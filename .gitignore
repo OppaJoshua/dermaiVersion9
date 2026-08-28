@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Environment / secret files
+*.local
+.env
+.env.*
+
+# Build files
+dist/
+dist-ssr/
+
+# Supabase local files
+supabase/.temp/
+
+# Logs
+*.log
+
+# VS Code
+.vscode/

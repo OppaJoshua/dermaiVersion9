@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@theme {
+  --color-magenta-50:  #fdf2f7;
+  --color-magenta-100: #fce7f0;
+  --color-magenta-200: #fbcfe1;
+  --color-magenta-300: #f4a3c4;
+  --color-magenta-400: #e8619a;
+  --color-magenta-500: #A0195A;
+  --color-magenta-600: #85134a;
+  --color-magenta-700: #6b0f3c;
+  --color-magenta-800: #520b2e;
+  --color-magenta-900: #3d0824;
+
+  --font-display: "Poppins", sans-serif;
+  --font-mono-accent: "JetBrains Mono", monospace;
+}
