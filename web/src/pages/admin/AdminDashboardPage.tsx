@@ -12,8 +12,6 @@ const dashboardFeatures = [
     { id: "skin-map", label: "Cebu Skin Condition Map", icon: MapPin },
 ];
 
-// TODO: Load top conditions from Supabase skin analysis records
-const topConditions: Array<{ name: string; count: number }> = [];
 // TODO: Load weekly trend data from Supabase
 const trendData: Array<{ week: string; analyses: number }> = [];
 const activityLog: Array<{
@@ -175,7 +173,7 @@ export default function AdminDashboardPage() {
             <ChevronDown className={cn("w-4 h-4 transition-transform", showMenu && "rotate-180")}/>
           </button>
 
-          {showMenu && (<motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute right-0 top-full mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 min-w-[280px] overflow-hidden">
+          {showMenu && (<motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute right-0 top-full mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 min-w-70 overflow-hidden">
               {dashboardFeatures.map((feature) => {
                 const Icon = feature.icon;
                 const isSelected = selectedFeature === feature.id;
@@ -242,8 +240,8 @@ export default function AdminDashboardPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={topConditions}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-                    <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#9ca3af" }}/>
-                    <YAxis tick={{ fontSize: 12, fill: "#9ca3af" }}/>
+                    <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#9ca3af" }} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
+                    <YAxis tick={{ fontSize: 12, fill: "#9ca3af" }} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
                     <Tooltip contentStyle={{
                 borderRadius: 12,
                 border: "1px solid #f3f4f6",
@@ -274,8 +272,8 @@ export default function AdminDashboardPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={trendData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-                    <XAxis dataKey="week" tick={{ fontSize: 12, fill: "#9ca3af" }}/>
-                    <YAxis tick={{ fontSize: 12, fill: "#9ca3af" }}/>
+                    <XAxis dataKey="week" tick={{ fontSize: 12, fill: "#9ca3af" }} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
+                    <YAxis tick={{ fontSize: 12, fill: "#9ca3af" }} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
                     <Tooltip contentStyle={{
                 borderRadius: 12,
                 border: "1px solid #f3f4f6",
@@ -305,8 +303,8 @@ export default function AdminDashboardPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={topConditions}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-                    <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#9ca3af" }}/>
-                    <YAxis tick={{ fontSize: 12, fill: "#9ca3af" }}/>
+                    <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#9ca3af" }} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
+                    <YAxis tick={{ fontSize: 12, fill: "#9ca3af" }} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
                     <Tooltip contentStyle={{
                 borderRadius: 12,
                 border: "1px solid #f3f4f6",
@@ -337,8 +335,8 @@ export default function AdminDashboardPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={trendData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-                    <XAxis dataKey="week" tick={{ fontSize: 12, fill: "#9ca3af" }}/>
-                    <YAxis tick={{ fontSize: 12, fill: "#9ca3af" }}/>
+                    <XAxis dataKey="week" tick={{ fontSize: 12, fill: "#9ca3af" }} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
+                    <YAxis tick={{ fontSize: 12, fill: "#9ca3af" }} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
                     <Tooltip contentStyle={{
                 borderRadius: 12,
                 border: "1px solid #f3f4f6",
@@ -368,7 +366,7 @@ export default function AdminDashboardPage() {
           </div>
 
           <div className="px-6 pb-5">
-            <div className="relative bg-gray-50/80 rounded-2xl overflow-hidden h-[300px] border border-gray-100">
+            <div className="relative bg-gray-50/80 rounded-2xl overflow-hidden h-75 border border-gray-100">
               <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full" style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.03))" }}>
                 <path d="M 52 5 C 54 8, 57 12, 58 18 C 59 22, 57 26, 56 30 C 55 34, 54 36, 53 38 C 52 40, 54 42, 55 44 C 56 46, 58 44, 60 42 C 62 40, 65 38, 66 40 C 67 42, 64 44, 62 46 C 60 48, 56 48, 54 48 C 52 48, 50 50, 49 52 C 48 54, 48 56, 47 58 C 46 60, 46 62, 45 64 C 44 66, 43 68, 42 70 C 41 72, 40 74, 39 76 C 38 78, 37 80, 36 82 C 35 84, 34 86, 35 88 C 36 90, 38 90, 39 88 C 40 86, 41 84, 42 82 C 43 80, 44 78, 44 76 C 44 74, 45 72, 46 70 C 47 68, 48 66, 48 64 C 48 62, 49 60, 50 58 C 51 56, 52 54, 52 52 C 52 50, 53 48, 55 46 C 57 44, 56 42, 55 40 C 54 38, 55 36, 56 34 C 57 32, 58 28, 57 24 C 56 20, 55 16, 54 12 C 53 8, 52 6, 52 5Z" fill="#f9fafb" stroke="#e5e7eb" strokeWidth="0.4"/>
                 <ellipse cx="64" cy="42" rx="5" ry="2.5" fill="#f9fafb" stroke="#e5e7eb" strokeWidth="0.4"/>

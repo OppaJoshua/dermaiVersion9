@@ -107,7 +107,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       {/* Sidebar — White */}
       <aside
         className={cn(
-          "flex flex-col w-[260px] bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300",
+          "flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
@@ -137,16 +137,16 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 to={link.path}
                 onClick={() => setSidebarOpen(false)}
                 className={cn(
-                  "flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
+                  "flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap",
                   isActive
                     ? "bg-magenta-50 text-magenta-600"
                     : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
                 )}
               >
-                <Icon className={cn("w-[18px] h-[18px]", isActive ? "text-magenta-500" : "text-gray-400")} />
-                <span className="flex-1">{link.label}</span>
+                <Icon className={cn("w-4.5 h-4.5 shrink-0", isActive ? "text-magenta-500" : "text-gray-400")} />
+                <span className="flex-1 min-w-0 truncate">{link.label}</span>
                 {isActive && (
-                  <div className="w-1.5 h-1.5 rounded-full bg-magenta-500" />
+                  <div className="w-1.5 h-1.5 rounded-full bg-magenta-500 shrink-0" />
                 )}
               </Link>
             );
@@ -168,14 +168,14 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             to="/"
             className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors"
           >
-            <LogOut className="w-[18px] h-[18px]" />
+            <LogOut className="w-4.5 h-4.5" />
             Logout
           </Link>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 lg:ml-[260px] min-h-screen">
+      <main className="flex-1 lg:ml-65 min-h-screen">
         {/* Top Bar */}
         <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
           <div className="flex items-center gap-3">
@@ -199,7 +199,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
               >
                 <Bell className="w-5 h-5 text-gray-500" />
                 {unreadCount > 0 && (
-                  <span className="absolute top-1 right-1 min-w-[18px] h-[18px] px-1 bg-red-500 rounded-full text-white text-[10px] font-bold flex items-center justify-center leading-none">
+                  <span className="absolute top-1 right-1 min-w-4.5 h-4.5 px-1 bg-red-500 rounded-full text-white text-[10px] font-bold flex items-center justify-center leading-none">
                     {unreadCount > 99 ? "99+" : unreadCount}
                   </span>
                 )}

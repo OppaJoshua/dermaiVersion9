@@ -40,7 +40,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
     return (<div className="min-h-screen bg-gray-50/80 flex">
       {sidebarOpen && (<div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden" onClick={() => setSidebarOpen(false)}/>)}
 
-      <aside className={cn("flex flex-col w-[260px] bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300", sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0")}>
+      <aside className={cn("flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300", sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0")}>
         <div className="flex items-center gap-2.5 px-6 h-16 border-b border-gray-100 shrink-0">
           <img src={Logo} alt="DERMAI logo" className="h-9 w-auto object-contain"/>
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold ml-0.5">
@@ -57,13 +57,13 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
             const isActive = location.pathname === link.path;
             const isLocked = link.requiresVerified && verificationStatus !== "verified";
             return isLocked ? (<div key={link.path} className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-300 cursor-not-allowed select-none" title="Available for Verified clinics only">
-                <Icon className="w-[18px] h-[18px] text-gray-300"/>
+                <Icon className="w-4.5 h-4.5 text-gray-300"/>
                 <span className="flex-1">{link.label}</span>
                 <Lock className="w-3.5 h-3.5 text-gray-300"/>
               </div>) : (<Link key={link.path} to={link.path} onClick={() => setSidebarOpen(false)} className={cn("flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all", isActive
                     ? "bg-magenta-50 text-magenta-600"
                     : "text-gray-500 hover:bg-gray-50 hover:text-gray-900")}>
-                <Icon className={cn("w-[18px] h-[18px]", isActive ? "text-magenta-500" : "text-gray-400")}/>
+                <Icon className={cn("w-4.5 h-4.5", isActive ? "text-magenta-500" : "text-gray-400")}/>
                 <span className="flex-1">{link.label}</span>
                 {isActive && <div className="w-1.5 h-1.5 rounded-full bg-magenta-500"/>}
               </Link>);
@@ -85,13 +85,13 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
           </div>
 
           <Link to="/" className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors">
-            <LogOut className="w-[18px] h-[18px]"/>
+            <LogOut className="w-4.5 h-4.5"/>
             Logout
           </Link>
         </div>
       </aside>
 
-      <main className="flex-1 lg:ml-[260px] min-h-screen">
+      <main className="flex-1 lg:ml-65 min-h-screen">
         <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
           <div className="flex items-center gap-3">
             <button className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500" onClick={() => setSidebarOpen(true)}>
@@ -106,7 +106,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
           <div ref={notifRef} className="relative">
             <button onClick={() => setNotifOpen((o) => !o)} className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors">
               <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")}/>
-              {unreadCount > 0 && (<span className="absolute top-1 right-1 min-w-[16px] h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none">
+              {unreadCount > 0 && (<span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none">
                   {unreadCount > 9 ? "9+" : unreadCount}
                 </span>)}
             </button>

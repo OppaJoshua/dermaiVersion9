@@ -106,27 +106,27 @@ export default function AdminSystemSettingsPage() {
               <div className="flex-1">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-400 mb-1.5 flex items-center gap-1"><User className="w-4 h-4 text-magenta-500"/> Full Name</label>
+                    <label className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-1.5"><User className="w-4 h-4 text-magenta-500"/> Full Name</label>
                     <input type="text" value={adminProfile.fullName} onChange={e => handleProfileChange("fullName", e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500"/>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-400 mb-1.5 flex items-center gap-1"><Mail className="w-4 h-4 text-magenta-500"/> Email Address</label>
+                    <label className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-1.5"><Mail className="w-4 h-4 text-magenta-500"/> Email Address</label>
                     <input type="email" value={adminProfile.email} onChange={e => handleProfileChange("email", e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500"/>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-400 mb-1.5 flex items-center gap-1"><Phone className="w-4 h-4 text-magenta-500"/> Contact Number</label>
+                    <label className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-1.5"><Phone className="w-4 h-4 text-magenta-500"/> Contact Number</label>
                     <input type="text" value={adminProfile.phone} onChange={e => handleProfileChange("phone", e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500"/>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-400 mb-1.5 flex items-center gap-1"><User className="w-4 h-4 text-magenta-500"/> Gender</label>
+                    <label className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-1.5"><User className="w-4 h-4 text-magenta-500"/> Gender</label>
                     <input type="text" value={adminProfile.gender} onChange={e => handleProfileChange("gender", e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500" placeholder="Gender"/>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-400 mb-1.5 flex items-center gap-1"><Calendar className="w-4 h-4 text-magenta-500"/> Birthdate</label>
+                    <label className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-1.5"><Calendar className="w-4 h-4 text-magenta-500"/> Birthdate</label>
                     <input type="date" value={adminProfile.birthday} onChange={e => handleProfileChange("birthday", e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500"/>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-400 mb-1.5 flex items-center gap-1"><MapPin className="w-4 h-4 text-magenta-500"/> District</label>
+                    <label className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-1.5"><MapPin className="w-4 h-4 text-magenta-500"/> District</label>
                     <select value={adminProfile.district} onChange={e => handleProfileChange("district", e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 bg-white">
                       <option value="">Select District</option>
                       {districts.map((d) => <option key={d} value={d}>{d}</option>)}
@@ -134,8 +134,8 @@ export default function AdminSystemSettingsPage() {
                   </div>
                 </div>
                 <div className="mt-4">
-                  <label className="block text-xs font-semibold text-gray-400 mb-1.5 flex items-center gap-1"><MapPin className="w-4 h-4 text-magenta-500"/> Complete Address</label>
-                  <textarea value={adminProfile.address} onChange={e => handleProfileChange("address", e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 resize-none min-h-[48px]"/>
+                  <label className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-1.5"><MapPin className="w-4 h-4 text-magenta-500"/> Complete Address</label>
+                  <textarea value={adminProfile.address} onChange={e => handleProfileChange("address", e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 resize-none min-h-12"/>
                 </div>
               </div>
             </div>
@@ -182,8 +182,8 @@ export default function AdminSystemSettingsPage() {
               Users will be redirected to a maintenance page
             </p>
           </div>
-          <button onClick={() => setMaintenanceMode(!maintenanceMode)} className={cn("relative w-12 h-6 rounded-full transition-colors", maintenanceMode ? "bg-amber-500" : "bg-gray-200")}>
-            <span className={cn("absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform", maintenanceMode ? "translate-x-7" : "translate-x-1")}/>
+          <button onClick={() => setMaintenanceMode(!maintenanceMode)} className={cn("relative inline-flex h-6 w-11 items-center rounded-full transition-colors", maintenanceMode ? "bg-amber-500" : "bg-gray-200")}>
+            <span className={cn("absolute h-4 w-4 rounded-full bg-white shadow-sm transition-transform", maintenanceMode ? "translate-x-6" : "translate-x-1")}/>
           </button>
         </div>
       </div>
@@ -232,8 +232,8 @@ export default function AdminSystemSettingsPage() {
                 <p className="text-sm font-semibold text-gray-700">{item.label}</p>
                 <p className="text-xs text-gray-400 mt-0.5">{item.sublabel}</p>
               </div>
-              <button onClick={() => item.setter(!item.value)} className={cn("relative w-12 h-6 rounded-full transition-colors shrink-0", item.value ? "bg-magenta-500" : "bg-gray-200")}>
-                <span className={cn("absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform", item.value ? "translate-x-7" : "translate-x-1")}/>
+              <button onClick={() => item.setter(!item.value)} className={cn("relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0", item.value ? "bg-magenta-500" : "bg-gray-200")}>
+                <span className={cn("absolute h-4 w-4 rounded-full bg-white shadow-sm transition-transform", item.value ? "translate-x-6" : "translate-x-1")}/>
               </button>
             </div>))}
         </div>

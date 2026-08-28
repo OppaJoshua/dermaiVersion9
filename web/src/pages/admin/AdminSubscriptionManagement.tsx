@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { CreditCard, RefreshCcw, DollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { logAdminAction } from "@/lib/auditLog";
 type SubscriptionStatus = "active" | "expired" | "cancelled";
 type PremiumUser = {
     id: number;
@@ -41,7 +40,7 @@ function formatPhp(amount: number) {
 export default function AdminSubscriptionManagement() {
     // TODO: Load subscription users and transactions from Supabase
     const [premiumUsers] = useState<PremiumUser[]>([]);
-    const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [transactions, _setTransactions] = useState<Transaction[]>([]);
     const [statusFilter, setStatusFilter] = useState<"all" | SubscriptionStatus>("all");
     const visibleUsers = premiumUsers.filter((user) => statusFilter === "all" ? true : user.status === statusFilter);
     const totalRevenue = useMemo(() => transactions.reduce((sum, txn) => sum + txn.amount, 0), [transactions]);
