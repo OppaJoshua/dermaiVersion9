@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { X } from "lucide-react";
-import logo from "../../assets/LogoDerm.png";
+import logo from "../../assets/logo2.png";
 import { useAuth } from "../../context/AuthContext";
 
 function GoogleIcon() {

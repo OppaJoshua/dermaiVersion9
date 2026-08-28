@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useRef } from "react";
-import Logo from "../../assets/LogoDerm.png";
+import Logo from "../../assets/logo2.png";
 
 interface DoctorLayoutProps {
   children: React.ReactNode;

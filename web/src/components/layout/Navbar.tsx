@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Menu, X, ChevronDown } from "lucide-react";
 import { cn } from "../../lib/utils";
-import logo from "../../assets/Derma Logo.png";
+import logo from "../../assets/logo2.png";
 
 const navLinks = [
   { label: "Home", path: "/" },

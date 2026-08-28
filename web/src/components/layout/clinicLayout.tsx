@@ -3,7 +3,7 @@ import { LayoutDashboard, Calendar, Users, Bell, LogOut, Menu, ChevronRight, Che
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useRef } from "react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
-import Logo from "../../assets/LogoDerm.png";
+import Logo from "../../assets/logo2.png";
 interface ClinicLayoutProps {
     children: React.ReactNode;
 }

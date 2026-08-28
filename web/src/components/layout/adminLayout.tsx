@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import Logo from "../../assets/LogoDerm.png";
+import Logo from "../../assets/logo2.png";
 
 interface AdminLayoutProps {
   children: React.ReactNode;

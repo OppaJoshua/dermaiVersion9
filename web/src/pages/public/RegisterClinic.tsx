@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { Link } from "react-router-dom";
-import Logo from "../../assets/LogoDerm.png";
+import Logo from "../../assets/logo2.png";
 import {
   ArrowLeft,
   Upload,

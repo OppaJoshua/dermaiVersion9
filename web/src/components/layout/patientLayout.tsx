@@ -13,7 +13,7 @@ import {
 import { cn } from "../../lib/utils";
 import { useState } from "react";
 import Navbar from "./Navbar";
-import Logo from "../../assets/LogoDerm.png";
+import Logo from "../../assets/logo2.png";
 
 // ---------------------------------------------------------------------------
 // TYPES

@@ -1,6 +1,6 @@
 ﻿import {Link} from 'react-router-dom';
 import { Facebook, Instagram, Twitter } from 'lucide-react';
-import Logo from "../../assets/LogoDerm.png";
+import Logo from "../../assets/logo2.png";
 function Footer() {
   return (
     <footer className="bg-magenta-900 text-white">
