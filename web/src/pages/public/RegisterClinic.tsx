@@ -69,7 +69,7 @@ export default function RegisterClinic() {
 
   if (submitted) {
     return (
-      <div className="min-h-screen bg-magenta-50 pt-8 pb-16 flex items-center justify-center px-4">
+      <div className="relative min-h-screen overflow-x-hidden bg-magenta-50 pt-8 pb-16 flex items-center justify-center px-4">
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -103,13 +103,13 @@ export default function RegisterClinic() {
   }
 
   return (
-    <div className="min-h-screen bg-magenta-50 flex items-center justify-center px-4 py-12 sm:py-16">
-      <div className="absolute inset-0 pointer-events-none">
+    <div className="relative min-h-screen overflow-x-hidden bg-magenta-50 flex items-center justify-center px-4 py-12 sm:py-16">
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-24 -left-24 w-72 h-72 rounded-full bg-magenta-100/60 blur-3xl" />
         <div className="absolute -bottom-24 -right-24 w-72 h-72 rounded-full bg-magenta-200/50 blur-3xl" />
       </div>
 
-      <div className="max-w-2xl w-full mx-auto">
+      <div className="max-w-2xl w-full mx-auto relative z-10">
         <Link
           to="/"
           className="inline-flex items-center gap-1 text-sm text-magenta-500 font-medium mb-4 hover:text-magenta-600"
