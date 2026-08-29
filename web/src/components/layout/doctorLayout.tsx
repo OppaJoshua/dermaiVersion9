@@ -69,7 +69,7 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
 
       <aside
         className={cn(
-          "flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300",
+          "flex flex-col w-[260px] bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
@@ -99,7 +99,7 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
                     : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
                 )}
               >
-                <Icon className={cn("w-4.5 h-4.5", isActive ? "text-blue-500" : "text-gray-400")} />
+                <Icon className={cn("w-[18px] h-[18px]", isActive ? "text-blue-500" : "text-gray-400")} />
                 <span className="flex-1">{link.label}</span>
                 {isActive && <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
               </Link>
@@ -124,13 +124,13 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
             onClick={handleLogout}
             className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors"
           >
-            <LogOut className="w-4.5 h-4.5" />
+            <LogOut className="w-[18px] h-[18px]" />
             Logout
           </button>
         </div>
       </aside>
 
-      <main className="flex-1 lg:ml-65 min-h-screen">
+      <main className="flex-1 lg:ml-[260px] min-h-screen">
         <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
           <div className="flex items-center gap-3">
             <button
@@ -153,7 +153,7 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
             >
               <Bell className={cn("w-5 h-5", bellOpen ? "text-blue-500" : "text-gray-500")} />
               {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-blue-500 rounded-full text-white text-[10px] font-bold leading-none">
+                <span className="absolute top-1 right-1 min-w-[16px] h-4 px-0.5 flex items-center justify-center bg-blue-500 rounded-full text-white text-[10px] font-bold leading-none">
                   {unreadCount > 9 ? "9+" : unreadCount}
                 </span>
               )}

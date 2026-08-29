@@ -95,7 +95,7 @@ export default function HomePage() {
               initial={{ opacity: 0, x: 60 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.8, delay: 0.3 }}
-              className="hidden lg:flex items-end justify-end h-full"
+              className="hidden lg:flex items-end justify-end h-full translate-y-3"
             >
               <img
                 src={heroRightImage}
