@@ -139,7 +139,7 @@ export default function HomePage() {
                 icon: MapPin,
                 title: "Find a Clinic",
                 desc: "Discover verified dermatology clinics near you in Cebu City with directions and contact info.",
-                link: "/clinics",
+                link: "/find-clinics",
                 color: "bg-magenta-300",
               },
             ].map((feature, i) => (
