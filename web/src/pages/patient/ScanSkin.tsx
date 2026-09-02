@@ -326,7 +326,9 @@ export default function ScanSkinPage() {
   const quickPreview = useMemo(() => computeQuickPreview(answers), [answers]);
 
   const closeUpInputRef = useRef<HTMLInputElement>(null);
+  const closeUpCameraRef = useRef<HTMLInputElement>(null);
   const wideInputRef = useRef<HTMLInputElement>(null);
+  const wideCameraRef = useRef<HTMLInputElement>(null);
   const [closeUpFile, setCloseUpFile] = useState<File | null>(null);
   const [closeUpImage, setCloseUpImage] = useState<string | null>(null);
   const [wideFile, setWideFile] = useState<File | null>(null);
@@ -458,9 +460,25 @@ export default function ScanSkinPage() {
           onChange={handleFileChange("closeup")}
         />
         <input
+          ref={closeUpCameraRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={handleFileChange("closeup")}
+        />
+        <input
           ref={wideInputRef}
           type="file"
           accept="image/*"
+          className="hidden"
+          onChange={handleFileChange("wide")}
+        />
+        <input
+          ref={wideCameraRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
           className="hidden"
           onChange={handleFileChange("wide")}
         />
@@ -649,8 +667,8 @@ export default function ScanSkinPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                 {(
                   [
-                    { slot: "closeup" as const, title: "Photo 1 — Close-up", image: closeUpImage, inputRef: closeUpInputRef },
-                    { slot: "wide" as const, title: "Photo 2 — Wider view", image: wideImage, inputRef: wideInputRef },
+                    { slot: "closeup" as const, title: "Photo 1 — Close-up", image: closeUpImage, inputRef: closeUpInputRef, cameraRef: closeUpCameraRef },
+                    { slot: "wide" as const, title: "Photo 2 — Wider view", image: wideImage, inputRef: wideInputRef, cameraRef: wideCameraRef },
                   ]
                 ).map((p) => (
                   <div key={p.slot}>
@@ -686,7 +704,7 @@ export default function ScanSkinPage() {
                         Gallery
                       </button>
                       <button
-                        onClick={() => guardAction(() => p.inputRef.current?.click())}
+                        onClick={() => guardAction(() => p.cameraRef.current?.click())}
                         className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl border-2 border-magenta-200 text-magenta-700 text-xs font-medium hover:bg-magenta-50 transition-colors"
                       >
                         <Camera className="w-3.5 h-3.5" />
