@@ -294,7 +294,6 @@ interface ScanResultData {
   id: string;
   condition: string;
   localName: string;
-  category: string;
   confidence: number;
   bodyPart: string;
   date: string;
@@ -840,9 +839,6 @@ export default function ScanSkinPage() {
             <motion.div key="step3" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
               <div className="bg-white rounded-[20px] shadow-[0_4px_24px_rgba(160,25,90,0.08)] overflow-hidden">
                 <div className="p-6 sm:p-8 border-b border-magenta-100">
-                  <span className="inline-block px-3 py-1 rounded-full bg-magenta-100 text-magenta-600 text-xs font-bold mb-3">
-                    {scanResult.category}
-                  </span>
                   <h2 className="text-3xl font-display font-bold text-magenta-900 mb-1">
                     Possible {scanResult.condition}
                   </h2>

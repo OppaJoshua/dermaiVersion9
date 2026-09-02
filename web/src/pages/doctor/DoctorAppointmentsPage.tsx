@@ -293,9 +293,6 @@ export default function DoctorAppointmentsPage() {
                                   <div>
                                     <p className="font-semibold text-blue-800">{cond.name}</p>
                                     {cond.filipinoName && (<p className="text-xs text-blue-600 italic mb-1">{cond.filipinoName}</p>)}
-                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold">
-                                      {cond.category}
-                                    </span>
                                     <p className="text-xs text-gray-600 mt-2">{cond.description}</p>
                                   </div>
                                 </div>

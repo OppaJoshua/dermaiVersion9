@@ -8,7 +8,6 @@ interface SkinHistoryItem {
   id: string;
   condition: string;
   localName?: string;
-  category?: string;
   confidence: number;
   bodyPart: string;
   date: string;
@@ -182,12 +181,6 @@ export default function PatientSkinHistory() {
               {/* Header */}
               <div className="flex items-start justify-between mb-4">
                 <div>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="text-xs px-2.5 py-0.5 rounded-full bg-magenta-100 text-magenta-700 font-semibold">
-                      {selectedItem.category || "Skin Condition"}
-                    </span>
-
-                  </div>
                   <h2 className="text-xl font-bold text-gray-900">Possible {selectedItem.condition}</h2>
                   {selectedItem.localName && (
                     <p className="text-sm text-gray-400 mt-0.5">
