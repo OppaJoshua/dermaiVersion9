@@ -344,9 +344,6 @@ export default function FindClinicsPage() {
           </div>
 
           <div className="flex gap-2 mt-3">
-            <span className="px-4 py-1.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 flex items-center gap-1.5">
-              <CheckCircle2 className="w-3 h-3"/> Showing verified clinics only
-            </span>
             <button onClick={() => setActiveTab("all")} className={cn("px-4 py-1.5 rounded-full text-xs font-semibold transition-colors", activeTab === "all"
             ? "bg-magenta-500 text-white"
             : "bg-magenta-50 text-magenta-600 hover:bg-magenta-100")}>
