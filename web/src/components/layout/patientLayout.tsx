@@ -1,4 +1,4 @@
-import { useLocation, Link } from "react-router-dom";
+﻿import { useLocation, Link } from "react-router-dom";
 import {
   UserCircle,
   CalendarDays,
@@ -9,41 +9,33 @@ import {
   ScanLine,
   LogOut,
   X,
+  Bell,
+  Menu,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { useState } from "react";
-import Navbar from "./Navbar";
+import { useState, useEffect, useRef } from "react";
 import Logo from "../../assets/logo2.png";
 
 // ---------------------------------------------------------------------------
 // TYPES
 // ---------------------------------------------------------------------------
 
-/**
- * Shape of the patient profile data this layout needs to render the sidebar
- * header (avatar, name, membership tier, location).
- *
- * TODO(backend): This should ultimately come from your auth/user context
- * (e.g. a `useAuth()` or `useUser()` hook backed by Supabase), not be
- * fetched or stored locally inside this component.
- */
 export interface UserProfileSummary {
   fullName: string;
   profilePictureUrl?: string;
-  membershipTier?: string; // e.g. "Premium Member", "Free Plan"
-  location?: string; // e.g. "Cebu City, Philippines"
+  membershipTier?: string;
+  location?: string;
 }
 
 interface UserLayoutProps {
   children: React.ReactNode;
-  /** Current patient's profile summary. */
   profile?: UserProfileSummary;
-  /** Called when the user clicks "Logout". */
   onLogout?: () => void;
 }
 
 // ---------------------------------------------------------------------------
-// STATIC NAV CONFIG (this part is fine to hardcode — it's UI structure, not data)
+// STATIC NAV CONFIG
 // ---------------------------------------------------------------------------
 
 const sidebarSections = [
@@ -87,6 +79,11 @@ const sidebarSections = [
   },
 ];
 
+const allLinks = [
+  { label: "Dashboard", path: "/dashboard" },
+  ...sidebarSections.flatMap((s) => s.links),
+];
+
 // ---------------------------------------------------------------------------
 // COMPONENT
 // ---------------------------------------------------------------------------
@@ -98,8 +95,23 @@ export default function UserLayout({
 }: UserLayoutProps) {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+
+  const unreadCount = 0;
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setNotifOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   const initial = profile.fullName?.charAt(0)?.toUpperCase() ?? "P";
+  const currentPage = allLinks.find((l) => l.path === location.pathname)?.label || "Dashboard";
 
   return (
     <div className="min-h-screen bg-gray-50/80 flex flex-col lg:flex-row">
@@ -138,7 +150,7 @@ export default function UserLayout({
           </button>
         </div>
 
-        {/* Patient Account Info — driven entirely by the `profile` prop now */}
+        {/* Patient Account Info */}
         <div className="p-6 border-b border-gray-100">
           <div className="flex items-center gap-3 mb-2">
             <div className="w-12 h-12 rounded-full ring-2 ring-magenta-100 bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-lg font-bold">
@@ -209,7 +221,7 @@ export default function UserLayout({
           })}
         </div>
 
-        {/* Logout — calls the onLogout prop instead of just linking to "/" */}
+        {/* Logout */}
         <div className="p-4 border-t border-gray-100 bg-gray-50/50">
           {onLogout ? (
             <button
@@ -233,7 +245,59 @@ export default function UserLayout({
 
       {/* Main Content */}
       <main className="flex-1 lg:ml-70 min-h-screen flex flex-col relative w-full">
-        <Navbar onMenuClick={() => setSidebarOpen((prev) => !prev)} isDashboard={true} />
+        {/* Top Header — clinic-style breadcrumb + bell */}
+        <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
+          <div className="flex items-center gap-3">
+            <button
+              className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500"
+              onClick={() => setSidebarOpen((prev) => !prev)}
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-1.5 text-sm">
+              <span className="text-gray-400">Patient</span>
+              <ChevronRight className="w-3.5 h-3.5 text-gray-300" />
+              <span className="font-semibold text-gray-900">{currentPage}</span>
+            </div>
+          </div>
+
+          <div ref={notifRef} className="relative">
+            <button
+              onClick={() => setNotifOpen((o) => !o)}
+              className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors"
+            >
+              <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")} />
+              {unreadCount > 0 && (
+                <span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none">
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
+              )}
+            </button>
+
+            {notifOpen && (
+              <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
+                  <Bell className="w-4 h-4 text-magenta-500" />
+                  <span className="font-semibold text-gray-900 text-sm">Notifications</span>
+                </div>
+                <div className="py-10 text-center">
+                  <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                  <p className="text-sm text-gray-400">No new notifications</p>
+                </div>
+                <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50">
+                  <Link
+                    to="/dashboard/history"
+                    onClick={() => setNotifOpen(false)}
+                    className="block text-center text-sm font-semibold text-magenta-500 hover:text-magenta-700 transition-colors"
+                  >
+                    View skin history →
+                  </Link>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
         <div className="flex-1 overflow-x-hidden">{children}</div>
       </main>
     </div>

@@ -5,7 +5,6 @@ import {
   Filter,
   RefreshCw,
   Search,
-  ShieldAlert,
   Stethoscope,
   XCircle,
 } from "lucide-react";
@@ -22,8 +21,6 @@ type ReviewRecord = {
   finalDiagnosis: string;
   reviewedAt: string;
 };
-
-const demoRecords: ReviewRecord[] = [];
 
 function normalizeDiagnosis(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -50,13 +47,9 @@ export default function AdminDoctorAiReviewPage() {
   const [query, setQuery] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const { records, usingDemoData } = useMemo(() => {
+  const records = useMemo(() => {
     void refreshKey;
-    const reviewedRecords = getReviewedAppointments();
-    return {
-      records: reviewedRecords.length > 0 ? reviewedRecords : demoRecords,
-      usingDemoData: reviewedRecords.length === 0,
-    };
+    return getReviewedAppointments();
   }, [refreshKey]);
 
   const metrics = useMemo(() => {
@@ -111,13 +104,6 @@ export default function AdminDoctorAiReviewPage() {
           <RefreshCw className="w-4 h-4" /> Refresh records
         </button>
       </div>
-
-      {usingDemoData && (
-        <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
-          <p>Showing sample validation records. Completed doctor reviews with a final diagnosis will appear here automatically.</p>
-        </div>
-      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <MetricCard label="AI Accuracy" value={`${metrics.accuracy}%`} detail="Correct doctor-validated diagnoses" icon={Activity} color="magenta" />
@@ -202,7 +188,13 @@ export default function AdminDoctorAiReviewPage() {
                 );
               })}
               {visibleRecords.length === 0 && (
-                <tr><td colSpan={9} className="px-5 py-14 text-center text-sm text-gray-400">No validation records match the selected filters.</td></tr>
+                <tr>
+                  <td colSpan={9} className="px-5 py-14 text-center text-sm text-gray-400">
+                    <Stethoscope className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                    <p className="font-semibold text-gray-600">No review records found</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Completed doctor reviews with a final diagnosis will appear here automatically.</p>
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>

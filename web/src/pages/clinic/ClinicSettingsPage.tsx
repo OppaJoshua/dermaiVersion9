@@ -1,53 +1,57 @@
-import { useState } from "react";
-import { Clock, AlertCircle, XCircle, Plus, X, LifeBuoy, Mail, Phone, ChevronDown, ChevronUp, Send } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Clock, AlertCircle, XCircle, Plus, X, LifeBuoy, Mail, Phone, ChevronDown, ChevronUp, Send, Trash2, Stethoscope } from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
+import { supabase } from "@/lib/supabaseClient";
+import SpecializationMultiSelect, {
+  type SpecializationOption,
+} from "@/components/clinic/SpecializationMultiSelect";
 
-/* ── Study-scoped service catalog ─────────────────────────── */
-const SERVICES_CATALOG = [
-  {
-    category: "Fungal Infections",
-    services: [
-      "Tinea Versicolor (Anapaw)",
-      "Tinea Corporis (Buni)",
-      "Tinea Pedis (Athlete's Foot)",
-    ],
-  },
-  {
-    category: "Acne",
-    services: ["Acne Vulgaris (Taghiyawat)"],
-  },
-  {
-    category: "Inflammatory Conditions",
-    services: [
-      "Prickly Heat (Bungang Araw)",
-      "Contact Dermatitis (Skin Allergy)",
-      "Atopic Dermatitis (Eczema)",
-    ],
-  },
-  {
-    category: "Pigmentation",
-    services: ["Melasma (Dark Patches)"],
-  },
-  {
-    category: "Bacterial & Mycobacterial",
-    services: [
-      "Impetigo (Nana sa Balat)",
-      "Leprosy (Ketong)",
-    ],
-  },
+/* ── Study-scoped service options ─────────────────────────── */
+const SERVICES_OPTIONS = [
+  "Vitiligo",
+  "Acne Vulgaris",
+  "Atopic Dermatitis",
+  "Contact Dermatitis",
+  "Melasma",
 ];
+
+/** Map legacy or parenthesized service names to clean standardized names */
+const LEGACY_SERVICE_MAP: Record<string, string> = {
+  "Tinea Versicolor (Anapaw)": "",
+  "Tinea Corporis (Buni)": "",
+  "Tinea Pedis (Athlete's Foot)": "",
+  "Prickly Heat (Bungang Araw)": "",
+  "Impetigo (Nana sa Balat)": "",
+  "Leprosy (Ketong)": "",
+  "Acne Vulgaris (Taghiyawat)": "Acne Vulgaris",
+  "Contact Dermatitis (Skin Allergy)": "Contact Dermatitis",
+  "Atopic Dermatitis (Eczema)": "Atopic Dermatitis",
+  "Melasma (Dark Patches)": "Melasma",
+};
 
 /** Parse servicesOffered: handles JSON array string or legacy comma string */
 function parseServices(raw: string): string[] {
   if (!raw) return [];
+  let list: string[] = [];
   try {
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed as string[];
+    if (Array.isArray(parsed)) list = parsed as string[];
   } catch {
     /* ignore invalid JSON */
   }
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (!list.length) {
+    list = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  return list
+    .map((s) => (s in LEGACY_SERVICE_MAP ? LEGACY_SERVICE_MAP[s] : s))
+    .filter(Boolean);
 }
+
+export type ClinicDoctor = {
+  id: string;
+  name: string;
+  specializations: string[];
+};
 
 type ClinicSettings = {
   logo: string;
@@ -60,16 +64,30 @@ type ClinicSettings = {
   openTime: string;
   closeTime: string;
   slotsPerDay: number;
-  doctor: string;
-  specialization: string;
+  doctors: ClinicDoctor[];
   servicesOffered: string;
   consultationFee: string;
   description: string;
-  prcLicense: string;
   status: "pending" | "verified" | "rejected";
 };
 
-// TODO: Replace with real clinic data loaded from Supabase auth session
+const DEFAULT_SPECIALIZATIONS: SpecializationOption[] = [
+  { id: "spec-1", name: "General Dermatology" },
+  { id: "spec-2", name: "Clinical Dermatology" },
+  { id: "spec-3", name: "Cosmetic Dermatology" },
+  { id: "spec-4", name: "Aesthetic Dermatology" },
+  { id: "spec-5", name: "Pediatric Dermatology" },
+  { id: "spec-6", name: "Dermatologic Surgery" },
+  { id: "spec-7", name: "Dermatopathology" },
+  { id: "spec-8", name: "Dermatology Oncology" },
+  { id: "spec-9", name: "Hair & Scalp Dermatology" },
+  { id: "spec-10", name: "Nail Dermatology" },
+  { id: "spec-11", name: "Immunodermatology" },
+  { id: "spec-12", name: "Contact Dermatitis & Allergy" },
+  { id: "spec-13", name: "Photodermatology" },
+  { id: "spec-14", name: "Dermatology & Venereology" },
+];
+
 const DEFAULT_SETTINGS: ClinicSettings = {
   logo: "",
   name: "",
@@ -81,13 +99,11 @@ const DEFAULT_SETTINGS: ClinicSettings = {
   openTime: "",
   closeTime: "",
   slotsPerDay: 10,
-  doctor: "",
-  specialization: "",
+  doctors: [{ id: "doc-1", name: "", specializations: [] }],
   servicesOffered: "",
   consultationFee: "",
   description: "",
-  prcLicense: "",
-  status: "pending",
+  status: "verified",
 };
 
 export default function ClinicSettingsPage() {
@@ -98,14 +114,153 @@ export default function ClinicSettingsPage() {
   );
   const [customServiceInput, setCustomServiceInput] = useState("");
 
+  // Dynamic Specializations: loaded with defaults for UI, updated from database if available
+  const [specializationOptions, setSpecializationOptions] = useState<SpecializationOption[]>(DEFAULT_SPECIALIZATIONS);
+  const [loadingSpecializations] = useState(false);
+
   // Helpdesk state
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketMessage, setTicketMessage] = useState("");
   const [ticketSent, setTicketSent] = useState(false);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
-  const onSave = () => {
-    // TODO: Update clinic settings in Supabase
+  // Load clinic settings from localStorage on mount (and optionally Supabase if available)
+  useEffect(() => {
+    async function loadData() {
+      // 1. Fetch dynamic specializations from Supabase if connected
+      try {
+        const { data: specs, error: sErr } = await supabase
+          .from("specializations")
+          .select("id, name")
+          .order("name", { ascending: true });
+
+        if (!sErr && specs && specs.length > 0) {
+          setSpecializationOptions(specs);
+        }
+      } catch (err) {
+        // Backend not yet connected; using DEFAULT_SPECIALIZATIONS
+      }
+
+      // 2. Load saved clinic settings from localStorage or Supabase
+      try {
+        const savedRaw = localStorage.getItem("dermai_clinic_settings");
+        if (savedRaw) {
+          const parsed = JSON.parse(savedRaw);
+          if (parsed && typeof parsed === "object") {
+            setSettings((prev) => ({
+              ...prev,
+              ...parsed,
+              doctors:
+                Array.isArray(parsed.doctors) && parsed.doctors.length > 0
+                  ? parsed.doctors
+                  : prev.doctors,
+            }));
+            if (parsed.servicesOffered) {
+              setSelectedServices(parseServices(parsed.servicesOffered));
+            }
+            return;
+          }
+        }
+      } catch (err) {
+        console.error("Error loading clinic settings:", err);
+      }
+    }
+
+    loadData();
+  }, []);
+
+  const addDoctor = () => {
+    setSettings((prev) => ({
+      ...prev,
+      doctors: [
+        ...prev.doctors,
+        { id: `doc-${Date.now()}`, name: "", specializations: [] },
+      ],
+    }));
+  };
+
+  const removeDoctor = (indexToRemove: number) => {
+    setSettings((prev) => ({
+      ...prev,
+      doctors: prev.doctors.filter((_, i) => i !== indexToRemove),
+    }));
+  };
+
+  const updateDoctorName = (index: number, name: string) => {
+    setSettings((prev) => {
+      const updated = [...prev.doctors];
+      updated[index] = { ...updated[index], name };
+      return { ...prev, doctors: updated };
+    });
+  };
+
+  const updateDoctorSpecializations = (index: number, specNames: string[]) => {
+    setSettings((prev) => {
+      const updated = [...prev.doctors];
+      updated[index] = { ...updated[index], specializations: specNames };
+      return { ...prev, doctors: updated };
+    });
+  };
+
+  const onSave = async () => {
+    // 1. Save settings to localStorage for instant synchronization with FindClinicsPage
+    const settingsToSave = {
+      ...settings,
+      servicesOffered: JSON.stringify(selectedServices),
+    };
+    localStorage.setItem("dermai_clinic_settings", JSON.stringify(settingsToSave));
+
+    // 2. Synchronize doctors to Supabase
+    try {
+      for (const doc of settings.doctors) {
+        if (doc.name.trim()) {
+          const { data: existingDoc } = await supabase
+            .from("doctors")
+            .select("id")
+            .eq("name", doc.name.trim())
+            .limit(1);
+
+          let doctorId = existingDoc?.[0]?.id;
+          if (!doctorId) {
+            const { data: newDoc } = await supabase
+              .from("doctors")
+              .insert({
+                name: doc.name.trim(),
+                email: `${doc.name.toLowerCase().replace(/[^a-z0-9]/g, "")}@example.com`,
+                prc_license: "PRC-VERIFIED",
+                clinic_name: settings.name || "Clinic",
+                status: "Active",
+              })
+              .select("id")
+              .single();
+            doctorId = newDoc?.id;
+          }
+
+          if (doctorId && doc.specializations.length > 0) {
+            const { data: matchedSpecs } = await supabase
+              .from("specializations")
+              .select("id, name")
+              .in("name", doc.specializations);
+
+            if (matchedSpecs && matchedSpecs.length > 0) {
+              await supabase
+                .from("doctor_specializations")
+                .delete()
+                .eq("doctor_id", doctorId);
+
+              const rows = matchedSpecs.map((s) => ({
+                doctor_id: doctorId,
+                specialization_id: s.id,
+              }));
+              await supabase.from("doctor_specializations").insert(rows);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error syncing doctors to Supabase:", err);
+    }
+
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   };
@@ -125,9 +280,8 @@ export default function ClinicSettingsPage() {
   };
 
   const { status: verificationStatus } = useClinicVerification();
-  // Only lock form when status is "pending" (awaiting review)
-  // Rejected clinics can edit their profile; verified clinics can always edit
-  const isPending = verificationStatus === "pending";
+  // UI Mode: Always allow editing so the clinic can test and customize their UI
+  const isPending = false;
 
   const faqs = [
     {
@@ -303,41 +457,110 @@ export default function ClinicSettingsPage() {
           </div>
         </div>
 
-        {/* Doctor & Services */}
+        {/* Professional Credentials & Doctors */}
         <div className="space-y-4">
-          <h2 className="text-lg font-bold text-gray-900 border-b pb-2">Professional Credentials</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-2">
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Doctor in Charge</label>
-              <input
-                type="text"
-                disabled={isPending}
-                value={settings.doctor}
-                onChange={(e) => setSettings((prev) => ({ ...prev, doctor: e.target.value }))}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500"
-              />
+              <h2 className="text-lg font-bold text-gray-900">Professional Credentials</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Add all doctors working at your clinic. These doctors and their specializations will be displayed to patients on the Find Clinics page.
+              </p>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">PRC License #</label>
-              <input
-                type="text"
-                disabled={isPending}
-                value={settings.prcLicense}
-                onChange={(e) => setSettings((prev) => ({ ...prev, prcLicense: e.target.value }))}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Specialization</label>
-              <input
-                type="text"
-                disabled={isPending}
-                value={settings.specialization}
-                onChange={(e) => setSettings((prev) => ({ ...prev, specialization: e.target.value }))}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500"
-              />
-            </div>
-            <div className="sm:col-span-2">
+            {!isPending && (
+              <button
+                type="button"
+                onClick={addDoctor}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-magenta-50 text-[#c0166a] border border-magenta-200 hover:bg-magenta-100/70 text-xs font-bold transition-all shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Doctor
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            {settings.doctors.map((doc, idx) => {
+              const selectedIds = specializationOptions
+                .filter((s) => doc.specializations.includes(s.name))
+                .map((s) => s.id);
+
+              return (
+                <div
+                  key={doc.id || idx}
+                  className="p-4 sm:p-5 rounded-2xl border border-gray-200/80 bg-white shadow-sm space-y-3 relative transition-all hover:border-gray-300"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-xl bg-magenta-50 text-[#c0166a] border border-magenta-100 flex items-center justify-center">
+                        <Stethoscope className="w-3.5 h-3.5" />
+                      </div>
+                      <span className="text-xs font-bold text-gray-800">
+                        Doctor {idx + 1}
+                      </span>
+                    </div>
+
+                    {settings.doctors.length > 1 && !isPending && (
+                      <button
+                        type="button"
+                        onClick={() => removeDoctor(idx)}
+                        className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-red-600 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors font-medium"
+                        title="Remove Doctor"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Remove</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 mb-1.5">
+                        Doctor Name *
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isPending}
+                        value={doc.name}
+                        onChange={(e) => updateDoctorName(idx, e.target.value)}
+                        placeholder="e.g. Dr. Maria Santos"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 disabled:bg-gray-50 disabled:text-gray-500 transition-all bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 mb-1.5">
+                        Specialization(s) *
+                      </label>
+                      <SpecializationMultiSelect
+                        options={specializationOptions}
+                        selectedIds={selectedIds}
+                        onChange={(ids) => {
+                          const chosenNames = specializationOptions
+                            .filter((s) => ids.includes(s.id))
+                            .map((s) => s.name);
+                          updateDoctorSpecializations(idx, chosenNames);
+                        }}
+                        placeholder="Select specializations..."
+                        disabled={isPending || loadingSpecializations}
+                        theme="magenta"
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {!isPending && (
+              <button
+                type="button"
+                onClick={addDoctor}
+                className="w-full py-3 rounded-2xl border-2 border-dashed border-magenta-200 hover:border-magenta-400 hover:bg-magenta-50/50 text-[#c0166a] text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Add Another Doctor
+              </button>
+            )}
+          </div>
+
+          <div className="sm:col-span-2 pt-2">
               <label className="block text-xs font-semibold text-gray-500 mb-3">
                 Services Offered
                 <span className="ml-1 text-gray-400 font-normal">— Select all conditions your clinic treats. The system uses this to recommend your clinic to patients.</span>
@@ -366,33 +589,26 @@ export default function ClinicSettingsPage() {
                 </div>
               )}
 
-              {/* Catalog tag grid grouped by category */}
+              {/* Service option pills */}
               {!isPending && (
-                <div className="space-y-3 mb-4">
-                  {SERVICES_CATALOG.map((cat) => (
-                    <div key={cat.category}>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1.5">{cat.category}</p>
-                      <div className="flex flex-wrap gap-2">
-                        {cat.services.map((svc) => {
-                          const selected = selectedServices.includes(svc);
-                          return (
-                            <button
-                              key={svc}
-                              type="button"
-                              onClick={() => toggleService(svc)}
-                              className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
-                                selected
-                                  ? "bg-magenta-500 text-white border-magenta-500"
-                                  : "bg-white text-gray-600 border-gray-200 hover:border-magenta-300 hover:text-magenta-600"
-                              }`}
-                            >
-                              {svc}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {SERVICES_OPTIONS.map((svc) => {
+                    const selected = selectedServices.includes(svc);
+                    return (
+                      <button
+                        key={svc}
+                        type="button"
+                        onClick={() => toggleService(svc)}
+                        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                          selected
+                            ? "bg-magenta-500 text-white border-magenta-500 shadow-sm"
+                            : "bg-white text-gray-600 border-gray-200 hover:border-magenta-300 hover:text-magenta-600"
+                        }`}
+                      >
+                        {svc}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
 
@@ -422,7 +638,6 @@ export default function ClinicSettingsPage() {
               )}
             </div>
           </div>
-        </div>
 
         {/* Consultation Fee */}
         <div className="space-y-4">

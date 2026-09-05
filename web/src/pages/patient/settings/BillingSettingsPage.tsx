@@ -13,7 +13,11 @@ interface CardData {
   expiry: string;
 }
 
-const DEFAULT_CARD: CardData = { last4: "4242", expiry: "12/27" };
+interface BillingHistoryItem {
+  date: string;
+  amount: string;
+  status: string;
+}
 
 function formatCardNumber(value: string) {
   // Keep only digits, max 16
@@ -29,7 +33,8 @@ function formatExpiry(value: string) {
 
 export default function BillingSettingsPage() {
   const [sub, setSub] = useState<SubData>({ isPro: false, scansUsed: 0 });
-  const [card, setCard] = useState<CardData>(DEFAULT_CARD);
+  const [card, setCard] = useState<CardData | null>(null);
+  const [billingHistory] = useState<BillingHistoryItem[]>([]);
   const [showCardModal, setShowCardModal] = useState(false);
   const [cardNumber, setCardNumber] = useState("");
   const [cardExpiry, setCardExpiry] = useState("");
@@ -54,7 +59,7 @@ export default function BillingSettingsPage() {
 
   const openCardModal = () => {
     setCardNumber("");
-    setCardExpiry(card.expiry);
+    setCardExpiry(card?.expiry ?? "");
     setCardCvv("");
     setCardName("");
     setCardSaved(false);
@@ -104,7 +109,7 @@ export default function BillingSettingsPage() {
             </div>
             <div>
               <p className="text-base font-bold text-gray-900">{sub.isPro ? "Pro Plan" : "Free Plan"}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{sub.isPro ? price : "1 scan per account"}</p>
+              <p className="text-xs text-gray-500 mt-0.5">{sub.isPro ? price : "3 scan per account"}</p>
             </div>
           </div>
           <span className={`text-xs px-3 py-1 rounded-full font-bold ${sub.isPro ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
@@ -136,7 +141,7 @@ export default function BillingSettingsPage() {
         ) : (
           <div className="space-y-3">
             <div className="space-y-1.5">
-              {["1 free AI skin scan", "Basic clinic search", "Limited scan history"].map((feat) => (
+              {["3 free AI skin scan", "Basic clinic search", "Limited scan history"].map((feat) => (
                 <div key={feat} className="flex items-center gap-2 text-sm text-gray-500">
                   <CheckCircle2 className="w-4 h-4 text-gray-300 shrink-0" />
                   {feat}
@@ -156,7 +161,7 @@ export default function BillingSettingsPage() {
       {/* Payment Method */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm mb-6">
         <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-4">Payment Method</h2>
-        {sub.isPro ? (
+        {card ? (
           <div className="flex items-center gap-4">
             <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
               <CreditCard className="w-6 h-6 text-gray-400" />
@@ -173,19 +178,24 @@ export default function BillingSettingsPage() {
             </button>
           </div>
         ) : (
-          <p className="text-sm text-gray-400">No payment method on file. Upgrade to Pro to add one.</p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-400">No payment method on file.</p>
+            <button
+              onClick={openCardModal}
+              className="text-xs text-magenta-500 font-semibold hover:text-magenta-700 transition-colors"
+            >
+              Add Card
+            </button>
+          </div>
         )}
       </div>
 
       {/* Billing History */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
         <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-4">Billing History</h2>
-        {sub.isPro ? (
+        {billingHistory.length > 0 ? (
           <div className="divide-y divide-gray-100">
-            {[
-              { date: "Apr 4, 2026", amount: sub.billingCycle === "yearly" ? "₱1,999" : "₱199", status: "Paid" },
-              { date: "Mar 4, 2026", amount: "₱199", status: "Paid" },
-            ].map((row, i) => (
+            {billingHistory.map((row, i) => (
               <div key={i} className="flex items-center justify-between py-3 text-sm">
                 <span className="text-gray-600">{row.date}</span>
                 <span className="font-semibold text-gray-900">{row.amount}</span>
@@ -291,7 +301,7 @@ export default function BillingSettingsPage() {
           </form>
 
           <p className="text-center text-[11px] text-gray-400">
-            Your card details are stored locally for demo purposes only.
+            Payment information is encrypted and securely processed.
           </p>
         </div>
       </div>

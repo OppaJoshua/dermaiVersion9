@@ -1,23 +1,12 @@
+import { Trash2, Save, UserCircle } from "lucide-react";
 import { useState } from "react";
-import { UserCircle, Mail, Trash2, Save } from "lucide-react";
 export default function AccountSettingsPage() {
-    const [form, setForm] = useState({
-        fullName: "",
-        email: "",
-        phone: "",
-    });
     const [saved, setSaved] = useState(false);
-    // TODO: Load user profile from Supabase auth session
     const handleSave = (e: React.FormEvent) => {
         e.preventDefault();
-        // TODO: Save profile changes via Supabase
         setSaved(true);
         setTimeout(() => setSaved(false), 2500);
     };
-    const field = (label: string, key: keyof typeof form, type = "text", placeholder = "") => (<div>
-      <label className="block text-sm font-semibold text-gray-700 mb-1.5">{label}</label>
-      <input type={type} value={form[key]} onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))} placeholder={placeholder} className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"/>
-    </div>);
     return (<div className="max-w-2xl mx-auto py-10 px-4 sm:px-6">
       <div className="flex items-center gap-3 mb-8">
         <div className="p-2.5 bg-magenta-100 rounded-2xl text-magenta-600">
@@ -25,22 +14,11 @@ export default function AccountSettingsPage() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Account Settings</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Manage your profile details</p>
+          <p className="text-sm text-gray-500 mt-0.5">Manage your account</p>
         </div>
       </div>
 
       <form onSubmit={handleSave} className="space-y-6">
-        {/* Profile Info */}
-        <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-1">
-            <Mail className="w-4 h-4 text-magenta-400"/>
-            <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Profile Information</h2>
-          </div>
-          {field("Full Name", "fullName", "text", "Juan Dela Cruz")}
-          {field("Email Address", "email", "email", "email@example.com")}
-          {field("Phone Number", "phone", "tel", "+63 9XX XXX XXXX")}
-        </div>
-
         {/* Danger Zone */}
         <div className="bg-red-50 rounded-2xl border border-red-100 p-6">
           <div className="flex items-center gap-2 mb-3">

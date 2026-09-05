@@ -72,8 +72,16 @@ const DEFAULT_SETTINGS: ClinicSettings = {
 export default function ClinicAppointmentsPage() {
   const { status: verificationStatus } = useClinicVerification();
   const fallbackConditionImage = skinConditions[0]?.image;
-  // TODO: Load clinic name from Supabase auth session
-  const clinicName = "";
+  let clinicName = "";
+  try {
+    const raw = localStorage.getItem("dermai_clinic_settings");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.name) clinicName = parsed.name;
+    }
+  } catch {
+    /* ignore */
+  }
 
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [currentMonth, setCurrentMonth] = useState(() => {
@@ -88,9 +96,26 @@ export default function ClinicAppointmentsPage() {
   });
 
   const [daySlotLimits, setDaySlotLimits] = useState<Record<string, number>>({});
-  const clinicSettings: ClinicSettings = DEFAULT_SETTINGS;
+  const clinicSettings: ClinicSettings = useMemo(() => {
+    try {
+      const raw = localStorage.getItem("dermai_clinic_settings");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed) {
+          return {
+            openTime: parsed.openTime || DEFAULT_SETTINGS.openTime,
+            closeTime: parsed.closeTime || DEFAULT_SETTINGS.closeTime,
+            slotsPerDay: parsed.slotsPerDay || DEFAULT_SETTINGS.slotsPerDay,
+          };
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_SETTINGS;
+  }, []);
   const getSlotsForDate = (date: string) => daySlotLimits[date] ?? clinicSettings.slotsPerDay;
-  const [slotInput, setSlotInput] = useState(() => String(DEFAULT_SETTINGS.slotsPerDay));
+  const [slotInput, setSlotInput] = useState(() => String(clinicSettings.slotsPerDay));
 
   const [pendingAssign, setPendingAssign] = useState<{
     appointmentId: string;
@@ -117,7 +142,18 @@ export default function ClinicAppointmentsPage() {
   const [selectedPresetReason, setSelectedPresetReason] = useState("");
   const [rejectError, setRejectError] = useState("");
 
-  const clinicDoctors: DoctorAccount[] = [];
+  const clinicDoctors: DoctorAccount[] = useMemo(() => {
+    try {
+      const rawDocs = localStorage.getItem("dermai_clinic_doctors");
+      if (rawDocs) {
+        const parsed = JSON.parse(rawDocs);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      /* ignore */
+    }
+    return [];
+  }, []);
 
   const [assignError, setAssignError] = useState("");
 

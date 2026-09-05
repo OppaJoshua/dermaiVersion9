@@ -47,6 +47,7 @@ import DoctorDashboardPage from "./pages/doctor/DoctorDashboardPage";
 import DoctorAppointmentsPage from "./pages/doctor/DoctorAppointmentsPage";
 import DoctorScheduledAppointmentsPage from "./pages/doctor/DoctorScheduledAppointmentsPage";
 import DoctorPatientHistoryPage from "./pages/doctor/DoctorPatientHistoryPage";
+import DoctorSettingsPage from "./pages/doctor/DoctorSettingsPage";
 
 // Admin Pages
 import AdminDashboardPage from "./pages/admin/AdminDashboardPage";
@@ -128,6 +129,7 @@ function App() {
         <Route path="/doctor/appointments" element={<DoctorLayout><DoctorAppointmentsPage /></DoctorLayout>} />
         <Route path="/doctor/scheduled" element={<DoctorLayout><DoctorScheduledAppointmentsPage /></DoctorLayout>} />
         <Route path="/doctor/history" element={<DoctorLayout><DoctorPatientHistoryPage /></DoctorLayout>} />
+        <Route path="/doctor/settings" element={<DoctorLayout><DoctorSettingsPage /></DoctorLayout>} />
 
         {/* Admin Routes */}
         <Route path="/admin" element={<AdminLayout><AdminDashboardPage /></AdminLayout>} />

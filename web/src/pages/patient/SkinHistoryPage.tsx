@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Search, Calendar, Activity, ChevronRight, MapPin, Trash2, CheckCircle2, AlertTriangle, X } from "lucide-react";
+import { Calendar, Activity, ChevronRight, MapPin, Trash2, CheckCircle2, AlertTriangle, X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 
@@ -26,7 +26,6 @@ async function loadPlaceholderHistory(): Promise<SkinHistoryItem[]> {
 
 export default function PatientSkinHistory() {
   const [history, setHistory] = useState<SkinHistoryItem[]>([]);
-  const [searchTerm, setSearchTerm] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [selectedItem, setSelectedItem] = useState<SkinHistoryItem | null>(null);
 
@@ -50,10 +49,7 @@ export default function PatientSkinHistory() {
     setHistory((prev) => prev.filter((item) => item.id !== id));
   };
 
-  const filteredHistory = history.filter((item) =>
-    item.condition.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.bodyPart.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredHistory = history;
 
   return (
     <div className="max-w-6xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
@@ -61,17 +57,6 @@ export default function PatientSkinHistory() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Skin Analysis History</h1>
           <p className="text-gray-500 text-sm mt-1">Review your past skin scan results and progress.</p>
-        </div>
-        
-        <div className="relative group">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 group-focus-within:text-magenta-500 transition-colors" />
-          <input
-            type="text"
-            placeholder="Search condition or body part..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10 pr-4 py-2.5 w-full md:w-80 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all text-sm shadow-sm"
-          />
         </div>
       </div>
 
@@ -146,18 +131,14 @@ export default function PatientSkinHistory() {
           </div>
           <h2 className="text-xl font-bold text-gray-900 mb-2">No History Found</h2>
           <p className="text-gray-500 max-w-sm mb-8">
-            {searchTerm 
-              ? `No results matching "${searchTerm}". Try a different keyword.` 
-              : "You haven't performed any skin analysis yet. Start your first scan today!"}
+            You haven't performed any skin analysis yet. Start your first scan today!
           </p>
-          {!searchTerm && (
-            <Link
-              to="/dashboard/scan"
-              className="bg-magenta-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-magenta-700 transition-all shadow-lg shadow-magenta-100"
-            >
-              Perform Your First Scan
-            </Link>
-          )}
+          <Link
+            to="/dashboard/scan"
+            className="bg-magenta-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-magenta-700 transition-all shadow-lg shadow-magenta-100"
+          >
+            Perform Your First Scan
+          </Link>
         </div>
       )}
 

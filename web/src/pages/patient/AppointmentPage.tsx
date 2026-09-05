@@ -245,7 +245,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-xs font-bold text-magenta-400 uppercase tracking-widest mb-2">Detected Condition</label>
-                        <input type="text" required value={aiConditionName} onChange={(e) => setAiConditionName(e.target.value)} placeholder="e.g. Tinea Versicolor" className="w-full px-4 py-3 rounded-xl border border-magenta-100 bg-white focus:outline-none focus:ring-2 focus:ring-magenta-500/20 text-magenta-900 text-sm"/>
+                        <input type="text" required value={aiConditionName} onChange={(e) => setAiConditionName(e.target.value)} placeholder="e.g. Acne Vulgaris" className="w-full px-4 py-3 rounded-xl border border-magenta-100 bg-white focus:outline-none focus:ring-2 focus:ring-magenta-500/20 text-magenta-900 text-sm"/>
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-magenta-400 uppercase tracking-widest mb-2">Confidence %</label>

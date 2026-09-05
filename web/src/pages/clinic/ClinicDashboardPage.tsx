@@ -52,13 +52,22 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
 };
 /* ── Main Component ─────────────────────────────────────────── */
 export default function ClinicDashboardPage() {
-    // TODO: Load clinic name, logo, and appointments from Supabase using clinic auth session
-    const clinicName = "";
+    let clinicName = "";
+    let clinicLogo = "";
+    try {
+        const raw = localStorage.getItem("dermai_clinic_settings");
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed?.name) clinicName = parsed.name;
+            if (parsed?.logo) clinicLogo = parsed.logo;
+        }
+    } catch {
+        /* ignore */
+    }
     const now = new Date();
     const [calMonth] = useState(
         now.toLocaleString("en-PH", { month: "long", year: "numeric" })
     );
-    const clinicLogo = "";
     const appointments: AppointmentRecord[] = [];
     const { status: verificationStatus } = useClinicVerification();
     const pending = appointments.filter((a) => a.status === "pending").length;
@@ -127,23 +136,22 @@ export default function ClinicDashboardPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Clock className="w-4 h-4 text-[#c0166a]"/>
-          <span className="text-sm font-semibold text-gray-700">March 31, 2026</span>
-          {verificationStatus === "verified" && (<span className="ml-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#c0166a] text-white text-[10px] font-bold">
-              <CheckCircle2 className="w-3 h-3"/> Verified
-            </span>)}
-          {verificationStatus === "pending" && (<span className="ml-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-pink-100 text-pink-700 text-[10px] font-bold border border-pink-200">
-              Pending Verification
-            </span>)}
+          <span className="text-sm font-semibold text-gray-700">
+            {now.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+          </span>
+          <span className="ml-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
+            <CheckCircle2 className="w-3 h-3"/> Active Clinic
+          </span>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
-            {clinicLogo ? (<img src={clinicLogo} className="w-8 h-8 rounded-full object-cover border-2 border-[#c0166a]" alt={clinicName}/>) : (<div className="w-8 h-8 rounded-full bg-[#c0166a] flex items-center justify-center border-2 border-[#c0166a]">
+            {clinicLogo ? (<img src={clinicLogo} className="w-8 h-8 rounded-full object-cover border-2 border-[#c0166a]" alt={clinicName || "Clinic"}/>) : (<div className="w-8 h-8 rounded-full bg-[#c0166a] flex items-center justify-center border-2 border-[#c0166a]">
                 <span className="text-white text-[10px] font-bold">
-                  {clinicName.charAt(0).toUpperCase()}
+                  {(clinicName || "C").charAt(0).toUpperCase()}
                 </span>
               </div>)}
             <div className="hidden sm:block">
-              <p className="text-xs font-bold text-gray-800 leading-none truncate max-w-[120px]">{clinicName}</p>
+              <p className="text-xs font-bold text-gray-800 leading-none truncate max-w-[140px]">{clinicName || "Clinic Portal"}</p>
               <p className="text-[10px] text-gray-400">Dermatology Clinic</p>
             </div>
           </div>
@@ -216,12 +224,19 @@ export default function ClinicDashboardPage() {
             </Link>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {(newPatientReferrals.length > 0 ? newPatientReferrals.map((appointment) => ({
+            {newPatientReferrals.length === 0 && newPatients.length === 0 ? (
+              <div className="sm:col-span-3 py-10 flex flex-col items-center justify-center text-center text-gray-400">
+                <Users className="w-8 h-8 text-pink-200 mb-2" />
+                <p className="text-xs font-semibold text-gray-600">No new patient requests yet</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">When patients request an appointment, their referral will appear here.</p>
+              </div>
+            ) : (
+              (newPatientReferrals.length > 0 ? newPatientReferrals.map((appointment) => ({
                 name: appointment.patientName || "Patient",
                 age: appointment.patientAge,
                 concern: appointment.notes || appointment.conditionName || "Appointment request",
                 avatar: appointment.patientAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(appointment.patientName || "P")}&background=fce7f3&color=c0166a`,
-            })) : newPatients).map((p) => (<div key={p.name} className="rounded-2xl border border-gray-100 p-4 flex flex-col items-center text-center gap-2 hover:border-pink-200 hover:shadow-sm transition-all">
+              })) : newPatients).map((p) => (<div key={p.name} className="rounded-2xl border border-gray-100 p-4 flex flex-col items-center text-center gap-2 hover:border-pink-200 hover:shadow-sm transition-all">
                 <div className="relative">
                   <img src={p.avatar} alt={p.name} className="w-16 h-16 rounded-full object-cover border-2 border-pink-100" onError={(e) => {
                     (e.target as HTMLImageElement).src =
@@ -244,7 +259,8 @@ export default function ClinicDashboardPage() {
                     <MoreVertical className="w-3.5 h-3.5 text-gray-400"/>
                   </button>
                 </div>
-              </div>))}
+              </div>))
+            )}
           </div>
         </motion.div>
 
@@ -272,22 +288,27 @@ export default function ClinicDashboardPage() {
           <div className="grid grid-cols-7 text-center gap-y-1">
             {calDays.map((d) => (<button key={d} className={`w-7 h-7 mx-auto rounded-full text-[11px] font-semibold transition-colors ${d === today
                     ? "bg-[#c0166a] text-white shadow"
-                    : d === 15 || d === 16
-                        ? "bg-gray-900 text-white"
-                        : "text-gray-600 hover:bg-pink-50"}`}>
+                    : "text-gray-600 hover:bg-pink-50"}`}>
                 {d}
               </button>))}
           </div>
 
           {/* Appointments list */}
           <div className="space-y-2 pt-1">
-            {(upcomingAppointments.length > 0 ? upcomingAppointments.map((appointment) => ({
+            {upcomingAppointments.length === 0 && calendarAppointments.length === 0 ? (
+              <div className="py-6 flex flex-col items-center justify-center text-center text-gray-400">
+                <CalendarX className="w-7 h-7 text-pink-200 mb-1.5" />
+                <p className="text-xs font-semibold text-gray-600">No appointments for today</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Scheduled visits will show here.</p>
+              </div>
+            ) : (
+              (upcomingAppointments.length > 0 ? upcomingAppointments.map((appointment) => ({
                 name: appointment.patientName || "Patient",
                 type: appointment.conditionName || "Consultation",
                 status: "today",
                 time: appointment.time || "Schedule pending",
                 avatar: appointment.patientAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(appointment.patientName || "P")}&background=fce7f3&color=c0166a`,
-            })) : calendarAppointments).map((a) => (<div key={a.name} className="flex items-center gap-2">
+              })) : calendarAppointments).map((a) => (<div key={a.name} className="flex items-center gap-2">
                 <img src={a.avatar} alt={a.name} className="w-7 h-7 rounded-full object-cover flex-shrink-0" onError={(e) => {
                     (e.target as HTMLImageElement).src =
                         `https://ui-avatars.com/api/?name=${encodeURIComponent(a.name)}&background=fce7f3&color=c0166a&size=56`;
@@ -299,7 +320,8 @@ export default function ClinicDashboardPage() {
                 {a.status === "visited" && (<span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700">Visited</span>)}
                 {a.status === "today" && (<span className="text-[10px] font-semibold text-gray-500 whitespace-nowrap">Today at<br />{a.time}</span>)}
                 {a.status === "cancelled" && (<span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">Cancelled</span>)}
-              </div>))}
+              </div>))
+            )}
           </div>
         </motion.div>
       </div>

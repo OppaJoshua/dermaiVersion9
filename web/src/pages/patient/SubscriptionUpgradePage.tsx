@@ -4,6 +4,8 @@ import { motion } from "framer-motion";
 import { Sparkles, ArrowLeft, Crown, CalendarDays, Calendar, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSubscriptionPlans } from "@/lib/store";
+import gcashLogo from "@/assets/gcash.png";
+import mayaLogo from "@/assets/maya.png";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
 const PAYMONGO_PUBLIC_KEY = import.meta.env.VITE_PAYMONGO_PUBLIC_KEY || "";
@@ -351,26 +353,35 @@ export default function SubscriptionUpgradePage() {
                         type="button"
                         onClick={() => setPaymentMethod("gcash")}
                         className={cn(
-                          "flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 font-bold text-sm transition-all",
+                          "flex items-center justify-center h-14 px-4 rounded-2xl border-2 transition-all cursor-pointer",
                           paymentMethod === "gcash"
-                            ? "border-blue-500 bg-blue-50 text-blue-600"
-                            : "border-gray-200 bg-white text-gray-500 hover:border-gray-300"
+                            ? "border-blue-500 bg-blue-50/70 shadow-sm ring-2 ring-blue-500/20"
+                            : "border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/60"
                         )}
+                        aria-label="Pay with GCash"
                       >
-                        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" /><text x="12" y="16" textAnchor="middle" fill="white" fontSize="10" fontWeight="bold">G</text></svg>
-                        GCash
+                        <img
+                          src={gcashLogo}
+                          alt="GCash"
+                          className="h-6 w-auto object-contain"
+                        />
                       </button>
                       <button
                         type="button"
                         onClick={() => setPaymentMethod("maya")}
                         className={cn(
-                          "flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 font-bold text-sm transition-all",
+                          "flex items-center justify-center h-14 px-4 rounded-2xl border-2 transition-all cursor-pointer",
                           paymentMethod === "maya"
-                            ? "border-green-500 bg-green-50 text-green-600"
-                            : "border-gray-200 bg-white text-gray-500 hover:border-gray-300"
+                            ? "border-emerald-500 bg-emerald-50/70 shadow-sm ring-2 ring-emerald-500/20"
+                            : "border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/60"
                         )}
+                        aria-label="Pay with Maya"
                       >
-                        <span className="text-lg font-black tracking-tight">maya</span>
+                        <img
+                          src={mayaLogo}
+                          alt="Maya"
+                          className="h-6 w-auto object-contain"
+                        />
                       </button>
                     </div>
                   </div>

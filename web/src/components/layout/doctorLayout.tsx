@@ -8,7 +8,9 @@ import {
   ChevronRight,
   Stethoscope,
   History,
+  Settings,
   X,
+  User,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useRef } from "react";
@@ -23,21 +25,58 @@ const sidebarLinks = [
   { label: "Review Patient", path: "/doctor/appointments", icon: Calendar },
   { label: "Assigned Appointment", path: "/doctor/scheduled", icon: Stethoscope },
   { label: "Patient History", path: "/doctor/history", icon: History },
+  { label: "Settings", path: "/doctor/settings", icon: Settings },
 ];
-
-// TODO: Replace with Supabase auth session
-const doctorName = "";
-const doctorClinic = "";
 
 export default function DoctorLayout({ children }: DoctorLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
+  const [docProfile, setDocProfile] = useState<{ name: string; clinic: string; photo?: string }>({
+    name: "",
+    clinic: "",
+  });
   // TODO: Load doctor notifications from Supabase real-time subscription
   const notifications: never[] = [];
   const unreadCount = 0;
   const bellRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const loadProfile = () => {
+      try {
+        const stored = localStorage.getItem("dermai_doctor_profile");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.fullName) {
+            setDocProfile((prev) => ({
+              ...prev,
+              name: parsed.fullName,
+              photo: parsed.photo || prev.photo,
+            }));
+          }
+        }
+        const clinicDocs = localStorage.getItem("dermai_clinic_doctors");
+        if (clinicDocs) {
+          const parsedDocs = JSON.parse(clinicDocs);
+          if (Array.isArray(parsedDocs) && parsedDocs.length > 0) {
+            const first = parsedDocs[0];
+            setDocProfile((prev) => ({
+              name: prev.name || first.name || "Doctor",
+              clinic: first.clinicName || "SkinCare Clinic",
+              photo: prev.photo || first.photo,
+            }));
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+
+    loadProfile();
+    window.addEventListener("storage", loadProfile);
+    return () => window.removeEventListener("storage", loadProfile);
+  }, []);
 
   useEffect(() => {
     if (!bellOpen) return;
@@ -108,14 +147,26 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
         </nav>
 
         <div className="px-3 py-4 border-t border-gray-100 space-y-2">
-          <div className="px-4 py-3 rounded-xl bg-blue-50 border border-blue-100">
-            <div className="flex items-center gap-2">
-              <Stethoscope className="w-4 h-4 text-blue-500 shrink-0" />
+          <div className="px-3.5 py-3 rounded-xl bg-blue-50/70 border border-blue-100">
+            <div className="flex items-center gap-2.5">
+              {docProfile.photo ? (
+                <img
+                  src={docProfile.photo}
+                  alt={docProfile.name || "Doctor"}
+                  className="w-8 h-8 rounded-full object-cover border border-blue-200 shrink-0"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                  <User className="w-4 h-4 text-blue-500" />
+                </div>
+              )}
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-gray-900 truncate">{doctorName || "Doctor"}</p>
-                {doctorClinic && (
-                  <p className="text-[11px] text-blue-600 truncate">{doctorClinic}</p>
-                )}
+                <p className="text-sm font-semibold text-gray-900 truncate">
+                  {docProfile.name || "Doctor"}
+                </p>
+                <p className="text-[11px] text-blue-600 truncate">
+                  {docProfile.clinic || "Clinic Doctor"}
+                </p>
               </div>
             </div>
           </div>

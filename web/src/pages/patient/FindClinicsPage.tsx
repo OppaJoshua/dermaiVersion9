@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, MapPin, Phone, Clock, CheckCircle2, ChevronDown, Calendar, X, Stethoscope, Bookmark, BookmarkCheck } from "lucide-react";
 /* ── Condition → keywords mapping (for flexible matching) ──────── */
+import { supabase } from "@/lib/supabaseClient";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap } from "react-leaflet";
@@ -159,8 +160,23 @@ export default function FindClinicsPage() {
         name?: string;
         servicesOffered?: string;
         location?: string;
+        address?: string;
+        phone?: string;
         consultationFee?: string;
+        openTime?: string;
+        closeTime?: string;
+        operatingDays?: string;
+        doctors?: Array<{ name: string; specializations: string[] }>;
     } | null {
+        try {
+            const raw = localStorage.getItem("dermai_clinic_settings");
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === "object") return parsed;
+            }
+        } catch {
+            /* ignore */
+        }
         return null;
     }
     const allClinicSettings = loadClinicSettings();
@@ -168,41 +184,121 @@ export default function FindClinicsPage() {
     const parseServices = (raw: string): string[] => {
         if (!raw)
             return [];
+        const legacyMap: Record<string, string> = {
+            "Acne Vulgaris (Taghiyawat)": "Acne Vulgaris",
+            "Contact Dermatitis (Skin Allergy)": "Contact Dermatitis",
+            "Atopic Dermatitis (Eczema)": "Atopic Dermatitis",
+            "Melasma (Dark Patches)": "Melasma",
+        };
+        let list: string[] = [];
         try {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed))
-                return parsed as string[];
+                list = parsed as string[];
         }
         catch {
             /* ignore invalid JSON */
         }
-        return raw.split(",").map((s) => s.trim()).filter(Boolean);
+        if (!list.length) {
+            list = raw.split(",").map((s) => s.trim()).filter(Boolean);
+        }
+        return list.map((s) => legacyMap[s] || s);
     };
-    const clinicsWithVerification = useMemo(() => clinicsData.map((clinic) => {
-        const matched = adminClinicApplications.find((app) => isClinicNameMatch(app.name, clinic.name));
-        // Merge live settings services and fee if this clinic matches the registered clinic
-        const mergedConditions = [...clinic.conditionsTreated];
-        let mergedFee = clinic.consultationFee ?? "";
-        if (allClinicSettings?.name &&
-            isClinicNameMatch(allClinicSettings.name, clinic.name)) {
-            if (allClinicSettings.servicesOffered) {
-                const liveServices = parseServices(allClinicSettings.servicesOffered);
-                liveServices.forEach((s) => {
-                    if (!mergedConditions.includes(s))
-                        mergedConditions.push(s);
-                });
-            }
-            if (allClinicSettings.consultationFee) {
-                mergedFee = allClinicSettings.consultationFee;
+    const [dbDoctors, setDbDoctors] = useState<Array<{ name: string; specialization: string }>>([]);
+
+    useEffect(() => {
+        async function fetchDbDoctors() {
+            try {
+                const { data } = await supabase
+                    .from("doctors")
+                    .select("id, name, doctor_specializations(specializations(name))");
+                if (data && data.length > 0) {
+                    const mapped = data
+                        .filter((d: any) => d.name && d.name.trim())
+                        .map((d: any) => {
+                            const specNames = (d.doctor_specializations || [])
+                                .map((ds: any) => ds.specializations?.name)
+                                .filter(Boolean);
+                            return {
+                                name: d.name.trim(),
+                                specialization: specNames.length > 0 ? specNames.join(", ") : "General Dermatology",
+                            };
+                        });
+                    if (mapped.length > 0) {
+                        setDbDoctors(mapped);
+                    }
+                }
+            } catch (err) {
+                console.error("Error loading doctors from database:", err);
             }
         }
-        return {
-            ...clinic,
-            conditionsTreated: mergedConditions,
-            consultationFee: mergedFee,
-            verified: matched ? matched.status === "verified" : clinic.verified,
-        };
-    }), [adminClinicApplications, allClinicSettings]);
+        fetchDbDoctors();
+    }, []);
+
+    const clinicsWithVerification = useMemo(() => {
+        const baseClinics = clinicsData.length > 0 
+            ? clinicsData 
+            : (allClinicSettings?.name ? [
+                {
+                    id: 1,
+                    name: allClinicSettings.name,
+                    address: allClinicSettings.address || allClinicSettings.location || "",
+                    phone: allClinicSettings.phone || "",
+                    facebook: "",
+                    hours: allClinicSettings.openTime && allClinicSettings.closeTime
+                        ? `${allClinicSettings.operatingDays || "Mon-Sat"}: ${allClinicSettings.openTime} - ${allClinicSettings.closeTime}`
+                        : "",
+                    verified: true,
+                    district: allClinicSettings.location || "Cebu City",
+                    lat: 10.3157,
+                    lng: 123.8854,
+                    doctors: [],
+                    conditionsTreated: ["Vitiligo", "Acne Vulgaris", "Atopic Dermatitis", "Contact Dermatitis", "Melasma"],
+                    consultationFee: allClinicSettings.consultationFee || "",
+                }
+            ] : []);
+
+        return baseClinics.map((clinic) => {
+            const matched = adminClinicApplications.find((app) => isClinicNameMatch(app.name, clinic.name));
+            const mergedConditions = [...clinic.conditionsTreated];
+            let mergedFee = clinic.consultationFee ?? "";
+            let mergedDoctors = dbDoctors.length > 0 ? [...dbDoctors] : [...clinic.doctors];
+
+            if (allClinicSettings) {
+                if (allClinicSettings.servicesOffered) {
+                    const liveServices = parseServices(allClinicSettings.servicesOffered);
+                    liveServices.forEach((s) => {
+                        if (!mergedConditions.includes(s))
+                            mergedConditions.push(s);
+                    });
+                }
+                if (allClinicSettings.consultationFee) {
+                    mergedFee = allClinicSettings.consultationFee;
+                }
+                if (allClinicSettings.doctors && allClinicSettings.doctors.length > 0) {
+                    const validDocs = allClinicSettings.doctors
+                        .filter((d) => d.name && d.name.trim())
+                        .map((d) => ({
+                            name: d.name.trim(),
+                            specialization: Array.isArray(d.specializations) && d.specializations.length > 0
+                                ? d.specializations.join(", ")
+                                : "General Dermatology",
+                        }));
+                    if (validDocs.length > 0) {
+                        mergedDoctors = validDocs;
+                    }
+                }
+            }
+
+            return {
+                ...clinic,
+                conditionsTreated: mergedConditions,
+                consultationFee: mergedFee,
+                doctors: mergedDoctors.length > 0 ? mergedDoctors : clinic.doctors,
+                verified: matched ? matched.status === "verified" : clinic.verified,
+            };
+        });
+    }, [adminClinicApplications, allClinicSettings, dbDoctors]);
     // Pending/rejected clinics are not searchable; only verified clinics are visible.
     const searchableClinics = clinicsWithVerification.filter((clinic) => clinic.verified);
     const filteredClinics = searchableClinics.filter((clinic) => {

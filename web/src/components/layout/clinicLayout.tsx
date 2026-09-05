@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { LayoutDashboard, Calendar, Users, Bell, LogOut, Menu, ChevronRight, CheckCircle2, Lock, XCircle, Settings, Stethoscope } from "lucide-react";
+import { LayoutDashboard, Calendar, Users, Bell, LogOut, Menu, ChevronRight, CheckCircle2, Settings, Stethoscope } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useRef } from "react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
@@ -19,7 +19,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [notifOpen, setNotifOpen] = useState(false);
     const notifRef = useRef<HTMLDivElement>(null);
-    const { status: verificationStatus, clinicName } = useClinicVerification();
+    const { clinicName } = useClinicVerification();
     // TODO: Load clinic notifications from Supabase real-time subscription
     const pendingAppointments: never[] = [];
     const doctorReviewNotifs: never[] = [];
@@ -55,32 +55,33 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
           {sidebarLinks.map((link) => {
             const Icon = link.icon;
             const isActive = location.pathname === link.path;
-            const isLocked = link.requiresVerified && verificationStatus !== "verified";
-            return isLocked ? (<div key={link.path} className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-300 cursor-not-allowed select-none" title="Available for Verified clinics only">
-                <Icon className="w-4.5 h-4.5 text-gray-300"/>
+            return (
+              <Link
+                key={link.path}
+                to={link.path}
+                onClick={() => setSidebarOpen(false)}
+                className={cn(
+                  "flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
+                  isActive
+                    ? "bg-magenta-50 text-magenta-600 font-semibold"
+                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+                )}
+              >
+                <Icon className={cn("w-4.5 h-4.5", isActive ? "text-magenta-500" : "text-gray-400")} />
                 <span className="flex-1">{link.label}</span>
-                <Lock className="w-3.5 h-3.5 text-gray-300"/>
-              </div>) : (<Link key={link.path} to={link.path} onClick={() => setSidebarOpen(false)} className={cn("flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all", isActive
-                    ? "bg-magenta-50 text-magenta-600"
-                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900")}>
-                <Icon className={cn("w-4.5 h-4.5", isActive ? "text-magenta-500" : "text-gray-400")}/>
-                <span className="flex-1">{link.label}</span>
-                {isActive && <div className="w-1.5 h-1.5 rounded-full bg-magenta-500"/>}
-              </Link>);
-        })}
+                {isActive && <div className="w-1.5 h-1.5 rounded-full bg-magenta-500" />}
+              </Link>
+            );
+          })}
         </nav>
 
         <div className="px-3 py-4 border-t border-gray-100 space-y-2">
           <div className="px-4 py-2 rounded-xl bg-gray-50 border border-gray-100">
-            <p className="text-sm font-semibold text-gray-900 truncate">{clinicName || "Clinic"}</p>
+            <p className="text-sm font-semibold text-gray-900 truncate">{clinicName || "Clinic Portal"}</p>
             <div className="mt-1">
-              {verificationStatus === "verified" ? (<span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500 text-white text-[10px] font-bold">
-                  <CheckCircle2 className="w-3 h-3"/> Verified
-                </span>) : verificationStatus === "rejected" ? (<span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-bold border border-red-200">
-                  <XCircle className="w-3 h-3"/> Rejected
-                </span>) : (<span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold border border-amber-200">
-                  Pending Verification
-                </span>)}
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
+                <CheckCircle2 className="w-3 h-3" /> Active Clinic
+              </span>
             </div>
           </div>
 
