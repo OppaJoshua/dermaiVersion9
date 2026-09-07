@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import {
   Calendar,
   CheckCircle2,
@@ -16,6 +16,7 @@ import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
+import { supabase } from "@/lib/supabaseClient";
 
 type AppointmentRecord = {
   id: string;
@@ -60,30 +61,147 @@ type DoctorAccount = {
 type ClinicSettings = {
   openTime: string;
   closeTime: string;
-  slotsPerDay: number;
 };
 
 const DEFAULT_SETTINGS: ClinicSettings = {
   openTime: "09:00",
   closeTime: "18:00",
-  slotsPerDay: 10,
 };
 
 export default function ClinicAppointmentsPage() {
-  const { status: verificationStatus } = useClinicVerification();
+  const { status: verificationStatus, clinicName: verifiedClinicName, clinicId } = useClinicVerification();
   const fallbackConditionImage = skinConditions[0]?.image;
-  let clinicName = "";
-  try {
-    const raw = localStorage.getItem("dermai_clinic_settings");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed?.name) clinicName = parsed.name;
+  let clinicName = verifiedClinicName || "";
+  if (!clinicName) {
+    try {
+      const raw = localStorage.getItem("dermai_clinic_settings");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.name) clinicName = parsed.name;
+      }
+    } catch {
+      /* ignore */
     }
-  } catch {
-    /* ignore */
   }
 
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
+  const [clinicDoctors, setClinicDoctors] = useState<DoctorAccount[]>([]);
+  const [_loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!clinicId) return;
+    let cancelled = false;
+
+    async function loadData() {
+      setLoading(true);
+
+      // 1. Fetch clinic doctors from clinic_doctor table
+      const { data: docRows } = await supabase
+        .from("clinic_doctor")
+        .select("doctor_id, doctor_name, invite_email, specialization")
+        .eq("clinic_id", clinicId)
+        .eq("active", true);
+
+      if (!cancelled && docRows) {
+        setClinicDoctors(docRows.map((d: any) => ({
+          id: d.doctor_id,
+          name: d.doctor_name,
+          email: d.invite_email || "",
+          specialization: d.specialization || "Dermatology",
+          clinicName: clinicName || "Clinic",
+        })));
+      }
+
+      // 2. Fetch appointments from patient_appointment table
+      const { data: apptRows } = await supabase
+        .from("patient_appointment")
+        .select(`
+          appointment_id,
+          date,
+          status,
+          notes,
+          clinic_note,
+          skin_photo_url,
+          patient_name,
+          patient_email,
+          patient_contact,
+          patient_address,
+          ai_condition_name,
+          ai_confidence,
+          assigned_doctor_id,
+          doctor_status,
+          doctor_note,
+          doctor_reviewed_at,
+          schedule_sent_to_doctor,
+          created_at,
+          doctor:assigned_doctor_id ( doctor_name )
+        `)
+        .eq("clinic_id", clinicId)
+        .order("created_at", { ascending: false });
+
+      if (!cancelled && apptRows) {
+        const mapped: AppointmentRecord[] = await Promise.all(
+          apptRows.map(async (a: any) => {
+            let photoUrl = a.skin_photo_url || undefined;
+            if (photoUrl && !photoUrl.startsWith("http") && !photoUrl.startsWith("data:")) {
+              try {
+                const { data: signed } = await supabase.storage
+                  .from("scan-uploads")
+                  .createSignedUrl(photoUrl, 3600);
+                if (signed?.signedUrl) {
+                  photoUrl = signed.signedUrl;
+                }
+              } catch {
+                /* ignore */
+              }
+            }
+
+            const apptDate = a.date ? new Date(a.date) : null;
+            const dateStr = apptDate ? `${apptDate.getFullYear()}-${String(apptDate.getMonth() + 1).padStart(2, "0")}-${String(apptDate.getDate()).padStart(2, "0")}` : "";
+            const timeStr = apptDate ? `${String(apptDate.getHours()).padStart(2, "0")}:${String(apptDate.getMinutes()).padStart(2, "0")}` : "";
+
+            let displayStatus: AppointmentRecord["status"] = "pending";
+            if (a.status === "confirmed") displayStatus = "scheduled";
+            else if (a.status === "completed") displayStatus = "accepted";
+            else if (a.status === "cancelled") displayStatus = "rejected";
+
+            return {
+              id: a.appointment_id,
+              clinicId: 0,
+              clinicName: clinicName || "Clinic",
+              patientName: a.patient_name || "Patient",
+              patientEmail: a.patient_email || undefined,
+              patientAddress: a.patient_address || undefined,
+              patientContact: a.patient_contact || undefined,
+              consultationType: "face-to-face" as const,
+              conditionName: a.ai_condition_name || undefined,
+              date: dateStr,
+              time: timeStr,
+              notes: a.notes || "",
+              status: displayStatus,
+              clinicNote: a.clinic_note || undefined,
+              assignedDoctorId: a.assigned_doctor_id || undefined,
+              assignedDoctorName: a.doctor?.doctor_name || undefined,
+              doctorStatus: a.doctor_status || undefined,
+              doctorNote: a.doctor_note || undefined,
+              doctorReviewedAt: a.doctor_reviewed_at || undefined,
+              scheduleSentToDoctor: a.schedule_sent_to_doctor || false,
+              createdAt: a.created_at || new Date().toISOString(),
+              skinPhotoUrl: photoUrl,
+              aiConditionName: a.ai_condition_name || undefined,
+              aiConfidence: a.ai_confidence ? Number(a.ai_confidence) : undefined,
+            };
+          })
+        );
+        setAppointments(mapped);
+      }
+      if (!cancelled) setLoading(false);
+    }
+
+    loadData();
+    return () => { cancelled = true; };
+  }, [clinicId, clinicName]);
+
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -95,7 +213,6 @@ export default function ClinicAppointmentsPage() {
     ).padStart(2, "0")}`;
   });
 
-  const [daySlotLimits, setDaySlotLimits] = useState<Record<string, number>>({});
   const clinicSettings: ClinicSettings = useMemo(() => {
     try {
       const raw = localStorage.getItem("dermai_clinic_settings");
@@ -105,7 +222,6 @@ export default function ClinicAppointmentsPage() {
           return {
             openTime: parsed.openTime || DEFAULT_SETTINGS.openTime,
             closeTime: parsed.closeTime || DEFAULT_SETTINGS.closeTime,
-            slotsPerDay: parsed.slotsPerDay || DEFAULT_SETTINGS.slotsPerDay,
           };
         }
       }
@@ -114,8 +230,6 @@ export default function ClinicAppointmentsPage() {
     }
     return DEFAULT_SETTINGS;
   }, []);
-  const getSlotsForDate = (date: string) => daySlotLimits[date] ?? clinicSettings.slotsPerDay;
-  const [slotInput, setSlotInput] = useState(() => String(clinicSettings.slotsPerDay));
 
   const [pendingAssign, setPendingAssign] = useState<{
     appointmentId: string;
@@ -142,37 +256,8 @@ export default function ClinicAppointmentsPage() {
   const [selectedPresetReason, setSelectedPresetReason] = useState("");
   const [rejectError, setRejectError] = useState("");
 
-  const clinicDoctors: DoctorAccount[] = useMemo(() => {
-    try {
-      const rawDocs = localStorage.getItem("dermai_clinic_doctors");
-      if (rawDocs) {
-        const parsed = JSON.parse(rawDocs);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch {
-      /* ignore */
-    }
-    return [];
-  }, []);
-
   const [assignError, setAssignError] = useState("");
 
-  const addDoctorForAssignment = () => {
-    // TODO: Load/create doctor via Supabase
-    setAssignError("Please connect the backend to manage doctors.");
-  };
-
-  const saveSlotForSelectedDate = () => {
-    const value = Number(slotInput);
-    if (!Number.isFinite(value) || value < 1) {
-      setAssignError("Slots per day must be at least 1.");
-      return;
-    }
-    setAssignError("");
-    const next = { ...daySlotLimits, [selectedDate]: value };
-    setDaySlotLimits(next);
-    // TODO: Save slot limits to Supabase
-  };
 
   const calendarCells = useMemo(() => {
     const start = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
@@ -222,10 +307,20 @@ export default function ClinicAppointmentsPage() {
   ).length;
   const rejectedCount = appointments.filter((a) => a.status === "rejected").length;
 
-  const rejectRequest = (id: string, reason?: string) => {
-    // TODO: Update appointment status to 'rejected' in Supabase
-    // TODO: Trigger patient notification via Supabase real-time
+  const rejectRequest = async (id: string, reason?: string) => {
     const rejectionReason = reason?.trim() || "Request declined by clinic scheduling.";
+    try {
+      await supabase
+        .from("patient_appointment")
+        .update({
+          status: "cancelled",
+          clinic_note: rejectionReason,
+        })
+        .eq("appointment_id", id);
+    } catch (err: any) {
+      console.error("Failed to reject appointment in Supabase:", err.message);
+    }
+
     setAppointments((prev) =>
       prev.map((appt) =>
         appt.id === id
@@ -256,11 +351,11 @@ export default function ClinicAppointmentsPage() {
       appointmentId,
       date: appointment?.date || selectedDate,
       time: appointment?.time || clinicSettings.openTime,
-      doctorId: clinicDoctors.find((doctor) => doctor.email === appointment?.assignedDoctorId)?.id || "",
+      doctorId: clinicDoctors.find((doctor) => doctor.id === appointment?.assignedDoctorId)?.id || "",
     });
   };
 
-  const confirmAssign = () => {
+  const confirmAssign = async () => {
     if (!pendingAssign) return;
     setAssignError("");
 
@@ -280,8 +375,21 @@ export default function ClinicAppointmentsPage() {
       return;
     }
 
-    // TODO: Save assigned schedule to Supabase
-    // TODO: Notify doctor & patient via Supabase real-time
+    try {
+      await supabase
+        .from("patient_appointment")
+        .update({
+          status: "confirmed",
+          date: `${pendingAssign.date}T${pendingAssign.time}:00`,
+          assigned_doctor_id: doctor.id,
+          schedule_sent_to_doctor: true,
+          clinic_note: "Your schedule has been assigned by the clinic.",
+        })
+        .eq("appointment_id", pendingAssign.appointmentId);
+    } catch (err: any) {
+      console.error("Failed to save schedule in Supabase:", err.message);
+    }
+
     setAppointments((prev) =>
       prev.map((appt) => {
         if (appt.id !== pendingAssign.appointmentId) return appt;
@@ -290,7 +398,7 @@ export default function ClinicAppointmentsPage() {
           date: pendingAssign.date,
           time: pendingAssign.time,
           status: "scheduled" as const,
-          assignedDoctorId: doctor.email,
+          assignedDoctorId: doctor.id,
           assignedDoctorName: doctor.name,
           doctorStatus: undefined,
           scheduleSentToDoctor: true,
@@ -301,17 +409,29 @@ export default function ClinicAppointmentsPage() {
     setPendingAssign(null);
   };
 
-  const assignDoctor = () => {
+  const assignDoctor = async () => {
     if (!assignDoctorModal || !selectedDoctorId) return;
     const doc = clinicDoctors.find((d) => d.id === selectedDoctorId);
     if (!doc) return;
-    // TODO: Assign doctor in Supabase
+
+    try {
+      await supabase
+        .from("patient_appointment")
+        .update({
+          assigned_doctor_id: doc.id,
+          doctor_status: "pending-review",
+        })
+        .eq("appointment_id", assignDoctorModal.appointmentId);
+    } catch (err: any) {
+      console.error("Failed to assign doctor in Supabase:", err.message);
+    }
+
     setAppointments((prev) =>
       prev.map((a) => {
         if (a.id !== assignDoctorModal.appointmentId) return a;
         return {
           ...a,
-          assignedDoctorId: doc.email,
+          assignedDoctorId: doc.id,
           assignedDoctorName: doc.name,
           doctorStatus: "pending-review" as const,
         };
@@ -322,8 +442,16 @@ export default function ClinicAppointmentsPage() {
     setAssignError("");
   };
 
-  const sendScheduleToDoctor = (appointmentId: string) => {
-    // TODO: Finalize and send schedule to doctor in Supabase
+  const sendScheduleToDoctor = async (appointmentId: string) => {
+    try {
+      await supabase
+        .from("patient_appointment")
+        .update({ schedule_sent_to_doctor: true })
+        .eq("appointment_id", appointmentId);
+    } catch (err: any) {
+      console.error("Failed to update scheduleSentToDoctor in Supabase:", err.message);
+    }
+
     setAppointments((prev) =>
       prev.map((a) =>
         a.id === appointmentId ? { ...a, scheduleSentToDoctor: true } : a
@@ -425,27 +553,6 @@ export default function ClinicAppointmentsPage() {
             </div>
           </div>
 
-          <div className="mb-4 rounded-xl border border-magenta-100 bg-magenta-50 p-3">
-            <p className="text-xs font-semibold text-magenta-700 mb-2">Dynamic Slots for {selectedDate}</p>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={1}
-                value={slotInput}
-                onChange={(e) => setSlotInput(e.target.value)}
-                className="w-24 px-3 py-2 rounded-lg border border-magenta-200 text-xs text-magenta-900 outline-none"
-              />
-              <button
-                onClick={saveSlotForSelectedDate}
-                className="px-3 py-2 rounded-lg bg-magenta-500 text-white text-xs font-semibold hover:bg-magenta-600"
-              >
-                Save Day Slots
-              </button>
-              <span className="text-[11px] text-magenta-600">
-                Default: {clinicSettings.slotsPerDay}
-              </span>
-            </div>
-          </div>
 
           <div className="grid grid-cols-7 gap-2 text-center text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2 px-1">
             {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
@@ -466,7 +573,6 @@ export default function ClinicAppointmentsPage() {
                   onClick={() => {
                     setSelectedDate(cell.key);
                     setDayDetailDate(cell.key);
-                    setSlotInput(String(getSlotsForDate(cell.key)));
                   }}
                   className={`min-h-[106px] rounded-xl border p-2 text-left transition-colors cursor-pointer ${
                     isSelected
@@ -483,7 +589,6 @@ export default function ClinicAppointmentsPage() {
                   >
                     {cell.date.getDate()}
                   </p>
-                  <p className="mt-1 text-[10px] text-gray-500">{used}/{capacity} slots</p>
 
                   <div className="mt-2 space-y-1">
                     {dayAppointments.some((a) => a.status === "scheduled" || a.status === "accepted") && (

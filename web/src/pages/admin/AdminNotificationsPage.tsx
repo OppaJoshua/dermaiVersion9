@@ -1,8 +1,10 @@
-import { useState } from "react";
-import { Bell, CheckCircle2, Filter, AlertTriangle, Send, Megaphone, CreditCard, HelpCircle } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Bell, CheckCircle2, Filter, AlertTriangle, Send, Megaphone, CreditCard, HelpCircle, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { logAdminAction } from "@/lib/auditLog";
+import { supabase } from "@/lib/supabaseClient";
+
 type Broadcast = {
     id: string;
     title: string;
@@ -10,6 +12,7 @@ type Broadcast = {
     audience: "All Users" | "Premium Only" | "Free Only";
     sentAt: string;
 };
+
 type AdminNotification = {
     id: string;
     type: "clinic-approved" | "clinic-rejected" | "new-subscription" | "new-ticket";
@@ -18,33 +21,139 @@ type AdminNotification = {
     message: string;
     timestamp: string;
 };
+
 type FilterType = "all" | "clinic-approved" | "clinic-rejected" | "new-subscription" | "new-ticket";
-// TODO: Load system quality alerts from Supabase
+
 const seedAlerts: Array<{ id: string; title: string; text: string; level: string }> = [];
+
 export default function AdminNotificationsPage() {
     const [filter, setFilter] = useState<FilterType>("all");
     const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
+    const [notifications, setNotifications] = useState<AdminNotification[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [sending, setSending] = useState(false);
     const [title, setTitle] = useState("");
     const [message, setMessage] = useState("");
     const [audience, setAudience] = useState<"All Users" | "Premium Only" | "Free Only">("All Users");
-    // TODO: Load admin notifications from Supabase
-    const notifications: AdminNotification[] = [];
-    const sendBroadcast = () => {
+
+    const fetchNotifications = async () => {
+        setLoading(true);
+        try {
+            const list: AdminNotification[] = [];
+
+            // 1. Fetch from user_notification
+            const { data: notifs } = await supabase
+                .from("user_notification")
+                .select("notif_id, type, title, body, created_at")
+                .order("created_at", { ascending: false })
+                .limit(25);
+
+            if (notifs) {
+                notifs.forEach((n) => {
+                    let mappedType: AdminNotification["type"] = "new-ticket";
+                    if (n.type?.includes("clinic")) {
+                        mappedType = n.type.includes("reject") ? "clinic-rejected" : "clinic-approved";
+                    } else if (n.type?.includes("sub") || n.type?.includes("plan")) {
+                        mappedType = "new-subscription";
+                    }
+                    list.push({
+                        id: n.notif_id,
+                        type: mappedType,
+                        title: n.title,
+                        message: n.body || "",
+                        timestamp: n.created_at,
+                    });
+                });
+            }
+
+            // 2. Fetch recent support tickets
+            const { data: tickets } = await supabase
+                .from("user_support_ticket")
+                .select("ticket_id, subject, message, created_at")
+                .order("created_at", { ascending: false })
+                .limit(10);
+
+            if (tickets) {
+                tickets.forEach((t) => {
+                    list.push({
+                        id: t.ticket_id,
+                        type: "new-ticket",
+                        title: `Support Ticket: ${t.subject}`,
+                        message: t.message,
+                        timestamp: t.created_at,
+                    });
+                });
+            }
+
+            // 3. Fetch recent clinics
+            const { data: clinics } = await supabase
+                .from("clinic")
+                .select("clinic_id, name, status")
+                .in("status", ["approved", "rejected"])
+                .limit(10);
+
+            if (clinics) {
+                clinics.forEach((c) => {
+                    list.push({
+                        id: c.clinic_id,
+                        type: c.status === "approved" ? "clinic-approved" : "clinic-rejected",
+                        clinicName: c.name,
+                        message: `Clinic status set to ${c.status}.`,
+                        timestamp: new Date().toISOString(),
+                    });
+                });
+            }
+
+            // Sort by timestamp
+            list.sort((a, b) => (new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+            setNotifications(list);
+        } catch {
+            setNotifications([]);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchNotifications();
+    }, []);
+
+    const sendBroadcast = async () => {
         if (!title.trim() || !message.trim())
             return;
-        const newBroadcast: Broadcast = {
-            id: `bcast-${Date.now()}`,
-            title: title.trim(),
-            message: message.trim(),
-            audience,
-            sentAt: new Date().toISOString(),
-        };
-        setBroadcasts((prev) => [newBroadcast, ...prev]);
-        logAdminAction("Broadcast Sent", audience, `"${title.trim()}" sent to ${audience}.`, "system");
-        setTitle("");
-        setMessage("");
-        setAudience("All Users");
+        setSending(true);
+        try {
+            const { data: users } = await supabase.from("user").select("user_id").limit(100);
+            if (users && users.length > 0) {
+                const notifRows = users.map((u) => ({
+                    user_id: u.user_id,
+                    type: "broadcast",
+                    title: title.trim(),
+                    body: message.trim(),
+                }));
+                await supabase.from("user_notification").insert(notifRows);
+            }
+
+            const newBroadcast: Broadcast = {
+                id: `bcast-${Date.now()}`,
+                title: title.trim(),
+                message: message.trim(),
+                audience,
+                sentAt: new Date().toISOString(),
+            };
+            setBroadcasts((prev) => [newBroadcast, ...prev]);
+            logAdminAction("Broadcast Sent", audience, `"${title.trim()}" sent to ${audience}.`, "system");
+            setTitle("");
+            setMessage("");
+            setAudience("All Users");
+            await fetchNotifications();
+        } catch {
+            /* ignore */
+        } finally {
+            setSending(false);
+        }
     };
+
     const filtered = notifications.filter((n) => filter === "all" || n.type === filter);
     return (<div>
       <div className="mb-6">
@@ -125,10 +234,17 @@ export default function AdminNotificationsPage() {
       </div>
 
       <div className="space-y-3 mb-6">
-        {filtered.length === 0 && (<div className="bg-white border border-dashed border-magenta-200 rounded-2xl p-8 text-center">
+        {loading ? (
+          <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center">
+            <Loader2 className="w-8 h-8 text-magenta-500 animate-spin mx-auto mb-2" />
+            <p className="text-sm text-gray-400">Loading notifications...</p>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="bg-white border border-dashed border-magenta-200 rounded-2xl p-8 text-center">
             <Bell className="w-8 h-8 text-magenta-300 mx-auto mb-2"/>
             <p className="text-sm text-magenta-500">No notifications found.</p>
-          </div>)}
+          </div>
+        ) : null}
 
         {filtered.map((item, i) => (<motion.div key={item.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} className="bg-white border border-magenta-100 rounded-2xl p-4">
             <div className="flex items-start gap-3">

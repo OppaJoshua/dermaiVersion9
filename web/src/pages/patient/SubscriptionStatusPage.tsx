@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { CheckCircle2, Crown, Zap, AlertCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
+import { supabase } from "../../lib/supabaseClient";
 
 interface SubscriptionInfo {
   isPro: boolean;
@@ -43,21 +44,100 @@ export default function SubscriptionStatusPage() {
 
     const loadSubscriptionStatus = async () => {
       setLoading(true);
+
+      // No user logged in — show Free plan defaults immediately
+      if (!user?.id) {
+        if (isMounted) setLoading(false);
+        return;
+      }
+
       try {
-        // TODO: Replace with real Supabase query once backend table is ready:
-        // const { data: sub } = await supabase.from('subscriptions').select('*').eq('user_id', user?.id).single();
-        // const { count: usedScans } = await supabase.from('ai_scans').select('*', { count: 'exact', head: true }).eq('user_id', user?.id);
+        // Fetch active subscription joined with plan (table may not exist yet)
+        const { data: subData, error: subError } = await supabase
+          .from("user_plan_subscription")
+          .select(`
+            subscription_id,
+            status,
+            billing_cycle,
+            renews_at,
+            plan:plan_id ( name, scan_limit )
+          `)
+          .eq("user_id", user.id)
+          .eq("status", "active")
+          .maybeSingle();
+
+        if (subError) {
+          // Table doesn't exist yet — default to Free plan silently
+          console.warn("user_plan_subscription not available:", subError.message);
+        }
+
+        // Count scans used (table may not exist yet)
+        const { count: usedScans, error: scanError } = await supabase
+          .from("ai_scan_result")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", user.id);
+
+        if (scanError) {
+          console.warn("ai_scan_result not available:", scanError.message);
+        }
+
+        // Fetch billing history (table may not exist yet)
+        const { data: payments, error: payError } = await supabase
+          .from("user_payment")
+          .select("payment_id, payment_date, amount, status, plan:plan_id ( name )")
+          .eq("user_id", user.id)
+          .order("payment_date", { ascending: false })
+          .limit(10);
+
+        if (payError) {
+          console.warn("user_payment not available:", payError.message);
+        }
 
         if (!isMounted) return;
 
-        setSubscription({
-          isPro: false,
-          planName: "Free Plan",
-          maxScans: DEFAULT_MAX_FREE_SCANS,
-          scansUsed: 0,
-          remainingDays: null,
-        });
-        setBillingHistory([]);
+        if (subData && !subError) {
+          const planRaw: any = subData.plan;
+          const plan = Array.isArray(planRaw) ? planRaw[0] : planRaw;
+          const isPro = plan?.scan_limit === -1;
+          const remainingDays = subData.renews_at
+            ? Math.max(0, Math.ceil((new Date(subData.renews_at).getTime() - Date.now()) / 86400000))
+            : null;
+
+          setSubscription({
+            isPro,
+            planName: plan?.name ?? "Free Plan",
+            billingCycle: subData.billing_cycle as "monthly" | "yearly",
+            renewsAt: subData.renews_at ?? undefined,
+            remainingDays,
+            maxScans: plan?.scan_limit === -1 ? Infinity : (plan?.scan_limit ?? DEFAULT_MAX_FREE_SCANS),
+            scansUsed: usedScans ?? 0,
+          });
+        } else {
+          // No active subscription or table missing → Free plan
+          setSubscription((prev) => ({
+            ...prev,
+            isPro: false,
+            planName: "Free Plan",
+            maxScans: DEFAULT_MAX_FREE_SCANS,
+            scansUsed: usedScans ?? 0,
+            remainingDays: null,
+          }));
+        }
+
+        if (!payError && payments) {
+          setBillingHistory(
+            payments.map((p: any) => {
+              const planObj = Array.isArray(p.plan) ? p.plan[0] : p.plan;
+              return {
+                id: p.payment_id,
+                date: new Date(p.payment_date).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
+                description: planObj?.name ?? "Plan Payment",
+                amount: `₱${Number(p.amount).toLocaleString()}`,
+                status: (p.status === "success" ? "paid" : p.status === "failed" ? "failed" : "pending") as BillingTransaction["status"],
+              };
+            })
+          );
+        }
       } catch (err) {
         console.error("Failed to load subscription status:", err);
       } finally {

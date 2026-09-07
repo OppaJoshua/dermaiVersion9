@@ -1,4 +1,4 @@
-﻿import { useLocation, Link } from "react-router-dom";
+import { useLocation, Link } from "react-router-dom";
 import {
   UserCircle,
   CalendarDays,
@@ -16,6 +16,8 @@ import {
 import { cn } from "../../lib/utils";
 import { useState, useEffect, useRef } from "react";
 import Logo from "../../assets/logo2.png";
+import { useAuth } from "../../context/AuthContext";
+import { supabase } from "../../lib/supabaseClient";
 
 // ---------------------------------------------------------------------------
 // TYPES
@@ -90,15 +92,99 @@ const allLinks = [
 
 export default function UserLayout({
   children,
-  profile = { fullName: "Patient User", membershipTier: "Free Plan" },
+  profile,
   onLogout,
 }: UserLayoutProps) {
+  const { user } = useAuth();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
 
-  const unreadCount = 0;
+  const [dynamicProfile, setDynamicProfile] = useState<UserProfileSummary>({
+    fullName: profile?.fullName || "",
+    membershipTier: profile?.membershipTier || "Free Plan",
+    profilePictureUrl: profile?.profilePictureUrl,
+    location: profile?.location,
+  });
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadUserData() {
+      if (!user) return;
+
+      // 1. Fetch user name from DB "user" table
+      let name = profile?.fullName || user.user_metadata?.full_name || user.email?.split("@")[0] || "Patient";
+      try {
+        const { data: userData } = await supabase
+          .from("user")
+          .select("full_name")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        if (userData?.full_name) {
+          name = userData.full_name;
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // 2. Fetch membership tier
+      let tier = profile?.membershipTier || "Free Plan";
+      try {
+        const { data: subData } = await supabase
+          .from("user_plan_subscription")
+          .select(`
+            status,
+            plan:plan_id (
+              name,
+              price
+            )
+          `)
+          .eq("user_id", user.id)
+          .eq("status", "active")
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (subData) {
+          const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
+          tier = planObj?.name || "Pro Plan";
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // 3. Fetch unread notification count
+      try {
+        const { count } = await supabase
+          .from("user_notification")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("is_read", false);
+
+        if (!cancelled && count !== null) {
+          setUnreadCount(count);
+        }
+      } catch {
+        /* ignore */
+      }
+
+      if (!cancelled) {
+        setDynamicProfile({
+          fullName: name,
+          membershipTier: tier,
+        });
+      }
+    }
+
+    loadUserData();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, profile]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -110,7 +196,8 @@ export default function UserLayout({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const initial = profile.fullName?.charAt(0)?.toUpperCase() ?? "P";
+  const displayFullName = dynamicProfile.fullName || (user?.email?.split("@")[0] ?? "Patient");
+  const initial = displayFullName.charAt(0)?.toUpperCase() ?? "P";
   const currentPage = allLinks.find((l) => l.path === location.pathname)?.label || "Dashboard";
 
   return (
@@ -153,21 +240,21 @@ export default function UserLayout({
         {/* Patient Account Info */}
         <div className="p-6 border-b border-gray-100">
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-full ring-2 ring-magenta-100 bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-lg font-bold">
-              {profile.profilePictureUrl ? (
-                <img src={profile.profilePictureUrl} alt="Profile" className="w-full h-full object-cover" />
+            <div className="w-12 h-12 rounded-full ring-2 ring-magenta-100 bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-lg font-bold shrink-0">
+              {dynamicProfile.profilePictureUrl ? (
+                <img src={dynamicProfile.profilePictureUrl} alt="Profile" className="w-full h-full object-cover" />
               ) : (
                 initial
               )}
             </div>
-            <div>
-              <p className="text-base font-semibold text-gray-900 leading-tight">{profile.fullName}</p>
-              {profile.membershipTier && (
-                <p className="text-xs text-gray-500">{profile.membershipTier}</p>
+            <div className="min-w-0 flex-1">
+              <p className="text-base font-semibold text-gray-900 leading-tight truncate">{displayFullName}</p>
+              {dynamicProfile.membershipTier && (
+                <p className="text-xs text-gray-500 mt-0.5">{dynamicProfile.membershipTier}</p>
               )}
             </div>
           </div>
-          {profile.location && <p className="text-xs text-gray-400">{profile.location}</p>}
+          {dynamicProfile.location && <p className="text-xs text-gray-400">{dynamicProfile.location}</p>}
         </div>
 
         {/* Navigation Sections */}

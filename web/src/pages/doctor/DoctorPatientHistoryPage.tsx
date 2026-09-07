@@ -1,28 +1,11 @@
-import { useState } from "react";
-import { CheckCircle2, Calendar, User, ScanSearch, X, FileText } from "lucide-react";
+import { useState, useMemo } from "react";
+import { CheckCircle2, Calendar, User, ScanSearch, X, FileText, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
-type AppointmentRecord = {
-    id: string;
-    clinicName: string;
-    patientName?: string;
-    patientAge?: number;
-    patientAvatar?: string;
-    conditionId?: string;
-    conditionName?: string;
-    conditionImage?: string;
-    date: string;
-    time: string;
-    notes: string;
-    status: string;
-    assignedDoctorId?: string;
-    assignedDoctorName?: string;
-    doctorStatus?: string;
-    doctorNote?: string;
-    scheduleSentToDoctor?: boolean;
-    doctorDone?: boolean;
-    createdAt: string;
-};
+import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
+
+type AppointmentRecord = DoctorAppointmentRecord;
+
 function formatDate(dateStr: string): string {
     if (!dateStr)
         return "—";
@@ -51,22 +34,38 @@ function formatTime(timeStr: string): string {
         return timeStr;
     }
 }
+
 export default function DoctorPatientHistoryPage() {
-    // TODO: Load doctor info and appointment history from Supabase auth session
+    const { appointments, loading } = useDoctorAppointments();
     const [viewingAppt, setViewingAppt] = useState<AppointmentRecord | null>(null);
     const [search, setSearch] = useState("");
-    // TODO: Load completed appointments from Supabase
-    const history: AppointmentRecord[] = [];
-    const filtered = history.filter((a) => {
+
+    const history = useMemo(() => {
+        return appointments.filter((a) => a.status === "completed" || a.doctorDone);
+    }, [appointments]);
+
+    const filtered = useMemo(() => {
         const q = search.toLowerCase();
-        return (!q ||
-            (a.patientName || "").toLowerCase().includes(q) ||
-            (a.conditionName || "").toLowerCase().includes(q) ||
-            (a.clinicName || "").toLowerCase().includes(q));
-    });
+        return history.filter((a) => {
+            return (!q ||
+                (a.patientName || "").toLowerCase().includes(q) ||
+                (a.conditionName || "").toLowerCase().includes(q) ||
+                (a.clinicName || "").toLowerCase().includes(q));
+        });
+    }, [history, search]);
+
     const viewCond = viewingAppt?.conditionId
         ? skinConditions.find((c) => c.id === viewingAppt.conditionId)
         : null;
+
+    if (loading) {
+        return (
+            <div className="py-24 text-center">
+                <Loader2 className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
+                <p className="text-sm text-gray-400">Loading patient history records...</p>
+            </div>
+        );
+    }
     return (<div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between gap-4 flex-wrap">

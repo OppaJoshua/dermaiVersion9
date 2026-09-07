@@ -1,34 +1,11 @@
 import { useMemo, useState, useCallback } from "react";
-import { Calendar, User, Stethoscope, ScanSearch, X, FileText, CheckCircle2 } from "lucide-react";
+import { Calendar, User, Stethoscope, ScanSearch, X, FileText, CheckCircle2, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
-type AppointmentRecord = {
-    id: string;
-    clinicName: string;
-    patientName?: string;
-    patientAge?: number;
-    patientAvatar?: string;
-    conditionId?: string;
-    conditionName?: string;
-    conditionImage?: string;
-    date: string;
-    time: string;
-    notes: string;
-    status: "pending" | "accepted" | "scheduled" | "rejected";
-    assignedDoctorId?: string;
-    assignedDoctorName?: string;
-    doctorStatus?: "pending-review" | "approved" | "rejected";
-    doctorNote?: string;
-    scheduleSentToDoctor?: boolean;
-    doctorDone?: boolean;
-    createdAt: string;
-    skinPhotoUrl?: string;
-    aiConditionName?: string;
-    aiConfidence?: number;
-    patientEmail?: string;
-    patientAddress?: string;
-    patientContact?: string;
-};
+import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
+
+type AppointmentRecord = DoctorAppointmentRecord;
+
 function formatDate(dateStr: string): string {
     if (!dateStr)
         return "—";
@@ -57,35 +34,38 @@ function formatTime(timeStr: string): string {
         return timeStr;
     }
 }
-function normalizeDoctorIdentity(value: string) {
-    return value.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
+
 export default function DoctorScheduledAppointmentsPage() {
-    // TODO: Load doctor info from Supabase auth session
-    const doctorName = "";
-    const doctorEmail = "";
+    const { doctorName, appointments, loading, markAppointmentDone } = useDoctorAppointments();
     const [viewingAppt, setViewingAppt] = useState<AppointmentRecord | null>(null);
-    // TODO: Load scheduled appointments from Supabase
-    const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
-    const markAsDone = useCallback((id: string) => {
-        // TODO: Mark appointment as done via Supabase
-        const updated = appointments.map((a) => a.id === id ? { ...a, doctorDone: true } : a);
-        setAppointments(updated);
-        setViewingAppt((prev) => prev?.id === id ? { ...prev, doctorDone: true } : prev);
-    }, [appointments]);
+
+    const markAsDone = useCallback(async (id: string) => {
+        try {
+            await markAppointmentDone(id);
+            setViewingAppt((prev) => prev?.id === id ? { ...prev, doctorDone: true, status: "completed" } : prev);
+        } catch {
+            /* ignore */
+        }
+    }, [markAppointmentDone]);
+
     const scheduled = useMemo<AppointmentRecord[]>(() => {
-        const doctorNameKey = normalizeDoctorIdentity(doctorName);
-        const doctorEmailKey = normalizeDoctorIdentity(doctorEmail);
         return appointments
-            .filter((a) => a.status === "scheduled" &&
-            Boolean(a.date && a.time) &&
-            (normalizeDoctorIdentity(a.assignedDoctorId || "") === doctorEmailKey ||
-                normalizeDoctorIdentity(a.assignedDoctorName || "") === doctorNameKey))
+            .filter((a) => (a.status === "confirmed" || a.status === "scheduled" || a.scheduleSentToDoctor) && a.status !== "completed")
             .sort((a, b) => (a.date > b.date ? 1 : -1));
-    }, [appointments, doctorEmail, doctorName]);
+    }, [appointments]);
+
     const viewCond = viewingAppt?.conditionId
         ? skinConditions.find((c) => c.id === viewingAppt.conditionId)
         : null;
+
+    if (loading) {
+        return (
+            <div className="py-24 text-center">
+                <Loader2 className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
+                <p className="text-sm text-gray-400">Loading assigned appointments...</p>
+            </div>
+        );
+    }
     return (<div className="space-y-6">
       {/* Header */}
       <div>

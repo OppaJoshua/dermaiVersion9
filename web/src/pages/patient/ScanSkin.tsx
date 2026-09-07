@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "../../lib/utils";
+import { useAuth } from "../../context/AuthContext";
+import { supabase } from "../../lib/supabaseClient";
 
 const steps = [
   { label: "Answer Questions", number: 1 },
@@ -314,7 +316,8 @@ interface RecommendedClinic {
 
 export default function ScanSkinPage() {
   const navigate = useNavigate();
-  const isAuthenticated = true;
+  const { user } = useAuth();
+  const isAuthenticated = !!user;
 
   const [currentStep, setCurrentStep] = useState(1);
   const [qIndex, setQIndex] = useState(0);
@@ -348,8 +351,30 @@ export default function ScanSkinPage() {
     const loadSubscription = async () => {
       setSubLoading(true);
       try {
-        // TODO: GET /api/patients/me/subscription from Supabase
-        setSubData({ scansUsed: 0, isPro: false, isDemoAccount: false });
+        if (!user?.id) {
+          setSubData({ scansUsed: 0, isPro: false, isDemoAccount: false });
+          return;
+        }
+
+        const { data: sub } = await supabase
+          .from("user_plan_subscription")
+          .select("status, plan:plan_id(scan_limit)")
+          .eq("user_id", user.id)
+          .eq("status", "active")
+          .maybeSingle();
+
+        const isPro = (sub?.plan as any)?.scan_limit === -1;
+
+        const { count: used } = await supabase
+          .from("ai_scan_result")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", user.id);
+
+        setSubData({
+          scansUsed: used ?? 0,
+          isPro: Boolean(isPro),
+          isDemoAccount: false,
+        });
       } catch (err) {
         console.error("Failed to load subscription data:", err);
       } finally {
@@ -357,7 +382,7 @@ export default function ScanSkinPage() {
       }
     };
     loadSubscription();
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!showResult || !scanResult) return;
@@ -427,16 +452,53 @@ export default function ScanSkinPage() {
     setAnalyzeError(null);
 
     try {
-      const formData = new FormData();
-      formData.append("image_close_up", closeUpFile);
-      formData.append("image_wide", wideFile);
-      formData.append("answers", JSON.stringify(answers)); // raw { q1: 2, q2: 0, ... } — RF does the encoding
+      let uploadedFilePath: string | undefined;
 
-      // TODO: point this at your FastAPI endpoint once the RF + CNN are wired up
-      // const res = await fetch("/api/scans/analyze", { method: "POST", body: formData });
-      // if (!res.ok) throw new Error(`Analyze failed: ${res.status}`);
-      // const result: ScanResultData = await res.json();
-      // setScanResult(result);
+      // 1. If user is logged in, upload the close-up photo to private scan-uploads storage
+      if (user?.id) {
+        const filePath = `${user.id}/${Date.now()}_close_up_${closeUpFile.name}`;
+        const { error: upErr } = await supabase.storage
+          .from("scan-uploads")
+          .upload(filePath, closeUpFile, { upsert: false });
+
+        if (!upErr) {
+          uploadedFilePath = filePath;
+        }
+
+        // 2. Insert analysis row into ai_scan_result table
+        await supabase.from("ai_scan_result").insert({
+          user_id: user.id,
+          confidence_score: 0,
+          status: "pending",
+          photo_url: uploadedFilePath || null,
+          body_part: "Skin Assessment",
+        });
+      }
+
+      // 3. Set dynamic assessment based on the user's real questionnaire answers
+      setScanResult({
+        id: `scan-${Date.now()}`,
+        condition: "Assessment Queued",
+        localName: "Pansamantalang Pagsusuri",
+        confidence: 0,
+        bodyPart: "Uploaded Photos & Questionnaire",
+        date: new Date().toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }),
+        severity: quickPreview.severityLevel,
+        description: "Your responses and skin photos have been securely logged. A certified dermatologist can review these during your clinic appointment.",
+        symptoms: quickPreview.urgentMessage
+          ? [quickPreview.urgentMessage]
+          : ["Symptoms recorded from pre-screening questionnaire"],
+        whoAffected: "General assessment",
+        careTips: [
+          "Do not scratch, peel, or apply unprescribed topical steroids to the area.",
+          "Keep the skin clean with mild, unscented cleanser.",
+          "Book a consultation with a verified clinic for official medical diagnosis.",
+        ],
+        whenToSeeDoctor: quickPreview.urgent
+          ? "Immediate clinic visit recommended due to reported severe symptoms."
+          : "Consult a specialist if symptoms persist or cause discomfort.",
+        imageUrl: closeUpImage || undefined,
+      });
 
       setShowResult(true);
       setCurrentStep(3);

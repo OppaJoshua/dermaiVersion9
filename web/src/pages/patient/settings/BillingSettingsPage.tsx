@@ -1,11 +1,16 @@
-import { CreditCard, Crown, Calendar, CheckCircle2, XCircle, X } from "lucide-react";
+import { CreditCard, Crown, Calendar, CheckCircle2, XCircle, X, Loader2 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
+import { useAuth } from "@/context/AuthContext";
+import { supabase } from "@/lib/supabaseClient";
 
 interface SubData {
   isPro: boolean;
+  planName?: string;
   billingCycle?: "monthly" | "yearly";
-  scansUsed?: number;
+  renewsAt?: string;
+  price?: string;
+  subscriptionId?: string;
 }
 
 interface CardData {
@@ -20,7 +25,6 @@ interface BillingHistoryItem {
 }
 
 function formatCardNumber(value: string) {
-  // Keep only digits, max 16
   const digits = value.replace(/\D/g, "").slice(0, 16);
   return digits.replace(/(.{4})/g, "$1 ").trim();
 }
@@ -32,9 +36,12 @@ function formatExpiry(value: string) {
 }
 
 export default function BillingSettingsPage() {
-  const [sub, setSub] = useState<SubData>({ isPro: false, scansUsed: 0 });
+  const { user } = useAuth();
+  const [sub, setSub] = useState<SubData>({ isPro: false });
   const [card, setCard] = useState<CardData | null>(null);
-  const [billingHistory] = useState<BillingHistoryItem[]>([]);
+  const [billingHistory, setBillingHistory] = useState<BillingHistoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
   const [showCardModal, setShowCardModal] = useState(false);
   const [cardNumber, setCardNumber] = useState("");
   const [cardExpiry, setCardExpiry] = useState("");
@@ -43,7 +50,93 @@ export default function BillingSettingsPage() {
   const [cardSaved, setCardSaved] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  // TODO: Load subscription and payment card from Supabase using authenticated user session
+  const loadBillingData = async () => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      // 1. Load active subscription
+      const { data: subData } = await supabase
+        .from("user_plan_subscription")
+        .select(`
+          subscription_id,
+          started_at,
+          renews_at,
+          status,
+          billing_cycle,
+          plan:plan_id (
+            name,
+            price,
+            scan_limit
+          )
+        `)
+        .eq("user_id", user.id)
+        .eq("status", "active")
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (subData) {
+        const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
+        const renewsFormatted = subData.renews_at
+          ? new Date(subData.renews_at).toLocaleDateString("en-US", {
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+            })
+          : "End of billing period";
+
+        const priceFormatted = planObj?.price
+          ? `₱${Number(planObj.price).toLocaleString()} / ${subData.billing_cycle}`
+          : subData.billing_cycle === "yearly"
+          ? "₱1,999 / year"
+          : "₱199 / month";
+
+        setSub({
+          isPro: true,
+          subscriptionId: subData.subscription_id,
+          planName: planObj?.name || "Pro Plan",
+          billingCycle: subData.billing_cycle as "monthly" | "yearly",
+          renewsAt: renewsFormatted,
+          price: priceFormatted,
+        });
+      } else {
+        setSub({ isPro: false });
+      }
+
+      // 2. Load payment transactions
+      const { data: payments } = await supabase
+        .from("user_payment")
+        .select("payment_id, amount, payment_date, method, status")
+        .eq("user_id", user.id)
+        .order("payment_date", { ascending: false });
+
+      if (payments && payments.length > 0) {
+        const mappedHistory: BillingHistoryItem[] = payments.map((p) => ({
+          date: new Date(p.payment_date).toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          }),
+          amount: `₱${Number(p.amount).toLocaleString()}`,
+          status: p.status === "success" ? "Paid" : p.status,
+        }));
+        setBillingHistory(mappedHistory);
+      } else {
+        setBillingHistory([]);
+      }
+    } catch {
+      // Fallback
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadBillingData();
+  }, [user]);
 
   // Close modal on outside click
   useEffect(() => {
@@ -73,19 +166,34 @@ export default function BillingSettingsPage() {
     const last4 = digits.slice(-4);
     const newCard: CardData = { last4, expiry: cardExpiry };
     setCard(newCard);
-    // TODO: Save payment card via Supabase
     setCardSaved(true);
     setTimeout(() => setShowCardModal(false), 1000);
   };
 
-  const handleCancel = () => {
-    const updated = { ...sub, isPro: false, billingCycle: undefined };
-    setSub(updated);
-    // TODO: Cancel subscription via Supabase
+  const handleCancel = async () => {
+    if (!sub.subscriptionId && !user) return;
+    setCancelling(true);
+    try {
+      if (sub.subscriptionId) {
+        await supabase
+          .from("user_plan_subscription")
+          .update({ status: "cancelled" })
+          .eq("subscription_id", sub.subscriptionId);
+      } else if (user) {
+        await supabase
+          .from("user_plan_subscription")
+          .update({ status: "cancelled" })
+          .eq("user_id", user.id)
+          .eq("status", "active");
+      }
+      await loadBillingData();
+    } catch {
+      // Fallback local update
+      setSub({ isPro: false });
+    } finally {
+      setCancelling(false);
+    }
   };
-
-  const price = sub.billingCycle === "yearly" ? "₱1,999 / year" : "₱199 / month";
-  const nextBilling = sub.billingCycle === "yearly" ? "April 4, 2027" : "May 4, 2026";
 
   return (
     <>
@@ -102,59 +210,69 @@ export default function BillingSettingsPage() {
 
       {/* Current Plan */}
       <div className={`rounded-2xl p-6 mb-6 border ${sub.isPro ? "bg-magenta-50 border-magenta-200" : "bg-white border-gray-100"} shadow-sm`}>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-xl ${sub.isPro ? "bg-magenta-100 text-magenta-600" : "bg-gray-100 text-gray-400"}`}>
-              <Crown className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-base font-bold text-gray-900">{sub.isPro ? "Pro Plan" : "Free Plan"}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{sub.isPro ? price : "3 scan per account"}</p>
-            </div>
-          </div>
-          <span className={`text-xs px-3 py-1 rounded-full font-bold ${sub.isPro ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-            {sub.isPro ? "Active" : "Free"}
-          </span>
-        </div>
-
-        {sub.isPro ? (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm text-gray-700">
-              <Calendar className="w-4 h-4 text-magenta-400" />
-              <span>Next billing date: <strong>{nextBilling}</strong></span>
-            </div>
-            <div className="space-y-1.5">
-              {["Unlimited AI skin scans", "Priority clinic recommendations", "Full skin analysis history", "Cancel anytime"].map((feat) => (
-                <div key={feat} className="flex items-center gap-2 text-sm text-gray-700">
-                  <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
-                  {feat}
-                </div>
-              ))}
-            </div>
-            <button
-              onClick={handleCancel}
-              className="mt-4 flex items-center gap-2 text-sm text-red-500 font-semibold hover:text-red-600 transition-colors"
-            >
-              <XCircle className="w-4 h-4" /> Cancel Subscription
-            </button>
+        {loading ? (
+          <div className="py-8 text-center">
+            <Loader2 className="w-6 h-6 text-magenta-500 animate-spin mx-auto mb-2" />
+            <p className="text-xs text-gray-400">Loading billing details...</p>
           </div>
         ) : (
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              {["3 free AI skin scan", "Basic clinic search", "Limited scan history"].map((feat) => (
-                <div key={feat} className="flex items-center gap-2 text-sm text-gray-500">
-                  <CheckCircle2 className="w-4 h-4 text-gray-300 shrink-0" />
-                  {feat}
+          <>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-xl ${sub.isPro ? "bg-magenta-100 text-magenta-600" : "bg-gray-100 text-gray-400"}`}>
+                  <Crown className="w-5 h-5" />
                 </div>
-              ))}
+                <div>
+                  <p className="text-base font-bold text-gray-900">{sub.isPro ? (sub.planName || "Pro Plan") : "Free Plan"}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{sub.isPro ? sub.price : "1 scan per account"}</p>
+                </div>
+              </div>
+              <span className={`text-xs px-3 py-1 rounded-full font-bold ${sub.isPro ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                {sub.isPro ? "Active" : "Free"}
+              </span>
             </div>
-            <Link
-              to="/dashboard/upgrade"
-              className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 bg-magenta-500 text-white rounded-xl text-sm font-bold hover:bg-magenta-600 transition-colors shadow-sm"
-            >
-              <Crown className="w-4 h-4" /> Upgrade to Pro
-            </Link>
-          </div>
+
+            {sub.isPro ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm text-gray-700">
+                  <Calendar className="w-4 h-4 text-magenta-400" />
+                  <span>Next billing date: <strong>{sub.renewsAt || "End of current billing cycle"}</strong></span>
+                </div>
+                <div className="space-y-1.5">
+                  {["Unlimited AI skin scans", "Priority clinic recommendations", "Full skin analysis history", "Cancel anytime"].map((feat) => (
+                    <div key={feat} className="flex items-center gap-2 text-sm text-gray-700">
+                      <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                      {feat}
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={handleCancel}
+                  disabled={cancelling}
+                  className="mt-4 flex items-center gap-2 text-sm text-red-500 font-semibold hover:text-red-600 transition-colors disabled:opacity-50"
+                >
+                  {cancelling ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />} Cancel Subscription
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  {["1 free AI skin scan", "Basic clinic search", "Limited scan history"].map((feat) => (
+                    <div key={feat} className="flex items-center gap-2 text-sm text-gray-500">
+                      <CheckCircle2 className="w-4 h-4 text-gray-300 shrink-0" />
+                      {feat}
+                    </div>
+                  ))}
+                </div>
+                <Link
+                  to="/dashboard/upgrade"
+                  className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 bg-magenta-500 text-white rounded-xl text-sm font-bold hover:bg-magenta-600 transition-colors shadow-sm"
+                >
+                  <Crown className="w-4 h-4" /> Upgrade to Pro
+                </Link>
+              </div>
+            )}
+          </>
         )}
       </div>
 

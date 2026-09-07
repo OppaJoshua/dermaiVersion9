@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Calendar, Activity, ChevronRight, MapPin, Trash2, CheckCircle2, AlertTriangle, X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { supabase } from "@/lib/supabaseClient";
 
 
 interface SkinHistoryItem {
@@ -17,13 +18,6 @@ interface SkinHistoryItem {
   careTips?: string[];
 }
 
-// TODO: replace with a real fetch from Supabase, e.g.
-// supabase.from('ai_scan_result').select('*').order('scanned_at', { ascending: false })
-async function loadPlaceholderHistory(): Promise<SkinHistoryItem[]> {
-  await new Promise((resolve) => setTimeout(resolve, 400));
-  return [];
-}
-
 export default function PatientSkinHistory() {
   const [history, setHistory] = useState<SkinHistoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -32,21 +26,75 @@ export default function PatientSkinHistory() {
   useEffect(() => {
     let cancelled = false;
 
-    loadPlaceholderHistory().then((data) => {
-      if (!cancelled) {
-        setHistory(data);
-        setIsLoading(false);
-      }
-    });
+    async function loadHistory() {
+      setIsLoading(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      if (!userId || cancelled) { setIsLoading(false); return; }
 
-    return () => {
-      cancelled = true;
-    };
+      const { data, error } = await supabase
+        .from("ai_scan_result")
+        .select(`
+          analysis_id,
+          confidence_score,
+          body_part,
+          scanned_at,
+          photo_url,
+          skin_condition:condition_id (
+            name,
+            local_name,
+            description,
+            skin_condition_care_tip ( tip_text )
+          )
+        `)
+        .eq("user_id", userId)
+        .order("scanned_at", { ascending: false });
+
+      if (cancelled) return;
+
+      if (error) {
+        console.error("[SkinHistory] fetch error:", error.message);
+        setIsLoading(false);
+        return;
+      }
+
+      const mapped: SkinHistoryItem[] = (data ?? []).map((s: {
+        analysis_id: string;
+        confidence_score: number;
+        body_part: string | null;
+        scanned_at: string;
+        photo_url: string | null;
+        skin_condition: {
+          name: string;
+          local_name: string | null;
+          description: string | null;
+          skin_condition_care_tip: { tip_text: string }[];
+        } | null;
+      }) => ({
+        id: s.analysis_id,
+        condition: s.skin_condition?.name ?? "Unknown",
+        localName: s.skin_condition?.local_name ?? undefined,
+        confidence: Math.round(s.confidence_score),
+        bodyPart: s.body_part ?? "Unknown",
+        date: new Date(s.scanned_at).toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }),
+        severity: s.confidence_score >= 80 ? "Severe" : s.confidence_score >= 50 ? "Moderate" : "Mild",
+        imageUrl: s.photo_url ?? undefined,
+        description: s.skin_condition?.description ?? undefined,
+        careTips: s.skin_condition?.skin_condition_care_tip?.map((t) => t.tip_text),
+      }));
+
+      setHistory(mapped);
+      setIsLoading(false);
+    }
+
+    loadHistory();
+    return () => { cancelled = true; };
   }, []);
 
-  const deleteItem = (id: string) => {
-    // TODO: call DELETE /api/skin-history/:id once the backend exists.
+  const deleteItem = async (id: string) => {
     setHistory((prev) => prev.filter((item) => item.id !== id));
+    const { error } = await supabase.from("ai_scan_result").delete().eq("analysis_id", id);
+    if (error) console.error("[SkinHistory] delete error:", error.message);
   };
 
   const filteredHistory = history;

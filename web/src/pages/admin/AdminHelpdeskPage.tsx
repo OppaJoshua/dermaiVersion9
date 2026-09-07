@@ -1,9 +1,12 @@
-import { useState } from "react";
-import { X, MessageSquare } from "lucide-react";
+import { useState, useEffect } from "react";
+import { X, MessageSquare, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { updateHelpdeskTicketStatus } from "@/lib/store";
+import { supabase } from "@/lib/supabaseClient";
+
 type TicketStatus = "open" | "in-progress" | "resolved";
+
 type Ticket = {
     id: string;
     user: string;
@@ -13,29 +16,90 @@ type Ticket = {
     status: TicketStatus;
     createdAt: string;
 };
+
 type FilterType = "all" | TicketStatus;
+
 const statusBadge: Record<TicketStatus, string> = {
     open: "bg-red-50 text-red-600",
     "in-progress": "bg-amber-50 text-amber-600",
     resolved: "bg-green-50 text-green-700",
 };
+
 export default function AdminHelpdeskPage() {
-    // TODO: Load helpdesk tickets from Supabase
     const [tickets, setTickets] = useState<Ticket[]>([]);
+    const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<FilterType>("all");
     const [selectedTicket, setSelectedTicket] = useState<string | null>(null);
+
+    const fetchTickets = async () => {
+        setLoading(true);
+        try {
+            const { data, error } = await supabase
+                .from("user_support_ticket")
+                .select(`
+                    ticket_id,
+                    subject,
+                    message,
+                    status,
+                    created_at,
+                    user:user_id (
+                        full_name,
+                        email
+                    )
+                `)
+                .order("created_at", { ascending: false });
+
+            if (!error && data) {
+                const mapped: Ticket[] = data.map((t: any) => {
+                    const userObj: any = Array.isArray(t.user) ? t.user[0] : t.user;
+                    const statusMap: Record<string, TicketStatus> = {
+                        open: "open",
+                        pending: "in-progress",
+                        closed: "resolved",
+                    };
+                    return {
+                        id: t.ticket_id,
+                        user: userObj?.full_name || "Patient",
+                        email: userObj?.email || "",
+                        subject: t.subject,
+                        message: t.message,
+                        status: statusMap[t.status] || "open",
+                        createdAt: new Date(t.created_at).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                        }),
+                    };
+                });
+                setTickets(mapped);
+            } else {
+                setTickets([]);
+            }
+        } catch {
+            setTickets([]);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchTickets();
+    }, []);
+
     const filtered = tickets.filter((t) => filter === "all" || t.status === filter);
     const modalTicket = tickets.find((t) => t.id === selectedTicket);
     const openCount = tickets.filter((t) => t.status === "open").length;
     const inProgressCount = tickets.filter((t) => t.status === "in-progress").length;
     const resolvedCount = tickets.filter((t) => t.status === "resolved").length;
-    const resolveTicket = (id: string) => {
+
+    const resolveTicket = async (id: string) => {
         setTickets((prev) => prev.map((t) => (t.id === id ? { ...t, status: "resolved" } : t)));
-        updateHelpdeskTicketStatus(id, "resolved");
+        await updateHelpdeskTicketStatus(id, "resolved");
     };
-    const markInProgress = (id: string) => {
+
+    const markInProgress = async (id: string) => {
         setTickets((prev) => prev.map((t) => (t.id === id ? { ...t, status: "in-progress" } : t)));
-        updateHelpdeskTicketStatus(id, "in-progress");
+        await updateHelpdeskTicketStatus(id, "in-progress");
     };
     return (<div className="space-y-6">
       <div>
@@ -85,32 +149,44 @@ export default function AdminHelpdeskPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((ticket) => (<tr key={ticket.id} className="border-t border-gray-50 hover:bg-gray-50/70 transition-colors">
-                  <td className="px-6 py-4 text-sm font-medium text-gray-700">{ticket.id}</td>
-                  <td className="px-6 py-4">
-                    <p className="text-sm font-semibold text-gray-900">{ticket.user}</p>
-                    <p className="text-xs text-gray-400">{ticket.email}</p>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-12 text-center text-sm text-gray-400">
+                    <Loader2 className="w-8 h-8 text-magenta-500 animate-spin mx-auto mb-2" />
+                    Loading support tickets...
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-700 max-w-xs truncate">
-                    {ticket.subject}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{ticket.createdAt}</td>
-                  <td className="px-6 py-4">
-                    <span className={cn("px-3 py-1 rounded-full text-xs font-semibold capitalize", statusBadge[ticket.status])}>
-                      {ticket.status.replace("-", " ")}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <button onClick={() => setSelectedTicket(ticket.id)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-medium hover:bg-blue-100 transition-colors">
-                      <MessageSquare className="w-3.5 h-3.5"/> View
-                    </button>
-                  </td>
-                </tr>))}
-              {filtered.length === 0 && (<tr>
+                </tr>
+              ) : filtered.length === 0 ? (
+                <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-sm text-gray-400">
                     No tickets in this category.
                   </td>
-                </tr>)}
+                </tr>
+              ) : (
+                filtered.map((ticket) => (
+                  <tr key={ticket.id} className="border-t border-gray-50 hover:bg-gray-50/70 transition-colors">
+                    <td className="px-6 py-4 text-sm font-medium text-gray-700">{ticket.id}</td>
+                    <td className="px-6 py-4">
+                      <p className="text-sm font-semibold text-gray-900">{ticket.user}</p>
+                      <p className="text-xs text-gray-400">{ticket.email}</p>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-700 max-w-xs truncate">
+                      {ticket.subject}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500">{ticket.createdAt}</td>
+                    <td className="px-6 py-4">
+                      <span className={cn("px-3 py-1 rounded-full text-xs font-semibold capitalize", statusBadge[ticket.status])}>
+                        {ticket.status.replace("-", " ")}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <button onClick={() => setSelectedTicket(ticket.id)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-medium hover:bg-blue-100 transition-colors">
+                        <MessageSquare className="w-3.5 h-3.5"/> View
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

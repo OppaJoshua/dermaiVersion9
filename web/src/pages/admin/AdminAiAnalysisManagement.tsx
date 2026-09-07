@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { AlertTriangle, CheckCircle2, Filter, ShieldX } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { updatePlatformScanStatus } from "../../lib/store";
+import { supabase } from "../../lib/supabaseClient";
 type AnalysisStatus = "valid" | "flagged" | "invalid";
 type AnalysisRecord = {
     id: number;
@@ -18,9 +18,45 @@ const badgeClasses: Record<AnalysisStatus, string> = {
     invalid: "bg-red-100 text-red-700",
 };
 export default function AdminAiAnalysisManagement() {
-    // TODO: Load AI analysis records from Supabase
     const [records, setRecords] = useState<AnalysisRecord[]>([]);
     const [filter, setFilter] = useState<"all" | "low-confidence" | AnalysisStatus>("all");
+
+    useEffect(() => {
+        let cancelled = false;
+        async function loadRecords() {
+            const { data, error } = await supabase
+                .from("ai_scan_result")
+                .select(`
+                    analysis_id,
+                    confidence_score,
+                    status,
+                    scanned_at,
+                    skin_condition:condition_id ( name ),
+                    user:user_id ( full_name )
+                `)
+                .order("scanned_at", { ascending: false })
+                .limit(100);
+            if (cancelled || error || !data) return;
+            setRecords(data.map((s: {
+                analysis_id: string;
+                confidence_score: number;
+                status: string;
+                scanned_at: string;
+                skin_condition: { name: string } | null;
+                user: { full_name: string } | null;
+            }, idx: number) => ({
+                id: idx + 1,
+                _analysisId: s.analysis_id,
+                patient: (s.user as { full_name: string } | null)?.full_name ?? "Unknown",
+                uploadedAt: new Date(s.scanned_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
+                predictedCondition: (s.skin_condition as { name: string } | null)?.name ?? "Unknown",
+                confidence: Math.round(s.confidence_score),
+                status: (["valid", "flagged", "invalid"].includes(s.status) ? s.status : "valid") as AnalysisStatus,
+            })));
+        }
+        loadRecords();
+        return () => { cancelled = true; };
+    }, []);
     const visibleRecords = useMemo(() => {
         if (filter === "all")
             return records;
@@ -31,19 +67,15 @@ export default function AdminAiAnalysisManagement() {
     const lowConfidenceCount = records.filter((r) => r.confidence < 60).length;
     const flaggedCount = records.filter((r) => r.status === "flagged").length;
     const invalidCount = records.filter((r) => r.status === "invalid").length;
-    const setRecordStatus = (id: number, status: AnalysisStatus, reason?: string) => {
-        const record = records.find((r) => r.id === id) as (AnalysisRecord & {
-            _storeId?: string;
-        }) | undefined;
-        setRecords((prev) => prev.map((record) => record.id === id
-            ? {
-                ...record,
-                status,
-                reason,
-            }
-            : record));
-        if (record?._storeId) {
-            updatePlatformScanStatus(record._storeId, status, reason);
+    const setRecordStatus = async (id: number, status: AnalysisStatus, reason?: string) => {
+        const record = records.find((r) => r.id === id) as (AnalysisRecord & { _analysisId?: string }) | undefined;
+        setRecords((prev) => prev.map((r) => r.id === id ? { ...r, status, reason } : r));
+        if (record?._analysisId) {
+            const { error } = await supabase
+                .from("ai_scan_result")
+                .update({ status })
+                .eq("analysis_id", record._analysisId);
+            if (error) console.error("[AiAnalysis] update status error:", error.message);
         }
     };
     return (<div className="space-y-6">

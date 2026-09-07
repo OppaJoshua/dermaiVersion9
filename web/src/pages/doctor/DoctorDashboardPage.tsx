@@ -1,42 +1,17 @@
 import { Link } from "react-router-dom";
-import { Calendar, CheckCircle2, XCircle, Clock, ChevronRight, Stethoscope } from "lucide-react";
+import { Calendar, CheckCircle2, XCircle, Clock, ChevronRight, Stethoscope, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
-
-type AppointmentRecord = {
-  id: string;
-  clinicName: string;
-  patientName?: string;
-  patientAge?: number;
-  patientAvatar?: string;
-  conditionId?: string;
-  conditionName?: string;
-  conditionImage?: string;
-  date: string;
-  time: string;
-  notes: string;
-  status: "pending" | "accepted" | "scheduled" | "rejected";
-  assignedDoctorId?: string;
-  assignedDoctorName?: string;
-  doctorStatus?: "pending-review" | "approved" | "rejected";
-  doctorNote?: string;
-  doctorReviewedAt?: string;
-  scheduleSentToDoctor?: boolean;
-  createdAt: string;
-};
+import { useDoctorAppointments } from "@/hooks/useDoctorAppointments";
 
 export default function DoctorDashboardPage() {
-  // TODO: Load doctor info and appointments from Supabase using authenticated session
-  const doctorName = "";
-  const doctorClinic = "";
+  const { doctorName, doctorClinic, appointments: allAppointments, loading } = useDoctorAppointments();
   const fallbackImage = skinConditions[0]?.image;
-
-  const allAppointments: AppointmentRecord[] = [];
 
   const pendingReview = allAppointments.filter((a) => a.doctorStatus === "pending-review");
   const approved = allAppointments.filter((a) => a.doctorStatus === "approved");
   const rejected = allAppointments.filter((a) => a.doctorStatus === "rejected");
-  const scheduledSent = allAppointments.filter((a) => a.scheduleSentToDoctor);
+  const scheduledSent = allAppointments.filter((a) => a.scheduleSentToDoctor || a.status === "confirmed" || a.status === "scheduled");
 
   const stats = [
     { label: "Pending Review", value: pendingReview.length, icon: Clock, color: "bg-amber-50 text-amber-600 border-amber-100", iconColor: "text-amber-500", bg: "bg-amber-100" },
@@ -44,6 +19,15 @@ export default function DoctorDashboardPage() {
     { label: "Rejected", value: rejected.length, icon: XCircle, color: "bg-red-50 text-red-600 border-red-100", iconColor: "text-red-500", bg: "bg-red-100" },
     { label: "Schedule Received", value: scheduledSent.length, icon: Calendar, color: "bg-blue-50 text-blue-600 border-blue-100", iconColor: "text-blue-500", bg: "bg-blue-100" },
   ];
+
+  if (loading) {
+    return (
+      <div className="py-24 text-center">
+        <Loader2 className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
+        <p className="text-sm text-gray-400">Loading doctor portal dashboard...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { User, Mail, Phone, Calendar, MapPin, Save, UserCircle } from "lucide-react";
 import { motion } from "framer-motion";
+import { supabase } from "../../lib/supabaseClient";
 
 interface UserProfile {
   fullName: string;
@@ -39,21 +40,44 @@ const EMPTY_PROFILE: UserProfile = {
   profilePicture: undefined,
 };
 
-// TODO: point these at your real endpoints
 async function fetchProfile(): Promise<UserProfile> {
-  const res = await fetch("/api/profile");
-  if (!res.ok) throw new Error("Failed to load profile");
-  return res.json();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user?.id) throw new Error("No authenticated user");
+
+  const { data, error } = await supabase
+    .from("user")
+    .select("full_name, email, phone")
+    .eq("user_id", session.user.id)
+    .single();
+
+  if (error) throw error;
+
+  return {
+    fullName: data.full_name ?? "",
+    email: data.email ?? session.user.email ?? "",
+    contactNumber: data.phone ?? "",
+    gender: "",
+    birthdate: "",
+    district: "",
+    address: "",
+    profilePicture: undefined,
+  };
 }
 
 async function saveProfile(profile: UserProfile): Promise<UserProfile> {
-  const res = await fetch("/api/profile", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(profile),
-  });
-  if (!res.ok) throw new Error("Failed to save profile");
-  return res.json();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user?.id) throw new Error("No authenticated user");
+
+  const { error } = await supabase
+    .from("user")
+    .update({
+      full_name: profile.fullName.trim(),
+      phone: profile.contactNumber.trim() || null,
+    })
+    .eq("user_id", session.user.id);
+
+  if (error) throw error;
+  return profile;
 }
 
 export default function PatientPersonalInformation() {

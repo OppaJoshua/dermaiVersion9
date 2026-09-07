@@ -3,35 +3,41 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Sparkles, ArrowLeft, Crown, CalendarDays, Calendar, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getSubscriptionPlans } from "@/lib/store";
+import { getSubscriptionPlansAsync, type SubscriptionPlan } from "@/lib/store";
+import { useAuth } from "@/context/AuthContext";
 import gcashLogo from "@/assets/gcash.png";
 import mayaLogo from "@/assets/maya.png";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
 const PAYMONGO_PUBLIC_KEY = import.meta.env.VITE_PAYMONGO_PUBLIC_KEY || "";
 
-function getActivePlanPrice(billingType: "monthly" | "yearly"): number {
-  const plans = getSubscriptionPlans();
-  const match = plans.find((p) => p.billingType === billingType && p.status === "active" && p.scanLimit === null);
-  if (match) return match.price;
-  return billingType === "monthly" ? 199 : 1999;
-}
-
 export default function SubscriptionUpgradePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { user } = useAuth();
+  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [isSubscribing, setIsSubscribing] = useState(false);
   const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("monthly");
   const [error, setError] = useState<string | null>(null);
 
   // Controlled form state
   const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState(""); // TODO: Load user email from Supabase session
+  const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<"gcash" | "maya">("gcash");
   const [mobileNumber, setMobileNumber] = useState("");
 
-  const basePrice = billingCycle === "monthly" ? getActivePlanPrice("monthly") : getActivePlanPrice("yearly");
+  useEffect(() => {
+    getSubscriptionPlansAsync(false).then(setPlans).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (user?.email && !email) setEmail(user.email);
+    if (user?.user_metadata?.full_name && !fullName) setFullName(user.user_metadata.full_name);
+  }, [user]);
+
+  const matchedPlan = plans.find((p) => p.billingType === billingCycle && p.status === "active");
+  const basePrice = matchedPlan ? matchedPlan.price : (billingCycle === "monthly" ? 199 : 1999);
   const tax = Math.round(basePrice * 0.12 * 100) / 100;
   const total = Math.round((basePrice + tax) * 100) / 100;
   const billingLabel = billingCycle === "monthly" ? "Monthly" : "Yearly";
@@ -243,14 +249,14 @@ export default function SubscriptionUpgradePage() {
                   <span className="text-magenta-900 font-bold text-lg">₱{tax.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between items-center py-4 text-xl">
-                  <span className="text-magenta-900 font-bold">Total Due Todahaqy</span>
+                  <span className="text-magenta-900 font-bold">Total Due Today</span>
                   <span className="text-magenta-500 font-black text-2xl">₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
 
               <div className="p-4 bg-orange-50 rounded-2xl border border-orange-200">
                 <p className="text-orange-800 text-sm font-medium leading-relaxed">
-                  Subscription renews automatically every {billingCycle === "monthly" ? "month" : "year"} unless canceled. You can cancel at any time from your account settings.
+                  Subscription renews automatically every {billingCycle === "monthly" ? "month" : "year"} unless canceled. You can cancel at any time from your account settings. No refund.
                 </p>
               </div>
             </div>

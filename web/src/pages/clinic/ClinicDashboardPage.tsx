@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { CheckCircle2, Clock, ArrowUpRight, ChevronLeft, ChevronRight, MoreVertical, AlertTriangle, XCircle, FileText, Users, CalendarX, ShieldCheck } from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { supabase } from "@/lib/supabaseClient";
 /* ── Types ─────────────────────────────────────────────────── */
 type AppointmentRecord = {
     id: string;
@@ -22,29 +23,12 @@ type AppointmentRecord = {
     patientAge?: number;
     patientAvatar?: string;
 };
-/* ── Static sample data ─────────────────────────────────────── */
-// TODO: Load patient visit chart data from Supabase
-const chartData: Array<{ day: string; patients: number }> = [];
-const newPatients: Array<{
-    name: string;
-    age: number;
-    concern: string;
-    type: string;
-    avatar: string;
-}> = [];
-const calendarAppointments: Array<{
-    name: string;
-    type: string;
-    status: string;
-    time?: string;
-    avatar: string;
-}> = [];
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 /* ── Custom Tooltip ─────────────────────────────────────────── */
 const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number | string }>; label?: string }) => {
     if (active && payload && payload.length) {
         return (<div className="bg-[#c0166a] text-white text-xs px-3 py-2 rounded-xl shadow-lg">
-        <p className="font-bold">Sep {label}</p>
+        <p className="font-bold">{label}</p>
         <p>{payload[0].value} patients</p>
       </div>);
     }
@@ -52,24 +36,69 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
 };
 /* ── Main Component ─────────────────────────────────────────── */
 export default function ClinicDashboardPage() {
-    let clinicName = "";
-    let clinicLogo = "";
-    try {
-        const raw = localStorage.getItem("dermai_clinic_settings");
-        if (raw) {
-            const parsed = JSON.parse(raw);
-            if (parsed?.name) clinicName = parsed.name;
-            if (parsed?.logo) clinicLogo = parsed.logo;
-        }
-    } catch {
-        /* ignore */
-    }
     const now = new Date();
     const [calMonth] = useState(
         now.toLocaleString("en-PH", { month: "long", year: "numeric" })
     );
-    const appointments: AppointmentRecord[] = [];
-    const { status: verificationStatus } = useClinicVerification();
+    const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
+    const [chartData, setChartData] = useState<Array<{ day: string; patients: number }>>([]);
+
+    const { status: verificationStatus, clinicName, clinicLogo, clinicId } = useClinicVerification();
+
+    useEffect(() => {
+        if (!clinicId) return;
+        let cancelled = false;
+
+        async function loadAppointments() {
+            const { data, error } = await supabase
+                .from("patient_appointment")
+                .select(`
+                    appointment_id,
+                    date,
+                    status,
+                    ai_condition_name,
+                    user:user_id ( full_name )
+                `)
+                .eq("clinic_id", clinicId)
+                .order("date", { ascending: true });
+
+            if (cancelled || error) return;
+
+            const mapped: AppointmentRecord[] = (data ?? []).map((a: {
+                appointment_id: string;
+                date: string;
+                status: string;
+                ai_condition_name: string | null;
+                user: { full_name: string } | null;
+            }) => ({
+                id: a.appointment_id,
+                clinicId: 0,
+                clinicName: clinicName,
+                consultationType: "face-to-face" as const,
+                conditionName: a.ai_condition_name ?? undefined,
+                date: new Date(a.date).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
+                time: new Date(a.date).toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }),
+                notes: "",
+                status: (a.status === "confirmed" ? "accepted" : a.status === "completed" ? "scheduled" : a.status === "cancelled" ? "rejected" : "pending") as AppointmentRecord["status"],
+                createdAt: a.date,
+                patientName: (a.user as { full_name: string } | null)?.full_name ?? "Patient",
+            }));
+
+            if (!cancelled) setAppointments(mapped);
+
+            // Build chart data — count appointments per day-of-week label
+            const dayCounts: Record<string, number> = {};
+            mapped.forEach((appt) => {
+                const label = new Date(appt.createdAt).toLocaleDateString("en-PH", { weekday: "short" });
+                dayCounts[label] = (dayCounts[label] ?? 0) + 1;
+            });
+            if (!cancelled) setChartData(Object.entries(dayCounts).map(([day, patients]) => ({ day, patients })));
+        }
+
+        loadAppointments();
+        return () => { cancelled = true; };
+    }, [clinicId, clinicName]);
+
     const pending = appointments.filter((a) => a.status === "pending").length;
     const accepted = appointments.filter((a) => a.status === "accepted" || a.status === "scheduled").length;
     const uniquePatientCount = new Set(appointments.map((appointment) => appointment.patientName).filter(Boolean)).size;
@@ -139,9 +168,11 @@ export default function ClinicDashboardPage() {
           <span className="text-sm font-semibold text-gray-700">
             {now.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
           </span>
-          <span className="ml-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
-            <CheckCircle2 className="w-3 h-3"/> Active Clinic
-          </span>
+          {verificationStatus === "verified" && (
+            <span className="ml-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
+              <CheckCircle2 className="w-3 h-3"/> Active Clinic
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">

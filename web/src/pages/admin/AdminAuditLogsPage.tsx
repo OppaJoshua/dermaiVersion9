@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { User, CreditCard, Building2, Settings, Search, Scan, CalendarDays, UserCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AuditEntry } from "@/lib/auditLog";
+import { supabase } from "@/lib/supabaseClient";
 
 type ActorFilter = "all" | "admin" | "patient" | "clinic" | "system";
 
@@ -46,14 +47,43 @@ function formatTimestamp(iso: string) {
 export default function AdminAuditLogsPage() {
   const [actorFilter, setActorFilter] = useState<ActorFilter>("all");
   const [search, setSearch] = useState("");
+  const [liveLogs, setLiveLogs] = useState<AuditEntry[]>([]);
 
-  // TODO: Load audit logs from Supabase
-  const allLogs = useMemo(() => {
-    const liveLogs: AuditEntry[] = [];
-    const liveIds = new Set(liveLogs.map((l) => l.id));
-    const merged = [...liveLogs, ...seedLogs.filter((l) => !liveIds.has(l.id))];
-    return merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  useEffect(() => {
+    let cancelled = false;
+    async function loadLogs() {
+      const { data, error } = await supabase
+        .from("system_audit_log")
+        .select("log_id, action, user_type, log_type, timestamp, user:user_id ( full_name )")
+        .order("timestamp", { ascending: false })
+        .limit(500);
+      if (cancelled || error || !data) return;
+      setLiveLogs(data.map((l: {
+        log_id: string;
+        action: string;
+        user_type: string;
+        log_type: string;
+        timestamp: string;
+        user: { full_name: string } | null;
+      }) => ({
+        id: l.log_id,
+        type: l.log_type as AuditEntry["type"],
+        action: l.action,
+        target: (l.user as { full_name: string } | null)?.full_name ?? l.user_type,
+        details: "",
+        performedBy: (l.user as { full_name: string } | null)?.full_name ?? "System",
+        actorType: (l.user_type as AuditEntry["actorType"]) ?? "admin",
+        timestamp: l.timestamp,
+      })));
+    }
+    loadLogs();
+    return () => { cancelled = true; };
   }, []);
+
+  const allLogs = useMemo(() => {
+    const merged = [...liveLogs, ...seedLogs.filter((l) => !liveLogs.some((ll) => ll.id === l.id))];
+    return merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [liveLogs]);
 
   const filtered = allLogs.filter((log) => {
     const matchActor =

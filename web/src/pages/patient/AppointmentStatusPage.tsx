@@ -1,6 +1,9 @@
+import { useState, useEffect } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { supabase } from "@/lib/supabaseClient";
 
 interface Appointment {
+  id: string;
   clinicName: string;
   doctor: string;
   date: string;
@@ -183,8 +186,68 @@ function AppointmentCard({ app }: { app: Appointment }) {
 
 
 const AppointmentStatusPage = () => {
-  // TODO: Load appointments from Supabase using authenticated user session
-  const allAppointments: Appointment[] = [];
+  const [allAppointments, setAllAppointments] = useState<Appointment[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAppointments() {
+      setLoading(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      if (!userId) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("patient_appointment")
+        .select(`
+          appointment_id,
+          date,
+          status,
+          clinic_note,
+          doctor_note,
+          clinic:clinic_id ( name ),
+          doctor:assigned_doctor_id ( doctor_name )
+        `)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+
+      if (cancelled) return;
+
+      if (!error && data) {
+        const mapped: Appointment[] = data.map((a: any) => {
+          const apptDate = a.date ? new Date(a.date) : null;
+          const dateStr = apptDate ? apptDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "Date pending";
+          const timeStr = apptDate ? apptDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : "Time pending";
+
+          let displayStatus: Appointment["status"] = "Pending";
+          if (a.status === "confirmed") displayStatus = "Scheduled";
+          else if (a.status === "completed") displayStatus = "Completed";
+          else if (a.status === "cancelled") displayStatus = "Cancelled";
+          else if (a.doctor_status === "rejected") displayStatus = "Rejected";
+
+          return {
+            id: a.appointment_id,
+            clinicName: a.clinic?.name ?? "Clinic",
+            doctor: a.doctor?.doctor_name ?? "Doctor Assigned by Clinic",
+            date: dateStr,
+            time: timeStr,
+            status: displayStatus,
+            clinicNote: a.clinic_note || undefined,
+            rejectionReason: a.doctor_note || undefined,
+          };
+        });
+        setAllAppointments(mapped);
+      }
+      setLoading(false);
+    }
+
+    loadAppointments();
+    return () => { cancelled = true; };
+  }, []);
 
   // Scheduled and pending appointments appear in Upcoming
   const upcomingAppointments = allAppointments.filter(
@@ -196,6 +259,15 @@ const AppointmentStatusPage = () => {
   );
 
   const renderCards = (apps: Appointment[]) => {
+    if (loading) {
+      return (
+        <div className="flex flex-col items-center justify-center py-14 gap-3">
+          <div className="w-8 h-8 border-3 border-magenta-200 border-t-magenta-600 rounded-full animate-spin" />
+          <p className="text-sm text-gray-500 font-medium">Loading your appointments...</p>
+        </div>
+      );
+    }
+
     if (apps.length === 0) {
       return (
         <div className="flex flex-col items-center justify-center py-14 gap-3">
@@ -210,8 +282,8 @@ const AppointmentStatusPage = () => {
     }
     return (
       <div className="space-y-4">
-        {apps.map((app, i) => (
-          <AppointmentCard key={i} app={app} />
+        {apps.map((app) => (
+          <AppointmentCard key={app.id} app={app} />
         ))}
       </div>
     );
@@ -233,13 +305,13 @@ const AppointmentStatusPage = () => {
                 value="upcoming"
                 className="rounded-lg py-2 text-sm font-semibold transition-all data-[state=active]:bg-magenta-500 data-[state=active]:text-white data-[state=active]:shadow-sm text-gray-500"
               >
-                Upcoming
+                Upcoming ({upcomingAppointments.length})
               </TabsTrigger>
               <TabsTrigger
                 value="past"
                 className="rounded-lg py-2 text-sm font-semibold transition-all data-[state=active]:bg-magenta-500 data-[state=active]:text-white data-[state=active]:shadow-sm text-gray-500"
               >
-                Past
+                Past ({pastAppointments.length})
               </TabsTrigger>
             </TabsList>
           </div>

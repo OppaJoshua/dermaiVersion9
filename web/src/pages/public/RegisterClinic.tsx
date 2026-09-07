@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { Link } from "react-router-dom";
 import Logo from "../../assets/logo2.png";
+import { supabase } from "@/lib/supabaseClient";
 import {
   ArrowLeft,
   Upload,
@@ -33,6 +34,7 @@ export default function RegisterClinic() {
     doctorName: "",
     specialization: specializations[0],
     servicesOffered: "",
+    consultationFee: "500",
     description: "",
     operatingDays: "Monday - Saturday",
     openTime: "08:00",
@@ -60,10 +62,71 @@ export default function RegisterClinic() {
     if (logoInputRef.current) logoInputRef.current.value = "";
   };
 
-  // TODO: connect this to the FastAPI backend / Supabase.
-  // For now this just switches the UI to the "submitted" state.
-  const handleRegister = (e: FormEvent<HTMLFormElement>) => {
+  const handleRegister = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+
+    const servicesList = formData.servicesOffered
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const feeNum = parseFloat(formData.consultationFee);
+      const { data: newClinic, error: clinicErr } = await supabase
+        .from("clinic")
+        .insert({
+          name: formData.name.trim(),
+          address: formData.address.trim(),
+          district: formData.address.trim(),
+          email: formData.email.trim(),
+          phone: formData.phone.trim(),
+          consultation_fee: isNaN(feeNum) ? null : feeNum,
+          description: formData.description.trim() || null,
+          status: "pending",
+          owner_user_id: session?.user?.id || null,
+        })
+        .select("clinic_id")
+        .maybeSingle();
+
+      if (clinicErr) {
+        console.error("Clinic insert failed:", clinicErr.message);
+      } else if (newClinic?.clinic_id) {
+        // 1. Insert services offered
+        if (servicesList.length > 0) {
+          await supabase.from("clinic_service_offered").insert(
+            servicesList.map((s) => ({
+              clinic_id: newClinic.clinic_id,
+              service_name: s,
+            }))
+          );
+        }
+
+        // 2. Insert primary doctor into clinic_doctor
+        if (formData.doctorName.trim()) {
+          await supabase.from("clinic_doctor").insert({
+            clinic_id: newClinic.clinic_id,
+            doctor_name: formData.doctorName.trim(),
+            prc_license: formData.prcLicense.trim() || "PRC-PENDING",
+            specialization: formData.specialization || "General Dermatology",
+            active: true,
+          });
+        }
+
+        // 3. Insert operating schedule
+        if (formData.openTime && formData.closeTime) {
+          await supabase.from("clinic_operating_hours").insert({
+            clinic_id: newClinic.clinic_id,
+            day_of_week: formData.operatingDays || "Monday - Saturday",
+            open_time: formData.openTime,
+            close_time: formData.closeTime,
+          });
+        }
+      }
+    } catch (err: any) {
+      console.error("Error submitting clinic registration:", err.message);
+    }
+
     setSubmitted(true);
   };
 
@@ -319,6 +382,25 @@ export default function RegisterClinic() {
                   </option>
                 ))}
               </select>
+            </div>
+
+            {/* Consultation / Service Fee */}
+            <div>
+              <label className="block text-sm font-semibold text-magenta-900 mb-1.5">
+                Service Fee (Starts at ₱) *
+              </label>
+              <div className="flex items-center border border-magenta-200 rounded-xl overflow-hidden focus-within:border-magenta-500 focus-within:ring-2 focus-within:ring-magenta-500/10">
+                <span className="px-4 py-2.5 text-sm text-magenta-500 bg-magenta-50 border-r border-magenta-200 select-none font-bold">₱</span>
+                <input
+                  type="number"
+                  required
+                  min={0}
+                  value={formData.consultationFee}
+                  onChange={(e) => setFormData({...formData, consultationFee: e.target.value})}
+                  placeholder="e.g. 500"
+                  className="flex-1 px-4 py-2.5 text-sm text-magenta-900 placeholder:text-magenta-300 outline-none"
+                />
+              </div>
             </div>
 
             {/* Services Offered */}

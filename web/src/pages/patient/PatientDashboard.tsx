@@ -16,6 +16,7 @@ import {
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { skinConditions } from "../public/SkinLibrary";
+import { supabase } from "@/lib/supabaseClient";
 
 type AppointmentRecord = {
   id: string;
@@ -94,29 +95,155 @@ export default function PatientDashboard() {
   const [notifications, setNotifications] = useState<PatientNotif[]>([]);
 
   // TODO: replace with DELETE /api/notifications/:id
-  const dismissNotif = (id: string) => {
+  const dismissNotif = async (id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
+    await supabase.from("user_notification").update({ is_read: true }).eq("notif_id", id);
   };
 
-  // TODO: replace with a bulk-clear endpoint (e.g. POST /api/notifications/clear)
-  const clearAllNotifs = () => {
+  // TODO: replace with a bulk-clear endpoint
+  const clearAllNotifs = async () => {
+    const ids = notifications.map((n) => n.id);
     setNotifications([]);
+    if (ids.length > 0) {
+      await supabase.from("user_notification").update({ is_read: true }).in("notif_id", ids);
+    }
   };
 
   useEffect(() => {
     const loadDashboardData = async () => {
       setLoading(true);
+
+      // Guard outside try so the finally always fires
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      if (!userId) {
+        setLoading(false);
+        return;
+      }
+
       try {
-        // TODO: fetch data from Supabase
-        setProfile({ fullName: "" });
-        setAppointments([]);
-        setHistory([]);
-        setStats({
-          totalScans: "0",
-          conditionsFound: "0",
-          clinicsSaved: "0",
-          lastScan: "—",
+
+        // Fetch user profile
+        const { data: userRow } = await supabase
+          .from("user")
+          .select("full_name")
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        setProfile({ fullName: userRow?.full_name ?? "" });
+
+        // Fetch recent appointments
+        const { data: apptRows } = await supabase
+          .from("patient_appointment")
+          .select(`
+            appointment_id,
+            date,
+            status,
+            ai_condition_name,
+            clinic:clinic_id ( name )
+          `)
+          .eq("user_id", userId)
+          .order("date", { ascending: false })
+          .limit(10);
+
+        const mappedAppts: AppointmentRecord[] = (apptRows ?? []).map((a: any) => {
+          const clinicObj = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
+          return {
+            id: a.appointment_id,
+            clinicId: 0,
+            clinicName: clinicObj?.name ?? "Clinic",
+            consultationType: "face-to-face" as const,
+            conditionName: a.ai_condition_name ?? undefined,
+            date: new Date(a.date).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
+            time: "",
+            notes: "",
+            status: (a.status === "confirmed" ? "accepted" : a.status === "completed" ? "scheduled" : a.status === "cancelled" ? "rejected" : "pending") as AppointmentRecord["status"],
+            createdAt: a.date,
+          };
         });
+        setAppointments(mappedAppts);
+
+        // Fetch scan history
+        const { data: scanRows } = await supabase
+          .from("ai_scan_result")
+          .select(`
+            analysis_id,
+            confidence_score,
+            scanned_at,
+            body_part,
+            skin_condition:condition_id ( condition_id, name )
+          `)
+          .eq("user_id", userId)
+          .order("scanned_at", { ascending: false })
+          .limit(5);
+
+        const mappedHistory: AnalysisRecord[] = (scanRows ?? []).map((s: any) => {
+          const skinConditionObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+          return {
+            id: s.analysis_id,
+            conditionId: skinConditionObj?.condition_id ?? undefined,
+            condition: skinConditionObj?.name ?? "Unknown",
+            confidence: Math.round(s.confidence_score),
+            date: new Date(s.scanned_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
+            severity: s.confidence_score >= 80 ? "High" : s.confidence_score >= 50 ? "Moderate" : "Low",
+            severityColor: s.confidence_score >= 80 ? "text-red-500" : s.confidence_score >= 50 ? "text-amber-500" : "text-green-500",
+            bodyPart: s.body_part ?? "Unknown",
+          };
+        });
+        setHistory(mappedHistory);
+
+        // Fetch exact total scans count from ai_scan_result
+        const { count: exactScanCount } = await supabase
+          .from("ai_scan_result")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", userId);
+
+        const conditions = new Set((scanRows ?? []).map((s: any) => {
+          const sc = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+          return sc?.name;
+        }).filter(Boolean));
+        const lastScan = (scanRows ?? []).length > 0
+          ? new Date((scanRows![0] as { scanned_at: string }).scanned_at).toLocaleDateString("en-PH", { month: "short", day: "numeric" })
+          : "—";
+
+        // Fetch real saved-clinic count from user_saved_clinic table
+        const { count: savedCount } = await supabase
+          .from("user_saved_clinic")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", userId);
+
+        setStats({
+          totalScans: String(exactScanCount ?? 0),
+          conditionsFound: String(conditions.size),
+          clinicsSaved: String(savedCount ?? 0),
+          lastScan,
+        });
+
+        // Fetch notifications ordered by created_at descending
+        const { data: notifRows } = await supabase
+          .from("user_notification")
+          .select("notif_id, type, subtype, title, body, is_read, created_at")
+          .eq("user_id", userId)
+          .eq("is_read", false)
+          .order("created_at", { ascending: false })
+          .limit(10);
+
+        setNotifications((notifRows ?? []).map((n: {
+          notif_id: string;
+          type: string;
+          subtype: string | null;
+          title: string;
+          body: string | null;
+          is_read: boolean;
+          created_at: string;
+        }) => ({
+          id: n.notif_id,
+          type: (n.type === "appointment-rejected" ? "appointment-rejected" : "appointment-scheduled") as PatientNotif["type"],
+          title: n.title,
+          message: n.body || n.subtype || "",
+          timestamp: n.created_at || new Date().toISOString(),
+          read: n.is_read,
+        })));
       } catch (err) {
         console.error("Failed to load dashboard data:", err);
       } finally {

@@ -47,39 +47,16 @@ const DEFAULT_SPECIALIZATIONS: SpecializationOption[] = [
 ];
 
 export default function ClinicDoctorsPage() {
-  const { clinicName: verifiedClinicName } = useClinicVerification();
+  const { clinicName: verifiedClinicName, clinicId } = useClinicVerification();
   const clinicDisplayName = verifiedClinicName || "Clinic Portal";
 
   // Dynamic specializations: defaults provided for UI, synced from database if available
   const [specializations, setSpecializations] = useState<SpecializationOption[]>(DEFAULT_SPECIALIZATIONS);
-  const [loadingSpecializations] = useState(false);
+  const [loadingSpecializations, setLoadingSpecializations] = useState(false);
 
-  // Doctors: starts clean (empty), loaded from localStorage or database
-  const [allDoctors, setAllDoctors] = useState<DoctorAccount[]>(() => {
-    try {
-      const saved = localStorage.getItem("dermai_clinic_doctors");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          const filtered = parsed.filter(
-            (d) =>
-              d.email !== "maria.reyes@skincarecebu.ph" &&
-              d.email !== "antonio.cruz@skincarecebu.ph" &&
-              d.name !== "Dr. Maria Reyes" &&
-              d.name !== "Dr. Antonio Cruz"
-          );
-          if (filtered.length !== parsed.length) {
-            localStorage.setItem("dermai_clinic_doctors", JSON.stringify(filtered));
-          }
-          return filtered;
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    return [];
-  });
-  const [loadingDoctors] = useState(false);
+  // Doctors: starts clean (empty), loaded from database
+  const [allDoctors, setAllDoctors] = useState<DoctorAccount[]>([]);
+  const [loadingDoctors, setLoadingDoctors] = useState(true);
 
   // Add Form state
   const [form, setForm] = useState({
@@ -90,7 +67,7 @@ export default function ClinicDoctorsPage() {
     selectedSpecializationIds: [] as string[],
   });
   const [formError, setFormError] = useState("");
-  const [savingDoctor] = useState(false);
+  const [savingDoctor, setSavingDoctor] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
 
   // Modals state
@@ -104,16 +81,17 @@ export default function ClinicDoctorsPage() {
     selectedSpecializationIds: [] as string[],
   });
   const [editError, setEditError] = useState("");
-  const [savingEdit] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Delete modal
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [deletingDoctor] = useState(false);
+  const [deletingDoctor, setDeletingDoctor] = useState(false);
 
   const formSectionRef = useRef<HTMLDivElement>(null);
 
   // 1. Fetch specializations dynamically from database if available
   const fetchSpecializations = async () => {
+    setLoadingSpecializations(true);
     try {
       const { data, error } = await supabase
         .from("specializations")
@@ -125,11 +103,14 @@ export default function ClinicDoctorsPage() {
       }
     } catch {
       // Using DEFAULT_SPECIALIZATIONS
+    } finally {
+      setLoadingSpecializations(false);
     }
   };
 
-  // 2. Fetch doctors from database if available
+  // 2. Fetch doctors from database
   const fetchDoctors = async () => {
+    setLoadingDoctors(true);
     try {
       const { data, error } = await supabase
         .from("doctors")
@@ -139,6 +120,7 @@ export default function ClinicDoctorsPage() {
           email,
           contact_number,
           prc_license,
+          photo_url,
           clinic_name,
           status,
           created_at,
@@ -152,63 +134,50 @@ export default function ClinicDoctorsPage() {
         `)
         .order("created_at", { ascending: false });
 
-      if (!error && data && data.length > 0) {
-        const mapped: DoctorAccount[] = data
-          .filter(
-            (doc: any) =>
-              doc.email !== "maria.reyes@skincarecebu.ph" &&
-              doc.email !== "antonio.cruz@skincarecebu.ph" &&
-              doc.name !== "Dr. Maria Reyes" &&
-              doc.name !== "Dr. Antonio Cruz"
-          )
-          .map((doc: any) => {
-            const docSpecs: SpecializationOption[] = (doc.doctor_specializations || [])
-              .map((ds: any) => ds.specializations)
-              .filter(Boolean);
+      if (!error && data) {
+        const mapped: DoctorAccount[] = data.map((doc: any) => {
+          const docSpecs: SpecializationOption[] = (doc.doctor_specializations || [])
+            .map((ds: any) => ds.specializations)
+            .filter(Boolean);
 
-            // Preserve photo from local storage / doctor profile
-            let docPhoto: string | undefined = undefined;
-            try {
-              const localClinicDocs = localStorage.getItem("dermai_clinic_doctors");
-              if (localClinicDocs) {
-                const parsed = JSON.parse(localClinicDocs);
-                const localDoc = parsed.find(
-                  (ld: any) => ld.id === doc.id || ld.email?.toLowerCase() === doc.email?.toLowerCase()
-                );
-                if (localDoc?.photo) docPhoto = localDoc.photo;
-              }
-              if (!docPhoto) {
-                const doctorProfileStr = localStorage.getItem("dermai_doctor_profile");
-                if (doctorProfileStr) {
-                  const dp = JSON.parse(doctorProfileStr);
-                  if (dp.email?.toLowerCase() === doc.email?.toLowerCase() && dp.photo) {
-                    docPhoto = dp.photo;
-                  }
-                }
-              }
-            } catch {
-              /* ignore */
-            }
-
-            return {
-              id: doc.id,
-              name: doc.name,
-              email: doc.email,
-              contactNumber: doc.contact_number || "",
-              prcLicense: doc.prc_license || "",
-              photo: docPhoto,
-              specialization: docSpecs.map((s) => s.name).join(", "),
-              specializations: docSpecs,
-              clinicName: doc.clinic_name || clinicDisplayName,
-              status: doc.status === "Inactive" ? "Inactive" : "Active",
-            };
-          });
+          return {
+            id: doc.id,
+            name: doc.name,
+            email: doc.email,
+            contactNumber: doc.contact_number || "",
+            prcLicense: doc.prc_license || "",
+            photo: doc.photo_url || undefined,
+            specialization: docSpecs.map((s) => s.name).join(", "),
+            specializations: docSpecs,
+            clinicName: doc.clinic_name || clinicDisplayName,
+            status: doc.status === "Inactive" ? "Inactive" : "Active",
+          };
+        });
 
         setAllDoctors(mapped);
-        localStorage.setItem("dermai_clinic_doctors", JSON.stringify(mapped));
+        try {
+          localStorage.setItem("dermai_clinic_doctors", JSON.stringify(mapped));
+        } catch {
+          /* ignore */
+        }
+      } else {
+        // Fallback to local storage cache if offline
+        try {
+          const saved = localStorage.getItem("dermai_clinic_doctors");
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) {
+              setAllDoctors(parsed);
+            }
+          }
+        } catch {
+          /* ignore */
+        }
       }
     } catch {
-      // Local state is used
+      // Local state fallback
+    } finally {
+      setLoadingDoctors(false);
     }
   };
 
@@ -295,8 +264,27 @@ export default function ClinicDoctorsPage() {
     setSuccessMsg(`Dr. ${name.trim()} added successfully.`);
     setTimeout(() => setSuccessMsg(""), 4000);
 
-    // Optional background sync to Supabase if connected
+    setSavingDoctor(true);
     try {
+      let clinicDoctorId: string | null = null;
+      if (clinicId) {
+        const { data: cd } = await supabase
+          .from("clinic_doctor")
+          .insert({
+            clinic_id: clinicId,
+            doctor_name: name.trim(),
+            prc_license: prcLicense.trim(),
+            specialization: selectedSpecs.map((s) => s.name).join(", "),
+            invite_email: email.trim().toLowerCase(),
+            active: true,
+          })
+          .select("doctor_id")
+          .single();
+        if (cd) {
+          clinicDoctorId = cd.doctor_id;
+        }
+      }
+
       const { data: newDoc } = await supabase
         .from("doctors")
         .insert({
@@ -306,6 +294,7 @@ export default function ClinicDoctorsPage() {
           prc_license: prcLicense.trim(),
           clinic_name: clinicDisplayName,
           status: "Active",
+          clinic_doctor_id: clinicDoctorId,
         })
         .select()
         .single();
@@ -317,8 +306,11 @@ export default function ClinicDoctorsPage() {
         }));
         await supabase.from("doctor_specializations").insert(junctionRows);
       }
+      await fetchDoctors();
     } catch {
       // Local state is preserved
+    } finally {
+      setSavingDoctor(false);
     }
   };
 
@@ -410,7 +402,7 @@ export default function ClinicDoctorsPage() {
     setSuccessMsg(`Dr. ${name.trim()} updated successfully.`);
     setTimeout(() => setSuccessMsg(""), 4000);
 
-    // Optional background sync to Supabase if connected
+    setSavingEdit(true);
     try {
       await supabase
         .from("doctors")
@@ -435,6 +427,8 @@ export default function ClinicDoctorsPage() {
       await supabase.from("doctor_specializations").insert(junctionRows);
     } catch {
       // Local state is preserved
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -478,17 +472,21 @@ export default function ClinicDoctorsPage() {
     if (selectedDoctorForDetails?.id === deleteTarget) {
       setSelectedDoctorForDetails(null);
     }
+    const targetId = deleteTarget;
     setDeleteTarget(null);
     setSuccessMsg("Doctor removed successfully.");
     setTimeout(() => setSuccessMsg(""), 4000);
 
+    setDeletingDoctor(true);
     try {
       await supabase
         .from("doctors")
         .delete()
-        .eq("id", deleteTarget);
+        .eq("id", targetId);
     } catch {
       // Local state is preserved
+    } finally {
+      setDeletingDoctor(false);
     }
   };
 

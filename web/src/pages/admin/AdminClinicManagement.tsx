@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, CheckCircle2, XCircle, Eye } from "lucide-react";
+import { supabase } from "@/lib/supabaseClient";
 
 type ClinicStatus = "pending" | "verified" | "rejected";
 
@@ -36,64 +37,119 @@ const statusBadge: Record<string, string> = {
 };
 
 export default function AdminClinicManagement() {
-  // TODO: Load clinic applications from Supabase
   const [applications, setApplications] = useState<ClinicApplication[]>([]);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<StatusType>("all");
   const [reviewModal, setReviewModal] = useState<number | string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  const persistApplications = (next: ClinicApplication[]) => {
-    // TODO: Update clinic applications in Supabase
-    setApplications(next);
+  const loadClinics = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("clinic")
+      .select("clinic_id, name, district, specialization, status")
+      .order("name");
+    if (!error && data) {
+      setApplications(data.map((c: {
+        clinic_id: string;
+        name: string;
+        district: string | null;
+        specialization: string | null;
+        status: string;
+      }) => ({
+        id: c.clinic_id,
+        name: c.name,
+        location: c.district ?? "",
+        specialization: c.specialization ?? "",
+        dateApplied: "",
+        status: (c.status === "approved" ? "verified" : c.status === "pending" ? "pending" : "rejected") as ClinicStatus,
+      })));
+    }
+    setLoading(false);
   };
 
-  const pushNotification = (_n: { type: "clinic-approved" | "clinic-rejected"; clinicName: string; message: string }) => {
-    // TODO: Push admin notification to Supabase
-  };
+  useEffect(() => {
+    loadClinics();
+  }, []);
 
-  const approveClinic = (id: number | string) => {
+  const approveClinic = async (id: number | string) => {
     const target = applications.find((a) => a.id === id);
-    if (!target) return;
+    if (!target || isProcessing) return;
 
-    const next = applications.map((app) =>
-      app.id === id
-        ? {
-            ...app,
-            status: "verified" as ClinicStatus,
-            rejectionReason: "",
-          }
-        : app
-    );
+    setIsProcessing(true);
+    try {
+      // 1. Call database RPC function
+      const { error: rpcError } = await supabase.rpc("set_clinic_status", {
+        target_clinic_id: String(id),
+        new_status: "approved",
+      });
 
-    persistApplications(next);
-    pushNotification({
-      type: "clinic-approved",
-      clinicName: target.name,
-      message: `${target.name} has been approved and marked as verified.`,
-    });
+      // 2. Direct fallback if RPC fails
+      if (rpcError) {
+        console.warn("set_clinic_status RPC returned error, attempting direct table update:", rpcError.message);
+        const { error: directError } = await supabase
+          .from("clinic")
+          .update({ status: "approved" })
+          .eq("clinic_id", id);
+        if (directError) throw directError;
+      }
+
+      setApplications((prev) =>
+        prev.map((app) =>
+          app.id === id
+            ? { ...app, status: "verified" as ClinicStatus, rejectionReason: "" }
+            : app
+        )
+      );
+    } catch (err: any) {
+      console.error("Failed to approve clinic:", err.message);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
-  const rejectClinic = (id: number | string) => {
+  const rejectClinic = async (id: number | string) => {
     const target = applications.find((a) => a.id === id);
-    if (!target) return;
+    if (!target || isProcessing) return;
 
+    setIsProcessing(true);
     const reason = rejectReason.trim();
-    const next = applications.map((app) =>
-      app.id === id
-        ? {
-            ...app,
-            status: "rejected" as ClinicStatus,
-            rejectionReason: reason || "Incomplete or invalid requirements.",
-          }
-        : app
-    );
+    try {
+      // 1. Call database RPC function
+      const { error: rpcError } = await supabase.rpc("set_clinic_status", {
+        target_clinic_id: String(id),
+        new_status: "rejected",
+      });
 
-    persistApplications(next);
-    pushNotification({
-      type: "clinic-rejected",
-      clinicName: target.name,
-      message: `${target.name} has been rejected.${reason ? ` Reason: ${reason}` : ""}`,
-    });
+      // 2. Direct fallback if RPC fails
+      if (rpcError) {
+        console.warn("set_clinic_status RPC returned error, attempting direct table update:", rpcError.message);
+        const { error: directError } = await supabase
+          .from("clinic")
+          .update({ status: "rejected" })
+          .eq("clinic_id", id);
+        if (directError) throw directError;
+      }
+
+      setApplications((prev) =>
+        prev.map((app) =>
+          app.id === id
+            ? {
+                ...app,
+                status: "rejected" as ClinicStatus,
+                rejectionReason: reason || "Incomplete or invalid requirements.",
+              }
+            : app
+        )
+      );
+      setReviewModal(null);
+      setRejectReason("");
+    } catch (err: any) {
+      console.error("Failed to reject clinic:", err.message);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const filtered = applications.filter(

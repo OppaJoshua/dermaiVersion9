@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Eye, Lock, Unlock, UserX } from "lucide-react";
 import { logAdminAction } from "@/lib/auditLog";
-import { updatePlatformUserStatus } from "@/lib/store";
+import { supabase } from "@/lib/supabaseClient";
 type UserStatus = "active" | "suspended" | "inactive";
 type User = {
-    id: number;
+    id: string;
     name: string;
     email: string;
     phone: string;
@@ -23,36 +23,46 @@ const statusBadge: Record<string, string> = {
     inactive: "bg-gray-100 text-gray-700",
 };
 export default function AdminUserManagement() {
-    // TODO: Load users from Supabase
     const [users, setUsers] = useState<User[]>([]);
     const [activeTab, setActiveTab] = useState<StatusType>("all");
-    const [reviewModal, setReviewModal] = useState<number | null>(null);
+    const [reviewModal, setReviewModal] = useState<string | null>(null);
     const filtered = users.filter((u) => activeTab === "all" || u.status === activeTab);
     const modalUser = users.find((u) => u.id === reviewModal);
-    const suspendUser = (id: number) => {
-        const user = users.find((u) => u.id === id);
-        setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, status: "suspended" } : u)));
-        if (user) {
-            updatePlatformUserStatus(user.email, "suspended");
-            logAdminAction("User Suspended", user.name, `Account suspended by admin.`, "user");
+
+    useEffect(() => {
+        let cancelled = false;
+        async function loadUsers() {
+            const { data, error } = await supabase
+                .from("user")
+                .select("user_id, full_name, email, role")
+                .order("full_name");
+            if (cancelled || error || !data) return;
+            setUsers(data.map((u: { user_id: string; full_name: string; email: string; role: string }, idx: number) => ({
+                id: u.user_id,
+                name: u.full_name,
+                email: u.email,
+                phone: "",
+                joinedAt: "",
+                status: "active" as UserStatus,
+                plan: "Free" as const,
+                scansUsed: 0,
+                scansLimit: 3,
+            })));
         }
-    };
-    const unsuspendUser = (id: number) => {
+        loadUsers();
+        return () => { cancelled = true; };
+    }, []);
+
+    const setUserStatus = async (id: string, newStatus: UserStatus, label: string) => {
+        setUsers((prev) => prev.map((u) => u.id === id ? { ...u, status: newStatus } : u));
         const user = users.find((u) => u.id === id);
-        setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, status: "active" } : u)));
-        if (user) {
-            updatePlatformUserStatus(user.email, "active");
-            logAdminAction("User Unsuspended", user.name, `Suspension lifted by admin.`, "user");
-        }
+        if (user) logAdminAction(label, user.name, `Account ${newStatus} by admin.`, "user");
+        // TODO: store a status column in the user table to persist this
     };
-    const deactivateUser = (id: number) => {
-        const user = users.find((u) => u.id === id);
-        setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, status: "inactive" } : u)));
-        if (user) {
-            updatePlatformUserStatus(user.email, "inactive");
-            logAdminAction("User Deactivated", user.name, `Account deactivated by admin.`, "user");
-        }
-    };
+
+    const suspendUser = (id: string) => setUserStatus(id, "suspended", "User Suspended");
+    const unsuspendUser = (id: string) => setUserStatus(id, "active", "User Unsuspended");
+    const deactivateUser = (id: string) => setUserStatus(id, "inactive", "User Deactivated");
     return (<div>
       <div className="mb-6">
         <h1 className="text-2xl font-display font-bold text-gray-900">

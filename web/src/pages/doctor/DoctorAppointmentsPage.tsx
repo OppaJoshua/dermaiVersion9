@@ -1,35 +1,11 @@
 import { useState, useMemo } from "react";
-import { CheckCircle2, XCircle, Clock, ScanSearch, ChevronDown, ChevronUp, AlertTriangle, Calendar, User, FileText } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, ScanSearch, ChevronDown, ChevronUp, AlertTriangle, Calendar, User, FileText, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
-type AppointmentRecord = {
-    id: string;
-    clinicName: string;
-    patientName?: string;
-    patientAge?: number;
-    patientAvatar?: string;
-    patientEmail?: string;
-    patientAddress?: string;
-    patientContact?: string;
-    conditionId?: string;
-    conditionName?: string;
-    conditionImage?: string;
-    date: string;
-    time: string;
-    notes: string;
-    status: "pending" | "accepted" | "scheduled" | "rejected";
-    assignedDoctorId?: string;
-    assignedDoctorName?: string;
-    doctorStatus?: "pending-review" | "approved" | "rejected";
-    doctorNote?: string;
-    doctorDiagnosis?: string;
-    doctorReviewedAt?: string;
-    scheduleSentToDoctor?: boolean;
-    createdAt: string;
-    skinPhotoUrl?: string;
-    aiConditionName?: string;
-    aiConfidence?: number;
-};
+import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
+
+type AppointmentRecord = DoctorAppointmentRecord;
+
 type ReviewModal = {
     appointment: AppointmentRecord;
     decision: "approved" | "rejected" | null;
@@ -37,29 +13,27 @@ type ReviewModal = {
     note: string;
     showAnalysis: boolean;
 };
+
 function getConditionDetail(conditionId?: string) {
     return skinConditions.find((c) => c.id === conditionId);
 }
-// TODO: Notify clinic of doctor review via Supabase real-time
-function addDoctorNotifToClinic(_clinicKey: string, _appointmentId: string, _patientName: string, _doctorName: string, _decision: string) {
-    // no-op until backend is connected
-}
+
 export default function DoctorAppointmentsPage() {
-    // TODO: Load doctor info from Supabase auth session
-    const doctorName = "";
+    const { doctorName, appointments: allAppointments, loading, submitDoctorReview } = useDoctorAppointments();
     const [tab, setTab] = useState<"pending" | "reviewed">("pending");
-    const [allAppointments, setAllAppointments] = useState<AppointmentRecord[]>([]);
     const [reviewModal, setReviewModal] = useState<ReviewModal | null>(null);
     const [submitError, setSubmitError] = useState("");
-    // TODO: Load doctor appointments from Supabase
-    const reviewRequests = useMemo(() => allAppointments.filter((appointment) => appointment.status === "pending" && !appointment.date && !appointment.time), [allAppointments]);
-    const pendingReview = useMemo(() => reviewRequests.filter((appointment) => appointment.doctorStatus === "pending-review"), [reviewRequests]);
-    const reviewed = useMemo(() => reviewRequests.filter((appointment) => appointment.doctorStatus === "approved" || appointment.doctorStatus === "rejected"), [reviewRequests]);
+    const [submitting, setSubmitting] = useState(false);
+
+    const pendingReview = useMemo(() => allAppointments.filter((appointment) => appointment.doctorStatus === "pending-review"), [allAppointments]);
+    const reviewed = useMemo(() => allAppointments.filter((appointment) => appointment.doctorStatus === "approved" || appointment.doctorStatus === "rejected"), [allAppointments]);
+
     const openReview = (appt: AppointmentRecord) => {
-        setReviewModal({ appointment: appt, decision: null, diagnosis: appt.doctorDiagnosis || "", note: "", showAnalysis: false });
+        setReviewModal({ appointment: appt, decision: null, diagnosis: appt.doctorDiagnosis || appt.aiConditionName || "", note: "", showAnalysis: false });
         setSubmitError("");
     };
-    const submitReview = () => {
+
+    const submitReview = async () => {
         if (!reviewModal)
             return;
         if (!reviewModal.decision) {
@@ -74,27 +48,33 @@ export default function DoctorAppointmentsPage() {
             setSubmitError("A rejection note is required — please explain why.");
             return;
         }
-        // TODO: Submit doctor review to Supabase and trigger real-time clinic notification
-        const appt = reviewModal.appointment;
-        const clinicKey = appt.clinicName.toLowerCase().replace(/[^a-z0-9]/g, "");
-        addDoctorNotifToClinic(clinicKey, appt.id, appt.patientName || "Patient", doctorName, reviewModal.decision!);
-        setAllAppointments((prev) =>
-          prev.map((item) =>
-            item.id === appt.id
-              ? {
-                  ...item,
-                  doctorStatus: reviewModal.decision === "approved" ? ("approved" as const) : ("rejected" as const),
-                  doctorDiagnosis: reviewModal.diagnosis,
-                  doctorNote: reviewModal.note,
-                  doctorReviewedAt: new Date().toISOString(),
-                }
-              : item
-          )
-        );
-        setReviewModal(null);
-        // TODO: Reload appointments from Supabase after review
+
+        setSubmitting(true);
+        try {
+            await submitDoctorReview(
+                reviewModal.appointment.id,
+                reviewModal.decision,
+                reviewModal.diagnosis.trim(),
+                reviewModal.note.trim()
+            );
+            setReviewModal(null);
+        } catch (e: any) {
+            setSubmitError(e?.message || "Failed to submit review. Please try again.");
+        } finally {
+            setSubmitting(false);
+        }
     };
+
     const displayList = tab === "pending" ? pendingReview : reviewed;
+
+    if (loading) {
+        return (
+            <div className="py-24 text-center">
+                <Loader2 className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
+                <p className="text-sm text-gray-400">Loading patient review records...</p>
+            </div>
+        );
+    }
     return (<div className="space-y-6">
       <div>
         <h1 className="text-2xl font-display font-bold text-gray-900">Review Patient</h1>

@@ -63,7 +63,6 @@ type ClinicSettings = {
   operatingDays: string;
   openTime: string;
   closeTime: string;
-  slotsPerDay: number;
   doctors: ClinicDoctor[];
   servicesOffered: string;
   consultationFee: string;
@@ -95,15 +94,14 @@ const DEFAULT_SETTINGS: ClinicSettings = {
   phone: "",
   address: "",
   location: "",
-  operatingDays: "",
-  openTime: "",
-  closeTime: "",
-  slotsPerDay: 10,
-  doctors: [{ id: "doc-1", name: "", specializations: [] }],
+  operatingDays: "Monday - Saturday",
+  openTime: "08:00",
+  closeTime: "17:00",
+  doctors: [],
   servicesOffered: "",
   consultationFee: "",
   description: "",
-  status: "verified",
+  status: "pending",
 };
 
 export default function ClinicSettingsPage() {
@@ -141,7 +139,7 @@ export default function ClinicSettingsPage() {
         // Backend not yet connected; using DEFAULT_SPECIALIZATIONS
       }
 
-      // 2. Load saved clinic settings from localStorage or Supabase
+      // 2. Load saved clinic settings from localStorage
       try {
         const savedRaw = localStorage.getItem("dermai_clinic_settings");
         if (savedRaw) {
@@ -150,19 +148,81 @@ export default function ClinicSettingsPage() {
             setSettings((prev) => ({
               ...prev,
               ...parsed,
+              consultationFee: parsed.consultationFee != null ? String(parsed.consultationFee) : (prev.consultationFee || ""),
               doctors:
-                Array.isArray(parsed.doctors) && parsed.doctors.length > 0
+                Array.isArray(parsed.doctors)
                   ? parsed.doctors
                   : prev.doctors,
             }));
             if (parsed.servicesOffered) {
               setSelectedServices(parseServices(parsed.servicesOffered));
             }
-            return;
           }
         }
       } catch (err) {
-        console.error("Error loading clinic settings:", err);
+        console.error("Error loading clinic settings from localStorage:", err);
+      }
+
+      // 3. Supplement with Supabase clinic record if available
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user?.id) {
+          const { data: dbClinic } = await supabase
+            .from("clinic")
+            .select(`
+              clinic_id, name, district, address, phone, email, consultation_fee, description, status, logo_url,
+              clinic_service_offered ( service_name )
+            `)
+            .eq("owner_user_id", session.user.id)
+            .maybeSingle();
+
+          if (dbClinic) {
+            let loadedDoctors: ClinicDoctor[] = [];
+            if (dbClinic.name) {
+              const { data: docList } = await supabase
+                .from("doctors")
+                .select(`
+                  id, name,
+                  doctor_specializations (
+                    specializations ( name )
+                  )
+                `)
+                .eq("clinic_name", dbClinic.name);
+
+              if (docList && docList.length > 0) {
+                loadedDoctors = docList.map((d: any) => ({
+                  id: d.id,
+                  name: d.name,
+                  specializations: (d.doctor_specializations || [])
+                    .map((ds: any) => ds.specializations?.name)
+                    .filter(Boolean),
+                }));
+              }
+            }
+
+            setSettings((prev) => ({
+              ...prev,
+              name: dbClinic.name || prev.name,
+              address: dbClinic.address || prev.address || "",
+              location: dbClinic.district || prev.location || "",
+              phone: dbClinic.phone || prev.phone || "",
+              email: dbClinic.email || prev.email || "",
+              logo: dbClinic.logo_url || prev.logo || "",
+              consultationFee: dbClinic.consultation_fee != null ? String(dbClinic.consultation_fee) : (prev.consultationFee || ""),
+              description: dbClinic.description || prev.description || "",
+              status: (dbClinic.status === "approved" ? "verified" : dbClinic.status) as any || prev.status,
+              doctors: loadedDoctors.length > 0 ? loadedDoctors : prev.doctors,
+            }));
+            if (dbClinic.clinic_service_offered && dbClinic.clinic_service_offered.length > 0) {
+              const dbSvcs = dbClinic.clinic_service_offered.map((s: any) => s.service_name).filter(Boolean);
+              if (dbSvcs.length > 0) {
+                setSelectedServices((prev) => prev.length > 0 ? prev : dbSvcs);
+              }
+            }
+          }
+        }
+      } catch {
+        /* ignore if table not created */
       }
     }
 
@@ -202,15 +262,64 @@ export default function ClinicSettingsPage() {
     });
   };
 
+  const { status: verificationStatus, clinicId } = useClinicVerification();
+  // UI Mode: Always allow editing so the clinic can test and customize their UI
+  const isPending = false;
+
   const onSave = async () => {
     // 1. Save settings to localStorage for instant synchronization with FindClinicsPage
     const settingsToSave = {
       ...settings,
+      consultationFee: settings.consultationFee || "",
       servicesOffered: JSON.stringify(selectedServices),
     };
     localStorage.setItem("dermai_clinic_settings", JSON.stringify(settingsToSave));
+    window.dispatchEvent(new Event("storage"));
+    window.dispatchEvent(new CustomEvent("clinicSettingsUpdated", { detail: settingsToSave }));
 
-    // 2. Synchronize doctors to Supabase
+    // 2. Synchronize clinic details, consultation fee and services to Supabase
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      const targetClinicId = clinicId;
+      const feeNumber = settings.consultationFee.trim() !== "" ? parseFloat(settings.consultationFee) : null;
+
+      if (targetClinicId || userId) {
+        let query = supabase.from("clinic").update({
+          name: settings.name,
+          address: settings.address,
+          district: settings.location || settings.address,
+          phone: settings.phone,
+          email: settings.email,
+          consultation_fee: feeNumber,
+          description: settings.description,
+        });
+
+        if (targetClinicId) {
+          query = query.eq("clinic_id", targetClinicId);
+        } else if (userId) {
+          query = query.eq("owner_user_id", userId);
+        }
+        const { data: updatedClinic } = await query.select("clinic_id").maybeSingle();
+        const effectiveClinicId = targetClinicId || updatedClinic?.clinic_id;
+
+        if (effectiveClinicId) {
+          await supabase.from("clinic_service_offered").delete().eq("clinic_id", effectiveClinicId);
+          if (selectedServices.length > 0) {
+            await supabase.from("clinic_service_offered").insert(
+              selectedServices.map((s) => ({
+                clinic_id: effectiveClinicId,
+                service_name: s,
+              }))
+            );
+          }
+        }
+      }
+    } catch (cErr) {
+      console.error("Error syncing clinic to Supabase:", cErr);
+    }
+
+    // 3. Synchronize doctors to Supabase
     try {
       for (const doc of settings.doctors) {
         if (doc.name.trim()) {
@@ -279,10 +388,6 @@ export default function ClinicSettingsPage() {
     setCustomServiceInput("");
   };
 
-  const { status: verificationStatus } = useClinicVerification();
-  // UI Mode: Always allow editing so the clinic can test and customize their UI
-  const isPending = false;
-
   const faqs = [
     {
       q: "How do I update my clinic's verification documents?",
@@ -302,8 +407,22 @@ export default function ClinicSettingsPage() {
     },
   ];
 
-  const submitTicket = () => {
+  const submitTicket = async () => {
     if (!ticketSubject.trim() || !ticketMessage.trim()) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        await supabase.from("user_support_ticket").insert({
+          user_id: session.user.id,
+          subject: ticketSubject.trim(),
+          message: ticketMessage.trim(),
+          category: "Clinic Settings",
+          status: "open",
+        });
+      }
+    } catch (err) {
+      console.error("Failed to submit clinic ticket:", err);
+    }
     setTicketSent(true);
     setTicketSubject("");
     setTicketMessage("");
@@ -478,6 +597,11 @@ export default function ClinicSettingsPage() {
           </div>
 
           <div className="space-y-3">
+            {settings.doctors.length === 0 && (
+              <div className="p-4 rounded-xl border border-dashed border-gray-200 text-center text-xs text-gray-400">
+                No doctors registered yet. Click &quot;Add Doctor&quot; above to add attending doctors.
+              </div>
+            )}
             {settings.doctors.map((doc, idx) => {
               const selectedIds = specializationOptions
                 .filter((s) => doc.specializations.includes(s.name))
@@ -498,7 +622,7 @@ export default function ClinicSettingsPage() {
                       </span>
                     </div>
 
-                    {settings.doctors.length > 1 && !isPending && (
+                    {!isPending && (
                       <button
                         type="button"
                         onClick={() => removeDoctor(idx)}
@@ -662,8 +786,8 @@ export default function ClinicSettingsPage() {
 
         {/* Schedule */}
         <div className="space-y-4">
-          <h2 className="text-lg font-bold text-gray-900 border-b pb-2">Schedule & Capacity</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <h2 className="text-lg font-bold text-gray-900 border-b pb-2">Schedule</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-semibold text-gray-500 mb-1">Operating Days</label>
               <input
@@ -692,18 +816,6 @@ export default function ClinicSettingsPage() {
                 disabled={isPending}
                 value={settings.closeTime}
                 onChange={(e) => setSettings((prev) => ({ ...prev, closeTime: e.target.value }))}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Slots Per Day</label>
-              <input
-                type="number"
-                min={1}
-                max={100}
-                disabled={isPending}
-                value={settings.slotsPerDay}
-                onChange={(e) => setSettings((prev) => ({ ...prev, slotsPerDay: Number(e.target.value) || 1 }))}
                 className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500"
               />
             </div>

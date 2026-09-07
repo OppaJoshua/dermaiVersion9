@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Plus,
   Pencil,
@@ -10,10 +10,11 @@ import {
   ToggleLeft,
   ToggleRight,
   PackageOpen,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  getSubscriptionPlans,
+  getSubscriptionPlansAsync,
   upsertSubscriptionPlan,
   deleteSubscriptionPlan,
   type SubscriptionPlan,
@@ -43,14 +44,29 @@ const EMPTY_FORM: Omit<SubscriptionPlan, "id" | "createdAt" | "updatedAt"> = {
 };
 
 export default function AdminPlanManagement() {
-  const [plans, setPlans] = useState<SubscriptionPlan[]>(() => getSubscriptionPlans());
+  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingPlan, setEditingPlan] = useState<SubscriptionPlan | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [deleteConfirm, setDeleteConfirm] = useState<SubscriptionPlan | null>(null);
   const [featuresText, setFeaturesText] = useState("");
 
-  const refresh = () => setPlans(getSubscriptionPlans());
+  const loadPlans = async () => {
+    setLoading(true);
+    try {
+      const data = await getSubscriptionPlansAsync(true);
+      setPlans(data);
+    } catch {
+      setPlans([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadPlans();
+  }, []);
 
   const openCreate = () => {
     setEditingPlan(null);
@@ -74,7 +90,7 @@ export default function AdminPlanManagement() {
     setShowModal(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const features = featuresText
       .split("\n")
       .map((f) => f.trim())
@@ -90,32 +106,32 @@ export default function AdminPlanManagement() {
       updatedAt: new Date().toISOString(),
     };
 
-    upsertSubscriptionPlan(plan);
+    await upsertSubscriptionPlan(plan);
     logAdminAction(
       editingPlan ? "Plan Updated" : "Plan Created",
       plan.name,
       `${editingPlan ? "Updated" : "Created"} subscription plan: ${plan.name} (₱${plan.price} / ${plan.billingType})`,
       "subscription"
     );
-    refresh();
+    await loadPlans();
     setShowModal(false);
   };
 
-  const handleDelete = (plan: SubscriptionPlan) => {
-    deleteSubscriptionPlan(plan.id);
+  const handleDelete = async (plan: SubscriptionPlan) => {
+    await deleteSubscriptionPlan(plan.id);
     logAdminAction(
       "Plan Deleted",
       plan.name,
       `Deleted subscription plan: ${plan.name}`,
       "subscription"
     );
-    refresh();
+    await loadPlans();
     setDeleteConfirm(null);
   };
 
-  const toggleStatus = (plan: SubscriptionPlan) => {
-    upsertSubscriptionPlan({ ...plan, status: plan.status === "active" ? "inactive" : "active" });
-    refresh();
+  const toggleStatus = async (plan: SubscriptionPlan) => {
+    await upsertSubscriptionPlan({ ...plan, status: plan.status === "active" ? "inactive" : "active" });
+    await loadPlans();
   };
 
   const activePlans = plans.filter((p) => p.status === "active").length;
@@ -172,14 +188,21 @@ export default function AdminPlanManagement() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {plans.length === 0 && (
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="text-center py-16 text-gray-400">
+                    <Loader2 className="w-8 h-8 text-magenta-500 animate-spin mx-auto mb-2" />
+                    Loading subscription plans...
+                  </td>
+                </tr>
+              ) : plans.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="text-center py-16 text-gray-400">
                     <PackageOpen className="w-10 h-10 mx-auto mb-3 text-gray-200" />
                     No plans yet. Click <strong>Add Plan</strong> to create one.
                   </td>
                 </tr>
-              )}
+              ) : null}
               {plans.map((plan) => (
                 <tr key={plan.id} className="hover:bg-gray-50/50 transition-colors">
                   <td className="px-5 py-4">

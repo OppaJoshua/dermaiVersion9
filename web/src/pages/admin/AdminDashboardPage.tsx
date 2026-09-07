@@ -1,10 +1,10 @@
 import { motion } from "framer-motion";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
 import { Microscope, Users, Building2, ClipboardList, AlertTriangle, ArrowUpRight, ArrowDownRight, ChevronDown, MapPin, TrendingUp, Activity, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import CebuSkinConditionMap from "./CebuSkinConditionMap";
-import { getPlatformUsers, getPlatformScans } from "@/lib/store";
+import { supabase } from "@/lib/supabaseClient";
 const dashboardFeatures = [
     { id: "overview", label: "Overview", icon: TrendingUp },
     { id: "analytics", label: "Analytics & Charts", icon: BarChart3 },
@@ -12,14 +12,7 @@ const dashboardFeatures = [
     { id: "skin-map", label: "Cebu Skin Condition Map", icon: MapPin },
 ];
 
-// TODO: Load weekly trend data from Supabase
-const trendData: Array<{ week: string; analyses: number }> = [];
-const activityLog: Array<{
-    action: string;
-    user: string;
-    time: string;
-    type: string;
-}> = [];
+// TODO: Load weekly trend data from Supabase — now loaded dynamically below
 
 /** The 5 skin conditions tracked on the dashboard */
 const TRACKED_CONDITIONS = [
@@ -91,9 +84,96 @@ export default function AdminDashboardPage() {
     const [hoveredDistrict, setHoveredDistrict] = useState<string | null>(null);
     const [selectedFeature, setSelectedFeature] = useState<string>("overview");
     const [showMenu, setShowMenu] = useState(false);
-    // TODO: Load admin dashboard statistics from Supabase
-    const liveUsers = getPlatformUsers();
-    const liveScans = getPlatformScans();
+
+    // Live data from Supabase
+    const [liveUsers, setLiveUsers] = useState<{ id: string }[]>([]);
+    const [liveScans, setLiveScans] = useState<{ analysis_id: string; status: string; body_part: string | null; skin_condition: { name: string } | null }[]>([]);
+    const [districtCounts, setDistrictCounts] = useState<Record<string, number>>({});
+    const [verifiedClinicCount, setVerifiedClinicCount] = useState(0);
+    const [pendingClinicCount, setPendingClinicCount] = useState(0);
+    const [trendData, setTrendData] = useState<Array<{ week: string; analyses: number }>>([]);
+    const [activityLog, setActivityLog] = useState<Array<{ action: string; user: string; time: string; type: string }>>([]);
+
+    useEffect(() => {
+        async function loadData() {
+            // Users
+            const { data: users } = await supabase.from("user").select("user_id");
+            setLiveUsers((users ?? []).map((u: { user_id: string }) => ({ id: u.user_id })));
+
+            // Scans
+            const { data: scans } = await supabase
+                .from("ai_scan_result")
+                .select("analysis_id, status, body_part, skin_condition:condition_id ( name )");
+            setLiveScans((scans ?? []).map((s: { analysis_id: string; status: string; body_part: string | null; skin_condition: { name: string } | null }) => s));
+
+            // District counts from clinics and appointments
+            const counts: Record<string, number> = {};
+            const { data: clinicsWithDistrict } = await supabase
+                .from("clinic")
+                .select("district");
+            (clinicsWithDistrict ?? []).forEach((c: { district: string | null }) => {
+                if (c.district) {
+                    const key = c.district.trim().toLowerCase();
+                    counts[key] = (counts[key] ?? 0) + 1;
+                }
+            });
+
+            const { data: apptsWithDistrict } = await supabase
+                .from("patient_appointment")
+                .select("clinic:clinic_id ( district )");
+            (apptsWithDistrict ?? []).forEach((a: any) => {
+                const clinicObj: any = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
+                if (clinicObj?.district) {
+                    const key = clinicObj.district.trim().toLowerCase();
+                    counts[key] = (counts[key] ?? 0) + 1;
+                }
+            });
+            setDistrictCounts(counts);
+
+            // Trend data — group by week
+            const { data: trendRows } = await supabase
+                .from("ai_scan_result")
+                .select("scanned_at")
+                .order("scanned_at");
+            if (trendRows) {
+                const weekMap: Record<string, number> = {};
+                trendRows.forEach((r: { scanned_at: string }) => {
+                    const d = new Date(r.scanned_at);
+                    const week = `W${Math.ceil(d.getDate() / 7)} ${d.toLocaleString("en-PH", { month: "short" })}`;
+                    weekMap[week] = (weekMap[week] ?? 0) + 1;
+                });
+                setTrendData(Object.entries(weekMap).map(([week, analyses]) => ({ week, analyses })));
+            }
+
+            // Clinic counts
+            const { count: approved } = await supabase.from("clinic").select("*", { count: "exact", head: true }).eq("status", "approved");
+            const { count: pending } = await supabase.from("clinic").select("*", { count: "exact", head: true }).eq("status", "pending");
+            setVerifiedClinicCount(approved ?? 0);
+            setPendingClinicCount(pending ?? 0);
+
+            // Activity log from system_audit_log
+            const { data: logs } = await supabase
+                .from("system_audit_log")
+                .select("log_id, action, user_type, log_type, timestamp, user:user_id ( full_name )")
+                .order("timestamp", { ascending: false })
+                .limit(20);
+            setActivityLog((logs ?? []).map((l: {
+                log_id: string;
+                action: string;
+                user_type: string;
+                log_type: string;
+                timestamp: string;
+                user: { full_name: string } | null;
+            }) => ({
+                action: l.action,
+                user: (l.user as { full_name: string } | null)?.full_name ?? l.user_type,
+                time: new Date(l.timestamp).toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit" }),
+                type: l.log_type,
+            })));
+        }
+        loadData();
+    }, []);
+
     const flaggedScans = liveScans.filter((s) => s.status === "flagged" || s.status === "invalid");
 
     // Derive top-5 condition counts from real scan data
@@ -101,20 +181,27 @@ export default function AdminDashboardPage() {
         TRACKED_CONDITIONS.map((name) => ({
             name,
             count: liveScans.filter(
-                (s) => s.condition?.toLowerCase() === name.toLowerCase()
+                (s) => (s.skin_condition as { name: string } | null)?.name?.toLowerCase() === name.toLowerCase()
             ).length,
         })),
     [liveScans]);
 
-    // Derive per-district scan counts from real scan data
-    const cebuDistricts = useMemo(() =>
-        cebuDistrictGeo.map((d) => ({
-            ...d,
-            count: liveScans.filter(
-                (s) => s.district?.toLowerCase() === d.name.toLowerCase()
-            ).length,
-        })),
-    [liveScans]);
+    // Derive per-district counts from real clinic & appointment activity
+    const cebuDistricts = useMemo(() => {
+        return cebuDistrictGeo.map((d) => {
+            const dNameLower = d.name.toLowerCase();
+            let count = 0;
+            for (const [key, val] of Object.entries(districtCounts)) {
+                if (key.includes(dNameLower) || dNameLower.includes(key)) {
+                    count += val;
+                }
+            }
+            return {
+                ...d,
+                count,
+            };
+        }).sort((a, b) => b.count - a.count);
+    }, [districtCounts]);
 
     const stats = useMemo(() => [
         {
@@ -135,7 +222,7 @@ export default function AdminDashboardPage() {
         },
         {
             label: "Verified Clinics",
-            value: "0",
+            value: String(verifiedClinicCount),
             change: "—",
             trend: "up" as const,
             icon: Building2,
@@ -143,7 +230,7 @@ export default function AdminDashboardPage() {
         },
         {
             label: "Pending Applications",
-            value: "0",
+            value: String(pendingClinicCount),
             change: "—",
             trend: "down" as const,
             icon: ClipboardList,
@@ -157,7 +244,7 @@ export default function AdminDashboardPage() {
             icon: AlertTriangle,
             color: "bg-orange-50 text-orange-500",
         },
-    ], [liveUsers.length, liveScans.length, flaggedScans.length]);
+    ], [liveUsers.length, liveScans.length, flaggedScans.length, verifiedClinicCount, pendingClinicCount]);
     return (<div className="space-y-6">
       {/* Page Title + Feature Menu */}
       <div className="flex items-center justify-between">
