@@ -46,7 +46,7 @@ const guideSteps = [
         icon: CreditCard,
         title: "Upgrade to Pro",
         steps: [
-            "Free accounts are limited to 1 skin scan per account.",
+            "Free accounts are limited to 3 skin scans per account.",
             "Upgrade to Pro (₱199/month or ₱1,999/year) for unlimited scans.",
             "Go to Settings → Billing to manage your subscription and payment method.",
             "You can cancel at any time; Pro access stays active until the period ends.",
