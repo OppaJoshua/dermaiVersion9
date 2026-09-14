@@ -1,10 +1,24 @@
 import { useState, useEffect } from "react";
-import { Clock, AlertCircle, XCircle, Plus, X, LifeBuoy, Mail, Phone, ChevronDown, ChevronUp, Send, Trash2, Stethoscope } from "lucide-react";
+import { Link } from "react-router-dom";
+import {
+  Clock,
+  AlertCircle,
+  XCircle,
+  Plus,
+  X,
+  LifeBuoy,
+  Mail,
+  Phone,
+  ChevronDown,
+  ChevronUp,
+  Send,
+  Stethoscope,
+  ArrowUpRight,
+  UserCheck,
+} from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
-import SpecializationMultiSelect, {
-  type SpecializationOption,
-} from "@/components/clinic/SpecializationMultiSelect";
+import LocationPickerMap from "@/components/common/LocationPickerMap";
 
 /* ── Study-scoped service options ─────────────────────────── */
 const SERVICES_OPTIONS = [
@@ -47,10 +61,10 @@ function parseServices(raw: string): string[] {
     .filter(Boolean);
 }
 
-export type ClinicDoctor = {
+export type ClinicDoctorSummary = {
   id: string;
   name: string;
-  specializations: string[];
+  specialization?: string;
 };
 
 type ClinicSettings = {
@@ -63,29 +77,14 @@ type ClinicSettings = {
   operatingDays: string;
   openTime: string;
   closeTime: string;
-  doctors: ClinicDoctor[];
+  doctors: ClinicDoctorSummary[];
   servicesOffered: string;
   consultationFee: string;
   description: string;
+  latitude: number | null;
+  longitude: number | null;
   status: "pending" | "verified" | "rejected";
 };
-
-const DEFAULT_SPECIALIZATIONS: SpecializationOption[] = [
-  { id: "spec-1", name: "General Dermatology" },
-  { id: "spec-2", name: "Clinical Dermatology" },
-  { id: "spec-3", name: "Cosmetic Dermatology" },
-  { id: "spec-4", name: "Aesthetic Dermatology" },
-  { id: "spec-5", name: "Pediatric Dermatology" },
-  { id: "spec-6", name: "Dermatologic Surgery" },
-  { id: "spec-7", name: "Dermatopathology" },
-  { id: "spec-8", name: "Dermatology Oncology" },
-  { id: "spec-9", name: "Hair & Scalp Dermatology" },
-  { id: "spec-10", name: "Nail Dermatology" },
-  { id: "spec-11", name: "Immunodermatology" },
-  { id: "spec-12", name: "Contact Dermatitis & Allergy" },
-  { id: "spec-13", name: "Photodermatology" },
-  { id: "spec-14", name: "Dermatology & Venereology" },
-];
 
 const DEFAULT_SETTINGS: ClinicSettings = {
   logo: "",
@@ -101,20 +100,41 @@ const DEFAULT_SETTINGS: ClinicSettings = {
   servicesOffered: "",
   consultationFee: "",
   description: "",
+  latitude: null,
+  longitude: null,
   status: "pending",
 };
 
-export default function ClinicSettingsPage() {
-  const [settings, setSettings] = useState<ClinicSettings>(DEFAULT_SETTINGS);
-  const [saved, setSaved] = useState(false);
-  const [selectedServices, setSelectedServices] = useState<string[]>(() =>
-    parseServices(DEFAULT_SETTINGS.servicesOffered)
-  );
-  const [customServiceInput, setCustomServiceInput] = useState("");
+function getInitialSettings(): ClinicSettings {
+  try {
+    const savedRaw = localStorage.getItem("dermai_clinic_settings");
+    if (savedRaw) {
+      const parsed = JSON.parse(savedRaw);
+      if (parsed && typeof parsed === "object") {
+        return {
+          ...DEFAULT_SETTINGS,
+          ...parsed,
+          consultationFee: parsed.consultationFee != null ? String(parsed.consultationFee) : "",
+          doctors: Array.isArray(parsed.doctors) ? parsed.doctors : [],
+          latitude: parsed.latitude != null ? Number(parsed.latitude) : null,
+          longitude: parsed.longitude != null ? Number(parsed.longitude) : null,
+        };
+      }
+    }
+  } catch {}
+  return DEFAULT_SETTINGS;
+}
 
-  // Dynamic Specializations: loaded with defaults for UI, updated from database if available
-  const [specializationOptions, setSpecializationOptions] = useState<SpecializationOption[]>(DEFAULT_SPECIALIZATIONS);
-  const [loadingSpecializations] = useState(false);
+export default function ClinicSettingsPage() {
+  const [settings, setSettings] = useState<ClinicSettings>(getInitialSettings);
+  const [saved, setSaved] = useState(false);
+  const [selectedServices, setSelectedServices] = useState<string[]>(() => {
+    const initial = getInitialSettings();
+    return initial.servicesOffered
+      ? parseServices(initial.servicesOffered)
+      : parseServices(DEFAULT_SETTINGS.servicesOffered);
+  });
+  const [customServiceInput, setCustomServiceInput] = useState("");
 
   // Helpdesk state
   const [ticketSubject, setTicketSubject] = useState("");
@@ -122,152 +142,109 @@ export default function ClinicSettingsPage() {
   const [ticketSent, setTicketSent] = useState(false);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
-  // Load clinic settings from localStorage on mount (and optionally Supabase if available)
+  const { status: verificationStatus, clinicId, loading } = useClinicVerification();
+  const [dbClinicId, setDbClinicId] = useState<string | null>(null);
+  // UI Mode: Always allow editing so the clinic can test and customize their UI
+  const isPending = false;
+
+  // Load latest clinic settings from Supabase in background
   useEffect(() => {
+    let cancelled = false;
+
     async function loadData() {
-      // 1. Fetch dynamic specializations from Supabase if connected
-      try {
-        const { data: specs, error: sErr } = await supabase
-          .from("specializations")
-          .select("id, name")
-          .order("name", { ascending: true });
-
-        if (!sErr && specs && specs.length > 0) {
-          setSpecializationOptions(specs);
-        }
-      } catch (err) {
-        // Backend not yet connected; using DEFAULT_SPECIALIZATIONS
-      }
-
-      // 2. Load saved clinic settings from localStorage
-      try {
-        const savedRaw = localStorage.getItem("dermai_clinic_settings");
-        if (savedRaw) {
-          const parsed = JSON.parse(savedRaw);
-          if (parsed && typeof parsed === "object") {
-            setSettings((prev) => ({
-              ...prev,
-              ...parsed,
-              consultationFee: parsed.consultationFee != null ? String(parsed.consultationFee) : (prev.consultationFee || ""),
-              doctors:
-                Array.isArray(parsed.doctors)
-                  ? parsed.doctors
-                  : prev.doctors,
-            }));
-            if (parsed.servicesOffered) {
-              setSelectedServices(parseServices(parsed.servicesOffered));
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Error loading clinic settings from localStorage:", err);
-      }
-
-      // 3. Supplement with Supabase clinic record if available
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user?.id) {
-          const { data: dbClinic } = await supabase
-            .from("clinic")
-            .select(`
-              clinic_id, name, district, address, phone, email, consultation_fee, description, status, logo_url,
-              clinic_service_offered ( service_name )
-            `)
-            .eq("owner_user_id", session.user.id)
-            .maybeSingle();
+        const userId = session?.user?.id;
+        const userEmail = session?.user?.email?.toLowerCase().trim();
 
-          if (dbClinic) {
-            let loadedDoctors: ClinicDoctor[] = [];
-            if (dbClinic.name) {
-              const { data: docList } = await supabase
-                .from("doctors")
-                .select(`
-                  id, name,
-                  doctor_specializations (
-                    specializations ( name )
-                  )
-                `)
-                .eq("clinic_name", dbClinic.name);
+        if (!userId && !userEmail) return;
 
-              if (docList && docList.length > 0) {
-                loadedDoctors = docList.map((d: any) => ({
-                  id: d.id,
-                  name: d.name,
-                  specializations: (d.doctor_specializations || [])
-                    .map((ds: any) => ds.specializations?.name)
-                    .filter(Boolean),
-                }));
-              }
-            }
+        // Fetch clinic and doctors in parallel
+        const clinicQuery = clinicId
+          ? supabase
+              .from("clinic")
+              .select(`
+                clinic_id, name, district, address, phone, email, consultation_fee, description, status, logo_url,
+                latitude, longitude,
+                clinic_service_offered ( service_name )
+              `)
+              .eq("clinic_id", clinicId)
+              .maybeSingle()
+          : supabase
+              .from("clinic")
+              .select(`
+                clinic_id, name, district, address, phone, email, consultation_fee, description, status, logo_url,
+                latitude, longitude,
+                clinic_service_offered ( service_name )
+              `)
+              .or(`owner_user_id.eq.${userId}${userEmail ? `,email.ilike.${userEmail}` : ""}`)
+              .maybeSingle();
 
-            setSettings((prev) => ({
-              ...prev,
-              name: dbClinic.name || prev.name,
-              address: dbClinic.address || prev.address || "",
-              location: dbClinic.district || prev.location || "",
-              phone: dbClinic.phone || prev.phone || "",
-              email: dbClinic.email || prev.email || "",
-              logo: dbClinic.logo_url || prev.logo || "",
-              consultationFee: dbClinic.consultation_fee != null ? String(dbClinic.consultation_fee) : (prev.consultationFee || ""),
-              description: dbClinic.description || prev.description || "",
-              status: (dbClinic.status === "approved" ? "verified" : dbClinic.status) as any || prev.status,
-              doctors: loadedDoctors.length > 0 ? loadedDoctors : prev.doctors,
+        const { data: dbClinic, error: clinicErr } = await clinicQuery;
+        if (cancelled || clinicErr || !dbClinic) return;
+
+        if (dbClinic.clinic_id) {
+          setDbClinicId(dbClinic.clinic_id);
+        }
+
+        let loadedDoctors: ClinicDoctorSummary[] = [];
+        if (dbClinic.clinic_id) {
+          const { data: docList } = await supabase
+            .from("clinic_doctor")
+            .select("doctor_id, doctor_name, email, status, specialization")
+            .eq("clinic_id", dbClinic.clinic_id)
+            .neq("status", "Inactive");
+
+          if (docList && docList.length > 0) {
+            loadedDoctors = docList.map((d: any) => ({
+              id: d.doctor_id,
+              name: d.doctor_name,
+              specialization: d.specialization || "General Dermatology",
             }));
-            if (dbClinic.clinic_service_offered && dbClinic.clinic_service_offered.length > 0) {
-              const dbSvcs = dbClinic.clinic_service_offered.map((s: any) => s.service_name).filter(Boolean);
-              if (dbSvcs.length > 0) {
-                setSelectedServices((prev) => prev.length > 0 ? prev : dbSvcs);
-              }
-            }
           }
         }
-      } catch {
-        /* ignore if table not created */
+
+        if (cancelled) return;
+
+        setSettings((prev) => {
+          const next: ClinicSettings = {
+            ...prev,
+            name: dbClinic.name || prev.name,
+            address: dbClinic.address || prev.address || "",
+            location: dbClinic.district || prev.location || "",
+            phone: dbClinic.phone || prev.phone || "",
+            email: dbClinic.email || prev.email || "",
+            logo: dbClinic.logo_url || prev.logo || "",
+            consultationFee: dbClinic.consultation_fee != null ? String(dbClinic.consultation_fee) : (prev.consultationFee || ""),
+            description: dbClinic.description || prev.description || "",
+            latitude: dbClinic.latitude != null ? Number(dbClinic.latitude) : prev.latitude,
+            longitude: dbClinic.longitude != null ? Number(dbClinic.longitude) : prev.longitude,
+            status: (dbClinic.status === "approved" ? "verified" : dbClinic.status) as any || prev.status,
+            doctors: loadedDoctors.length > 0 ? loadedDoctors : prev.doctors,
+          };
+          try {
+            localStorage.setItem("dermai_clinic_settings", JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+
+        if (dbClinic.clinic_service_offered && dbClinic.clinic_service_offered.length > 0) {
+          const dbSvcs = dbClinic.clinic_service_offered.map((s: any) => s.service_name).filter(Boolean);
+          if (dbSvcs.length > 0) {
+            setSelectedServices(dbSvcs);
+          }
+        }
+      } catch (err) {
+        console.error("Error loading clinic settings:", err);
       }
     }
 
     loadData();
-  }, []);
-
-  const addDoctor = () => {
-    setSettings((prev) => ({
-      ...prev,
-      doctors: [
-        ...prev.doctors,
-        { id: `doc-${Date.now()}`, name: "", specializations: [] },
-      ],
-    }));
-  };
-
-  const removeDoctor = (indexToRemove: number) => {
-    setSettings((prev) => ({
-      ...prev,
-      doctors: prev.doctors.filter((_, i) => i !== indexToRemove),
-    }));
-  };
-
-  const updateDoctorName = (index: number, name: string) => {
-    setSettings((prev) => {
-      const updated = [...prev.doctors];
-      updated[index] = { ...updated[index], name };
-      return { ...prev, doctors: updated };
-    });
-  };
-
-  const updateDoctorSpecializations = (index: number, specNames: string[]) => {
-    setSettings((prev) => {
-      const updated = [...prev.doctors];
-      updated[index] = { ...updated[index], specializations: specNames };
-      return { ...prev, doctors: updated };
-    });
-  };
-
-  const { status: verificationStatus, clinicId } = useClinicVerification();
-  // UI Mode: Always allow editing so the clinic can test and customize their UI
-  const isPending = false;
+    return () => { cancelled = true; };
+  }, [clinicId]);
 
   const onSave = async () => {
-    // 1. Save settings to localStorage for instant synchronization with FindClinicsPage
+    // 1. Save settings to localStorage for instant 0ms synchronization
     const settingsToSave = {
       ...settings,
       consultationFee: settings.consultationFee || "",
@@ -277,15 +254,18 @@ export default function ClinicSettingsPage() {
     window.dispatchEvent(new Event("storage"));
     window.dispatchEvent(new CustomEvent("clinicSettingsUpdated", { detail: settingsToSave }));
 
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+
     // 2. Synchronize clinic details, consultation fee and services to Supabase
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
-      const targetClinicId = clinicId;
+      const targetClinicId = clinicId || dbClinicId;
       const feeNumber = settings.consultationFee.trim() !== "" ? parseFloat(settings.consultationFee) : null;
 
       if (targetClinicId || userId) {
-        let query = supabase.from("clinic").update({
+        const payload: Record<string, any> = {
           name: settings.name,
           address: settings.address,
           district: settings.location || settings.address,
@@ -293,7 +273,14 @@ export default function ClinicSettingsPage() {
           email: settings.email,
           consultation_fee: feeNumber,
           description: settings.description,
-        });
+          latitude: settings.latitude,
+          longitude: settings.longitude,
+        };
+        if (userId) {
+          payload.owner_user_id = userId;
+        }
+
+        let query = supabase.from("clinic").update(payload);
 
         if (targetClinicId) {
           query = query.eq("clinic_id", targetClinicId);
@@ -318,60 +305,6 @@ export default function ClinicSettingsPage() {
     } catch (cErr) {
       console.error("Error syncing clinic to Supabase:", cErr);
     }
-
-    // 3. Synchronize doctors to Supabase
-    try {
-      for (const doc of settings.doctors) {
-        if (doc.name.trim()) {
-          const { data: existingDoc } = await supabase
-            .from("doctors")
-            .select("id")
-            .eq("name", doc.name.trim())
-            .limit(1);
-
-          let doctorId = existingDoc?.[0]?.id;
-          if (!doctorId) {
-            const { data: newDoc } = await supabase
-              .from("doctors")
-              .insert({
-                name: doc.name.trim(),
-                email: `${doc.name.toLowerCase().replace(/[^a-z0-9]/g, "")}@example.com`,
-                prc_license: "PRC-VERIFIED",
-                clinic_name: settings.name || "Clinic",
-                status: "Active",
-              })
-              .select("id")
-              .single();
-            doctorId = newDoc?.id;
-          }
-
-          if (doctorId && doc.specializations.length > 0) {
-            const { data: matchedSpecs } = await supabase
-              .from("specializations")
-              .select("id, name")
-              .in("name", doc.specializations);
-
-            if (matchedSpecs && matchedSpecs.length > 0) {
-              await supabase
-                .from("doctor_specializations")
-                .delete()
-                .eq("doctor_id", doctorId);
-
-              const rows = matchedSpecs.map((s) => ({
-                doctor_id: doctorId,
-                specialization_id: s.id,
-              }));
-              await supabase.from("doctor_specializations").insert(rows);
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.error("Error syncing doctors to Supabase:", err);
-    }
-
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
   };
 
   const toggleService = (svc: string) => {
@@ -436,7 +369,7 @@ export default function ClinicSettingsPage() {
         <p className="text-sm text-gray-400 mt-0.5">Manage your clinic information, schedules, and booking capacity</p>
       </div>
 
-      {verificationStatus === "rejected" && (
+      {!loading && verificationStatus === "rejected" && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex gap-3 text-red-700">
           <XCircle className="w-5 h-5 flex-shrink-0" />
           <div className="text-sm">
@@ -445,7 +378,7 @@ export default function ClinicSettingsPage() {
           </div>
         </div>
       )}
-      {verificationStatus === "pending" && (
+      {!loading && verificationStatus === "pending" && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3 text-amber-700">
           <AlertCircle className="w-5 h-5 flex-shrink-0" />
           <div className="text-sm">
@@ -563,6 +496,29 @@ export default function ClinicSettingsPage() {
                 className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500"
               />
             </div>
+
+            {/* Interactive Location Pin Picker */}
+            <div className="sm:col-span-2 space-y-1">
+              <label className="block text-xs font-semibold text-gray-500 mb-1">
+                Pin Location on Map
+                <span className="ml-1 text-gray-400 font-normal">
+                  — Pin your clinic location so patients can find you on the map in Find Clinics.
+                </span>
+              </label>
+              <LocationPickerMap
+                latitude={settings.latitude}
+                longitude={settings.longitude}
+                disabled={isPending}
+                onChange={(lat, lng, addressSuggestion) => {
+                  setSettings((prev) => ({
+                    ...prev,
+                    latitude: lat,
+                    longitude: lng,
+                    address: prev.address.trim() ? prev.address : (addressSuggestion || prev.address),
+                  }));
+                }}
+              />
+            </div>
             <div className="sm:col-span-2">
               <label className="block text-xs font-semibold text-gray-500 mb-1">Description</label>
               <textarea
@@ -576,115 +532,57 @@ export default function ClinicSettingsPage() {
           </div>
         </div>
 
-        {/* Professional Credentials & Doctors */}
+        {/* Attending Doctors & Medical Staff Summary */}
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-2">
+          <div className="flex items-center justify-between border-b pb-2">
             <div>
-              <h2 className="text-lg font-bold text-gray-900">Professional Credentials</h2>
+              <h2 className="text-lg font-bold text-gray-900">Attending Doctors & Medical Staff</h2>
               <p className="text-xs text-gray-500 mt-0.5">
-                Add all doctors working at your clinic. These doctors and their specializations will be displayed to patients on the Find Clinics page.
+                Doctors, licenses, PRC credentials, and specializations are managed in the Doctors portal.
               </p>
             </div>
-            {!isPending && (
-              <button
-                type="button"
-                onClick={addDoctor}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-magenta-50 text-[#c0166a] border border-magenta-200 hover:bg-magenta-100/70 text-xs font-bold transition-all shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add Doctor
-              </button>
-            )}
           </div>
 
-          <div className="space-y-3">
-            {settings.doctors.length === 0 && (
-              <div className="p-4 rounded-xl border border-dashed border-gray-200 text-center text-xs text-gray-400">
-                No doctors registered yet. Click &quot;Add Doctor&quot; above to add attending doctors.
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-2xl bg-pink-50/50 border border-pink-100">
+            <div className="flex items-center gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-[#c0166a] text-white flex items-center justify-center shrink-0 shadow-sm">
+                <Stethoscope className="w-5 h-5" />
               </div>
-            )}
-            {settings.doctors.map((doc, idx) => {
-              const selectedIds = specializationOptions
-                .filter((s) => doc.specializations.includes(s.name))
-                .map((s) => s.id);
+              <div>
+                <p className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                  <span>{settings.doctors.length === 1 ? "1 Attending Doctor Registered" : `${settings.doctors.length} Attending Doctors Registered`}</span>
+                  {settings.doctors.length > 0 && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-full">
+                      <UserCheck className="w-3 h-3" /> Active Roster
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {settings.doctors.length > 0
+                    ? `Attending: ${settings.doctors.map((d) => d.name).join(", ")}`
+                    : "Add licensed doctors to assign appointments and showcase to patients."}
+                </p>
+              </div>
+            </div>
 
-              return (
-                <div
-                  key={doc.id || idx}
-                  className="p-4 sm:p-5 rounded-2xl border border-gray-200/80 bg-white shadow-sm space-y-3 relative transition-all hover:border-gray-300"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-xl bg-magenta-50 text-[#c0166a] border border-magenta-100 flex items-center justify-center">
-                        <Stethoscope className="w-3.5 h-3.5" />
-                      </div>
-                      <span className="text-xs font-bold text-gray-800">
-                        Doctor {idx + 1}
-                      </span>
-                    </div>
-
-                    {!isPending && (
-                      <button
-                        type="button"
-                        onClick={() => removeDoctor(idx)}
-                        className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-red-600 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors font-medium"
-                        title="Remove Doctor"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Remove</span>
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-500 mb-1.5">
-                        Doctor Name *
-                      </label>
-                      <input
-                        type="text"
-                        disabled={isPending}
-                        value={doc.name}
-                        onChange={(e) => updateDoctorName(idx, e.target.value)}
-                        placeholder="e.g. Dr. Maria Santos"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 disabled:bg-gray-50 disabled:text-gray-500 transition-all bg-white"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-500 mb-1.5">
-                        Specialization(s) *
-                      </label>
-                      <SpecializationMultiSelect
-                        options={specializationOptions}
-                        selectedIds={selectedIds}
-                        onChange={(ids) => {
-                          const chosenNames = specializationOptions
-                            .filter((s) => ids.includes(s.id))
-                            .map((s) => s.name);
-                          updateDoctorSpecializations(idx, chosenNames);
-                        }}
-                        placeholder="Select specializations..."
-                        disabled={isPending || loadingSpecializations}
-                        theme="magenta"
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-
-            {!isPending && (
-              <button
-                type="button"
-                onClick={addDoctor}
-                className="w-full py-3 rounded-2xl border-2 border-dashed border-magenta-200 hover:border-magenta-400 hover:bg-magenta-50/50 text-[#c0166a] text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                <Plus className="w-4 h-4" /> Add Another Doctor
-              </button>
-            )}
+            <Link
+              to="/clinic/doctors"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-all shrink-0 shadow-sm"
+            >
+              <span>Manage Doctors & Licenses</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </Link>
           </div>
+        </div>
 
-          <div className="sm:col-span-2 pt-2">
+        {/* Services & Conditions Treated */}
+        <div className="space-y-4">
+          <div className="border-b pb-2">
+            <h2 className="text-lg font-bold text-gray-900">Services Offered & Conditions Treated</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Select all conditions your clinic treats. Patients searching for these conditions will discover your clinic.
+            </p>
+          </div>
               <label className="block text-xs font-semibold text-gray-500 mb-3">
                 Services Offered
                 <span className="ml-1 text-gray-400 font-normal">— Select all conditions your clinic treats. The system uses this to recommend your clinic to patients.</span>
@@ -761,7 +659,6 @@ export default function ClinicSettingsPage() {
                 <p className="text-xs text-gray-400 italic">No services selected yet.</p>
               )}
             </div>
-          </div>
 
         {/* Consultation Fee */}
         <div className="space-y-4">

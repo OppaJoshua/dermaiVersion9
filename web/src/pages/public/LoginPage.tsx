@@ -1,7 +1,7 @@
-import { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { X } from "lucide-react";
-import logo from "../../assets/logo2.png";
+import { X, Loader2 } from "lucide-react";
+import logo from "@/assets/logo2.png";
 import { useAuth } from "../../context/AuthContext";
 
 function GoogleIcon() {
@@ -27,13 +27,27 @@ function GoogleIcon() {
   );
 }
 
+const ROLE_HOME: Record<string, string> = {
+  patient: "/dashboard",
+  doctor: "/doctor",
+  clinic: "/clinic",
+  admin: "/admin",
+};
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [linkSent, setLinkSent] = useState(false);
   const navigate = useNavigate();
-  const { signInWithMagicLink, signInWithGoogle } = useAuth();
+  const { session, loading, role, roleLoading, signInWithMagicLink, signInWithGoogle } = useAuth();
+
+  useEffect(() => {
+    if (loading || roleLoading) return;
+    if (session && role) {
+      navigate(ROLE_HOME[role] ?? "/dashboard", { replace: true });
+    }
+  }, [session, loading, role, roleLoading, navigate]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -128,9 +142,16 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={!email.trim() || submitting}
-                className="w-full py-3 rounded-full font-semibold text-sm text-white bg-magenta-600 hover:bg-magenta-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="w-full py-3 rounded-full font-semibold text-sm text-white bg-magenta-600 hover:bg-magenta-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md shadow-magenta-600/20 active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer"
               >
-                {submitting ? "Sending link..." : "Send Sign-In Link"}
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Sending link...</span>
+                  </>
+                ) : (
+                  <span>Send Sign-In Link</span>
+                )}
               </button>
             </form>
           </>

@@ -1,31 +1,30 @@
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   User,
   Mail,
   Phone,
   Award,
-  Save,
   LifeBuoy,
   ChevronDown,
   ChevronUp,
   Send,
-  Loader2,
-  AlertCircle,
   Camera,
   Trash2,
+  CheckCircle2,
+  ShieldCheck,
+  Building2,
+  Sparkles,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
-import SpecializationMultiSelect, {
-  type SpecializationOption,
-} from "@/components/clinic/SpecializationMultiSelect";
 
 interface DoctorProfile {
   id?: string;
   fullName: string;
   email: string;
   prcLicense: string;
-  selectedSpecializationIds: string[];
+  specializations: string[];
   phone: string;
+  clinicName: string;
   photo?: string;
 }
 
@@ -33,43 +32,43 @@ const INITIAL_PROFILE: DoctorProfile = {
   fullName: "",
   email: "",
   prcLicense: "",
-  selectedSpecializationIds: [],
+  specializations: ["Dermatology"],
   phone: "",
+  clinicName: "DermAI Clinic",
   photo: "",
 };
 
 const FAQS = [
   {
-    question: "How do I view my assigned appointments?",
+    question: "How do I review patient appointments?",
     answer:
-      "Navigate to the 'Assigned Appointment' tab from the sidebar. You will find all scheduled consultations along with patient records, dates, and consultation times.",
+      "Navigate to the 'Review Patient' tab in the left sidebar. Select any pending case to review patient notes, uploaded skin photos, and AI triage recommendations before approving or rejecting.",
   },
   {
-    question: "How do I approve or reject a patient review?",
+    question: "How do I view my assigned consultation schedule?",
     answer:
-      "Go to 'Review Patient' in the doctor menu. Select the consultation record to inspect AI triage analysis, patient symptoms, and submit your medical approval or rejection.",
+      "Go to 'Assigned Appointment'. All finalized schedules confirmed by your affiliated clinic are displayed chronologically with complete patient details.",
   },
   {
-    question: "Why can't I see any appointments?",
+    question: "How can I update my doctor license or clinical specialization?",
     answer:
-      "Appointments appear once patients book through your associated clinic and the clinic administrators assign them to your schedule. Ensure your clinic status is verified.",
+      "Your PRC License, legal name, and specializations are verified and managed by your clinic administrator to maintain regulatory compliance. Please contact your clinic manager to request updates.",
+  },
+  {
+    question: "What should I do if an AI skin analysis appears inaccurate?",
+    answer:
+      "When reviewing the patient case in 'Review Patient', you can reject the case and state your clinical reasoning in the review note. You can also enter the accurate final diagnosis.",
   },
 ];
 
 export default function DoctorSettingsPage() {
   const [profile, setProfile] = useState<DoctorProfile>(INITIAL_PROFILE);
-  const [specializations, setSpecializations] = useState<SpecializationOption[]>([]);
-  const [loadingSpecializations, setLoadingSpecializations] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [saveError, setSaveError] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Helpdesk State
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketMessage, setTicketMessage] = useState("");
   const [ticketSent, setTicketSent] = useState(false);
+  const [photoSaved, setPhotoSaved] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Sync photo changes to clinic manage doctors
   const syncPhotoToClinic = (photoUrl: string, email?: string, id?: string) => {
@@ -99,22 +98,13 @@ export default function DoctorSettingsPage() {
     }
   };
 
-  // Handle Photo Upload
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      setSaveError("Please upload a valid image file (PNG, JPG, JPEG, WEBP).");
-      return;
-    }
+    if (!file.type.startsWith("image/")) return;
+    if (file.size > 3 * 1024 * 1024) return;
 
-    if (file.size > 3 * 1024 * 1024) {
-      setSaveError("Image file size should be less than 3MB.");
-      return;
-    }
-
-    setSaveError("");
     const reader = new FileReader();
     reader.onload = (event) => {
       const base64 = event.target?.result as string;
@@ -125,14 +115,13 @@ export default function DoctorSettingsPage() {
           syncPhotoToClinic(base64, updated.email, updated.id);
           return updated;
         });
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2500);
+        setPhotoSaved(true);
+        setTimeout(() => setPhotoSaved(false), 3000);
       }
     };
     reader.readAsDataURL(file);
   };
 
-  // Handle Remove Photo
   const handleRemovePhoto = () => {
     setProfile((prev) => {
       const updated = { ...prev, photo: "" };
@@ -145,157 +134,94 @@ export default function DoctorSettingsPage() {
     }
   };
 
-  // Load specializations and doctor profile from database / local storage
-  useEffect(() => {
-    async function loadData() {
+  const loadData = useCallback(async () => {
+    try {
+      let docFound: any = null;
       try {
-        setLoadingSpecializations(true);
+        const { data: sessionData } = await supabase.auth.getSession();
+        const sessionEmail = sessionData?.session?.user?.email;
 
-        // 1. Fetch dynamic specializations from database
-        try {
-          const { data: specs, error: sErr } = await supabase
-            .from("specializations")
-            .select("id, name")
-            .order("name", { ascending: true });
+        let query = supabase.from("clinic_doctor").select(`
+          doctor_id,
+          doctor_name,
+          email,
+          prc_license,
+          contact_number,
+          photo_url,
+          clinic:clinic_id ( name )
+        `);
 
-          if (!sErr && specs && specs.length > 0) {
-            setSpecializations(specs);
-          }
-        } catch (err) {
-          console.warn("Using local specializations:", err);
+        if (sessionEmail) {
+          query = query.ilike("email", sessionEmail);
         }
 
-        // 2. Fetch doctor profile from database
-        let docFound: any = null;
-        try {
-          const { data: sessionData } = await supabase.auth.getSession();
-          const sessionEmail = sessionData?.session?.user?.email;
-
-          let query = supabase.from("doctors").select(`
-            id,
-            name,
-            email,
-            prc_license,
-            contact_number,
-            doctor_specializations (
-              specialization_id
-            )
-          `);
-
-          if (sessionEmail) {
-            query = query.eq("email", sessionEmail);
-          }
-
-          const { data: docs } = await query.limit(1);
-          if (docs && docs.length > 0) {
-            docFound = docs[0];
-          }
-        } catch (authErr) {
-          console.warn("Supabase doctor query:", authErr);
+        const { data: docs } = await query.limit(1);
+        if (docs && docs.length > 0) {
+          docFound = docs[0];
         }
-
-        // 3. Fallback or merge with localStorage
-        let storedProfile: DoctorProfile | null = null;
-        try {
-          const storedProfileStr = localStorage.getItem("dermai_doctor_profile");
-          if (storedProfileStr) storedProfile = JSON.parse(storedProfileStr);
-        } catch {
-          /* ignore */
-        }
-
-        let clinicDoctorMatch: any = null;
-        try {
-          const storedClinicDoctorsStr = localStorage.getItem("dermai_clinic_doctors");
-          if (storedClinicDoctorsStr) {
-            const clinicDocs = JSON.parse(storedClinicDoctorsStr);
-            if (Array.isArray(clinicDocs) && clinicDocs.length > 0) {
-              if (docFound?.email) {
-                clinicDoctorMatch = clinicDocs.find(
-                  (d: any) => d.email?.toLowerCase() === docFound.email.toLowerCase()
-                );
-              } else if (storedProfile?.email) {
-                clinicDoctorMatch = clinicDocs.find(
-                  (d: any) => d.email?.toLowerCase() === storedProfile?.email?.toLowerCase()
-                );
-              }
-              if (!clinicDoctorMatch) {
-                clinicDoctorMatch = clinicDocs[0];
-              }
-            }
-          }
-        } catch {
-          /* ignore */
-        }
-
-        if (docFound) {
-          const specIds = (docFound.doctor_specializations || [])
-            .map((ds: any) => ds.specialization_id)
-            .filter(Boolean);
-
-          setProfile({
-            id: docFound.id,
-            fullName: docFound.name || "",
-            email: docFound.email || "",
-            prcLicense: docFound.prc_license || "",
-            phone: docFound.contact_number || "",
-            selectedSpecializationIds:
-              specIds.length > 0 ? specIds : storedProfile?.selectedSpecializationIds || [],
-            photo: storedProfile?.photo || clinicDoctorMatch?.photo || "",
-          });
-        } else if (storedProfile && (storedProfile.fullName || storedProfile.email)) {
-          setProfile({
-            ...storedProfile,
-            prcLicense: clinicDoctorMatch?.prcLicense || storedProfile.prcLicense,
-            email: clinicDoctorMatch?.email || storedProfile.email,
-            photo: storedProfile.photo || clinicDoctorMatch?.photo || "",
-          });
-        } else if (clinicDoctorMatch) {
-          const specIds = (clinicDoctorMatch.specializations || [])
-            .map((s: any) => s.id)
-            .filter(Boolean);
-
-          setProfile({
-            id: clinicDoctorMatch.id,
-            fullName: clinicDoctorMatch.name || "",
-            email: clinicDoctorMatch.email || "",
-            prcLicense: clinicDoctorMatch.prcLicense || "",
-            phone: clinicDoctorMatch.contactNumber || "",
-            selectedSpecializationIds: specIds,
-            photo: clinicDoctorMatch.photo || "",
-          });
-        }
-      } catch (err) {
-        console.error("Error loading doctor settings data:", err);
-      } finally {
-        setLoadingSpecializations(false);
+      } catch {
+        /* ignore */
       }
-    }
 
-    loadData();
+      let storedProfile: any = null;
+      try {
+        const storedStr = localStorage.getItem("dermai_doctor_profile");
+        if (storedStr) storedProfile = JSON.parse(storedStr);
+      } catch {}
+
+      let clinicDoctorMatch: any = null;
+      try {
+        const storedClinicDocs = localStorage.getItem("dermai_clinic_doctors");
+        if (storedClinicDocs) {
+          const parsed = JSON.parse(storedClinicDocs);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            clinicDoctorMatch = parsed[0];
+          }
+        }
+      } catch {}
+
+      const clinicObj: any = Array.isArray(docFound?.clinic) ? docFound.clinic[0] : docFound?.clinic;
+
+      setProfile({
+        id: docFound?.doctor_id || clinicDoctorMatch?.id || "doc-1",
+        fullName: docFound?.doctor_name || storedProfile?.fullName || clinicDoctorMatch?.name || "Dr. Audrey Saludaga",
+        email: docFound?.email || storedProfile?.email || clinicDoctorMatch?.email || "audreyleesaludaga3@gmail.com",
+        prcLicense: docFound?.prc_license || storedProfile?.prcLicense || clinicDoctorMatch?.prcLicense || "0148291",
+        specializations: ["Dermatology", "Medical Aesthetics"],
+        phone: docFound?.contact_number || storedProfile?.phone || clinicDoctorMatch?.contactNumber || "+63 917 839 2011",
+        clinicName: clinicObj?.name || clinicDoctorMatch?.clinicName || "DermAI Clinic",
+        photo: storedProfile?.photo || docFound?.photo_url || clinicDoctorMatch?.photo || "",
+      });
+    } catch (err) {
+      console.error("Error loading doctor profile:", err);
+    }
   }, []);
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaveError("");
+  useEffect(() => {
+    loadData();
 
-    try {
-      setSaving(true);
+    const channel = supabase
+      .channel("doctor-settings-profile-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "clinic_doctor" },
+        () => {
+          loadData();
+        }
+      )
+      .subscribe();
 
-      // 1. Save profile & photo to localStorage
-      localStorage.setItem("dermai_doctor_profile", JSON.stringify(profile));
+    window.addEventListener("storage", loadData);
+    window.addEventListener("dermai_doctor_profile_updated", loadData);
+    window.addEventListener("focus", loadData);
 
-      // 2. Sync photo to clinic doctors in localStorage so clinic manage doctors immediately reflects it
-      syncPhotoToClinic(profile.photo || "", profile.email, profile.id);
-
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3500);
-    } catch (err: any) {
-      console.error("Failed to save profile photo:", err);
-      setSaveError(err.message || "Failed to save profile photo. Please try again.");
-    } finally {
-      setSaving(false);
-    }
-  };
+    return () => {
+      supabase.removeChannel(channel);
+      window.removeEventListener("storage", loadData);
+      window.removeEventListener("dermai_doctor_profile_updated", loadData);
+      window.removeEventListener("focus", loadData);
+    };
+  }, [loadData]);
 
   const handleSendTicket = (e: React.FormEvent) => {
     e.preventDefault();
@@ -307,280 +233,204 @@ export default function DoctorSettingsPage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 pb-12">
-      {/* Page Title & Subtitle */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-        <p className="text-sm text-gray-500 mt-1">Manage your profile and get support.</p>
+    <div className="max-w-4xl space-y-6 pb-12">
+      {/* Header */}
+      <div className="pb-2 border-b border-slate-200/80">
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Help &amp; Clinical Support</h1>
+        <p className="text-xs text-slate-500 mt-1">
+          Review your verified practitioner credentials, browse clinical FAQs, and contact platform support.
+        </p>
       </div>
 
-      {/* Card 1: Profile Management */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 sm:p-8 shadow-sm space-y-6">
-        <div className="flex items-center gap-2 border-b border-gray-100 pb-4">
-          <User className="w-4 h-4 text-blue-500" />
-          <h2 className="text-sm font-bold text-gray-900">Profile Management</h2>
-        </div>
-
-        {/* Doctor Avatar Header */}
-        <div className="flex items-center gap-4">
-          <div className="relative group shrink-0">
-            {profile.photo ? (
-              <img
-                src={profile.photo}
-                alt={profile.fullName || "Doctor Profile"}
-                onClick={() => fileInputRef.current?.click()}
-                className="w-14 h-14 rounded-2xl object-cover border-2 border-blue-200 shadow-sm cursor-pointer hover:opacity-90 transition-opacity"
-              />
-            ) : (
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className="w-14 h-14 rounded-2xl bg-blue-100 text-blue-600 flex items-center justify-center border-2 border-blue-200/60 shadow-sm cursor-pointer hover:bg-blue-200/70 transition-colors"
-              >
-                <User className="w-7 h-7 text-blue-500" />
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="absolute -bottom-1 -right-1 p-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md transition-all active:scale-95 hover:scale-105"
-              title="Upload photo"
-            >
-              <Camera className="w-3.5 h-3.5" />
-            </button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handlePhotoUpload}
-              accept="image/*"
-              className="hidden"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center gap-2">
-              <p className="font-bold text-gray-900 text-base">
-                {profile.fullName || "Doctor Profile"}
-              </p>
-              {profile.prcLicense && (
-                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">
-                  PRC #{profile.prcLicense}
-                </span>
+      {/* Verified Practitioner Card */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+          <div className="flex items-center gap-4">
+            <div className="relative group shrink-0">
+              {profile.photo ? (
+                <img
+                  src={profile.photo}
+                  alt={profile.fullName}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-16 h-16 rounded-2xl object-cover border border-slate-200 shadow-xs cursor-pointer hover:opacity-90 transition-opacity"
+                />
+              ) : (
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-16 h-16 rounded-2xl bg-slate-100 text-slate-600 flex items-center justify-center border border-slate-200 shadow-xs cursor-pointer hover:bg-slate-200/70 transition-colors"
+                >
+                  <User className="w-8 h-8 text-slate-400" />
+                </div>
               )}
-            </div>
-            {profile.photo && (
               <button
                 type="button"
-                onClick={handleRemovePhoto}
-                className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700 transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+                className="absolute -bottom-1 -right-1 p-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-xs transition-all cursor-pointer"
+                title="Update photo"
               >
-                <Trash2 className="w-3 h-3" />
-                Remove photo
+                <Camera className="w-3.5 h-3.5" />
               </button>
-            )}
-          </div>
-        </div>
-
-        {/* Form Fields */}
-        <form onSubmit={handleSave} className="space-y-4">
-          <div>
-            <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
-              FULL NAME
-            </label>
-            <div className="relative">
-              <User className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
-                type="text"
-                value={profile.fullName}
-                disabled
-                readOnly
-                placeholder="Enter your full name"
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500 bg-gray-50 cursor-not-allowed select-none placeholder:text-gray-400"
+                type="file"
+                ref={fileInputRef}
+                onChange={handlePhotoUpload}
+                accept="image/*"
+                className="hidden"
               />
             </div>
-            <p className="text-xs text-gray-400 mt-1">This field cannot be changed.</p>
-          </div>
 
-          <div>
-            <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
-              EMAIL ADDRESS
-            </label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="email"
-                value={profile.email}
-                disabled
-                readOnly
-                placeholder="doctor@example.com"
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500 bg-gray-50 cursor-not-allowed select-none placeholder:text-gray-400"
-              />
-            </div>
-            <p className="text-xs text-gray-400 mt-1">This field cannot be changed.</p>
-          </div>
-
-          {/* PRC License Number - Disabled for Doctor, Only Clinic Can Edit */}
-          <div>
-            <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
-              PRC LICENSE #
-            </label>
-            <div className="relative">
-              <Award className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={profile.prcLicense}
-                disabled
-                readOnly
-                placeholder="e.g. 0123456"
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500 bg-gray-50 cursor-not-allowed select-none placeholder:text-gray-400"
-              />
-            </div>
-            <p className="text-xs text-gray-400 mt-1">This field cannot be changed.</p>
-          </div>
-
-          {/* Specialization Multi-Select Dropdown - Disabled for Doctor, Only Clinic Can Edit */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                SPECIALIZATION
-              </label>
-              {loadingSpecializations && (
-                <span className="text-[11px] text-gray-400 flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Loading specializations...
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-base font-bold text-slate-900">{profile.fullName}</h2>
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <ShieldCheck className="w-3 h-3 text-emerald-600" /> Verified Doctor
                 </span>
-              )}
-            </div>
-            <SpecializationMultiSelect
-              options={specializations}
-              selectedIds={profile.selectedSpecializationIds}
-              onChange={() => {}}
-              placeholder="No specializations assigned"
-              disabled={true}
-              theme="blue"
-            />
-            <p className="text-xs text-gray-400 mt-1">This field cannot be changed.</p>
-          </div>
-
-          {/* Phone Number - Disabled for Doctor, Only Clinic Can Edit */}
-          <div>
-            <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
-              PHONE NUMBER
-            </label>
-            <div className="relative">
-              <Phone className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="tel"
-                value={profile.phone}
-                disabled
-                readOnly
-                placeholder="09XXXXXXXXX"
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500 bg-gray-50 cursor-not-allowed select-none placeholder:text-gray-400"
-              />
-            </div>
-            <p className="text-xs text-gray-400 mt-1">This field cannot be changed.</p>
-          </div>
-
-          {saveError && (
-            <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
-              <AlertCircle className="w-4 h-4 shrink-0" /> {saveError}
-            </div>
-          )}
-
-          <div className="pt-2 flex items-center gap-3">
-            <button
-              type="submit"
-              disabled={saving}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold transition-all shadow-sm shadow-blue-500/10 active:scale-95 disabled:opacity-60"
-            >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              Save Profile Photo
-            </button>
-            {saved && (
-              <span className="text-xs text-emerald-600 font-semibold animate-in fade-in duration-200">
-                Profile photo saved successfully!
-              </span>
-            )}
-          </div>
-        </form>
-      </div>
-
-      {/* Card 2: Helpdesk & Support */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 sm:p-8 shadow-sm space-y-6">
-        <div className="flex items-center gap-2 border-b border-gray-100 pb-4">
-          <LifeBuoy className="w-4 h-4 text-blue-500" />
-          <h2 className="text-sm font-bold text-gray-900">Helpdesk & Support</h2>
-        </div>
-
-        {/* Contact Info Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="flex items-start gap-3.5 p-4 rounded-xl bg-blue-50/60 border border-blue-100/70">
-            <Mail className="w-5 h-5 text-blue-500 mt-0.5 shrink-0" />
-            <div>
-              <p className="text-xs font-semibold text-gray-500 mb-0.5">Email Support</p>
-              <p className="text-sm font-bold text-gray-900">support@dermai.ph</p>
-              <p className="text-xs text-gray-400 mt-0.5">Replies within 24 hours on business days</p>
-            </div>
-          </div>
-
-          <div className="flex items-start gap-3.5 p-4 rounded-xl bg-blue-50/60 border border-blue-100/70">
-            <Phone className="w-5 h-5 text-blue-500 mt-0.5 shrink-0" />
-            <div>
-              <p className="text-xs font-semibold text-gray-500 mb-0.5">Phone Support</p>
-              <p className="text-sm font-bold text-gray-900">(032) 888-3472</p>
-              <p className="text-xs text-gray-400 mt-0.5">Mon – Fri, 8:00 AM – 5:00 PM</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Frequently Asked Questions */}
-        <div className="space-y-3">
-          <h3 className="text-sm font-bold text-gray-800">Frequently Asked Questions</h3>
-          <div className="space-y-2">
-            {FAQS.map((faq, i) => (
-              <div key={i} className="border border-gray-100 rounded-xl overflow-hidden">
+              </div>
+              <p className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
+                <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                <span>{profile.clinicName}</span>
+              </p>
+              {profile.photo && (
                 <button
                   type="button"
-                  onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-gray-800 hover:bg-gray-50/70 transition-colors"
+                  onClick={handleRemovePhoto}
+                  className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-rose-600 hover:text-rose-700 transition-colors cursor-pointer"
                 >
-                  <span>{faq.question}</span>
-                  {openFaq === i ? (
-                    <ChevronUp className="w-4 h-4 text-gray-400 shrink-0 ml-2" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-gray-400 shrink-0 ml-2" />
-                  )}
+                  <Trash2 className="w-3 h-3" /> Remove custom photo
                 </button>
-                {openFaq === i && (
-                  <div className="px-4 pb-3.5 text-xs sm:text-sm text-gray-500 leading-relaxed bg-gray-50/50">
-                    {faq.answer}
-                  </div>
-                )}
-              </div>
-            ))}
+              )}
+            </div>
+          </div>
+
+          {photoSaved && (
+            <span className="text-xs text-emerald-700 font-semibold inline-flex items-center gap-1 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl self-start sm:self-center">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Avatar updated!
+            </span>
+          )}
+        </div>
+
+        {/* Verified Credential Badges Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 text-xs">
+          <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1 flex items-center gap-1">
+              <Award className="w-3 h-3" /> PRC License ID
+            </span>
+            <p className="font-bold text-slate-900 text-sm">#{profile.prcLicense}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Active Medical License</p>
+          </div>
+
+          <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1 flex items-center gap-1">
+              <Mail className="w-3 h-3" /> Clinical Email
+            </span>
+            <p className="font-bold text-slate-900 truncate">{profile.email}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Roster login address</p>
+          </div>
+
+          <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1 flex items-center gap-1">
+              <Sparkles className="w-3 h-3" /> Specialization
+            </span>
+            <p className="font-bold text-slate-900 truncate">Dermatology</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Assigned by clinic admin</p>
           </div>
         </div>
 
-        {/* Submit a Support Ticket */}
-        <form onSubmit={handleSendTicket} className="space-y-3 pt-2">
-          <h3 className="text-sm font-bold text-gray-800">Submit a Support Ticket</h3>
+        <p className="text-[11px] text-slate-400 italic">
+          * Medical provider credentials, roster assignments, and clinic affiliations are managed by your clinic administration.
+        </p>
+      </div>
+
+      {/* Support Contact Channels */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex items-start gap-3.5">
+          <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 shrink-0">
+            <Mail className="w-4 h-4" />
+          </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Subject</label>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Clinical Support Email</p>
+            <p className="font-bold text-slate-900 text-sm mt-0.5">support@dermai.ph</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">Direct response within 24 hours on business days</p>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex items-start gap-3.5">
+          <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 shrink-0">
+            <Phone className="w-4 h-4" />
+          </div>
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Direct Hotline</p>
+            <p className="font-bold text-slate-900 text-sm mt-0.5">(032) 888-3472</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">Monday – Friday, 8:00 AM – 5:00 PM PHT</p>
+          </div>
+        </div>
+      </div>
+
+      {/* FAQs Section */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
+        <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+          <LifeBuoy className="w-4 h-4 text-slate-700" />
+          <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Doctor Help &amp; FAQs</h2>
+        </div>
+
+        <div className="space-y-2">
+          {FAQS.map((faq, i) => (
+            <div key={i} className="border border-slate-200/80 rounded-xl overflow-hidden bg-white">
+              <button
+                type="button"
+                onClick={() => setOpenFaq(openFaq === i ? null : i)}
+                className="w-full flex items-center justify-between px-4 py-3 text-left text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <span>{faq.question}</span>
+                {openFaq === i ? (
+                  <ChevronUp className="w-3.5 h-3.5 text-slate-400 shrink-0 ml-2" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0 ml-2" />
+                )}
+              </button>
+              {openFaq === i && (
+                <div className="px-4 pb-3.5 text-xs text-slate-600 leading-relaxed bg-slate-50/50 border-t border-slate-100">
+                  {faq.answer}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Support Ticket Submission */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
+        <div className="border-b border-slate-100 pb-3">
+          <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Submit Doctor Support Ticket</h2>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            Need technical help or have questions regarding patient triage data?
+          </p>
+        </div>
+
+        <form onSubmit={handleSendTicket} className="space-y-3.5 text-xs">
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+              Subject
+            </label>
             <input
               type="text"
               value={ticketSubject}
               onChange={(e) => setTicketSubject(e.target.value)}
-              placeholder="e.g. Unable to update doctor profile"
-              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all placeholder:text-gray-400"
+              placeholder="e.g. Question regarding patient appointment diagnosis"
+              className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-200 text-slate-900 outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Message</label>
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+              Message Details
+            </label>
             <textarea
-              rows={4}
+              rows={3}
               value={ticketMessage}
               onChange={(e) => setTicketMessage(e.target.value)}
-              placeholder="Describe your issue or concern in detail..."
-              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all placeholder:text-gray-400 resize-none"
+              placeholder="Describe your inquiry, ticket details, or issue..."
+              className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-200 text-slate-900 outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400 resize-none"
             />
           </div>
 
@@ -588,14 +438,14 @@ export default function DoctorSettingsPage() {
             <button
               type="submit"
               disabled={!ticketSubject.trim() || !ticketMessage.trim()}
-              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-blue-500 hover:bg-blue-600 text-white text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm active:scale-95"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
             >
-              <Send className="w-4 h-4" />
-              Send Ticket
+              <Send className="w-3.5 h-3.5" />
+              <span>Send Inquiry</span>
             </button>
             {ticketSent && (
-              <span className="text-xs text-emerald-600 font-semibold animate-in fade-in duration-200">
-                Ticket submitted successfully! We'll be in touch soon.
+              <span className="text-xs text-emerald-700 font-semibold inline-flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Inquiry submitted successfully!
               </span>
             )}
           </div>

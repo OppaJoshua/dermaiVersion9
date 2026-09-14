@@ -1,5 +1,5 @@
 import { Mail, Phone, MapPin, Smartphone } from "lucide-react";
-import contactImg from "@/assets/Girl-homepage.png";
+import contactImg from "@/assets/contact.png";
 
 export default function ContactUsPage() {
   return (

@@ -1,5 +1,5 @@
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { CreditCard, Crown, Calendar, CheckCircle2, XCircle, X, Loader2 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
@@ -50,13 +50,15 @@ export default function BillingSettingsPage() {
   const [cardSaved, setCardSaved] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  const loadBillingData = async () => {
+  const loadBillingData = useCallback(async () => {
     if (!user) {
       setLoading(false);
       return;
     }
 
     try {
+      setLoading(true);
+
       // 1. Load active subscription
       const { data: subData } = await supabase
         .from("user_plan_subscription")
@@ -132,11 +134,11 @@ export default function BillingSettingsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
     loadBillingData();
-  }, [user]);
+  }, [loadBillingData]);
 
   // Close modal on outside click
   useEffect(() => {

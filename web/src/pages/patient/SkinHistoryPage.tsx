@@ -58,30 +58,21 @@ export default function PatientSkinHistory() {
         return;
       }
 
-      const mapped: SkinHistoryItem[] = (data ?? []).map((s: {
-        analysis_id: string;
-        confidence_score: number;
-        body_part: string | null;
-        scanned_at: string;
-        photo_url: string | null;
-        skin_condition: {
-          name: string;
-          local_name: string | null;
-          description: string | null;
-          skin_condition_care_tip: { tip_text: string }[];
-        } | null;
-      }) => ({
-        id: s.analysis_id,
-        condition: s.skin_condition?.name ?? "Unknown",
-        localName: s.skin_condition?.local_name ?? undefined,
-        confidence: Math.round(s.confidence_score),
-        bodyPart: s.body_part ?? "Unknown",
-        date: new Date(s.scanned_at).toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }),
-        severity: s.confidence_score >= 80 ? "Severe" : s.confidence_score >= 50 ? "Moderate" : "Mild",
-        imageUrl: s.photo_url ?? undefined,
-        description: s.skin_condition?.description ?? undefined,
-        careTips: s.skin_condition?.skin_condition_care_tip?.map((t) => t.tip_text),
-      }));
+      const mapped: SkinHistoryItem[] = ((data ?? []) as any[]).map((s: any) => {
+        const condObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+        return {
+          id: s.analysis_id,
+          condition: condObj?.name ?? "Unknown",
+          localName: condObj?.local_name ?? undefined,
+          confidence: Math.round(s.confidence_score),
+          bodyPart: s.body_part ?? "Unknown",
+          date: new Date(s.scanned_at).toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }),
+          severity: s.confidence_score >= 80 ? "Severe" : s.confidence_score >= 50 ? "Moderate" : "Mild",
+          imageUrl: s.photo_url ?? undefined,
+          description: condObj?.description ?? undefined,
+          careTips: condObj?.skin_condition_care_tip?.map((t: any) => t.tip_text),
+        };
+      });
 
       setHistory(mapped);
       setIsLoading(false);

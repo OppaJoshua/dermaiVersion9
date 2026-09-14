@@ -3,11 +3,11 @@ import { Link } from "react-router-dom";
 import { Search, ArrowRight } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { motion } from "framer-motion";
-import vitiligoImg from "../../assets/vitiligo.jpg";
-import atopicDermatitisImg from "../../assets/atopicDermatitis.jpg";
-import acneRosaceaImg from "../../assets/acneVulgaris.jpg";
-import contactDermatitisImg from "../../assets/contactDermatitis.jpg";
-import melasmaImg from "../../assets/Melasma.jpg";
+import vitiligoImg from "@/assets/vitiligo.jpg";
+import atopicDermatitisImg from "@/assets/atopicDermatitis.jpg";
+import acneRosaceaImg from "@/assets/acneVulgaris.jpg";
+import contactDermatitisImg from "@/assets/contactDermatitis.jpg";
+import melasmaImg from "@/assets/Melasma.jpg";
 
 export const skinConditions = [
   {
@@ -160,12 +160,6 @@ export const skinConditions = [
 
 const categories = ["All", "Acne", "Inflammatory", "Pigmentation"];
 
-const categoryColors: Record<string, string> = {
-  Acne: "bg-rose-100 text-rose-700",
-  Inflammatory: "bg-orange-100 text-orange-700",
-  Pigmentation: "bg-amber-100 text-amber-700",
-};
-
 export default function SkinLibraryPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -173,51 +167,70 @@ export default function SkinLibraryPage() {
   const filtered = skinConditions.filter((c) => {
     const matchesSearch =
       c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.filipinoName.toLowerCase().includes(searchQuery.toLowerCase());
+      c.filipinoName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.description.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = selectedCategory === "All" || c.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
 
   return (
-    <div className="min-h-screen bg-magenta-50 pt-8 pb-16">
+    <div className="min-h-screen bg-white text-slate-900 pt-8 pb-16">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="text-center mb-10">
-          <h1 className="text-3xl sm:text-4xl font-display font-bold text-magenta-900 mb-2">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 border border-magenta-100 text-magenta-700 text-xs font-semibold uppercase tracking-wider mb-3">
+            Dermatology Knowledge Base
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-display font-bold text-slate-900 mb-2">
             Skin Condition Library
           </h1>
-          <p className="text-magenta-700/60 text-sm max-w-md mx-auto">
-            Learn about common skin conditions in the Philippines
+          <p className="text-slate-500 text-sm max-w-lg mx-auto leading-relaxed">
+            Medical information, common symptoms, self-care guidelines, and localized insights for common skin conditions in the Philippines.
           </p>
         </div>
 
         {/* Search & Filters */}
-        <div className="bg-white rounded-[20px] shadow-[0_4px_24px_rgba(160,25,90,0.08)] p-4 sm:p-6 mb-8">
-          <div className="flex items-center gap-2 bg-magenta-50 rounded-full px-4 py-2.5 mb-4">
-            <Search className="w-4 h-4 text-magenta-400 shrink-0" />
-            <input
-              type="text"
-              placeholder="Search conditions..."
-              className="flex-1 bg-transparent outline-none text-sm text-magenta-900 placeholder:text-magenta-300"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={cn(
-                  "px-4 py-1.5 rounded-full text-xs font-semibold transition-all active:scale-[0.96]",
-                  selectedCategory === cat
-                    ? "bg-magenta-500 text-white"
-                    : "bg-magenta-50 text-magenta-600 hover:bg-magenta-100"
-                )}
-              >
-                {cat}
-              </button>
-            ))}
+        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-4 sm:p-5 mb-8">
+          <div className="flex flex-col md:flex-row gap-3 sm:items-center justify-between">
+            {/* Search input */}
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search by condition name, Tagalog name, or symptoms..."
+                className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50/50 text-sm text-slate-900 placeholder:text-slate-400 focus:border-magenta-500 focus:bg-white focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-3 top-3 text-xs text-slate-400 hover:text-slate-600 font-semibold"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
+            {/* Category Pills */}
+            <div className="flex flex-wrap gap-1.5 items-center">
+              <span className="text-xs font-semibold text-slate-500 mr-1 hidden sm:inline">Category:</span>
+              {categories.map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={cn(
+                    "px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer active:scale-[0.96]",
+                    selectedCategory === cat
+                      ? "bg-magenta-500 text-white shadow-sm shadow-magenta-500/20"
+                      : "bg-slate-50 border border-slate-200 text-slate-700 hover:bg-magenta-50/60 hover:text-magenta-700 hover:border-magenta-200"
+                  )}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -226,54 +239,121 @@ export default function SkinLibraryPage() {
           {filtered.map((condition, i) => (
             <motion.div
               key={condition.id}
-              initial={{ opacity: 0, y: 20 }}
+              initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
+              transition={{ delay: i * 0.04 }}
             >
               <Link
                 to={`/skin-library/${condition.id}`}
-                className="group block bg-white rounded-[20px] shadow-[0_4px_24px_rgba(160,25,90,0.06)] hover:shadow-[0_8px_40px_rgba(160,25,90,0.12)] transition-all duration-300 overflow-hidden"
+                className="group flex flex-col h-full bg-white rounded-3xl border border-slate-200/80 shadow-sm hover:shadow-md hover:border-magenta-300 transition-all duration-300 overflow-hidden"
               >
-                <div className="h-44 overflow-hidden">
+                {/* Photo Header */}
+                <div className="h-48 overflow-hidden relative bg-slate-100">
                   <img
                     src={condition.image}
                     alt={condition.name}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   />
-                </div>
-                <div className="p-5">
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="absolute top-3 left-3">
                     <span
                       className={cn(
-                        "px-2.5 py-0.5 rounded-full text-[10px] font-bold",
-                        categoryColors[condition.category] || "bg-gray-100 text-gray-600"
+                        "px-2.5 py-0.5 rounded-full text-[11px] font-bold shadow-xs",
+                        condition.category === "Acne"
+                          ? "bg-rose-50 text-rose-700 border border-rose-200/80"
+                          : condition.category === "Inflammatory"
+                          ? "bg-orange-50 text-orange-700 border border-orange-200/80"
+                          : "bg-amber-50 text-amber-700 border border-amber-200/80"
                       )}
                     >
                       {condition.category}
                     </span>
                   </div>
-                  <h3 className="font-display font-bold text-magenta-900 text-base mb-0.5">
-                    {condition.name}
-                  </h3>
-                  <p className="text-xs text-magenta-400 mb-2">{condition.filipinoName}</p>
-                  <p className="text-sm text-magenta-700/60 leading-relaxed mb-3 line-clamp-2">
-                    {condition.description}
-                  </p>
-                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-magenta-500 group-hover:text-magenta-600">
-                    Learn More <ArrowRight className="w-3.5 h-3.5" />
-                  </span>
+                </div>
+
+                {/* Content Body */}
+                <div className="p-5 flex-1 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <h3 className="font-display font-bold text-slate-900 text-lg group-hover:text-magenta-600 transition-colors">
+                        {condition.name}
+                      </h3>
+                    </div>
+                    <p className="text-xs font-semibold text-magenta-600 mb-2.5">
+                      Filipino: {condition.filipinoName}
+                    </p>
+                    <p className="text-xs text-slate-600 leading-relaxed mb-4 line-clamp-2">
+                      {condition.description}
+                    </p>
+                  </div>
+
+                  {/* Card Bottom Meta & CTA */}
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-slate-400">
+                      {condition.symptoms.length} common symptoms
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-magenta-600 group-hover:text-magenta-700 group-hover:translate-x-0.5 transition-transform">
+                      Learn More <ArrowRight className="w-3.5 h-3.5" />
+                    </span>
+                  </div>
                 </div>
               </Link>
             </motion.div>
           ))}
         </div>
 
+        {/* Empty State */}
         {filtered.length === 0 && (
-          <div className="text-center py-16">
-            <Search className="w-10 h-10 text-magenta-200 mx-auto mb-3" />
-            <p className="text-magenta-400 text-sm">No conditions found matching your search</p>
+          <div className="bg-white rounded-3xl border border-slate-200/80 p-12 text-center my-6">
+            <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3 text-slate-400">
+              <Search className="w-6 h-6" />
+            </div>
+            <h3 className="font-display font-bold text-slate-900 text-base mb-1">
+              No matching skin conditions found
+            </h3>
+            <p className="text-slate-500 text-xs mb-4">
+              Try adjusting your keyword or clearing the category filter.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery("");
+                setSelectedCategory("All");
+              }}
+              className="px-4 py-2 rounded-full bg-magenta-500 text-white text-xs font-semibold hover:bg-magenta-600 transition-colors shadow-sm"
+            >
+              Reset Filters
+            </button>
           </div>
         )}
+
+        {/* Bottom Professional Assessment Banner */}
+        <div className="mt-12 bg-slate-50 border border-slate-200/80 rounded-3xl p-6 sm:p-8 flex flex-col sm:flex-row items-center justify-between gap-6">
+          <div>
+            <span className="inline-block px-2.5 py-0.5 rounded-md bg-magenta-100 text-magenta-700 text-[11px] font-bold uppercase tracking-wide mb-2">
+              Preliminary Triage
+            </span>
+            <h3 className="text-xl font-display font-bold text-slate-900 mb-1">
+              Not sure about your skin condition?
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-600 max-w-xl leading-relaxed">
+              Use DermAI’s clinical photo analyzer and symptom questionnaire for an instant AI-powered pre-screening, or book an in-person consultation with accredited Cebu dermatologists.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <Link
+              to="/scan"
+              className="px-6 py-3 rounded-full bg-magenta-500 text-white text-sm font-semibold hover:bg-magenta-600 transition-all shadow-md shadow-magenta-500/20 active:scale-[0.96]"
+            >
+              Scan Skin Now
+            </Link>
+            <Link
+              to="/find-clinics"
+              className="px-5 py-3 rounded-full border border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-all active:scale-[0.96]"
+            >
+              Find Cebu Clinics
+            </Link>
+          </div>
+        </div>
       </div>
     </div>
   );

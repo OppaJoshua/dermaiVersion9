@@ -17,6 +17,7 @@ import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { skinConditions } from "../public/SkinLibrary";
 import { supabase } from "@/lib/supabaseClient";
+import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 
 type AppointmentRecord = {
   id: string;
@@ -69,16 +70,19 @@ const skinTips = [
   },
 ];
 
+import { useAuth } from "@/context/AuthContext";
+
 export default function PatientDashboard() {
+  const { session } = useAuth();
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [profile, setProfile] = useState<{ fullName: string; profilePicture?: string }>({
     fullName: "",
   });
   const [history, setHistory] = useState<AnalysisRecord[]>([]);
   const [stats, setStats] = useState<QuickStats>({
-    totalScans: "—",
-    conditionsFound: "—",
-    clinicsSaved: "—",
+    totalScans: "0",
+    conditionsFound: "0",
+    clinicsSaved: "0",
     lastScan: "—",
   });
   const [loading, setLoading] = useState(true);
@@ -94,13 +98,11 @@ export default function PatientDashboard() {
   };
   const [notifications, setNotifications] = useState<PatientNotif[]>([]);
 
-  // TODO: replace with DELETE /api/notifications/:id
   const dismissNotif = async (id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
     await supabase.from("user_notification").update({ is_read: true }).eq("notif_id", id);
   };
 
-  // TODO: replace with a bulk-clear endpoint
   const clearAllNotifs = async () => {
     const ids = notifications.map((n) => n.id);
     setNotifications([]);
@@ -122,7 +124,6 @@ export default function PatientDashboard() {
       }
 
       try {
-
         // Fetch user profile
         const { data: userRow } = await supabase
           .from("user")
@@ -130,7 +131,16 @@ export default function PatientDashboard() {
           .eq("user_id", userId)
           .maybeSingle();
 
-        setProfile({ fullName: userRow?.full_name ?? "" });
+        const meta = session?.user?.user_metadata || {};
+        let localProfile: any = null;
+        try {
+          const raw = localStorage.getItem(`derm_profile_${userId}`);
+          if (raw) localProfile = JSON.parse(raw);
+        } catch {}
+
+        const avatar = localProfile?.profilePicture || meta.avatar_url || meta.picture || "";
+        const name = userRow?.full_name ?? localProfile?.fullName ?? meta.full_name ?? meta.name ?? "";
+        setProfile({ fullName: name, profilePicture: avatar });
 
         // Fetch recent appointments
         const { data: apptRows } = await supabase
@@ -252,7 +262,19 @@ export default function PatientDashboard() {
     };
 
     loadDashboardData();
-  }, []);
+
+    const handleProfileUpdate = () => {
+      loadDashboardData();
+    };
+
+    window.addEventListener("derm_profile_updated", handleProfileUpdate);
+    window.addEventListener("storage", handleProfileUpdate);
+
+    return () => {
+      window.removeEventListener("derm_profile_updated", handleProfileUpdate);
+      window.removeEventListener("storage", handleProfileUpdate);
+    };
+  }, [session]);
 
   const fallbackImage = skinConditions[0]?.image;
 
@@ -430,7 +452,10 @@ export default function PatientDashboard() {
                       {item.status === "accepted" ? "scheduled" : item.status}
                     </span>
                   </div>
-                  <p className="text-[11px] text-gray-600 truncate">{item.clinicName}</p>
+                  <div className="flex items-center gap-1">
+                    <p className="text-[11px] text-gray-600 truncate font-medium">{item.clinicName}</p>
+                    <VerifiedBadge size={13} className="w-3.5 h-3.5" title="Verified Clinic" />
+                  </div>
                   <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-3">
                     <span className="inline-flex items-center gap-1">
                       <MapPin className="w-3 h-3" />
@@ -465,7 +490,7 @@ export default function PatientDashboard() {
             </div>
             <div className="px-6 pb-5 space-y-3">
               {history.map((analysis, i) => (
-                <Link key={analysis.id} to={`/library/${analysis.conditionId || ""}`} className="block">
+                <Link key={analysis.id} to="/dashboard/history" className="block">
                   <motion.div
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}

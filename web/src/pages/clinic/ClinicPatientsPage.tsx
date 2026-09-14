@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Users,
   Search,
@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabaseClient";
 
 export type ClinicPatient = {
   id: string;
@@ -30,13 +31,67 @@ const statusBadges: Record<string, string> = {
   pending: "bg-amber-50 text-amber-700 border-amber-200",
 };
 
+import { useClinicVerification } from "@/hooks/useClinicVerification";
+
 export default function ClinicPatientsPage() {
+  const { clinicId } = useClinicVerification();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedPatient, setSelectedPatient] = useState<ClinicPatient | null>(null);
+  const [patients, setPatients] = useState<ClinicPatient[]>([]);
 
-  // TODO: Load patient records from Supabase for the current clinic
-  const [patients] = useState<ClinicPatient[]>([]);
+  useEffect(() => {
+    async function loadPatients() {
+      try {
+        let query = supabase
+          .from("patient_appointment")
+          .select("*, user(full_name, email, phone), clinic_doctor:assigned_doctor_id(doctor_name)");
+
+        if (clinicId) {
+          query = query.eq("clinic_id", clinicId);
+        }
+
+        const { data } = await query;
+
+        if (data && data.length > 0) {
+          const patientMap = new Map<string, ClinicPatient>();
+
+          data.forEach((row) => {
+            const email = row.patient_email || row.user?.email || `patient_${row.appointment_id.slice(0, 6)}@dermai.local`;
+            const name = row.patient_name || row.user?.full_name || email.split("@")[0];
+            const phone = row.patient_contact || row.user?.phone || "";
+            const isCompleted = row.status === "completed";
+            const isPending = row.status === "pending";
+
+            if (!patientMap.has(email)) {
+              patientMap.set(email, {
+                id: row.user_id || row.appointment_id,
+                name,
+                email,
+                phone,
+                condition: row.ai_condition_name || "General Dermatology",
+                assignedDoctor: row.clinic_doctor?.doctor_name || "Resident Doctor",
+                lastVisit: row.date ? new Date(row.date).toLocaleDateString() : "—",
+                totalVisits: 1,
+                status: isCompleted ? "completed" : isPending ? "pending" : "active",
+                notes: row.ai_condition_name ? `Noted Condition: ${row.ai_condition_name}` : "",
+              });
+            } else {
+              const existing = patientMap.get(email)!;
+              existing.totalVisits += 1;
+              if (phone && !existing.phone) existing.phone = phone;
+              if (isCompleted && existing.status !== "active") existing.status = "completed";
+            }
+          });
+
+          setPatients(Array.from(patientMap.values()));
+        }
+      } catch (err) {
+        console.error("Error loading clinic patients:", err);
+      }
+    }
+    loadPatients();
+  }, [clinicId]);
 
   const filteredPatients = useMemo(() => {
     return patients.filter((p) => {

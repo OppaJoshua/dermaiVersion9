@@ -7,11 +7,16 @@ import { useDoctorAppointments } from "@/hooks/useDoctorAppointments";
 export default function DoctorDashboardPage() {
   const { doctorName, doctorClinic, appointments: allAppointments, loading } = useDoctorAppointments();
   const fallbackImage = skinConditions[0]?.image;
-
-  const pendingReview = allAppointments.filter((a) => a.doctorStatus === "pending-review");
+  const pendingReview = allAppointments.filter(
+    (a) =>
+      a.doctorStatus === "pending-review" ||
+      (!a.doctorStatus && a.status !== "completed" && a.status !== "rejected")
+  );
   const approved = allAppointments.filter((a) => a.doctorStatus === "approved");
   const rejected = allAppointments.filter((a) => a.doctorStatus === "rejected");
-  const scheduledSent = allAppointments.filter((a) => a.scheduleSentToDoctor || a.status === "confirmed" || a.status === "scheduled");
+  const scheduledSent = allAppointments.filter(
+    (a) => a.scheduleSentToDoctor || a.status === "confirmed" || a.status === "scheduled"
+  );
 
   const stats = [
     { label: "Pending Review", value: pendingReview.length, icon: Clock, color: "bg-amber-50 text-amber-600 border-amber-100", iconColor: "text-amber-500", bg: "bg-amber-100" },

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Sparkles, ArrowLeft, Crown, CalendarDays, Calendar, AlertCircle } from "lucide-react";
@@ -32,8 +32,8 @@ export default function SubscriptionUpgradePage() {
   }, []);
 
   useEffect(() => {
-    if (user?.email && !email) setEmail(user.email);
-    if (user?.user_metadata?.full_name && !fullName) setFullName(user.user_metadata.full_name);
+    if (user?.email) setEmail((prev) => prev || user.email || "");
+    if (user?.user_metadata?.full_name) setFullName((prev) => prev || user.user_metadata.full_name || "");
   }, [user]);
 
   const matchedPlan = plans.find((p) => p.billingType === billingCycle && p.status === "active");
@@ -168,270 +168,280 @@ export default function SubscriptionUpgradePage() {
   };
 
   return (
-    <div className="min-h-screen bg-magenta-50 pt-8 pb-16">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6">
-        <button
-          onClick={() => navigate(-1)}
-          className="flex items-center gap-2 text-sm text-magenta-500 mb-8 hover:text-magenta-700 font-medium"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back
-        </button>
+    <div className="min-h-screen bg-white text-gray-900 pt-8 pb-20 px-4 font-sans antialiased">
+      <div className="max-w-5xl mx-auto">
+        {/* Top Back Navigation */}
+        <div className="mb-6 flex items-center justify-between">
+          <button
+            onClick={() => navigate(-1)}
+            className="inline-flex items-center gap-2 text-xs font-semibold text-gray-500 hover:text-gray-900 transition-colors px-3 py-1.5 rounded-lg hover:bg-gray-50"
+          >
+            <ArrowLeft className="w-4 h-4" /> Back to Dashboard
+          </button>
+        </div>
 
-        {/* Billing Cycle Selector */}
-        <div className="mb-8">
-          <p className="text-center text-sm font-semibold text-magenta-600 mb-4 uppercase tracking-wider">Choose your billing cycle</p>
-          <div className="flex gap-4 max-w-md mx-auto">
+        {/* Header */}
+        <div className="text-center max-w-xl mx-auto mb-8">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-600 text-xs font-semibold mb-3">
+            <Sparkles className="w-3.5 h-3.5" /> Upgrade to DermAI Pro
+          </span>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">
+            Unlock Unlimited AI Skin Analysis
+          </h1>
+          <p className="text-sm text-gray-500 mt-2">
+            Get unlimited AI scans, priority clinic booking, and detailed skin progression analytics.
+          </p>
+
+          {/* Billing Cycle Toggle */}
+          <div className="mt-6 inline-flex p-1 bg-gray-100 rounded-2xl border border-gray-200/60 max-w-xs w-full">
             <button
               type="button"
               onClick={() => setBillingCycle("monthly")}
               className={cn(
-                "flex-1 flex flex-col items-center gap-1 py-4 px-3 rounded-2xl border-2 transition-all font-medium",
+                "flex-1 py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5",
                 billingCycle === "monthly"
-                  ? "border-magenta-500 bg-magenta-50 text-magenta-900 shadow-md shadow-magenta-100"
-                  : "border-magenta-100 bg-white text-magenta-500 hover:border-magenta-300"
+                  ? "bg-white text-gray-900 shadow-xs"
+                  : "text-gray-500 hover:text-gray-900"
               )}
             >
-              <Calendar className="w-5 h-5" />
-              <span className="text-base font-bold">₱199</span>
-              <span className="text-xs">per month</span>
+              <Calendar className="w-3.5 h-3.5 text-magenta-500" />
+              <span>Monthly • ₱199</span>
             </button>
             <button
               type="button"
               onClick={() => setBillingCycle("yearly")}
               className={cn(
-                "flex-1 flex flex-col items-center gap-1 py-4 px-3 rounded-2xl border-2 transition-all font-medium relative",
+                "flex-1 py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 relative",
                 billingCycle === "yearly"
-                  ? "border-magenta-500 bg-magenta-50 text-magenta-900 shadow-md shadow-magenta-100"
-                  : "border-magenta-100 bg-white text-magenta-500 hover:border-magenta-300"
+                  ? "bg-white text-gray-900 shadow-xs"
+                  : "text-gray-500 hover:text-gray-900"
               )}
             >
-              <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">SAVE ~16%</span>
-              <CalendarDays className="w-5 h-5" />
-              <span className="text-base font-bold">₱1,999</span>
-              <span className="text-xs">per year</span>
+              <CalendarDays className="w-3.5 h-3.5 text-magenta-500" />
+              <span>Yearly • ₱1,999</span>
+              <span className="absolute -top-2.5 -right-1 bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider">
+                -16%
+              </span>
             </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-8 xl:gap-16">
-          {/* Order Summary & Features */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
+          {/* Order Summary & Features (5 cols) */}
           <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="order-2 lg:order-1"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="lg:col-span-5 space-y-4"
           >
-            <div className="bg-white rounded-[24px] shadow-[0_12px_48px_rgba(160,25,90,0.08)] p-6 sm:p-10 border border-magenta-100">
-              <div className="flex items-center gap-3 mb-8">
-                <div className="p-3 bg-magenta-100 rounded-2xl text-magenta-500">
-                  <Crown className="w-8 h-8" />
+            <div className="bg-white rounded-3xl border border-gray-100 p-6 sm:p-7 shadow-xs">
+              <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
+                <div className="w-12 h-12 rounded-2xl bg-magenta-50 text-magenta-600 flex items-center justify-center shrink-0">
+                  <Crown className="w-6 h-6" />
                 </div>
                 <div>
-                  <h1 className="text-3xl font-display font-bold text-magenta-900">
-                    Pro Plan
-                  </h1>
-                  <p className="text-magenta-500 font-medium mt-1">
-                    Unlimited Anomaly Scans
-                  </p>
+                  <h2 className="text-lg font-bold text-gray-900">Pro Membership</h2>
+                  <p className="text-xs text-gray-500">Unlimited Anomaly Scans</p>
                 </div>
               </div>
 
-              <div className="space-y-6 mb-8">
-                <div className="flex justify-between items-center py-4 border-b border-magenta-100">
-                  <span className="text-magenta-700 font-medium text-lg">Billing</span>
-                  <span className="text-magenta-900 font-bold text-lg">{billingLabel}</span>
+              {/* Price Breakdown */}
+              <div className="space-y-3 text-xs mb-6">
+                <div className="flex justify-between items-center text-gray-600">
+                  <span>Billing Plan</span>
+                  <span className="font-semibold text-gray-900">{billingLabel}</span>
                 </div>
-                <div className="flex justify-between items-center py-4 border-b border-magenta-100">
-                  <span className="text-magenta-700 font-medium text-lg">Subtotal</span>
-                  <span className="text-magenta-900 font-bold text-lg">₱{basePrice.toLocaleString()}</span>
+                <div className="flex justify-between items-center text-gray-600">
+                  <span>Subtotal</span>
+                  <span className="font-semibold text-gray-900">₱{basePrice.toLocaleString()}</span>
                 </div>
-                <div className="flex justify-between items-center py-4 border-b border-magenta-100">
-                  <span className="text-magenta-700 font-medium text-lg">Tax (12%)</span>
-                  <span className="text-magenta-900 font-bold text-lg">₱{tax.toFixed(2)}</span>
+                <div className="flex justify-between items-center text-gray-600">
+                  <span>VAT / Tax (12%)</span>
+                  <span className="font-semibold text-gray-900">₱{tax.toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between items-center py-4 text-xl">
-                  <span className="text-magenta-900 font-bold">Total Due Today</span>
-                  <span className="text-magenta-500 font-black text-2xl">₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <div className="pt-3 border-t border-gray-100 flex justify-between items-baseline">
+                  <span className="text-sm font-bold text-gray-900">Total Due Today</span>
+                  <span className="text-xl font-bold text-magenta-600">
+                    ₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
                 </div>
               </div>
 
-              <div className="p-4 bg-orange-50 rounded-2xl border border-orange-200">
-                <p className="text-orange-800 text-sm font-medium leading-relaxed">
-                  Subscription renews automatically every {billingCycle === "monthly" ? "month" : "year"} unless canceled. You can cancel at any time from your account settings. No refund.
-                </p>
+              {/* Pro Features Included */}
+              <div className="space-y-2.5 pt-4 border-t border-gray-100 mb-5">
+                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Included with Pro</p>
+                <div className="space-y-2 text-xs text-gray-600">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                    <span>Unlimited AI skin disease scans</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                    <span>Priority clinic consultation requests</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                    <span>Full scan history &amp; severity tracking</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                    <span>Continuous instant updates</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-gray-50 rounded-2xl border border-gray-100 text-[11px] text-gray-500 leading-relaxed">
+                Auto-renews every {billingCycle === "monthly" ? "month" : "year"}. Cancel anytime directly from your billing settings.
               </div>
             </div>
           </motion.div>
 
-          {/* Payment Form */}
+          {/* Payment Form (7 cols) */}
           <motion.div
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="order-1 lg:order-2"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.05 }}
+            className="lg:col-span-7"
           >
-            <div className="bg-white rounded-[24px] shadow-[0_12px_48px_rgba(160,25,90,0.12)] p-6 sm:p-10 border-2 border-magenta-200 relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-magenta-400 to-orange-400" />
-              <h2 className="text-2xl font-display font-bold text-magenta-900 mb-8">
-                Payment Information
-              </h2>
+            <div className="bg-white rounded-3xl border border-gray-100 p-6 sm:p-8 shadow-xs">
+              <div className="mb-6">
+                <h2 className="text-xl font-bold text-gray-900 tracking-tight">Payment Information</h2>
+                <p className="text-xs text-gray-500 mt-0.5">Secure payment processing via PayMongo</p>
+              </div>
 
-              <form onSubmit={handleSubmit} className="space-y-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
                 {error && (
-                  <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
-                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                  <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
                     <span>{error}</span>
                   </div>
                 )}
 
                 <div>
-                  <label className="block text-sm font-semibold text-magenta-900 mb-2">
-                    Full Name
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                    Full Name <span className="text-red-500">*</span>
                   </label>
                   <input
                     required
                     type="text"
-                    placeholder="Juan Dela Cruz"
+                    placeholder="e.g. Maria Santos"
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
-                    className="w-full bg-white border border-magenta-200 rounded-xl px-4 py-3 text-sm text-magenta-900 focus:outline-none focus:ring-2 focus:ring-magenta-500 focus:border-transparent transition-all"
+                    className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
                   />
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                   <div>
-                    <label className="block text-sm font-semibold text-magenta-900 mb-2">
-                      Country
-                    </label>
-                    <select
-                      className="w-full bg-white border border-magenta-200 rounded-xl px-4 py-3 text-sm text-magenta-900 focus:outline-none focus:ring-2 focus:ring-magenta-500 focus:border-transparent transition-all appearance-none"
-                    >
-                      <option>Philippines</option>
-                      <option>United States</option>
-                      <option>Other</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-magenta-900 mb-2">
-                      Philippine TIN (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="000-000-000-000"
-                      className="w-full bg-white border border-magenta-200 rounded-xl px-4 py-3 text-sm text-magenta-900 focus:outline-none focus:ring-2 focus:ring-magenta-500 focus:border-transparent transition-all"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-magenta-900 mb-2">
-                    Address
-                  </label>
-                  <input
-                    required
-                    type="text"
-                    placeholder="Street, City, Province"
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    className="w-full bg-white border border-magenta-200 rounded-xl px-4 py-3 text-sm text-magenta-900 focus:outline-none focus:ring-2 focus:ring-magenta-500 focus:border-transparent transition-all"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-magenta-900 mb-2">
-                    Email Address
-                  </label>
-                  <input
-                    required
-                    type="email"
-                    placeholder="email@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full bg-white border border-magenta-200 rounded-xl px-4 py-3 text-sm text-magenta-900 focus:outline-none focus:ring-2 focus:ring-magenta-500 focus:border-transparent transition-all"
-                  />
-                </div>
-
-                <div className="space-y-4 pt-4 border-t border-magenta-100">
-                  <div>
-                    <label className="block text-sm font-semibold text-magenta-900 mb-2">
-                      Payment Method
-                    </label>
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setPaymentMethod("gcash")}
-                        className={cn(
-                          "flex items-center justify-center h-14 px-4 rounded-2xl border-2 transition-all cursor-pointer",
-                          paymentMethod === "gcash"
-                            ? "border-blue-500 bg-blue-50/70 shadow-sm ring-2 ring-blue-500/20"
-                            : "border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/60"
-                        )}
-                        aria-label="Pay with GCash"
-                      >
-                        <img
-                          src={gcashLogo}
-                          alt="GCash"
-                          className="h-6 w-auto object-contain"
-                        />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPaymentMethod("maya")}
-                        className={cn(
-                          "flex items-center justify-center h-14 px-4 rounded-2xl border-2 transition-all cursor-pointer",
-                          paymentMethod === "maya"
-                            ? "border-emerald-500 bg-emerald-50/70 shadow-sm ring-2 ring-emerald-500/20"
-                            : "border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/60"
-                        )}
-                        aria-label="Pay with Maya"
-                      >
-                        <img
-                          src={mayaLogo}
-                          alt="Maya"
-                          className="h-6 w-auto object-contain"
-                        />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-semibold text-magenta-900 mb-2">
-                      {paymentMethod === "gcash" ? "GCash" : "Maya"} Mobile Number
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                      Email Address <span className="text-red-500">*</span>
                     </label>
                     <input
                       required
-                      type="tel"
-                      inputMode="numeric"
-                      placeholder="09XXXXXXXXX"
-                      maxLength={11}
-                      value={mobileNumber}
-                      onChange={(e) => setMobileNumber(formatMobileNumber(e.target.value))}
-                      className="w-full bg-white border border-magenta-200 rounded-xl px-4 py-3 text-sm text-magenta-900 focus:outline-none focus:ring-2 focus:ring-magenta-500 focus:border-transparent transition-all"
+                      type="email"
+                      placeholder="maria@example.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
                     />
-                    <p className="text-xs text-gray-400 mt-1.5">
-                      Enter the mobile number linked to your {paymentMethod === "gcash" ? "GCash" : "Maya"} account.
-                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                      Billing Address <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      required
+                      type="text"
+                      placeholder="City, Province"
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
+                    />
                   </div>
                 </div>
 
-                <div className="flex gap-4 pt-6">
-                  <button
-                    type="button"
-                    onClick={() => navigate(-1)}
-                    className="flex-1 py-4 bg-magenta-50 text-magenta-700 rounded-xl font-bold text-sm hover:bg-magenta-100 transition-colors"
-                  >
-                    Cancel
-                  </button>
+                {/* Payment Method Selector */}
+                <div className="pt-2">
+                  <label className="block text-xs font-semibold text-gray-700 mb-2">
+                    Select E-Wallet <span className="text-red-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod("gcash")}
+                      className={cn(
+                        "flex items-center justify-center h-14 px-4 rounded-2xl border transition-all cursor-pointer",
+                        paymentMethod === "gcash"
+                          ? "border-blue-500 bg-blue-50/40 ring-2 ring-blue-500/15 shadow-xs"
+                          : "border-gray-200 bg-white hover:bg-gray-50/60"
+                      )}
+                      aria-label="Pay with GCash"
+                    >
+                      <img
+                        src={gcashLogo}
+                        alt="GCash"
+                        className="h-6 w-auto object-contain"
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod("maya")}
+                      className={cn(
+                        "flex items-center justify-center h-14 px-4 rounded-2xl border transition-all cursor-pointer",
+                        paymentMethod === "maya"
+                          ? "border-emerald-500 bg-emerald-50/40 ring-2 ring-emerald-500/15 shadow-xs"
+                          : "border-gray-200 bg-white hover:bg-gray-50/60"
+                      )}
+                      aria-label="Pay with Maya"
+                    >
+                      <img
+                        src={mayaLogo}
+                        alt="Maya"
+                        className="h-6 w-auto object-contain"
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                    {paymentMethod === "gcash" ? "GCash" : "Maya"} Mobile Number <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    required
+                    type="tel"
+                    inputMode="numeric"
+                    placeholder="09XXXXXXXXX"
+                    maxLength={11}
+                    value={mobileNumber}
+                    onChange={(e) => setMobileNumber(formatMobileNumber(e.target.value))}
+                    className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
+                  />
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    Enter the 11-digit number linked to your {paymentMethod === "gcash" ? "GCash" : "Maya"} account.
+                  </p>
+                </div>
+
+                {/* Submit & Cancel Buttons */}
+                <div className="pt-4 space-y-2.5">
                   <button
                     type="submit"
                     disabled={isSubscribing}
-                    className="flex-[2] py-4 bg-emerald-500 text-white rounded-xl font-bold text-sm hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20 disabled:opacity-70 disabled:cursor-wait flex items-center justify-center gap-2"
+                    className="w-full py-3.5 bg-magenta-600 text-white rounded-full font-semibold text-sm shadow-sm hover:bg-magenta-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait flex items-center justify-center gap-2 cursor-pointer"
                   >
                     {isSubscribing ? (
-                      "Processing..."
+                      "Processing Payment..."
                     ) : (
                       <>
-                        <Sparkles className="w-4 h-4" /> Subscribe ₱{total.toFixed(2)}
+                        <Sparkles className="w-4 h-4" /> Pay &amp; Activate (₱{total.toFixed(2)})
                       </>
                     )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate(-1)}
+                    className="block w-full py-2 text-center text-xs font-medium text-gray-400 hover:text-gray-700 transition-colors"
+                  >
+                    Cancel and Return
                   </button>
                 </div>
               </form>

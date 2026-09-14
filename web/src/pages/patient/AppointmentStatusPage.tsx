@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/lib/supabaseClient";
+import { useAuth } from "@/context/AuthContext";
+import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 
 interface Appointment {
   id: string;
@@ -44,9 +46,9 @@ function StatusTracker({ app }: { app: Appointment }) {
   const activeStep = isCancelled ? -1 : getStepIndex(app.status);
 
   return (
-    <div className="mt-4 rounded-2xl border border-magenta-100 bg-gradient-to-r from-magenta-50 via-white to-rose-50 p-4">
+    <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
       <div className="flex items-center justify-between mb-4">
-        <p className="text-xs font-semibold text-magenta-700 uppercase tracking-wider">Appointment Progress</p>
+        <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Appointment Progress</p>
         <StatusBadge status={app.status} />
       </div>
 
@@ -61,8 +63,8 @@ function StatusTracker({ app }: { app: Appointment }) {
             </p>
             <p className="text-xs text-red-600 mt-0.5 leading-relaxed">
               {app.status === "Rejected"
-                ? `Your appointment request with ${app.clinicName} was declined.`
-                : `This appointment with ${app.clinicName} was cancelled.`}
+                ? <span>Your appointment request with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> was declined.</span>
+                : <span>This appointment with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> was cancelled.</span>}
             </p>
             {(app.clinicNote || app.rejectionReason) && (
               <div className="mt-2 rounded-lg bg-white border border-red-200 p-2.5 shadow-xs">
@@ -84,13 +86,10 @@ function StatusTracker({ app }: { app: Appointment }) {
         </div>
       ) : (
         <>
-          {/* Step tracker */}
           <div className="relative flex items-start mb-4 px-2">
-            {/* Connecting line background */}
             <div className="absolute top-2.5 left-[calc(3.5rem/2)] right-[calc(3.5rem/2)] h-0.5 bg-gray-200 z-0" />
-            {/* Active progress line */}
             <div
-              className="absolute top-2.5 left-[calc(3.5rem/2)] h-0.5 bg-gradient-to-r from-magenta-400 to-magenta-600 z-0 transition-all duration-700"
+              className="absolute top-2.5 left-[calc(3.5rem/2)] h-0.5 bg-magenta-500 z-0 transition-all duration-700"
               style={{
                 width: activeStep > 0
                   ? `calc(${(activeStep / (STEPS.length - 1)) * 100}% - 0px)`
@@ -107,8 +106,8 @@ function StatusTracker({ app }: { app: Appointment }) {
                       className={`w-5 h-5 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
                         isDone
                           ? isActive
-                            ? "bg-magenta-500 border-magenta-400 scale-110 shadow-md"
-                            : "bg-magenta-400 border-magenta-300 shadow-sm"
+                            ? "bg-magenta-600 border-magenta-500 scale-105 shadow-xs"
+                            : "bg-magenta-500 border-magenta-400"
                           : "bg-white border-gray-200"
                       }`}
                     >
@@ -117,7 +116,7 @@ function StatusTracker({ app }: { app: Appointment }) {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                         </svg>
                       ) : (
-                        <div className="w-1.5 h-1.5 rounded-full bg-gray-200" />
+                        <div className="w-1.5 h-1.5 rounded-full bg-gray-300" />
                       )}
                     </div>
                     <span
@@ -133,17 +132,15 @@ function StatusTracker({ app }: { app: Appointment }) {
             </div>
           </div>
 
-          {/* Status message */}
-          <div className="flex items-start gap-2 bg-white/70 border border-magenta-100 rounded-xl p-3">
-            <svg className="w-3.5 h-3.5 text-magenta-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-            </svg>
+          <div className="flex items-start gap-2 bg-white border border-gray-100 rounded-xl p-3">
             <p className="text-[11px] text-gray-600 leading-relaxed">
-              {app.status === "Completed"
-                ? `Your appointment with ${app.clinicName} has been completed.`
-                : app.status === "Scheduled"
-                ? `Your appointment with ${app.clinicName} is scheduled on ${app.date} at ${app.time}.`
-                : `Your request to ${app.clinicName} is pending clinic review.`}
+              {app.status === "Completed" ? (
+                <span>Your appointment with <strong className="inline-flex items-center gap-1 text-gray-900 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> has been completed.</span>
+              ) : app.status === "Scheduled" ? (
+                <span>Your appointment with <strong className="inline-flex items-center gap-1 text-gray-900 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> is scheduled on {app.date} at {app.time}.</span>
+              ) : (
+                <span>Your request to <strong className="inline-flex items-center gap-1 text-gray-900 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> is pending clinic review.</span>
+              )}
             </p>
           </div>
         </>
@@ -152,52 +149,61 @@ function StatusTracker({ app }: { app: Appointment }) {
   );
 }
 
-function AppointmentCard({ app }: { app: Appointment }) {
+function AppointmentCard({ app, onCancel }: { app: Appointment; onCancel?: (id?: string) => void }) {
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden">
-      {/* Top accent strip */}
-      <div className="h-1 w-full bg-gradient-to-r from-magenta-400 via-magenta-500 to-magenta-600" />
+    <div className="rounded-2xl border border-gray-100 bg-white shadow-xs hover:border-gray-200 transition-all duration-200 overflow-hidden">
       <div className="p-5">
-        {/* Info grid – no Consultation Type column */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
           <div>
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Clinic Name</p>
-            <p className="text-sm font-semibold text-gray-800 leading-tight">{app.clinicName}</p>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Clinic</p>
+            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+              <p className="text-sm font-semibold text-gray-900">{app.clinicName}</p>
+              <VerifiedBadge size={15} className="w-3.5 h-3.5" title="Verified Clinic" />
+            </div>
           </div>
           <div>
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Doctor</p>
-            <p className="text-sm font-medium text-gray-700">{app.doctor}</p>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Doctor</p>
+            <p className="text-sm font-semibold text-gray-900 mt-0.5">{app.doctor || "To be assigned"}</p>
           </div>
           <div>
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Date</p>
-            <p className="text-sm font-medium text-gray-700">{app.date}</p>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Date</p>
+            <p className="text-sm font-semibold text-gray-900 mt-0.5">{app.date}</p>
           </div>
           <div>
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Time</p>
-            <p className="text-sm font-medium text-gray-700">{app.time}</p>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Time</p>
+            <p className="text-sm font-semibold text-gray-900 mt-0.5">{app.time}</p>
           </div>
         </div>
 
         <StatusTracker app={app} />
+
+        {app.status === "Pending" && (
+          <div className="mt-4 flex justify-end">
+            <button
+              onClick={() => onCancel && onCancel(app.id)}
+              className="text-xs font-semibold text-red-500 hover:text-red-700 px-3 py-1.5 rounded-lg border border-red-200 hover:bg-red-50 transition-colors"
+            >
+              Cancel Request
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-
-const AppointmentStatusPage = () => {
+const AppointmentStatusPage: React.FC = () => {
+  const { user } = useAuth();
   const [allAppointments, setAllAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadAppointments() {
-      setLoading(true);
+  const fetchAppointments = useCallback(async () => {
+    setLoading(true);
+    try {
       const { data: { session } } = await supabase.auth.getSession();
-      const userId = session?.user?.id;
+      const userId = user?.id || session?.user?.id;
       if (!userId) {
-        if (!cancelled) setLoading(false);
+        setLoading(false);
         return;
       }
 
@@ -207,15 +213,15 @@ const AppointmentStatusPage = () => {
           appointment_id,
           date,
           status,
+          doctor_status,
           clinic_note,
           doctor_note,
+          ai_condition_name,
           clinic:clinic_id ( name ),
           doctor:assigned_doctor_id ( doctor_name )
         `)
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
-
-      if (cancelled) return;
 
       if (!error && data) {
         const mapped: Appointment[] = data.map((a: any) => {
@@ -223,37 +229,59 @@ const AppointmentStatusPage = () => {
           const dateStr = apptDate ? apptDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "Date pending";
           const timeStr = apptDate ? apptDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : "Time pending";
 
+          const rawStatus = (a.status || "").toLowerCase();
           let displayStatus: Appointment["status"] = "Pending";
-          if (a.status === "confirmed") displayStatus = "Scheduled";
-          else if (a.status === "completed") displayStatus = "Completed";
-          else if (a.status === "cancelled") displayStatus = "Cancelled";
-          else if (a.doctor_status === "rejected") displayStatus = "Rejected";
+          if (rawStatus === "confirmed" || rawStatus === "scheduled") displayStatus = "Scheduled";
+          else if (rawStatus === "completed") displayStatus = "Completed";
+          else if (rawStatus === "cancelled") displayStatus = "Cancelled";
+          else if (rawStatus === "rejected" || a.doctor_status === "rejected") displayStatus = "Rejected";
+
+          const clinicObj: any = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
+          const doctorObj: any = Array.isArray(a.doctor) ? a.doctor[0] : a.doctor;
 
           return {
             id: a.appointment_id,
-            clinicName: a.clinic?.name ?? "Clinic",
-            doctor: a.doctor?.doctor_name ?? "Doctor Assigned by Clinic",
+            clinicName: clinicObj?.name ?? "Clinic",
+            doctor: doctorObj?.doctor_name ?? "Doctor Assigned by Clinic",
             date: dateStr,
             time: timeStr,
             status: displayStatus,
-            clinicNote: a.clinic_note || undefined,
+            clinicNote: a.clinic_note || (a.ai_condition_name ? `Condition noted: ${a.ai_condition_name}` : undefined),
             rejectionReason: a.doctor_note || undefined,
           };
         });
         setAllAppointments(mapped);
       }
+    } catch (err) {
+      console.error("Failed to load appointments:", err);
+    } finally {
       setLoading(false);
     }
+  }, [user]);
 
-    loadAppointments();
-    return () => { cancelled = true; };
-  }, []);
+  useEffect(() => {
+    fetchAppointments();
+  }, [fetchAppointments]);
 
-  // Scheduled and pending appointments appear in Upcoming
+  const handleCancel = async (id?: string) => {
+    if (!id) return;
+    try {
+      await supabase
+        .from("patient_appointment")
+        .update({ status: "cancelled" })
+        .eq("appointment_id", id);
+
+      setAllAppointments((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, status: "Cancelled" } : a))
+      );
+    } catch (err) {
+      console.error("Error cancelling appointment:", err);
+    }
+  };
+
   const upcomingAppointments = allAppointments.filter(
     (a) => a.status === "Scheduled" || a.status === "Pending"
   );
-  // Completed (Done), Rejected, and Cancelled appointments appear in Past
   const pastAppointments = allAppointments.filter(
     (a) => a.status === "Completed" || a.status === "Rejected" || a.status === "Cancelled"
   );
@@ -283,7 +311,7 @@ const AppointmentStatusPage = () => {
     return (
       <div className="space-y-4">
         {apps.map((app) => (
-          <AppointmentCard key={app.id} app={app} />
+          <AppointmentCard key={app.id} app={app} onCancel={handleCancel} />
         ))}
       </div>
     );
@@ -291,7 +319,6 @@ const AppointmentStatusPage = () => {
 
   return (
     <div className="container mx-auto p-4 md:p-6 lg:p-8 max-w-4xl">
-      {/* Page Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-800 tracking-tight">Appointment Status</h1>
         <p className="text-sm text-gray-500 mt-1">Track and manage your physical consultation appointments</p>

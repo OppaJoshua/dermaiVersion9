@@ -7,10 +7,10 @@ import {
   Clock,
   Lock,
   MapPin,
-  ScanSearch,
   Stethoscope,
   User,
   XCircle,
+  X,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -69,7 +69,7 @@ const DEFAULT_SETTINGS: ClinicSettings = {
 };
 
 export default function ClinicAppointmentsPage() {
-  const { status: verificationStatus, clinicName: verifiedClinicName, clinicId } = useClinicVerification();
+  const { status: verificationStatus, clinicName: verifiedClinicName, clinicId, loading } = useClinicVerification();
   const fallbackConditionImage = skinConditions[0]?.image;
   let clinicName = verifiedClinicName || "";
   if (!clinicName) {
@@ -86,7 +86,7 @@ export default function ClinicAppointmentsPage() {
 
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [clinicDoctors, setClinicDoctors] = useState<DoctorAccount[]>([]);
-  const [_loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
 
   useEffect(() => {
     if (!clinicId) return;
@@ -98,18 +98,38 @@ export default function ClinicAppointmentsPage() {
       // 1. Fetch clinic doctors from clinic_doctor table
       const { data: docRows } = await supabase
         .from("clinic_doctor")
-        .select("doctor_id, doctor_name, invite_email, specialization")
+        .select("doctor_id, doctor_name, email, photo_url, status")
         .eq("clinic_id", clinicId)
-        .eq("active", true);
+        .neq("status", "Inactive");
 
-      if (!cancelled && docRows) {
-        setClinicDoctors(docRows.map((d: any) => ({
-          id: d.doctor_id,
-          name: d.doctor_name,
-          email: d.invite_email || "",
-          specialization: d.specialization || "Dermatology",
-          clinicName: clinicName || "Clinic",
-        })));
+      if (!cancelled) {
+        if (docRows && docRows.length > 0) {
+          setClinicDoctors(docRows.map((d: any) => ({
+            id: d.doctor_id,
+            name: d.doctor_name,
+            email: d.email || "",
+            specialization: "Dermatology",
+            clinicName: clinicName || "Clinic",
+          })));
+        } else {
+          try {
+            const raw = localStorage.getItem("dermai_clinic_doctors");
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setClinicDoctors(parsed.map((d: any) => ({
+                  id: d.id,
+                  name: d.name,
+                  email: d.email || "",
+                  specialization: d.specialization || "Dermatology",
+                  clinicName: clinicName || d.clinicName || "Clinic",
+                })));
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+        }
       }
 
       // 2. Fetch appointments from patient_appointment table
@@ -139,61 +159,77 @@ export default function ClinicAppointmentsPage() {
         .eq("clinic_id", clinicId)
         .order("created_at", { ascending: false });
 
-      if (!cancelled && apptRows) {
-        const mapped: AppointmentRecord[] = await Promise.all(
-          apptRows.map(async (a: any) => {
-            let photoUrl = a.skin_photo_url || undefined;
-            if (photoUrl && !photoUrl.startsWith("http") && !photoUrl.startsWith("data:")) {
-              try {
-                const { data: signed } = await supabase.storage
-                  .from("scan-uploads")
-                  .createSignedUrl(photoUrl, 3600);
-                if (signed?.signedUrl) {
-                  photoUrl = signed.signedUrl;
+      if (!cancelled) {
+        if (apptRows && apptRows.length > 0) {
+          const mapped: AppointmentRecord[] = await Promise.all(
+            apptRows.map(async (a: any) => {
+              let photoUrl = a.skin_photo_url || undefined;
+              if (photoUrl && !photoUrl.startsWith("http") && !photoUrl.startsWith("data:")) {
+                try {
+                  const { data: signed } = await supabase.storage
+                    .from("scan-uploads")
+                    .createSignedUrl(photoUrl, 3600);
+                  if (signed?.signedUrl) {
+                    photoUrl = signed.signedUrl;
+                  }
+                } catch {
+                  /* ignore */
                 }
-              } catch {
-                /* ignore */
+              }
+
+              const apptDate = a.date ? new Date(a.date) : null;
+              const dateStr = apptDate ? `${apptDate.getFullYear()}-${String(apptDate.getMonth() + 1).padStart(2, "0")}-${String(apptDate.getDate()).padStart(2, "0")}` : "";
+              const timeStr = apptDate ? `${String(apptDate.getHours()).padStart(2, "0")}:${String(apptDate.getMinutes()).padStart(2, "0")}` : "";
+
+              let displayStatus: AppointmentRecord["status"] = "pending";
+              if (a.status === "confirmed") displayStatus = "scheduled";
+              else if (a.status === "completed") displayStatus = "accepted";
+              else if (a.status === "cancelled") displayStatus = "rejected";
+
+              return {
+                id: a.appointment_id,
+                clinicId: 0,
+                clinicName: clinicName || "Clinic",
+                patientName: a.patient_name || "Patient",
+                patientEmail: a.patient_email || undefined,
+                patientAddress: a.patient_address || undefined,
+                patientContact: a.patient_contact || undefined,
+                consultationType: "face-to-face" as const,
+                conditionName: a.ai_condition_name || undefined,
+                date: dateStr,
+                time: timeStr,
+                notes: a.notes || "",
+                status: displayStatus,
+                clinicNote: a.clinic_note || undefined,
+                assignedDoctorId: a.assigned_doctor_id || undefined,
+                assignedDoctorName: a.doctor?.doctor_name || docRows?.find((d: any) => d.doctor_id === a.assigned_doctor_id)?.doctor_name || undefined,
+                doctorStatus: a.doctor_status || undefined,
+                doctorNote: a.doctor_note || undefined,
+                doctorReviewedAt: a.doctor_reviewed_at || undefined,
+                scheduleSentToDoctor: a.schedule_sent_to_doctor || false,
+                createdAt: a.created_at || new Date().toISOString(),
+                skinPhotoUrl: photoUrl,
+                aiConditionName: a.ai_condition_name || undefined,
+                aiConfidence: a.ai_confidence ? Number(a.ai_confidence) : undefined,
+              };
+            })
+          );
+          setAppointments(mapped);
+          try {
+            localStorage.setItem("dermai_clinic_appointments", JSON.stringify(mapped));
+            window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+          } catch {}
+        } else {
+          try {
+            const raw = localStorage.getItem("dermai_clinic_appointments");
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setAppointments(parsed);
               }
             }
-
-            const apptDate = a.date ? new Date(a.date) : null;
-            const dateStr = apptDate ? `${apptDate.getFullYear()}-${String(apptDate.getMonth() + 1).padStart(2, "0")}-${String(apptDate.getDate()).padStart(2, "0")}` : "";
-            const timeStr = apptDate ? `${String(apptDate.getHours()).padStart(2, "0")}:${String(apptDate.getMinutes()).padStart(2, "0")}` : "";
-
-            let displayStatus: AppointmentRecord["status"] = "pending";
-            if (a.status === "confirmed") displayStatus = "scheduled";
-            else if (a.status === "completed") displayStatus = "accepted";
-            else if (a.status === "cancelled") displayStatus = "rejected";
-
-            return {
-              id: a.appointment_id,
-              clinicId: 0,
-              clinicName: clinicName || "Clinic",
-              patientName: a.patient_name || "Patient",
-              patientEmail: a.patient_email || undefined,
-              patientAddress: a.patient_address || undefined,
-              patientContact: a.patient_contact || undefined,
-              consultationType: "face-to-face" as const,
-              conditionName: a.ai_condition_name || undefined,
-              date: dateStr,
-              time: timeStr,
-              notes: a.notes || "",
-              status: displayStatus,
-              clinicNote: a.clinic_note || undefined,
-              assignedDoctorId: a.assigned_doctor_id || undefined,
-              assignedDoctorName: a.doctor?.doctor_name || undefined,
-              doctorStatus: a.doctor_status || undefined,
-              doctorNote: a.doctor_note || undefined,
-              doctorReviewedAt: a.doctor_reviewed_at || undefined,
-              scheduleSentToDoctor: a.schedule_sent_to_doctor || false,
-              createdAt: a.created_at || new Date().toISOString(),
-              skinPhotoUrl: photoUrl,
-              aiConditionName: a.ai_condition_name || undefined,
-              aiConfidence: a.ai_confidence ? Number(a.ai_confidence) : undefined,
-            };
-          })
-        );
-        setAppointments(mapped);
+          } catch {}
+        }
       }
       if (!cancelled) setLoading(false);
     }
@@ -213,7 +249,7 @@ export default function ClinicAppointmentsPage() {
     ).padStart(2, "0")}`;
   });
 
-  const clinicSettings: ClinicSettings = useMemo(() => {
+  const [clinicSettings] = useState<ClinicSettings>(() => {
     try {
       const raw = localStorage.getItem("dermai_clinic_settings");
       if (raw) {
@@ -229,7 +265,7 @@ export default function ClinicAppointmentsPage() {
       /* ignore */
     }
     return DEFAULT_SETTINGS;
-  }, []);
+  });
 
   const [pendingAssign, setPendingAssign] = useState<{
     appointmentId: string;
@@ -255,9 +291,7 @@ export default function ClinicAppointmentsPage() {
   const [rejectReason, setRejectReason] = useState("");
   const [selectedPresetReason, setSelectedPresetReason] = useState("");
   const [rejectError, setRejectError] = useState("");
-
   const [assignError, setAssignError] = useState("");
-
 
   const calendarCells = useMemo(() => {
     const start = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
@@ -375,37 +409,61 @@ export default function ClinicAppointmentsPage() {
       return;
     }
 
+    let targetDoctorId = doctor.id;
+    if (!targetDoctorId || targetDoctorId.startsWith("doc-")) {
+      try {
+        const { data: dbDoc } = await supabase
+          .from("clinic_doctor")
+          .select("doctor_id")
+          .ilike("email", doctor.email)
+          .maybeSingle();
+        if (dbDoc?.doctor_id) {
+          targetDoctorId = dbDoc.doctor_id;
+        }
+      } catch {}
+    }
+
     try {
-      await supabase
+      const { error: updateErr } = await supabase
         .from("patient_appointment")
         .update({
           status: "confirmed",
           date: `${pendingAssign.date}T${pendingAssign.time}:00`,
-          assigned_doctor_id: doctor.id,
+          assigned_doctor_id: targetDoctorId,
           schedule_sent_to_doctor: true,
+          doctor_status: "pending-review",
           clinic_note: "Your schedule has been assigned by the clinic.",
         })
         .eq("appointment_id", pendingAssign.appointmentId);
+
+      if (updateErr) {
+        console.error("Failed to save schedule in Supabase:", updateErr.message);
+      }
     } catch (err: any) {
       console.error("Failed to save schedule in Supabase:", err.message);
     }
 
-    setAppointments((prev) =>
-      prev.map((appt) => {
+    setAppointments((prev) => {
+      const next = prev.map((appt) => {
         if (appt.id !== pendingAssign.appointmentId) return appt;
         return {
           ...appt,
           date: pendingAssign.date,
           time: pendingAssign.time,
           status: "scheduled" as const,
-          assignedDoctorId: doctor.id,
+          assignedDoctorId: targetDoctorId,
           assignedDoctorName: doctor.name,
-          doctorStatus: undefined,
+          doctorStatus: "pending-review" as const,
           scheduleSentToDoctor: true,
           clinicNote: "Your schedule has been assigned by the clinic.",
         };
-      })
-    );
+      });
+      try {
+        localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
+        window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+      } catch {}
+      return next;
+    });
     setPendingAssign(null);
   };
 
@@ -414,29 +472,52 @@ export default function ClinicAppointmentsPage() {
     const doc = clinicDoctors.find((d) => d.id === selectedDoctorId);
     if (!doc) return;
 
+    let targetDoctorId = doc.id;
+    if (!targetDoctorId || targetDoctorId.startsWith("doc-")) {
+      try {
+        const { data: dbDoc } = await supabase
+          .from("clinic_doctor")
+          .select("doctor_id")
+          .ilike("email", doc.email)
+          .maybeSingle();
+        if (dbDoc?.doctor_id) {
+          targetDoctorId = dbDoc.doctor_id;
+        }
+      } catch {}
+    }
+
     try {
-      await supabase
+      const { error: updateErr } = await supabase
         .from("patient_appointment")
         .update({
-          assigned_doctor_id: doc.id,
+          assigned_doctor_id: targetDoctorId,
           doctor_status: "pending-review",
         })
         .eq("appointment_id", assignDoctorModal.appointmentId);
+
+      if (updateErr) {
+        console.error("Failed to assign doctor in Supabase:", updateErr.message);
+      }
     } catch (err: any) {
       console.error("Failed to assign doctor in Supabase:", err.message);
     }
 
-    setAppointments((prev) =>
-      prev.map((a) => {
+    setAppointments((prev) => {
+      const next = prev.map((a) => {
         if (a.id !== assignDoctorModal.appointmentId) return a;
         return {
           ...a,
-          assignedDoctorId: doc.id,
+          assignedDoctorId: targetDoctorId,
           assignedDoctorName: doc.name,
           doctorStatus: "pending-review" as const,
         };
-      })
-    );
+      });
+      try {
+        localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
+        window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+      } catch {}
+      return next;
+    });
     setAssignDoctorModal(null);
     setSelectedDoctorId("");
     setAssignError("");
@@ -458,6 +539,20 @@ export default function ClinicAppointmentsPage() {
       )
     );
   };
+
+  if (loading && verificationStatus !== "verified") {
+    return (
+      <div className="space-y-6 animate-pulse">
+        <div className="h-8 w-48 bg-gray-200 rounded-lg"></div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-24 bg-white rounded-2xl border border-gray-100 p-4"></div>
+          ))}
+        </div>
+        <div className="h-96 bg-white rounded-2xl border border-gray-100"></div>
+      </div>
+    );
+  }
 
   if (verificationStatus !== "verified") {
     return (
@@ -562,10 +657,8 @@ export default function ClinicAppointmentsPage() {
 
           <div className="grid grid-cols-7 gap-2">
             {calendarCells.map((cell) => {
-              const dayAppointments = appointmentsByDate[cell.key] || [];
-              const used = dayAppointments.filter((a) => a.status !== "rejected").length;
-              const capacity = getSlotsForDate(cell.key);
               const isSelected = selectedDate === cell.key;
+              const dayAppointments = appointmentsByDate[cell.key] || [];
 
               return (
                 <div
@@ -782,9 +875,7 @@ export default function ClinicAppointmentsPage() {
                     <button
                       onClick={() => {
                         setAssignDoctorModal({ appointmentId: appointment.id });
-                        setSelectedDoctorId(
-                          clinicDoctors.find((d) => d.email === appointment.assignedDoctorId)?.id || ""
-                        );
+                        setSelectedDoctorId(appointment.assignedDoctorId || "");
                       }}
                       title="Assign to doctor for review"
                       className="inline-flex items-center justify-center gap-1 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-[11px] font-semibold hover:bg-blue-100 transition-colors"
@@ -807,134 +898,142 @@ export default function ClinicAppointmentsPage() {
 
       {/* ── Day Detail Modal ─────────────────────────────────── */}
       {dayDetailDate && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4" onClick={() => setDayDetailDate(null)}>
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDayDetailDate(null)}>
           <motion.div
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"
+            initial={{ opacity: 0, scale: 0.96, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 10 }}
+            transition={{ duration: 0.2 }}
+            className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="bg-gradient-to-r from-[#c0166a] to-[#9b1257] px-5 py-4 flex items-center justify-between">
+            <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-start justify-between">
               <div>
-                <p className="text-white font-bold text-base leading-tight">
+                <h3 className="text-base font-bold text-gray-900 leading-tight">
                   {new Date(dayDetailDate + "T00:00:00").toLocaleDateString("en-US", {
                     weekday: "long", month: "long", day: "numeric", year: "numeric",
                   })}
-                </p>
-                <p className="text-pink-200 text-xs mt-0.5">
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5 font-medium">
                   {(appointmentsByDate[dayDetailDate] || []).filter((a) => a.status !== "rejected").length} patient(s) scheduled
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => setDayDetailDate(null)}
-                className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors"
+                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                title="Close"
               >
-                <XCircle className="w-4 h-4 text-white" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Body */}
-            <div className="p-5 max-h-[60vh] overflow-y-auto">
+            <div className="p-6 max-h-[60vh] overflow-y-auto space-y-3">
               {(appointmentsByDate[dayDetailDate] || []).filter((a) => a.status !== "rejected").length === 0 ? (
-                <div className="border border-dashed border-gray-200 rounded-xl p-6 text-center">
+                <div className="border border-dashed border-gray-200 rounded-2xl p-8 text-center bg-gray-50/50">
                   <Calendar className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                  <p className="text-sm text-gray-400">No patients scheduled for this date.</p>
+                  <p className="text-xs font-semibold text-gray-500">No patients scheduled for this date.</p>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {(appointmentsByDate[dayDetailDate] || [])
-                    .filter((a) => a.status !== "rejected")
-                    .sort((a, b) => a.time.localeCompare(b.time))
-                    .map((appt) => (
-                      <div key={appt.id} className="rounded-xl border border-gray-100 bg-gray-50/70 p-3">
-                        <div className="flex items-center gap-3">
-                          <img
-                            src={
-                              appt.patientAvatar ||
-                              `https://ui-avatars.com/api/?name=${encodeURIComponent(appt.patientName || "P")}&background=fce7f3&color=c0166a`
-                            }
-                            alt={appt.patientName}
-                            className="w-10 h-10 rounded-full object-cover border border-gray-200 flex-shrink-0"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-gray-900 truncate">
-                              {appt.patientName || "Unknown Patient"}
-                            </p>
-                            {appt.patientAge && (
-                              <p className="text-[11px] text-gray-400">{appt.patientAge} years old</p>
-                            )}
-                          </div>
-                          <span className="flex-shrink-0 flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-magenta-50 text-magenta-700 border border-magenta-200">
-                            <Clock className="w-3 h-3" />
-                            {appt.time
-                              ? new Date(`1970-01-01T${appt.time}`).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
-                              : "TBD"}
-                          </span>
+                (appointmentsByDate[dayDetailDate] || [])
+                  .filter((a) => a.status !== "rejected")
+                  .sort((a, b) => a.time.localeCompare(b.time))
+                  .map((appt) => (
+                    <div key={appt.id} className="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 space-y-3">
+                      <div className="flex items-center gap-3">
+                        <img
+                          src={
+                            appt.patientAvatar ||
+                            `https://ui-avatars.com/api/?name=${encodeURIComponent(appt.patientName || "P")}&background=fce7f3&color=c0166a`
+                          }
+                          alt={appt.patientName}
+                          className="w-10 h-10 rounded-full object-cover border border-gray-200 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-gray-900 truncate">
+                            {appt.patientName || "Unknown Patient"}
+                          </p>
+                          {appt.patientAge && (
+                            <p className="text-[11px] text-gray-500">{appt.patientAge} years old</p>
+                          )}
                         </div>
-                        <div className="mt-2 pt-2 border-t border-gray-100 flex items-center gap-1.5">
-                          <Stethoscope className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
-                          <span className="text-[11px] text-blue-700 font-medium">
-                            {appt.assignedDoctorName || <span className="text-gray-400 italic">No doctor assigned yet</span>}
-                          </span>
-                          <span className={`ml-auto text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
-                            appt.status === "scheduled" || appt.status === "accepted"
-                              ? "bg-green-50 text-green-700 border-green-200"
-                              : "bg-amber-50 text-amber-700 border-amber-200"
-                          }`}>
-                            {appt.status}
-                          </span>
-                        </div>
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          <button
-                            onClick={() => {
-                              setDayDetailDate(null);
-                              setViewingPatient(appt);
-                            }}
-                            className="col-span-2 rounded-lg bg-[#c0166a] py-2 text-xs font-semibold text-white hover:bg-[#a01258]"
-                          >
-                            View Appointment Details
-                          </button>
-                          <button
-                            onClick={() => {
-                              setDayDetailDate(null);
-                              startScheduleAssignment(appt.id);
-                            }}
-                            className="rounded-lg border border-blue-200 bg-blue-50 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
-                          >
-                            Reschedule
-                          </button>
-                          <button
-                            onClick={() => {
-                              setRejectModal({
-                                appointmentId: appt.id,
-                                patientName: appt.patientName || "Patient",
-                                clinicName: appt.clinicName || clinicName,
-                                patientEmail: appt.patientEmail,
-                                date: appt.date,
-                                time: appt.time,
-                              });
-                              setRejectReason("");
-                              setSelectedPresetReason("");
-                              setRejectError("");
-                              setDayDetailDate(null);
-                            }}
-                            className="rounded-lg border border-red-200 bg-red-50 py-2 text-xs font-semibold text-red-600 hover:bg-red-100"
-                          >
-                            Cancel Appointment
-                          </button>
-                        </div>
+                        <span className="shrink-0 flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white text-gray-700 border border-gray-200 shadow-xs">
+                          <Clock className="w-3 h-3 text-gray-400" />
+                          {appt.time
+                            ? new Date(`1970-01-01T${appt.time}`).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+                            : "TBD"}
+                        </span>
                       </div>
-                    ))}
-                </div>
+                      <div className="pt-2 border-t border-gray-200/60 flex items-center justify-between text-[11px]">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Stethoscope className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                          <span className="text-gray-700 font-medium truncate">
+                            {appt.assignedDoctorName || <span className="text-gray-400 italic">No doctor assigned</span>}
+                          </span>
+                        </div>
+                        <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold border ${
+                          appt.status === "scheduled" || appt.status === "accepted"
+                            ? "bg-green-50 text-green-700 border-green-200"
+                            : "bg-amber-50 text-amber-700 border-amber-200"
+                        }`}>
+                          {appt.status}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDayDetailDate(null);
+                            setViewingPatient(appt);
+                          }}
+                          className="col-span-2 py-2 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-xs cursor-pointer text-center"
+                        >
+                          View Appointment Details
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDayDetailDate(null);
+                            startScheduleAssignment(appt.id);
+                          }}
+                          className="py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer text-center"
+                        >
+                          Reschedule
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRejectModal({
+                              appointmentId: appt.id,
+                              patientName: appt.patientName || "Patient",
+                              clinicName: appt.clinicName || clinicName,
+                              patientEmail: appt.patientEmail,
+                              date: appt.date,
+                              time: appt.time,
+                            });
+                            setRejectReason("");
+                            setSelectedPresetReason("");
+                            setRejectError("");
+                            setDayDetailDate(null);
+                          }}
+                          className="py-2 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold transition-colors cursor-pointer text-center"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ))
               )}
             </div>
 
             {/* Footer */}
-            <div className="px-5 pb-5">
+            <div className="px-6 pb-5 pt-2 border-t border-gray-100 bg-white">
               <button
+                type="button"
                 onClick={() => setDayDetailDate(null)}
-                className="w-full py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors"
+                className="w-full py-2.5 rounded-full border border-gray-200 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
               >
                 Close
               </button>
@@ -945,145 +1044,137 @@ export default function ClinicAppointmentsPage() {
 
       {/* ── Patient Details Review Modal ─────────────────────── */}
       {viewingPatient && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+            initial={{ opacity: 0, scale: 0.96, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 10 }}
+            transition={{ duration: 0.2 }}
+            className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[88vh] text-left"
           >
-            {/* Header */}
-            <div className="bg-gradient-to-r from-[#c0166a] to-[#9b1257] px-6 py-5 flex items-center gap-4">
-              <img
-                src={
-                  viewingPatient.patientAvatar ||
-                  `https://ui-avatars.com/api/?name=${encodeURIComponent(viewingPatient.patientName || "P")}&background=fce7f3&color=c0166a`
-                }
-                alt={viewingPatient.patientName}
-                className="w-14 h-14 rounded-full object-cover border-2 border-white/60"
-              />
-              <div>
-                <p className="text-white font-bold text-lg leading-tight">
-                  {viewingPatient.patientName || "Unknown Patient"}
-                </p>
-                {viewingPatient.patientAge && (
-                  <p className="text-pink-200 text-sm">{viewingPatient.patientAge} years old</p>
-                )}
-                <span className={`mt-1 inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/20 text-white border border-white/30`}>
-                  <MapPin className="w-3 h-3" /> Face-to-Face
-                </span>
+            {/* Minimal Header (No Gradient) */}
+            <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <img
+                  src={
+                    viewingPatient.patientAvatar ||
+                    `https://ui-avatars.com/api/?name=${encodeURIComponent(viewingPatient.patientName || "P")}&background=fce7f3&color=c0166a`
+                  }
+                  alt={viewingPatient.patientName}
+                  className="w-11 h-11 rounded-full object-cover border border-gray-200 shrink-0"
+                />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-base font-bold text-gray-900 leading-tight">
+                      {viewingPatient.patientName || "Unknown Patient"}
+                    </p>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
+                      <MapPin className="w-2.5 h-2.5 text-gray-400" /> Face-to-Face
+                    </span>
+                  </div>
+                  {viewingPatient.patientAge ? (
+                    <p className="text-xs text-gray-500 mt-0.5">{viewingPatient.patientAge} years old</p>
+                  ) : (
+                    <p className="text-xs text-gray-400 mt-0.5">Appointment Request</p>
+                  )}
+                </div>
               </div>
               <button
+                type="button"
                 onClick={() => setViewingPatient(null)}
-                className="ml-auto w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors"
+                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                title="Close"
               >
-                <XCircle className="w-4 h-4 text-white" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Body */}
-            <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
-
-              {/* ── Personal Information ── */}
+            <div className="p-6 space-y-4 overflow-y-auto">
+              {/* Personal Information */}
               <div>
-                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-2">Personal Information</p>
-                <div className="space-y-2">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Personal Information</p>
+                <div className="space-y-1.5 bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
                   {(
                     [
-                      { label: "Full Name",      value: viewingPatient.patientName },
-                      { label: "Email",          value: viewingPatient.patientEmail },
-                      { label: "Address",        value: viewingPatient.patientAddress },
-                      { label: "Contact Number", value: viewingPatient.patientContact },
+                      { label: "Full Name", value: viewingPatient.patientName },
+                      { label: "Email", value: viewingPatient.patientEmail },
+                      { label: "Address", value: viewingPatient.patientAddress },
+                      { label: "Contact", value: viewingPatient.patientContact },
                     ] as { label: string; value?: string }[]
                   ).map(({ label, value }) => (
-                    <div key={label} className="grid grid-cols-[140px_1fr] items-start gap-2">
-                      <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide pt-0.5">{label}</span>
-                      <span className="text-sm text-gray-800 bg-gray-50 border border-gray-100 rounded-lg px-3 py-1.5 min-h-[34px]">
-                        {value || <span className="text-gray-300 italic">—</span>}
-                      </span>
+                    <div key={label} className="grid grid-cols-[110px_1fr] items-center text-xs">
+                      <span className="font-semibold text-gray-400">{label}:</span>
+                      <span className="text-gray-900 font-medium truncate">{value || <span className="text-gray-300 italic">—</span>}</span>
                     </div>
                   ))}
-                  <div className="grid grid-cols-[140px_1fr] items-start gap-2">
-                    <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide pt-0.5">Consultation</span>
-                    <span className="inline-flex items-center gap-1.5 self-start px-3 py-1.5 rounded-lg text-sm font-semibold border bg-magenta-50 text-magenta-700 border-magenta-200">
-                      <MapPin className="w-3.5 h-3.5" /> Face to Face
-                    </span>
-                  </div>
                   {viewingPatient.status === "scheduled" && (
-                    <div className="grid grid-cols-[140px_1fr] items-start gap-2">
-                      <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide pt-0.5">Appointment Schedule</span>
-                      <span className="text-sm text-gray-800 bg-green-50 border border-green-100 rounded-lg px-3 py-1.5">
+                    <div className="grid grid-cols-[110px_1fr] items-start text-xs pt-1 border-t border-gray-200/60 mt-1">
+                      <span className="font-semibold text-green-700">Schedule:</span>
+                      <div className="text-gray-900 font-semibold">
                         {new Date(`${viewingPatient.date}T${viewingPatient.time || "00:00"}`).toLocaleString("en-US", {
-                          weekday: "long", month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
+                          weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
                         })}
-                        {viewingPatient.assignedDoctorName && <span className="block mt-1 text-xs font-semibold text-blue-700">Dr. {viewingPatient.assignedDoctorName.replace(/^Dr\.\s*/i, "")}</span>}
-                      </span>
+                        {viewingPatient.assignedDoctorName && (
+                          <span className="block text-xs font-normal text-gray-600 mt-0.5">
+                            Assigned: Dr. {viewingPatient.assignedDoctorName.replace(/^Dr\.\s*/i, "")}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* ── Uploaded Skin Photo ── */}
+              {/* Uploaded Skin Photo */}
               <div>
-                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-2">Uploaded Skin Photo</p>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Uploaded Skin Photo</p>
                 {viewingPatient.skinPhotoUrl ? (
-                  <img
-                    src={viewingPatient.skinPhotoUrl}
-                    alt="Patient skin photo"
-                    className="w-full max-h-52 object-contain rounded-xl border border-gray-200 bg-gray-50"
-                  />
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 overflow-hidden">
+                    <img
+                      src={viewingPatient.skinPhotoUrl}
+                      alt="Patient skin photo"
+                      className="w-full max-h-48 object-contain"
+                    />
+                  </div>
                 ) : (
-                  <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-5 text-center text-xs text-gray-400 italic">
+                  <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/50 px-4 py-5 text-center text-xs text-gray-400 italic">
                     No skin photo uploaded.
                   </div>
                 )}
               </div>
 
-              {/* ── AI Analysis Result ── */}
-              <div className="rounded-xl border border-blue-100 overflow-hidden">
-                <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 border-b border-blue-100">
-                  <ScanSearch className="w-4 h-4 text-blue-500" />
-                  <span className="text-xs font-bold text-blue-700 uppercase tracking-wide">AI Analysis Result</span>
-                </div>
-                <div className="px-4 py-3 space-y-2">
-                <div className="grid grid-cols-[140px_1fr] items-start gap-2">
-                    <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide pt-0.5">Detected Condition</span>
-                    <span className="text-sm font-semibold text-blue-800 bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5">
-                      {viewingPatient.aiConditionName || viewingPatient.conditionName || <span className="text-gray-300 italic">—</span>}
+              {/* AI Analysis Result */}
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">AI Scan Result</p>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3.5 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-gray-500">Condition:</span>
+                    <span className="font-bold text-gray-900">
+                      {viewingPatient.aiConditionName || viewingPatient.conditionName || "General Consultation"}
                     </span>
                   </div>
-                  <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                    <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Confidence</span>
-                    {viewingPatient.aiConfidence !== undefined ? (
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 bg-gray-200 rounded-full h-2">
-                          <div
-                            className="h-2 rounded-full bg-blue-500"
-                            style={{ width: `${Math.min(viewingPatient.aiConfidence, 100)}%` }}
-                          />
-                        </div>
-                        <span className="text-xs font-bold text-blue-700 w-14 text-right">
-                          {viewingPatient.aiConfidence}%
-                        </span>
-                      </div>
-                    ) : (
-                      <span className="text-sm text-gray-300 italic">—</span>
-                    )}
-                  </div>
+                  {viewingPatient.aiConfidence !== undefined && (
+                    <div className="flex items-center justify-between pt-1 border-t border-gray-200/60">
+                      <span className="font-semibold text-gray-500">Confidence:</span>
+                      <span className="font-bold text-magenta-700">{viewingPatient.aiConfidence}%</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* ── Additional Notes ── */}
-              <div className="grid grid-cols-[140px_1fr] items-start gap-2">
-                <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide pt-0.5">Additional Notes</span>
-                <span className="text-sm text-gray-700 bg-gray-50 border border-gray-100 rounded-lg px-3 py-1.5 leading-relaxed min-h-[60px]">
-                  {viewingPatient.notes || <span className="text-gray-300 italic">No additional notes.</span>}
-                </span>
+              {/* Additional Notes */}
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Patient Notes</p>
+                <div className="text-xs text-gray-700 bg-gray-50 border border-gray-100 rounded-2xl p-3.5 leading-relaxed">
+                  {viewingPatient.notes || <span className="text-gray-400 italic">No additional notes provided.</span>}
+                </div>
               </div>
 
-              {/* Submission time */}
+              {/* Submission timestamp */}
               <p className="text-[11px] text-gray-400 pt-1">
-                Submitted: {new Date(viewingPatient.createdAt).toLocaleString("en-US", {
-                  month: "long", day: "numeric", year: "numeric",
+                Requested: {new Date(viewingPatient.createdAt).toLocaleString("en-US", {
+                  month: "short", day: "numeric", year: "numeric",
                   hour: "2-digit", minute: "2-digit",
                 })}
               </p>
@@ -1091,69 +1182,83 @@ export default function ClinicAppointmentsPage() {
 
             {/* Footer actions */}
             {viewingPatient.status === "scheduled" ? (
-              <div className="px-6 pb-6 pt-2">
+              <div className="px-6 pb-5 pt-3 border-t border-gray-100 bg-white">
                 <button
+                  type="button"
                   onClick={() => setViewingPatient(null)}
-                  className="w-full py-3 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition-colors"
+                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
                 >
                   Close
                 </button>
               </div>
             ) : (
-            <div className="px-6 pb-6 pt-2 grid grid-cols-2 gap-3">
-              <button
-                onClick={() => {
-                  setRejectModal({
-                    appointmentId: viewingPatient.id,
-                    patientName: viewingPatient.patientName || "Patient",
-                    clinicName: viewingPatient.clinicName || clinicName,
-                    patientEmail: viewingPatient.patientEmail,
-                    date: viewingPatient.date,
-                    time: viewingPatient.time,
-                  });
-                  setRejectReason("");
-                  setSelectedPresetReason("");
-                  setRejectError("");
-                  setViewingPatient(null);
-                }}
-                className="py-3 rounded-xl border border-red-200 bg-red-50 text-red-600 text-sm font-semibold hover:bg-red-100 transition-colors"
-              >
-                Reject Request
-              </button>
-              <button
-                onClick={() => {
-                  setViewingPatient(null);
-                  startScheduleAssignment(viewingPatient.id);
-                }}
-                disabled={
-                  !!(viewingPatient.assignedDoctorId && viewingPatient.doctorStatus !== "approved")
-                }
-                title={
-                  viewingPatient.assignedDoctorId && viewingPatient.doctorStatus !== "approved"
-                    ? "Waiting for doctor's review approval"
-                    : "Schedule this appointment"
-                }
-                className="py-3 rounded-xl bg-[#c0166a] text-white text-sm font-semibold hover:bg-[#a01258] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {viewingPatient.assignedDoctorId && viewingPatient.doctorStatus !== "approved"
-                  ? "Awaiting Doctor Review"
-                  : "Schedule Appointment"}
-              </button>
-            </div>
+              <div className="px-6 pb-5 pt-3 border-t border-gray-100 bg-white grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRejectModal({
+                      appointmentId: viewingPatient.id,
+                      patientName: viewingPatient.patientName || "Patient",
+                      clinicName: viewingPatient.clinicName || clinicName,
+                      patientEmail: viewingPatient.patientEmail,
+                      date: viewingPatient.date,
+                      time: viewingPatient.time,
+                    });
+                    setRejectReason("");
+                    setSelectedPresetReason("");
+                    setRejectError("");
+                    setViewingPatient(null);
+                  }}
+                  className="py-3 rounded-full border border-red-200 bg-red-50 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors cursor-pointer"
+                >
+                  Decline Request
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewingPatient(null);
+                    startScheduleAssignment(viewingPatient.id);
+                  }}
+                  disabled={
+                    !!(viewingPatient.assignedDoctorId && viewingPatient.doctorStatus !== "approved")
+                  }
+                  className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {viewingPatient.assignedDoctorId && viewingPatient.doctorStatus !== "approved"
+                    ? "Awaiting Doctor Review"
+                    : "Schedule Appointment"}
+                </button>
+              </div>
             )}
           </motion.div>
         </div>
       )}
 
+      {/* ── Schedule Date & Time Modal ─────────────────────── */}
       {pendingAssign && (
-        <div className="fixed inset-0 z-50 bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white rounded-2xl border border-magenta-100 shadow-xl p-5">
-            <h3 className="text-base font-display font-bold text-gray-900 mb-1">Schedule Date & Time</h3>
-            <p className="text-xs text-gray-500 mb-4">Choose appointment date and time, then confirm.</p>
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 10 }}
+            transition={{ duration: 0.2 }}
+            className="w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
+          >
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-base font-bold text-gray-900">Schedule Date &amp; Time</h3>
+              <button
+                type="button"
+                onClick={() => setPendingAssign(null)}
+                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mb-5">Choose consultation schedule and assign a dermatologist.</p>
 
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Date</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Consultation Date</label>
                 <input
                   type="date"
                   value={pendingAssign.date}
@@ -1167,12 +1272,12 @@ export default function ClinicAppointmentsPage() {
                         : prev
                     )
                   }
-                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-400"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 transition-all bg-white"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Time</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Consultation Time</label>
                 <input
                   type="time"
                   value={pendingAssign.time}
@@ -1186,105 +1291,121 @@ export default function ClinicAppointmentsPage() {
                         : prev
                     )
                   }
-                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-400"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 transition-all bg-white"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Assign Doctor for Review</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Attending Dermatologist</label>
                 <select
                   value={pendingAssign.doctorId}
                   onChange={(e) =>
                     setPendingAssign((prev) => prev ? { ...prev, doctorId: e.target.value } : prev)
                   }
-                  className="w-full px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm text-gray-900 outline-none focus:border-magenta-400"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 bg-white text-xs text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 transition-all cursor-pointer"
                 >
-                  <option value="">Select a doctor</option>
+                  <option value="">Select an attending doctor</option>
                   {clinicDoctors.map((doctor) => (
                     <option key={doctor.id} value={doctor.id}>
-                      {doctor.name} - {doctor.specialization}
+                      {doctor.name} ({doctor.specialization})
                     </option>
                   ))}
                 </select>
                 {clinicDoctors.length === 0 && (
-                  <p className="mt-1.5 text-xs text-red-600">Add a doctor in Doctor Management before scheduling this appointment.</p>
+                  <p className="mt-1.5 text-xs text-amber-600 font-medium">Add a doctor in Doctor Management before scheduling.</p>
                 )}
               </div>
             </div>
 
-            <div className="mt-5 grid grid-cols-2 gap-2">
+            <div className="mt-6 grid grid-cols-2 gap-2.5">
               <button
+                type="button"
                 onClick={() => setPendingAssign(null)}
-                className="py-2.5 rounded-lg border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50"
+                className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={confirmAssign}
-                className="py-2.5 rounded-lg bg-magenta-500 text-white text-sm font-semibold hover:bg-magenta-600"
+                className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
               >
                 Confirm Schedule
               </button>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
 
       {/* ── Assign Doctor Modal ─────────────────────── */}
       {assignDoctorModal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6"
+            initial={{ opacity: 0, scale: 0.96, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 10 }}
+            transition={{ duration: 0.2 }}
+            className="w-full max-w-sm bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
           >
-            <h3 className="font-bold text-gray-900 mb-1 flex items-center gap-2">
-              <Stethoscope className="w-4 h-4 text-blue-500" /> Assign to Doctor
-            </h3>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
+                <Stethoscope className="w-4 h-4 text-magenta-600" /> Assign Doctor
+              </h3>
+              <button
+                type="button"
+                onClick={() => { setAssignDoctorModal(null); setSelectedDoctorId(""); }}
+                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
             <p className="text-xs text-gray-500 mb-4">
-              Select a doctor to review this appointment's AI analysis.
+              Select a doctor to review this patient's case.
             </p>
 
             <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
               {clinicDoctors.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-blue-200 bg-blue-50/50 p-4 text-center">
-                  <p className="text-xs text-gray-600">No doctors are available for this clinic yet.</p>
-                  <button
-                    onClick={addDoctorForAssignment}
-                    className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-600"
+                <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-4 text-center">
+                  <p className="text-xs text-gray-500">No doctors registered yet.</p>
+                  <Link
+                    to="/clinic/doctors"
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-magenta-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-magenta-700 transition-colors shadow-xs"
                   >
-                    <Stethoscope className="w-3.5 h-3.5" /> Add Doctor for Assignment
-                  </button>
+                    <Stethoscope className="w-3.5 h-3.5" /> Add Doctor
+                  </Link>
                 </div>
               ) : (
                 clinicDoctors.map((doc) => (
                   <button
                     key={doc.id}
+                    type="button"
                     onClick={() => setSelectedDoctorId(doc.id)}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl border text-sm transition-colors ${
+                    className={`w-full text-left px-3.5 py-3 rounded-2xl border text-xs transition-colors cursor-pointer ${
                       selectedDoctorId === doc.id
-                        ? "border-blue-400 bg-blue-50"
-                        : "border-gray-200 hover:border-blue-300"
+                        ? "border-magenta-500 bg-magenta-50/40 text-magenta-900 ring-1 ring-magenta-500"
+                        : "border-gray-200 hover:border-gray-300 bg-white"
                     }`}
                   >
-                    <p className="font-semibold text-gray-900">{doc.name}</p>
-                    <p className="text-[11px] text-gray-500">{doc.specialization}</p>
+                    <p className="font-bold text-gray-900">{doc.name}</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">{doc.specialization}</p>
                   </button>
                 ))
               )}
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className="mt-5 grid grid-cols-2 gap-2.5">
               <button
+                type="button"
                 onClick={() => { setAssignDoctorModal(null); setSelectedDoctorId(""); }}
-                className="py-2.5 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50"
+                className="py-2.5 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={assignDoctor}
                 disabled={!selectedDoctorId}
-                className="py-2.5 rounded-xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="py-2.5 rounded-full bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-xs cursor-pointer"
               >
                 Assign
               </button>
@@ -1295,46 +1416,56 @@ export default function ClinicAppointmentsPage() {
 
       {/* ── Reject Request with Reason Modal ─────────────────────── */}
       {rejectModal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-6 border border-red-100"
+            initial={{ opacity: 0, scale: 0.96, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 10 }}
+            transition={{ duration: 0.2 }}
+            className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
           >
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center text-red-600 shrink-0">
-                <XCircle className="w-5 h-5" />
-              </div>
+            <div className="flex items-center justify-between mb-3">
               <div>
-                <h3 className="font-bold text-gray-900 text-base">Decline Appointment Request</h3>
-                <p className="text-xs text-gray-500">
-                  Patient: <span className="font-semibold text-gray-700">{rejectModal.patientName}</span>
+                <h3 className="font-bold text-gray-900 text-base">Decline Appointment</h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Patient: <span className="font-semibold text-gray-800">{rejectModal.patientName}</span>
                 </p>
               </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setRejectModal(null);
+                  setRejectReason("");
+                  setSelectedPresetReason("");
+                  setRejectError("");
+                }}
+                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
-            <p className="text-xs text-gray-600 mb-3 leading-relaxed">
-              Please provide a reason or note for declining this appointment. The patient will receive a notification along with this note.
+            <p className="text-xs text-gray-600 mb-3.5 leading-relaxed">
+              Please provide a reason. The patient will receive a notification with this note.
             </p>
 
             {rejectError && (
-              <div className="mb-3 p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+              <div className="mb-3 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
                 {rejectError}
               </div>
             )}
 
             {/* Quick Reason Presets */}
-            <div className="space-y-1.5 mb-3">
-              <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                Select Common Reason:
+            <div className="space-y-1.5 mb-3.5">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                Common Reasons
               </label>
-              <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
+              <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
                 {[
                   "Doctor unavailable on the requested schedule",
                   "Clinic has reached full capacity for the selected date",
-                  "Condition requires specialized hospital/emergency facility",
+                  "Condition requires specialized hospital facility",
                   "Incomplete or unclear patient skin condition details",
-                  "Schedule conflict with clinic operating hours",
                 ].map((preset) => (
                   <button
                     key={preset}
@@ -1344,9 +1475,9 @@ export default function ClinicAppointmentsPage() {
                       setRejectReason(preset);
                       setRejectError("");
                     }}
-                    className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors border ${
+                    className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-colors border cursor-pointer ${
                       selectedPresetReason === preset || rejectReason === preset
-                        ? "bg-red-50 border-red-300 text-red-700 font-medium"
+                        ? "bg-red-50 border-red-200 text-red-700 font-semibold"
                         : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
                     }`}
                   >
@@ -1357,9 +1488,9 @@ export default function ClinicAppointmentsPage() {
             </div>
 
             {/* Custom Reason Note */}
-            <div className="mb-4">
-              <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">
-                Reason / Note for Patient:
+            <div className="mb-5">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                Note for Patient
               </label>
               <textarea
                 value={rejectReason}
@@ -1368,8 +1499,8 @@ export default function ClinicAppointmentsPage() {
                   setRejectError("");
                 }}
                 rows={3}
-                placeholder="Type the rejection reason or note for the patient here..."
-                className="w-full px-3 py-2 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-red-400 focus:ring-1 focus:ring-red-400"
+                placeholder="Type the decline note for the patient..."
+                className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-400/10 bg-white"
               />
             </div>
 
@@ -1382,14 +1513,14 @@ export default function ClinicAppointmentsPage() {
                   setSelectedPresetReason("");
                   setRejectError("");
                 }}
-                className="py-2.5 rounded-xl border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-50 transition-colors"
+                className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleConfirmRejection}
-                className="py-2.5 rounded-xl bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors shadow-sm"
+                className="py-3 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
               >
                 Confirm Decline
               </button>

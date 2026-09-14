@@ -37,22 +37,19 @@ export default function AdminAiAnalysisManagement() {
                 .order("scanned_at", { ascending: false })
                 .limit(100);
             if (cancelled || error || !data) return;
-            setRecords(data.map((s: {
-                analysis_id: string;
-                confidence_score: number;
-                status: string;
-                scanned_at: string;
-                skin_condition: { name: string } | null;
-                user: { full_name: string } | null;
-            }, idx: number) => ({
-                id: idx + 1,
-                _analysisId: s.analysis_id,
-                patient: (s.user as { full_name: string } | null)?.full_name ?? "Unknown",
-                uploadedAt: new Date(s.scanned_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
-                predictedCondition: (s.skin_condition as { name: string } | null)?.name ?? "Unknown",
-                confidence: Math.round(s.confidence_score),
-                status: (["valid", "flagged", "invalid"].includes(s.status) ? s.status : "valid") as AnalysisStatus,
-            })));
+            setRecords((data as any[]).map((s: any, idx: number) => {
+                const userObj = Array.isArray(s.user) ? s.user[0] : s.user;
+                const condObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+                return {
+                    id: idx + 1,
+                    _analysisId: s.analysis_id,
+                    patient: userObj?.full_name ?? "Unknown",
+                    uploadedAt: new Date(s.scanned_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
+                    predictedCondition: condObj?.name ?? "Unknown",
+                    confidence: Math.round(s.confidence_score),
+                    status: (["valid", "flagged", "invalid"].includes(s.status) ? s.status : "valid") as AnalysisStatus,
+                };
+            }));
         }
         loadRecords();
         return () => { cancelled = true; };

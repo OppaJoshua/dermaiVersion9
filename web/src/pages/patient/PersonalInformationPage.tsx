@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { User, Mail, Phone, Calendar, MapPin, Save, UserCircle } from "lucide-react";
 import { motion } from "framer-motion";
+import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 
 interface UserProfile {
@@ -40,47 +41,8 @@ const EMPTY_PROFILE: UserProfile = {
   profilePicture: undefined,
 };
 
-async function fetchProfile(): Promise<UserProfile> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.user?.id) throw new Error("No authenticated user");
-
-  const { data, error } = await supabase
-    .from("user")
-    .select("full_name, email, phone")
-    .eq("user_id", session.user.id)
-    .single();
-
-  if (error) throw error;
-
-  return {
-    fullName: data.full_name ?? "",
-    email: data.email ?? session.user.email ?? "",
-    contactNumber: data.phone ?? "",
-    gender: "",
-    birthdate: "",
-    district: "",
-    address: "",
-    profilePicture: undefined,
-  };
-}
-
-async function saveProfile(profile: UserProfile): Promise<UserProfile> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.user?.id) throw new Error("No authenticated user");
-
-  const { error } = await supabase
-    .from("user")
-    .update({
-      full_name: profile.fullName.trim(),
-      phone: profile.contactNumber.trim() || null,
-    })
-    .eq("user_id", session.user.id);
-
-  if (error) throw error;
-  return profile;
-}
-
 export default function PatientPersonalInformation() {
+  const { session, user: _authUser } = useAuth();
   const [profile, setProfile] = useState<UserProfile>(EMPTY_PROFILE);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -89,21 +51,61 @@ export default function PatientPersonalInformation() {
   useEffect(() => {
     let cancelled = false;
 
-    fetchProfile()
-      .then((data) => {
-        if (!cancelled) setProfile(data);
-      })
-      .catch(() => {
-        if (!cancelled) setMessage({ type: "error", text: "Could not load your profile. Please try again." });
-      })
-      .finally(() => {
+    async function loadUserProfile() {
+      if (!session?.user) {
+        setIsLoading(false);
+        return;
+      }
+
+      const email = session.user.email || "";
+      const meta = session.user.user_metadata || {};
+      const fallbackName = meta.full_name || meta.name || email.split("@")[0] || "";
+      const fallbackPicture = meta.avatar_url || meta.picture || undefined;
+
+      try {
+        const { data: dbUser, error: _error } = await supabase
+          .from("user")
+          .select("full_name, email")
+          .eq("user_id", session.user.id)
+          .maybeSingle();
+
+        if (cancelled) return;
+
+        // Try to read local stored extended profile info (contact, gender, birthdate, district, address)
+        const localSaved = localStorage.getItem(`derm_profile_${session.user.id}`);
+        const parsed = localSaved ? JSON.parse(localSaved) : {};
+
+        setProfile({
+          fullName: dbUser?.full_name || fallbackName,
+          email: dbUser?.email || email,
+          contactNumber: parsed.contactNumber || "",
+          gender: parsed.gender || "",
+          birthdate: parsed.birthdate || "",
+          district: parsed.district || "",
+          address: parsed.address || "",
+          profilePicture: parsed.profilePicture || fallbackPicture,
+        });
+      } catch (err) {
+        console.error("Error loading profile:", err);
+        if (!cancelled) {
+          setProfile((prev) => ({
+            ...prev,
+            email,
+            fullName: fallbackName,
+            profilePicture: fallbackPicture,
+          }));
+        }
+      } finally {
         if (!cancelled) setIsLoading(false);
-      });
+      }
+    }
+
+    loadUserProfile();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [session]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -119,8 +121,6 @@ export default function PatientPersonalInformation() {
       return;
     }
 
-    // TODO: upload `file` to your storage/CDN and store the returned URL
-    // instead of a base64 data URL, which is fine for a preview but not for persistence.
     const reader = new FileReader();
     reader.onloadend = () => {
       setProfile((prev) => ({ ...prev, profilePicture: reader.result as string }));
@@ -134,8 +134,47 @@ export default function PatientPersonalInformation() {
     setMessage(null);
 
     try {
-      const updated = await saveProfile(profile);
-      setProfile(updated);
+      if (session?.user) {
+        // 1. Update user full_name in Supabase public.user
+        const { error: dbError } = await supabase
+          .from("user")
+          .update({ full_name: profile.fullName })
+          .eq("user_id", session.user.id);
+
+        if (dbError) {
+          console.warn("Could not update public.user:", dbError);
+        }
+
+        // 2. Persist extended profile details locally for this user
+        localStorage.setItem(
+          `derm_profile_${session.user.id}`,
+          JSON.stringify({
+            fullName: profile.fullName,
+            contactNumber: profile.contactNumber,
+            gender: profile.gender,
+            birthdate: profile.birthdate,
+            district: profile.district,
+            address: profile.address,
+            profilePicture: profile.profilePicture,
+          })
+        );
+
+        // 3. Try to sync metadata to Supabase auth user
+        try {
+          await supabase.auth.updateUser({
+            data: {
+              full_name: profile.fullName,
+            },
+          });
+        } catch {
+          // ignore
+        }
+
+        // 4. Notify layout and any listeners immediately
+        window.dispatchEvent(new Event("derm_profile_updated"));
+        window.dispatchEvent(new Event("storage"));
+      }
+
       setMessage({ type: "success", text: "Profile updated successfully!" });
     } catch {
       setMessage({ type: "error", text: "Something went wrong while saving. Please try again." });
@@ -235,21 +274,20 @@ export default function PatientPersonalInformation() {
                 />
               </div>
 
-              {/* Email */}
+              {/* Email (Reflected from Google Login / Supabase Auth) */}
               <div className="space-y-2">
                 <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
                   <Mail className="w-4 h-4 text-magenta-500" />
                   Email Address
+                  <span className="text-[11px] text-gray-400 font-normal">(Linked to your account)</span>
                 </label>
                 <input
                   type="email"
                   name="email"
                   value={profile.email}
-                  onChange={handleChange}
-                  required
-                  className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all bg-gray-50"
+                  disabled
+                  className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-gray-600 bg-gray-50 cursor-not-allowed"
                   placeholder="name@example.com"
-                  readOnly
                 />
               </div>
 
@@ -264,7 +302,6 @@ export default function PatientPersonalInformation() {
                   name="contactNumber"
                   value={profile.contactNumber}
                   onChange={handleChange}
-                  required
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
                   placeholder="e.g. 09123456789"
                 />
@@ -280,7 +317,6 @@ export default function PatientPersonalInformation() {
                   name="gender"
                   value={profile.gender}
                   onChange={handleChange}
-                  required
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all appearance-none bg-white"
                 >
                   <option value="">Select Gender</option>
@@ -302,7 +338,6 @@ export default function PatientPersonalInformation() {
                   name="birthdate"
                   value={profile.birthdate}
                   onChange={handleChange}
-                  required
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
                 />
               </div>
@@ -336,7 +371,6 @@ export default function PatientPersonalInformation() {
                   name="address"
                   value={profile.address}
                   onChange={handleChange}
-                  required
                   rows={3}
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all resize-none"
                   placeholder="Street, City, Province, ZIP"
@@ -354,7 +388,7 @@ export default function PatientPersonalInformation() {
               <button
                 type="submit"
                 disabled={isSaving}
-                className="flex items-center gap-2 bg-magenta-600 hover:bg-magenta-700 disabled:bg-magenta-300 text-white font-semibold px-8 py-3 rounded-xl transition-all shadow-md shadow-magenta-500/20"
+                className="flex items-center gap-2 bg-magenta-600 hover:bg-magenta-700 disabled:bg-magenta-300 text-white font-semibold px-8 py-3 rounded-xl transition-all shadow-md shadow-magenta-500/20 cursor-pointer"
               >
                 {isSaving ? (
                   <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />

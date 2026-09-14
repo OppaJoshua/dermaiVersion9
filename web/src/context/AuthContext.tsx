@@ -21,50 +21,184 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<UserRole | null>(null);
-  const [roleLoading, setRoleLoading] = useState(false);
+  const [roleLoading, setRoleLoading] = useState(true);
 
   useEffect(() => {
-    // Check for an existing session on first load (also picks up the
-    // session Supabase parses from the URL after a magic link click).
+    // Check for an existing session on first load
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
+      const email = (data.session?.user?.email || "").toLowerCase().trim();
+      if (email === "dermaisupport@gmail.com") {
+        setRole("admin");
+        setRoleLoading(false);
+      } else if (!data.session) {
+        setRoleLoading(false);
+      }
       setLoading(false);
     });
 
     // Keep session in sync across the app (login, logout, token refresh).
     const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
+      const email = (newSession?.user?.email || "").toLowerCase().trim();
+      if (email === "dermaisupport@gmail.com") {
+        setRole("admin");
+        setRoleLoading(false);
+      } else if (!newSession) {
+        setRole(null);
+        setRoleLoading(false);
+      }
     });
 
     return () => listener.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    // Once we have a session, look up which role the DB trigger assigned
-    // this account (patient by default, doctor/clinic/admin if matched).
     if (!session?.user) {
       setRole(null);
+      setRoleLoading(false);
+      return;
+    }
+
+    const userEmail = (session.user.email || "").toLowerCase().trim();
+    if (userEmail === "dermaisupport@gmail.com") {
+      setRole("admin");
+      setRoleLoading(false);
       return;
     }
 
     let cancelled = false;
     setRoleLoading(true);
 
-    supabase
-      .from("user")
-      .select("role")
-      .eq("user_id", session.user.id)
-      .single()
-      .then(({ data, error }) => {
+    async function fetchUserRole() {
+      try {
+        const currentEmail = (session!.user.email || "").toLowerCase().trim();
+
+        // 1. Check local manual admin override
+        const overrideRole = localStorage.getItem("derm_override_role") as UserRole | null;
+        if (overrideRole) {
+          setRole(overrideRole);
+          setRoleLoading(false);
+          return;
+        }
+
+        // 2. Query user record in DB
+        let dbUser: any = null;
+        const { data: userById } = await supabase
+          .from("user")
+          .select("role, user_id")
+          .eq("user_id", session!.user.id)
+          .maybeSingle();
+
+        if (userById) {
+          dbUser = userById;
+        } else if (currentEmail) {
+          const { data: userByEmail } = await supabase
+            .from("user")
+            .select("role, user_id")
+            .ilike("email", currentEmail)
+            .maybeSingle();
+          if (userByEmail) dbUser = userByEmail;
+        }
+
+        // 3. Check Clinic Affiliation (by owner ID or Email)
+        let clinicFound: any = null;
+
+        const { data: c1 } = await supabase
+          .from("clinic")
+          .select("clinic_id, status, owner_user_id")
+          .eq("owner_user_id", session!.user.id)
+          .maybeSingle();
+
+        if (c1) {
+          clinicFound = c1;
+        } else if (currentEmail) {
+          const { data: c2 } = await supabase
+            .from("clinic")
+            .select("clinic_id, status, owner_user_id")
+            .ilike("email", currentEmail)
+            .maybeSingle();
+
+          if (c2) {
+            clinicFound = c2;
+            if (!c2.owner_user_id) {
+              await supabase
+                .from("clinic")
+                .update({ owner_user_id: session!.user.id })
+                .eq("clinic_id", c2.clinic_id);
+            }
+          }
+        }
+
+        // Check local applications cache
+        if (!clinicFound && currentEmail) {
+          try {
+            const localApps = localStorage.getItem("dermai_clinic_applications");
+            if (localApps) {
+              const parsed = JSON.parse(localApps);
+              if (parsed.some((a: any) => a.email?.toLowerCase().trim() === currentEmail)) {
+                clinicFound = { clinic_id: "local", status: "pending" };
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+
+        // 4. Check Doctor Affiliation
+        let doctorFound = false;
+        if (!clinicFound && currentEmail) {
+          const { data: d1 } = await supabase
+            .from("clinic_doctor")
+            .select("doctor_id")
+            .ilike("email", currentEmail)
+            .maybeSingle();
+          if (d1) doctorFound = true;
+        }
+
+        // 5. Determine Final Role
+        let finalRole: UserRole = "patient";
+        if (clinicFound) {
+          finalRole = "clinic";
+        } else if (doctorFound) {
+          finalRole = "doctor";
+        } else if (dbUser?.role && ["admin", "clinic", "doctor", "patient"].includes(dbUser.role)) {
+          finalRole = dbUser.role as UserRole;
+        } else if (session!.user.user_metadata?.role) {
+          finalRole = session!.user.user_metadata.role as UserRole;
+        }
+
+        // 6. Ensure user row exists and has the correct role
+        const meta = session!.user.user_metadata || {};
+        const fullName = meta.full_name || meta.name || session!.user.email?.split("@")[0] || "User";
+
+        await supabase.from("user").upsert({
+          user_id: session!.user.id,
+          email: session!.user.email || "",
+          full_name: fullName,
+          role: finalRole,
+          account_status: "active",
+        });
+
         if (cancelled) return;
-        setRole(error ? null : (data?.role as UserRole) ?? null);
-        setRoleLoading(false);
-      });
+
+        setRole(finalRole);
+        localStorage.setItem(`derm_role_${session!.user.id}`, finalRole);
+      } catch (err) {
+        console.error("Failed to resolve user role:", err);
+        const fallbackEmail = (session?.user?.email || "").toLowerCase().trim();
+        if (!cancelled) setRole(fallbackEmail === "dermaisupport@gmail.com" ? "admin" : "patient");
+      } finally {
+        if (!cancelled) setRoleLoading(false);
+      }
+    }
+
+    fetchUserRole();
 
     return () => {
       cancelled = true;
     };
-  }, [session?.user?.id]);
+  }, [session]);
 
   const signInWithMagicLink = async (email: string) => {
     const { error } = await supabase.auth.signInWithOtp({
@@ -97,6 +231,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    setSession(null);
+    setRole(null);
   };
 
   return (

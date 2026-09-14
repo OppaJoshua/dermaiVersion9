@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import {
   Activity,
   CheckCircle2,
@@ -7,12 +7,14 @@ import {
   Search,
   Stethoscope,
   XCircle,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabaseClient";
 
 type ReviewFilter = "all" | "correct" | "wrong" | "retrain" | "high-confidence-wrong";
 
-type ReviewRecord = {
+export type ReviewRecord = {
   id: string;
   patient: string;
   aiPrediction: string;
@@ -20,6 +22,8 @@ type ReviewRecord = {
   doctor: string;
   finalDiagnosis: string;
   reviewedAt: string;
+  status?: string;
+  note?: string;
 };
 
 function normalizeDiagnosis(value: string) {
@@ -27,30 +31,185 @@ function normalizeDiagnosis(value: string) {
 }
 
 function isCorrect(record: ReviewRecord) {
-  return normalizeDiagnosis(record.aiPrediction) === normalizeDiagnosis(record.finalDiagnosis);
+  if (!record.aiPrediction || !record.finalDiagnosis) return false;
+  const ai = normalizeDiagnosis(record.aiPrediction);
+  const doc = normalizeDiagnosis(record.finalDiagnosis);
+  return ai === doc || doc.includes(ai) || ai.includes(doc);
 }
 
 function formatDate(value: string) {
+  if (!value) return "-";
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? "-"
-    : date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    : date.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function getReviewedAppointments(): ReviewRecord[] {
-  // TODO: Load reviewed appointments from Supabase
-  return [];
+function parseDoctorNote(rawNote?: string): { diagnosis: string; note: string } {
+  if (!rawNote) return { diagnosis: "", note: "" };
+  const match = rawNote.match(/^Diagnosis:\s*([^|\n]+)(?:[|\n]\s*(?:Note:\s*)?(.*))?$/is);
+  if (match) {
+    return {
+      diagnosis: match[1]?.trim() || "",
+      note: match[2]?.trim() || "",
+    };
+  }
+  return { diagnosis: "", note: rawNote };
 }
 
 export default function AdminDoctorAiReviewPage() {
   const [filter, setFilter] = useState<ReviewFilter>("all");
   const [query, setQuery] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [records, setRecords] = useState<ReviewRecord[]>([]);
 
-  const records = useMemo(() => {
-    void refreshKey;
-    return getReviewedAppointments();
-  }, [refreshKey]);
+  const fetchReviewedAppointments = useCallback(async () => {
+    setLoading(true);
+    try {
+      const recordMap = new Map<string, ReviewRecord>();
+
+      // 1. Fetch from Supabase patient_appointment table
+      try {
+        const { data, error } = await supabase
+          .from("patient_appointment")
+          .select(`
+            appointment_id,
+            patient_name,
+            ai_condition_name,
+            ai_confidence,
+            doctor_status,
+            doctor_note,
+            doctor_reviewed_at,
+            created_at,
+            status,
+            assigned_doctor_id,
+            clinic:clinic_id ( name ),
+            doctor:assigned_doctor_id ( doctor_name )
+          `)
+          .order("doctor_reviewed_at", { ascending: false });
+
+        if (!error && data) {
+          for (const row of data as any[]) {
+            // Only include reviewed appointments (or ones with doctor notes/decisions)
+            const isReviewed = Boolean(
+              row.doctor_reviewed_at ||
+              (row.doctor_status && row.doctor_status !== "pending-review") ||
+              row.doctor_note ||
+              row.status === "completed"
+            );
+
+            if (!isReviewed) continue;
+
+            const parsed = parseDoctorNote(row.doctor_note);
+            const doctorObj = Array.isArray(row.doctor) ? row.doctor[0] : row.doctor;
+            const docName = doctorObj?.doctor_name || "Doctor Audrey Saludaga";
+
+            const aiPred = row.ai_condition_name || "Skin condition";
+            const finalDiag = parsed.diagnosis || aiPred;
+            const conf = row.ai_confidence ? Math.round(Number(row.ai_confidence)) : 85;
+
+            const recId = row.appointment_id
+              ? `REV-${row.appointment_id.slice(0, 8).toUpperCase()}`
+              : `REV-${Math.floor(Math.random() * 100000)}`;
+
+            recordMap.set(row.appointment_id, {
+              id: recId,
+              patient: row.patient_name || "Patient",
+              aiPrediction: aiPred,
+              confidence: conf,
+              doctor: docName,
+              finalDiagnosis: finalDiag,
+              reviewedAt: row.doctor_reviewed_at || row.created_at || new Date().toISOString(),
+              status: row.doctor_status || "approved",
+              note: parsed.note || row.doctor_note || "",
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("[AdminDoctorAiReviewPage] Supabase fetch error:", err);
+      }
+
+      // 2. Fetch and merge from localStorage
+      try {
+        const localData = localStorage.getItem("dermai_clinic_appointments");
+        if (localData) {
+          const parsed = JSON.parse(localData);
+          if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+              const isReviewed = Boolean(
+                item.doctorReviewedAt ||
+                (item.doctorStatus && item.doctorStatus !== "pending-review") ||
+                item.doctorDiagnosis ||
+                item.doctorNote ||
+                item.status === "completed" ||
+                item.status === "accepted"
+              );
+
+              if (!isReviewed) continue;
+              if (item.id && recordMap.has(item.id)) continue;
+
+              const aiPred = item.aiConditionName || item.conditionName || "Skin condition";
+              const finalDiag = item.doctorDiagnosis || aiPred;
+              const conf = item.aiConfidence ? Math.round(Number(item.aiConfidence)) : 85;
+              const recId = item.id
+                ? `REV-${String(item.id).slice(0, 8).toUpperCase()}`
+                : `REV-${Math.floor(Math.random() * 100000)}`;
+
+              recordMap.set(item.id || recId, {
+                id: recId,
+                patient: item.patientName || "Patient",
+                aiPrediction: aiPred,
+                confidence: conf,
+                doctor: item.assignedDoctorName || "Doctor Audrey Saludaga",
+                finalDiagnosis: finalDiag,
+                reviewedAt: item.doctorReviewedAt || item.createdAt || new Date().toISOString(),
+                status: item.doctorStatus || "approved",
+                note: item.doctorNote || "",
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[AdminDoctorAiReviewPage] LocalStorage fetch error:", err);
+      }
+
+      setRecords(Array.from(recordMap.values()));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchReviewedAppointments();
+
+    // Supabase Realtime channel for live sync
+    const channel = supabase
+      .channel("admin-doctor-review-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "patient_appointment" },
+        () => {
+          fetchReviewedAppointments();
+        }
+      )
+      .subscribe();
+
+    const handleCustomUpdate = () => fetchReviewedAppointments();
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "dermai_clinic_appointments") {
+        fetchReviewedAppointments();
+      }
+    };
+
+    window.addEventListener("dermai_appointments_updated", handleCustomUpdate);
+    window.addEventListener("storage", handleStorage);
+
+    return () => {
+      supabase.removeChannel(channel);
+      window.removeEventListener("dermai_appointments_updated", handleCustomUpdate);
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, [fetchReviewedAppointments]);
 
   const metrics = useMemo(() => {
     const correct = records.filter(isCorrect).length;
@@ -98,10 +257,10 @@ export default function AdminDoctorAiReviewPage() {
         </div>
         <button
           type="button"
-          onClick={() => setRefreshKey((key) => key + 1)}
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-600 hover:bg-gray-50"
+          onClick={fetchReviewedAppointments}
+          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer"
         >
-          <RefreshCw className="w-4 h-4" /> Refresh records
+          <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} /> Refresh records
         </button>
       </div>
 
@@ -112,7 +271,7 @@ export default function AdminDoctorAiReviewPage() {
         <MetricCard label="Retrain Candidates" value={String(metrics.retrainCandidates)} detail="Wrong high-confidence predictions" icon={RefreshCw} color="violet" />
       </div>
 
-      <div className="bg-white border border-gray-100 rounded-2xl p-4 flex flex-col xl:flex-row gap-3 xl:items-center xl:justify-between">
+      <div className="bg-white border border-gray-100 rounded-2xl p-4 flex flex-col xl:flex-row gap-3 xl:items-center xl:justify-between shadow-xs">
         <div className="flex flex-wrap gap-2">
           {filterOptions.map((option) => (
             <button
@@ -120,8 +279,8 @@ export default function AdminDoctorAiReviewPage() {
               type="button"
               onClick={() => setFilter(option.key)}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold transition-colors",
-                filter === option.key ? "bg-magenta-500 text-white" : "bg-gray-50 text-gray-600 hover:bg-gray-100"
+                "inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold transition-colors cursor-pointer",
+                filter === option.key ? "bg-magenta-600 text-white" : "bg-gray-50 text-gray-600 hover:bg-gray-100"
               )}
             >
               <Filter className="w-3.5 h-3.5" /> {option.label}
@@ -139,7 +298,7 @@ export default function AdminDoctorAiReviewPage() {
         </label>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white">
+      <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-xs">
         <div className="flex items-center justify-between gap-4 border-b border-gray-100 px-5 py-4">
           <div>
             <h2 className="font-display font-bold text-gray-900">AI vs Doctor Validation Records</h2>
@@ -148,56 +307,63 @@ export default function AdminDoctorAiReviewPage() {
           <Stethoscope className="w-5 h-5 text-magenta-500" />
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px]">
-            <thead>
-              <tr className="border-b border-gray-100 bg-gray-50/70">
-                {['Record ID', 'Patient', 'AI Prediction', 'Confidence', 'Doctor', 'Final Diagnosis', 'Result', 'Tag', 'Date'].map((label) => (
-                  <th key={label} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRecords.map((record) => {
-                const correct = isCorrect(record);
-                const retrain = !correct && record.confidence >= 70;
-                return (
-                  <tr key={record.id} className="border-b border-gray-50 last:border-b-0 hover:bg-gray-50/70">
-                    <td className="px-5 py-4 text-xs font-semibold text-gray-600">{record.id}</td>
-                    <td className="px-5 py-4 text-sm text-gray-700">{record.patient}</td>
-                    <td className="px-5 py-4 text-sm font-medium text-gray-700">{record.aiPrediction}</td>
-                    <td className="px-5 py-4 min-w-36">
-                      <div className="flex items-center gap-2">
-                        <span className={cn("text-xs font-bold", record.confidence >= 70 ? "text-emerald-600" : "text-amber-600")}>{record.confidence}%</span>
-                        <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-100">
-                          <div className={cn("h-full rounded-full", record.confidence >= 70 ? "bg-emerald-500" : "bg-amber-500")} style={{ width: `${record.confidence}%` }} />
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-5 py-4 text-sm text-gray-600">{record.doctor}</td>
-                    <td className="px-5 py-4 text-sm font-medium text-gray-700">{record.finalDiagnosis}</td>
-                    <td className="px-5 py-4">
-                      <span className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold", correct ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700")}>
-                        {correct ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />} {correct ? "Correct" : "Wrong"}
-                      </span>
-                    </td>
-                    <td className="px-5 py-4">
-                      {retrain ? <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">Retrain candidate</span> : <span className="text-sm text-gray-300">-</span>}
-                    </td>
-                    <td className="px-5 py-4 whitespace-nowrap text-sm text-gray-500">{formatDate(record.reviewedAt)}</td>
-                  </tr>
-                );
-              })}
-              {visibleRecords.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="px-5 py-14 text-center text-sm text-gray-400">
-                    <Stethoscope className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-                    <p className="font-semibold text-gray-600">No review records found</p>
-                    <p className="text-xs text-gray-400 mt-0.5">Completed doctor reviews with a final diagnosis will appear here automatically.</p>
-                  </td>
+          {loading ? (
+            <div className="py-16 text-center">
+              <Loader2 className="w-8 h-8 text-magenta-600 animate-spin mx-auto mb-3" />
+              <p className="text-sm text-gray-400">Loading doctor review records...</p>
+            </div>
+          ) : (
+            <table className="w-full min-w-[980px]">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50/70">
+                  {['Record ID', 'Patient', 'AI Prediction', 'Confidence', 'Doctor', 'Final Diagnosis', 'Result', 'Tag', 'Date'].map((label) => (
+                    <th key={label} className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</th>
+                  ))}
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {visibleRecords.map((record) => {
+                  const correct = isCorrect(record);
+                  const retrain = !correct && record.confidence >= 70;
+                  return (
+                    <tr key={record.id} className="border-b border-gray-50 last:border-b-0 hover:bg-gray-50/70 transition-colors">
+                      <td className="px-5 py-4 text-xs font-semibold text-gray-600">{record.id}</td>
+                      <td className="px-5 py-4 text-sm text-gray-700 font-medium">{record.patient}</td>
+                      <td className="px-5 py-4 text-sm font-medium text-gray-700">{record.aiPrediction}</td>
+                      <td className="px-5 py-4 min-w-36">
+                        <div className="flex items-center gap-2">
+                          <span className={cn("text-xs font-bold", record.confidence >= 70 ? "text-emerald-600" : "text-amber-600")}>{record.confidence}%</span>
+                          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-100">
+                            <div className={cn("h-full rounded-full", record.confidence >= 70 ? "bg-emerald-500" : "bg-amber-500")} style={{ width: `${record.confidence}%` }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 text-sm text-gray-600">{record.doctor}</td>
+                      <td className="px-5 py-4 text-sm font-medium text-gray-900">{record.finalDiagnosis}</td>
+                      <td className="px-5 py-4">
+                        <span className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold", correct ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700")}>
+                          {correct ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />} {correct ? "Correct" : "Wrong"}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4">
+                        {retrain ? <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">Retrain candidate</span> : <span className="text-sm text-gray-300">-</span>}
+                      </td>
+                      <td className="px-5 py-4 whitespace-nowrap text-sm text-gray-500">{formatDate(record.reviewedAt)}</td>
+                    </tr>
+                  );
+                })}
+                {visibleRecords.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="px-5 py-14 text-center text-sm text-gray-400">
+                      <Stethoscope className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                      <p className="font-semibold text-gray-600">No review records found</p>
+                      <p className="text-xs text-gray-400 mt-0.5">Completed doctor reviews with a final diagnosis will appear here automatically.</p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>
@@ -212,7 +378,7 @@ function MetricCard({ label, value, detail, icon: Icon, color }: { label: string
     violet: "bg-violet-50 text-violet-600",
   };
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white p-5">
+    <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-xs">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</p>

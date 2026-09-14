@@ -169,131 +169,133 @@ export default function SubscriptionStatusPage() {
       ];
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-2xl font-display font-bold text-magenta-900">Subscription Status</h1>
-        <p className="text-magenta-600">Manage your plan and usage limits</p>
-      </div>
+    <div className="min-h-screen bg-white text-gray-900 pt-8 pb-20 px-4 font-sans antialiased">
+      <div className="max-w-4xl mx-auto">
+        <div className="mb-8">
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Subscription Status</h1>
+          <p className="text-sm text-gray-500 mt-1">Manage your plan and usage limits</p>
+        </div>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Current Plan Card */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-[24px] p-8 shadow-[0_12px_48px_rgba(160,25,90,0.08)] border border-magenta-100 flex flex-col items-center text-center"
-        >
-          <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${isPro ? 'bg-amber-100 text-amber-600' : 'bg-magenta-100 text-magenta-600'}`}>
-            {isPro ? <Crown className="w-8 h-8" /> : <Zap className="w-8 h-8" />}
-          </div>
-          <h2 className="text-xl font-bold text-magenta-900 mb-1">
-            {planName}
-          </h2>
-          <p className="text-sm text-magenta-500 mb-6 font-medium">
-            {isPro
-              ? remainingDays !== null && remainingDays !== undefined
-                ? `${remainingDays} days remaining`
-                : "Active Subscription"
-              : "Basic access"}
-          </p>
+        <div className="grid gap-6 md:grid-cols-2 items-start">
+          {/* Current Plan Card */}
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-xs flex flex-col items-center text-center"
+          >
+            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-4 ${isPro ? 'bg-amber-50 text-amber-600' : 'bg-magenta-50 text-magenta-600'}`}>
+              {isPro ? <Crown className="w-7 h-7" /> : <Zap className="w-7 h-7" />}
+            </div>
+            <h2 className="text-xl font-bold text-gray-900 mb-1">
+              {planName}
+            </h2>
+            <p className="text-xs text-gray-500 mb-6 font-medium">
+              {isPro
+                ? remainingDays !== null && remainingDays !== undefined
+                  ? `${remainingDays} days remaining`
+                  : "Active Subscription"
+                : "Basic free access"}
+            </p>
 
-          <div className="w-full space-y-3 text-left mb-8">
-            {planFeatures.map((feat) => (
-              <div key={feat} className="flex items-center gap-3 text-sm text-magenta-700">
-                <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
-                <span>{feat}</span>
-              </div>
-            ))}
-          </div>
-
-          {!isPro && (
-            <Link
-              to="/dashboard/upgrade"
-              className="w-full py-3 bg-magenta-500 text-white rounded-full font-semibold hover:bg-magenta-600 transition-colors shadow-lg shadow-magenta-500/20 text-center"
-            >
-              Upgrade to Pro
-            </Link>
-          )}
-        </motion.div>
-
-        {/* Usage Card */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="bg-white rounded-[24px] p-8 shadow-[0_12px_48px_rgba(160,25,90,0.08)] border border-magenta-100"
-        >
-          <h2 className="text-xl font-bold text-magenta-900 mb-6">Plan Usage</h2>
-          
-          <div className="space-y-6">
-            <div>
-              <div className="flex justify-between items-end mb-2">
-                <span className="text-sm font-semibold text-magenta-900">AI Skin Scans</span>
-                <span className="text-xs text-magenta-500 font-medium">
-                  {loading
-                    ? "Loading..."
-                    : isPro
-                    ? "Unlimited"
-                    : `${scansRemaining} remaining (${scansUsed}/${maxScans} used)`}
-                </span>
-              </div>
-              <div className="h-2 w-full bg-magenta-50 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-magenta-500 rounded-full transition-all duration-500"
-                  style={{ width: `${remainingPercentage}%` }}
-                />
-              </div>
+            <div className="w-full space-y-3 text-left mb-8 pt-4 border-t border-gray-100">
+              {planFeatures.map((feat) => (
+                <div key={feat} className="flex items-center gap-3 text-xs text-gray-700">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                  <span>{feat}</span>
+                </div>
+              ))}
             </div>
 
-            {!isPro && scansRemaining <= 0 && !loading && (
-              <div className="bg-amber-50 border border-amber-100 p-4 rounded-xl flex gap-3">
-                <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
-                <p className="text-xs text-amber-700 leading-relaxed">
-                  You've reached your limit for free AI scans. Upgrade to Pro for unlimited scans and advanced insights.
-                </p>
-              </div>
+            {!isPro && (
+              <Link
+                to="/dashboard/upgrade"
+                className="w-full py-3 bg-magenta-600 text-white rounded-full font-semibold text-sm hover:bg-magenta-700 transition-all shadow-sm text-center active:scale-[0.98]"
+              >
+                Upgrade to Pro
+              </Link>
             )}
+          </motion.div>
 
-            <div className="pt-4 border-t border-magenta-50">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold text-magenta-900">Billing History</h3>
-                {billingHistory.length > 0 && (
-                  <span className="text-xs text-magenta-500 font-medium">
-                    {billingHistory.length} transaction{billingHistory.length !== 1 ? "s" : ""}
+          {/* Usage Card */}
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.05 }}
+            className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-xs"
+          >
+            <h2 className="text-xl font-bold text-gray-900 mb-6">Plan Usage</h2>
+            
+            <div className="space-y-6">
+              <div>
+                <div className="flex justify-between items-end mb-2">
+                  <span className="text-xs font-semibold text-gray-700">AI Skin Scans</span>
+                  <span className="text-xs text-gray-500 font-medium">
+                    {loading
+                      ? "Loading..."
+                      : isPro
+                      ? "Unlimited"
+                      : `${scansRemaining} remaining (${scansUsed}/${maxScans} used)`}
                   </span>
+                </div>
+                <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-magenta-600 rounded-full transition-all duration-500"
+                    style={{ width: `${remainingPercentage}%` }}
+                  />
+                </div>
+              </div>
+
+              {!isPro && scansRemaining <= 0 && !loading && (
+                <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex gap-3 text-xs">
+                  <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                  <p className="text-amber-800 leading-relaxed">
+                    You've reached your limit for free AI scans. Upgrade to Pro for unlimited scans and priority booking.
+                  </p>
+                </div>
+              )}
+
+              <div className="pt-4 border-t border-gray-100">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider">Billing History</h3>
+                  {billingHistory.length > 0 && (
+                    <span className="text-[11px] text-gray-400 font-medium">
+                      {billingHistory.length} transaction{billingHistory.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
+                {billingHistory.length > 0 ? (
+                  <div className="space-y-2">
+                    {billingHistory.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs"
+                      >
+                        <div>
+                          <p className="font-semibold text-gray-900">{item.description}</p>
+                          <p className="text-gray-400 text-[11px]">{item.date}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-gray-900">{item.amount}</p>
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                              item.status === "paid"
+                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                : "bg-gray-100 text-gray-600 border border-gray-200"
+                            }`}
+                          >
+                            {item.status.toUpperCase()}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-400 italic">No recent transactions found.</p>
                 )}
               </div>
-              {billingHistory.length > 0 ? (
-                <div className="space-y-2">
-                  {billingHistory.map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between p-2.5 rounded-xl bg-magenta-50/50 border border-magenta-100/60 text-xs"
-                    >
-                      <div>
-                        <p className="font-semibold text-magenta-900">{item.description}</p>
-                        <p className="text-magenta-500 text-[11px]">{item.date}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-bold text-magenta-900">{item.amount}</p>
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                            item.status === "paid"
-                              ? "bg-green-100 text-green-700"
-                              : "bg-magenta-100 text-magenta-700"
-                          }`}
-                        >
-                          {item.status.toUpperCase()}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-magenta-500 italic">No recent transactions found.</p>
-              )}
             </div>
-          </div>
-        </motion.div>
+          </motion.div>
+        </div>
       </div>
     </div>
   );

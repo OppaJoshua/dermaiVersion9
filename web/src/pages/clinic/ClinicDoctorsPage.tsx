@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   UserPlus,
   Trash2,
@@ -90,7 +90,7 @@ export default function ClinicDoctorsPage() {
   const formSectionRef = useRef<HTMLDivElement>(null);
 
   // 1. Fetch specializations dynamically from database if available
-  const fetchSpecializations = async () => {
+  const fetchSpecializations = useCallback(async () => {
     setLoadingSpecializations(true);
     try {
       const { data, error } = await supabase
@@ -106,22 +106,21 @@ export default function ClinicDoctorsPage() {
     } finally {
       setLoadingSpecializations(false);
     }
-  };
+  }, []);
 
   // 2. Fetch doctors from database
-  const fetchDoctors = async () => {
+  const fetchDoctors = useCallback(async () => {
     setLoadingDoctors(true);
     try {
-      const { data, error } = await supabase
-        .from("doctors")
+      let query = supabase
+        .from("clinic_doctor")
         .select(`
-          id,
-          name,
+          doctor_id,
+          doctor_name,
           email,
           contact_number,
           prc_license,
           photo_url,
-          clinic_name,
           status,
           created_at,
           doctor_specializations (
@@ -134,6 +133,12 @@ export default function ClinicDoctorsPage() {
         `)
         .order("created_at", { ascending: false });
 
+      if (clinicId) {
+        query = query.eq("clinic_id", clinicId);
+      }
+
+      const { data, error } = await query;
+
       if (!error && data) {
         const mapped: DoctorAccount[] = data.map((doc: any) => {
           const docSpecs: SpecializationOption[] = (doc.doctor_specializations || [])
@@ -141,15 +146,15 @@ export default function ClinicDoctorsPage() {
             .filter(Boolean);
 
           return {
-            id: doc.id,
-            name: doc.name,
+            id: doc.doctor_id,
+            name: doc.doctor_name,
             email: doc.email,
             contactNumber: doc.contact_number || "",
             prcLicense: doc.prc_license || "",
             photo: doc.photo_url || undefined,
             specialization: docSpecs.map((s) => s.name).join(", "),
             specializations: docSpecs,
-            clinicName: doc.clinic_name || clinicDisplayName,
+            clinicName: clinicDisplayName,
             status: doc.status === "Inactive" ? "Inactive" : "Active",
           };
         });
@@ -179,7 +184,7 @@ export default function ClinicDoctorsPage() {
     } finally {
       setLoadingDoctors(false);
     }
-  };
+  }, [clinicId, clinicDisplayName]);
 
   useEffect(() => {
     fetchSpecializations();
@@ -202,7 +207,7 @@ export default function ClinicDoctorsPage() {
 
     window.addEventListener("storage", handleStorageUpdate);
     return () => window.removeEventListener("storage", handleStorageUpdate);
-  }, []);
+  }, [fetchSpecializations, fetchDoctors]);
 
   const resetForm = () => {
     setForm({
@@ -266,45 +271,38 @@ export default function ClinicDoctorsPage() {
 
     setSavingDoctor(true);
     try {
-      let clinicDoctorId: string | null = null;
-      if (clinicId) {
-        const { data: cd } = await supabase
-          .from("clinic_doctor")
-          .insert({
-            clinic_id: clinicId,
-            doctor_name: name.trim(),
-            prc_license: prcLicense.trim(),
-            specialization: selectedSpecs.map((s) => s.name).join(", "),
-            invite_email: email.trim().toLowerCase(),
-            active: true,
-          })
-          .select("doctor_id")
-          .single();
-        if (cd) {
-          clinicDoctorId = cd.doctor_id;
-        }
-      }
-
-      const { data: newDoc } = await supabase
-        .from("doctors")
+      const { data: newDoc, error: insertErr } = await supabase
+        .from("clinic_doctor")
         .insert({
-          name: name.trim(),
+          clinic_id: clinicId || undefined,
+          doctor_name: name.trim(),
           email: email.trim().toLowerCase(),
           contact_number: contactNumber.trim(),
           prc_license: prcLicense.trim(),
-          clinic_name: clinicDisplayName,
           status: "Active",
-          clinic_doctor_id: clinicDoctorId,
         })
-        .select()
+        .select("doctor_id")
         .single();
 
-      if (newDoc) {
+      if (!insertErr && newDoc) {
+        newDoctorItem.id = newDoc.doctor_id;
+        const updatedList = [newDoctorItem, ...allDoctors];
+        setAllDoctors(updatedList);
+        try {
+          localStorage.setItem("dermai_clinic_doctors", JSON.stringify(updatedList));
+        } catch {}
+
         const junctionRows = selectedSpecializationIds.map((specId) => ({
-          doctor_id: newDoc.id,
+          doctor_id: newDoc.doctor_id,
           specialization_id: specId,
         }));
         await supabase.from("doctor_specializations").insert(junctionRows);
+
+        // If the user already registered previously as a patient, upgrade their role to doctor
+        await supabase
+          .from("user")
+          .update({ role: "doctor" })
+          .ilike("email", email.trim().toLowerCase());
       }
       await fetchDoctors();
     } catch {
@@ -383,20 +381,32 @@ export default function ClinicDoctorsPage() {
       const storedDoctorProfile = localStorage.getItem("dermai_doctor_profile");
       if (storedDoctorProfile) {
         const dp = JSON.parse(storedDoctorProfile);
-        if (dp.id === editingDoctor.id || dp.email?.toLowerCase() === editingDoctor.email?.toLowerCase()) {
-          const updatedDp = {
-            ...dp,
+        const updatedDp = {
+          ...dp,
+          fullName: name.trim(),
+          email: email.trim().toLowerCase(),
+          prcLicense: prcLicense.trim(),
+          phone: contactNumber.trim(),
+        };
+        localStorage.setItem("dermai_doctor_profile", JSON.stringify(updatedDp));
+      } else {
+        localStorage.setItem(
+          "dermai_doctor_profile",
+          JSON.stringify({
+            id: editingDoctor.id,
             fullName: name.trim(),
             email: email.trim().toLowerCase(),
             prcLicense: prcLicense.trim(),
             phone: contactNumber.trim(),
-          };
-          localStorage.setItem("dermai_doctor_profile", JSON.stringify(updatedDp));
-        }
+          })
+        );
       }
     } catch {
       /* ignore */
     }
+
+    window.dispatchEvent(new CustomEvent("dermai_doctor_profile_updated"));
+    window.dispatchEvent(new Event("storage"));
 
     setEditingDoctor(null);
     setSuccessMsg(`Dr. ${name.trim()} updated successfully.`);
@@ -405,15 +415,23 @@ export default function ClinicDoctorsPage() {
     setSavingEdit(true);
     try {
       await supabase
-        .from("doctors")
+        .from("clinic_doctor")
         .update({
-          name: name.trim(),
+          doctor_name: name.trim(),
           email: email.trim().toLowerCase(),
           contact_number: contactNumber.trim(),
           prc_license: prcLicense.trim(),
-          updated_at: new Date().toISOString(),
         })
-        .eq("id", editingDoctor.id);
+        .eq("doctor_id", editingDoctor.id);
+
+      // Sync name to public user table if email matches
+      await supabase
+        .from("user")
+        .update({
+          full_name: name.trim(),
+          phone: contactNumber.trim(),
+        })
+        .ilike("email", email.trim().toLowerCase());
 
       await supabase
         .from("doctor_specializations")
@@ -451,12 +469,11 @@ export default function ClinicDoctorsPage() {
 
     try {
       await supabase
-        .from("doctors")
+        .from("clinic_doctor")
         .update({
           status: nextStatus,
-          updated_at: new Date().toISOString(),
         })
-        .eq("id", doctor.id);
+        .eq("doctor_id", doctor.id);
     } catch {
       // Local state is preserved
     }
@@ -479,10 +496,7 @@ export default function ClinicDoctorsPage() {
 
     setDeletingDoctor(true);
     try {
-      await supabase
-        .from("doctors")
-        .delete()
-        .eq("id", targetId);
+      await supabase.from("clinic_doctor").delete().eq("doctor_id", targetId);
     } catch {
       // Local state is preserved
     } finally {
@@ -670,7 +684,7 @@ export default function ClinicDoctorsPage() {
                   className="w-12 h-12 rounded-full object-cover border-2 border-pink-200 shadow-sm shrink-0"
                 />
               ) : (
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-pink-50 to-pink-100/70 border border-pink-100 flex items-center justify-center shrink-0">
+                <div className="w-12 h-12 rounded-full bg-pink-50 border border-pink-100 flex items-center justify-center shrink-0">
                   <Stethoscope className="w-5 h-5 text-[#c0166a]" />
                 </div>
               )}
@@ -704,39 +718,35 @@ export default function ClinicDoctorsPage() {
                 </div>
               </div>
 
-              {/* Status Badge */}
-              <div className="shrink-0">
-                <span
-                  className={`inline-block rounded-full px-3 py-1 text-xs font-semibold ${
+              {/* Status Badge & Actions */}
+              <div className="flex items-center gap-3 shrink-0">
+                {/* 1-Click Interactive Status Badge */}
+                <button
+                  type="button"
+                  onClick={() => toggleDoctorStatus(doc)}
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-all hover:scale-105 active:scale-95 ${
                     doc.status === "Active"
-                      ? "bg-emerald-50 text-emerald-600 border border-emerald-100"
-                      : "bg-gray-100 text-gray-500 border border-gray-200"
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80 hover:bg-emerald-100"
+                      : "bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200"
                   }`}
+                  title={doc.status === "Active" ? "Click to Deactivate Doctor" : "Click to Activate Doctor"}
                 >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      doc.status === "Active" ? "bg-emerald-500 animate-pulse" : "bg-gray-400"
+                    }`}
+                  />
                   {doc.status}
-                </span>
-              </div>
+                </button>
 
-              {/* Actions */}
-              <div className="flex items-center gap-1.5 shrink-0">
-                {/* View Details Eye Icon */}
+                {/* View Details Button */}
                 <button
                   type="button"
                   onClick={() => setSelectedDoctorForDetails(doc)}
-                  className="p-2 rounded-xl text-gray-400 hover:text-[#c0166a] hover:bg-magenta-50 border border-transparent hover:border-magenta-100 transition-all"
-                  title="View Doctor Details"
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-magenta-700 bg-magenta-50 hover:bg-magenta-100 border border-magenta-200/60 transition-all active:scale-[0.97]"
                 >
-                  <Eye className="w-4 h-4" />
-                </button>
-
-                {/* Remove Doctor */}
-                <button
-                  type="button"
-                  onClick={() => setDeleteTarget(doc.id)}
-                  className="p-2 rounded-xl text-gray-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 transition-all"
-                  title="Remove Doctor"
-                >
-                  <Trash2 className="w-4 h-4" />
+                  <Eye className="w-3.5 h-3.5" />
+                  View Details
                 </button>
               </div>
             </motion.div>
@@ -855,26 +865,45 @@ export default function ClinicDoctorsPage() {
               </div>
 
               {/* Modal Footer */}
-              <div className="px-6 py-4 bg-gray-50/50 border-t border-gray-100 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={() => toggleDoctorStatus(selectedDoctorForDetails)}
-                  className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-colors ${
-                    selectedDoctorForDetails.status === "Active"
-                      ? "text-red-600 hover:bg-red-50"
-                      : "text-emerald-600 hover:bg-emerald-50"
-                  }`}
-                >
-                  {selectedDoctorForDetails.status === "Active" ? "Set Inactive" : "Set Active"}
-                </button>
+              <div className="px-6 py-4 bg-gray-50/70 border-t border-gray-100 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => toggleDoctorStatus(selectedDoctorForDetails)}
+                    className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
+                      selectedDoctorForDetails.status === "Active"
+                        ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
+                        : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                    }`}
+                  >
+                    {selectedDoctorForDetails.status === "Active" ? "Deactivate Doctor" : "Re-activate Doctor"}
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => handleOpenEdit(selectedDoctorForDetails)}
-                  className="px-5 py-2.5 rounded-xl bg-[#c0166a] text-white text-xs font-semibold hover:bg-[#a01258] transition-colors shadow-sm"
-                >
-                  Edit Info
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEdit(selectedDoctorForDetails)}
+                    className="px-5 py-2 rounded-xl bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors shadow-sm"
+                  >
+                    Edit Doctor Info
+                  </button>
+                </div>
+
+                <div className="pt-2 border-t border-gray-200/60 flex items-center justify-between text-[11px] text-gray-400">
+                  <span>
+                    {selectedDoctorForDetails.status === "Active"
+                      ? "Doctor is active for patient appointments."
+                      : "Doctor is hidden from new bookings."}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteTarget(selectedDoctorForDetails.id);
+                    }}
+                    className="text-gray-400 hover:text-red-500 transition-colors underline"
+                  >
+                    Permanent delete
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>

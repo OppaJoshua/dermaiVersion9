@@ -1,5 +1,5 @@
+import React, { useState } from "react";
 import { Trash2, Save, UserCircle } from "lucide-react";
-import { useState } from "react";
 export default function AccountSettingsPage() {
     const [saved, setSaved] = useState(false);
     const handleSave = (e: React.FormEvent) => {

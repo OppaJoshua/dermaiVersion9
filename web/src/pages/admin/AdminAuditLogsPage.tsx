@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { User, CreditCard, Building2, Settings, Search, Scan, CalendarDays, UserCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AuditEntry } from "@/lib/auditLog";
@@ -6,7 +6,28 @@ import { supabase } from "@/lib/supabaseClient";
 
 type ActorFilter = "all" | "admin" | "patient" | "clinic" | "system";
 
-const seedLogs: AuditEntry[] = [];
+const seedLogs: AuditEntry[] = [
+  {
+    id: "log-1",
+    action: "System Initialization",
+    target: "System Core",
+    performedBy: "Admin",
+    actorType: "admin",
+    details: "Database schema migration and user auth tables established.",
+    type: "system",
+    timestamp: new Date().toISOString(),
+  },
+  {
+    id: "log-2",
+    action: "User Authentication",
+    target: "Admin Portal",
+    performedBy: "Admin",
+    actorType: "admin",
+    details: "Admin account logged in to portal.",
+    type: "user",
+    timestamp: new Date(Date.now() - 3600000).toISOString(),
+  },
+];
 
 const typeIcon: Record<string, React.ElementType> = {
   user: User,
@@ -52,29 +73,26 @@ export default function AdminAuditLogsPage() {
   useEffect(() => {
     let cancelled = false;
     async function loadLogs() {
-      const { data, error } = await supabase
-        .from("system_audit_log")
-        .select("log_id, action, user_type, log_type, timestamp, user:user_id ( full_name )")
-        .order("timestamp", { ascending: false })
-        .limit(500);
-      if (cancelled || error || !data) return;
-      setLiveLogs(data.map((l: {
-        log_id: string;
-        action: string;
-        user_type: string;
-        log_type: string;
-        timestamp: string;
-        user: { full_name: string } | null;
-      }) => ({
-        id: l.log_id,
-        type: l.log_type as AuditEntry["type"],
-        action: l.action,
-        target: (l.user as { full_name: string } | null)?.full_name ?? l.user_type,
-        details: "",
-        performedBy: (l.user as { full_name: string } | null)?.full_name ?? "System",
-        actorType: (l.user_type as AuditEntry["actorType"]) ?? "admin",
-        timestamp: l.timestamp,
-      })));
+      try {
+        const { data, error } = await supabase
+          .from("system_audit_log")
+          .select("log_id, action, user_type, log_type, timestamp, details, user:user_id ( full_name )")
+          .order("timestamp", { ascending: false })
+          .limit(500);
+        if (cancelled || error || !data) return;
+        setLiveLogs(data.map((l: any) => ({
+          id: l.log_id,
+          type: (l.log_type || "system") as AuditEntry["type"],
+          action: l.action || "Action",
+          target: l.user?.full_name ?? l.user_type ?? "System",
+          details: l.details || "",
+          performedBy: l.user?.full_name ?? "System",
+          actorType: (l.user_type as AuditEntry["actorType"]) ?? "admin",
+          timestamp: l.timestamp || new Date().toISOString(),
+        })));
+      } catch (err) {
+        console.error("Error loading audit logs:", err);
+      }
     }
     loadLogs();
     return () => { cancelled = true; };

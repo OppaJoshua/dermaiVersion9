@@ -31,7 +31,7 @@ export default function AdminNotificationsPage() {
     const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
     const [notifications, setNotifications] = useState<AdminNotification[]>([]);
     const [loading, setLoading] = useState(true);
-    const [sending, setSending] = useState(false);
+    const [, setSending] = useState(false);
     const [title, setTitle] = useState("");
     const [message, setMessage] = useState("");
     const [audience, setAudience] = useState<"All Users" | "Premium Only" | "Free Only">("All Users");

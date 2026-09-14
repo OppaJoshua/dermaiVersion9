@@ -10,8 +10,8 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import heroLeftImage from "../../assets/homepage-partDesign.png";
-import heroRightImage from "../../assets/Girl-homepage.png";
+import heroLeftImage from "@/assets/homepage-partDesign.png";
+import heroRightImage from "@/assets/Girl-homepage.png";
 
 const fadeUp = {
   initial: { opacity: 0, y: 30 },

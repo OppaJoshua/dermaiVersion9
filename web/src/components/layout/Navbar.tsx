@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Menu, X, ChevronDown } from "lucide-react";
+import { Menu, X, ChevronDown, LayoutDashboard } from "lucide-react";
 import { cn } from "../../lib/utils";
-import logo from "../../assets/logo2.png";
+import logo from "@/assets/logo2.png";
+import { useAuth } from "../../context/AuthContext";
 
 const navLinks = [
   { label: "Home", path: "/" },
-  { label: "Scan Skin", path: "/Scan" },
+  { label: "Scan Skin", path: "/scan" },
   { label: "Find Clinics", path: "/find-clinics" },
   { label : "Skin Library", path: "/skin-library" },
 ];
@@ -23,6 +24,9 @@ export default function Navbar({ onMenuClick, isDashboard = false }: NavbarProps
   const [clinicDropdown, setClinicDropdown] = useState(false);
   const location = useLocation();
   const isHome = location.pathname === "/";
+  const { session, role } = useAuth();
+
+  const roleHome = role === "clinic" ? "/clinic" : role === "doctor" ? "/doctor" : role === "admin" ? "/admin" : "/dashboard";
 
   // Dashboard pages get a minimal top bar: just the sidebar toggle.
   // The full marketing nav (links, dropdown, login/register) doesn't apply once a user is inside the app.
@@ -137,28 +141,45 @@ export default function Navbar({ onMenuClick, isDashboard = false }: NavbarProps
 
           {/* Auth Buttons */}
           <div className="hidden md:flex items-center gap-3">
-            <Link
-              to="/login"
-              className={cn(
-                "px-5 py-2 rounded-full text-sm font-semibold border-2 transition-colors",
-                isHome
-                  ? "border-white text-white hover:bg-white/10"
-                  : "border-magenta-500 text-magenta-500 hover:bg-magenta-50"
-              )}
-            >
-              Login
-            </Link>
-            <Link
-              to="/register-clinic"
-              className={cn(
-                "px-5 py-2 rounded-full text-sm font-semibold transition-colors shadow-md",
-                isHome
-                  ? "bg-white text-magenta-600 hover:bg-magenta-50 shadow-white/20"
-                  : "bg-magenta-500 text-white hover:bg-magenta-600 shadow-magenta-500/20"
-              )}
-            >
-              Register
-            </Link>
+            {session ? (
+              <Link
+                to={roleHome}
+                className={cn(
+                  "px-5 py-2 rounded-full text-sm font-semibold transition-colors shadow-md flex items-center gap-2",
+                  isHome
+                    ? "bg-white text-magenta-600 hover:bg-magenta-50 shadow-white/20"
+                    : "bg-magenta-500 text-white hover:bg-magenta-600 shadow-magenta-500/20"
+                )}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                Go to Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link
+                  to="/login"
+                  className={cn(
+                    "px-5 py-2 rounded-full text-sm font-semibold border-2 transition-colors",
+                    isHome
+                      ? "border-white text-white hover:bg-white/10"
+                      : "border-magenta-500 text-magenta-500 hover:bg-magenta-50"
+                  )}
+                >
+                  Login
+                </Link>
+                <Link
+                  to="/register-clinic"
+                  className={cn(
+                    "px-5 py-2 rounded-full text-sm font-semibold transition-colors shadow-md",
+                    isHome
+                      ? "bg-white text-magenta-600 hover:bg-magenta-50 shadow-white/20"
+                      : "bg-magenta-500 text-white hover:bg-magenta-600 shadow-magenta-500/20"
+                  )}
+                >
+                  Register
+                </Link>
+              </>
+            )}
           </div>
 
           {/* Mobile Menu Toggle */}
@@ -215,28 +236,44 @@ export default function Navbar({ onMenuClick, isDashboard = false }: NavbarProps
               isHome ? "border-white/20" : "border-magenta-100"
             )}
           >
-            <Link
-              to="/login"
-              onClick={() => setMobileOpen(false)}
-              className={cn(
-                "flex-1 text-center px-4 py-2.5 rounded-full text-sm font-semibold border-2",
-                isHome ? "border-white text-white" : "border-magenta-500 text-magenta-500"
-              )}
-            >
-              Login
-            </Link>
-            <Link
-              to="/register"
-              onClick={() => setMobileOpen(false)}
-              className={cn(
-                "flex-1 text-center px-4 py-2.5 rounded-full text-sm font-semibold",
-                isHome
-                  ? "bg-white text-magenta-600"
-                  : "bg-magenta-500 text-white"
-              )}
-            >
-              Register
-            </Link>
+            {session ? (
+              <Link
+                to={roleHome}
+                onClick={() => setMobileOpen(false)}
+                className={cn(
+                  "flex-1 text-center px-4 py-2.5 rounded-full text-sm font-semibold shadow-md flex items-center justify-center gap-2",
+                  isHome ? "bg-white text-magenta-600" : "bg-magenta-500 text-white"
+                )}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                Go to Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link
+                  to="/login"
+                  onClick={() => setMobileOpen(false)}
+                  className={cn(
+                    "flex-1 text-center px-4 py-2.5 rounded-full text-sm font-semibold border-2",
+                    isHome ? "border-white text-white" : "border-magenta-500 text-magenta-500"
+                  )}
+                >
+                  Login
+                </Link>
+                <Link
+                  to="/register"
+                  onClick={() => setMobileOpen(false)}
+                  className={cn(
+                    "flex-1 text-center px-4 py-2.5 rounded-full text-sm font-semibold",
+                    isHome
+                      ? "bg-white text-magenta-600"
+                      : "bg-magenta-500 text-white"
+                  )}
+                >
+                  Register
+                </Link>
+              </>
+            )}
           </div>
         </div>
       )}

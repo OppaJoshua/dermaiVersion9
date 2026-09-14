@@ -1,4 +1,4 @@
-import { useLocation, Link } from "react-router-dom";
+import { useLocation, Link, useNavigate } from "react-router-dom";
 import {
   UserCircle,
   CalendarDays,
@@ -12,10 +12,13 @@ import {
   Bell,
   Menu,
   ChevronRight,
+  Megaphone,
+  Calendar,
+  ScanSearch,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { useState, useEffect, useRef } from "react";
-import Logo from "../../assets/logo2.png";
+import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
+import Logo from "@/assets/logo2.png";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -30,8 +33,17 @@ export interface UserProfileSummary {
   location?: string;
 }
 
+export interface PatientNotif {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
 interface UserLayoutProps {
-  children: React.ReactNode;
+  children: ReactNode;
   profile?: UserProfileSummary;
   onLogout?: () => void;
 }
@@ -74,7 +86,6 @@ const sidebarSections = [
     title: "Settings",
     icon: Settings,
     links: [
-      { label: "Account", path: "/dashboard/settings/account" },
       { label: "Help", path: "/dashboard/settings/help" },
       { label: "Billing", path: "/dashboard/settings/billing" },
     ],
@@ -92,99 +103,242 @@ const allLinks = [
 
 export default function UserLayout({
   children,
-  profile,
+  profile: customProfile,
   onLogout,
 }: UserLayoutProps) {
-  const { user } = useAuth();
+  const { user, session, role, roleLoading, signOut } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notifications, setNotifications] = useState<PatientNotif[]>([]);
   const notifRef = useRef<HTMLDivElement>(null);
 
-  const [dynamicProfile, setDynamicProfile] = useState<UserProfileSummary>({
-    fullName: profile?.fullName || "",
-    membershipTier: profile?.membershipTier || "Free Plan",
-    profilePictureUrl: profile?.profilePictureUrl,
-    location: profile?.location,
-  });
-  const [unreadCount, setUnreadCount] = useState(0);
-
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadUserData() {
-      if (!user) return;
-
-      // 1. Fetch user name from DB "user" table
-      let name = profile?.fullName || user.user_metadata?.full_name || user.email?.split("@")[0] || "Patient";
-      try {
-        const { data: userData } = await supabase
-          .from("user")
-          .select("full_name")
-          .eq("user_id", user.id)
-          .maybeSingle();
-
-        if (userData?.full_name) {
-          name = userData.full_name;
-        }
-      } catch {
-        /* ignore */
-      }
-
-      // 2. Fetch membership tier
-      let tier = profile?.membershipTier || "Free Plan";
-      try {
-        const { data: subData } = await supabase
-          .from("user_plan_subscription")
-          .select(`
-            status,
-            plan:plan_id (
-              name,
-              price
-            )
-          `)
-          .eq("user_id", user.id)
-          .eq("status", "active")
-          .order("started_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        if (subData) {
-          const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
-          tier = planObj?.name || "Pro Plan";
-        }
-      } catch {
-        /* ignore */
-      }
-
-      // 3. Fetch unread notification count
-      try {
-        const { count } = await supabase
-          .from("user_notification")
-          .select("*", { count: "exact", head: true })
-          .eq("user_id", user.id)
-          .eq("is_read", false);
-
-        if (!cancelled && count !== null) {
-          setUnreadCount(count);
-        }
-      } catch {
-        /* ignore */
-      }
-
-      if (!cancelled) {
-        setDynamicProfile({
-          fullName: name,
-          membershipTier: tier,
-        });
+    if (!roleLoading && location.pathname.startsWith("/dashboard")) {
+      if (role === "admin") {
+        navigate("/admin", { replace: true });
+      } else if (role === "clinic") {
+        navigate("/clinic", { replace: true });
+      } else if (role === "doctor") {
+        navigate("/doctor", { replace: true });
       }
     }
+  }, [role, roleLoading, location.pathname, navigate]);
 
+  const getLocalProfile = (userId?: string) => {
+    if (!userId) return null;
+    try {
+      const localSaved = localStorage.getItem(`derm_profile_${userId}`);
+      return localSaved ? JSON.parse(localSaved) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const localData = getLocalProfile(user?.id);
+  const userMeta = session?.user?.user_metadata || user?.user_metadata;
+  const displayName =
+    customProfile?.fullName ||
+    localData?.fullName ||
+    userMeta?.full_name ||
+    userMeta?.name ||
+    user?.email?.split("@")[0] ||
+    "Patient User";
+
+  const resolvedInitialPicture =
+    customProfile?.profilePictureUrl ||
+    localData?.profilePicture ||
+    userMeta?.avatar_url ||
+    userMeta?.picture ||
+    undefined;
+
+  const resolvedInitialLocation =
+    customProfile?.location ||
+    localData?.district ||
+    localData?.address ||
+    undefined;
+
+  const profile = {
+    fullName: displayName,
+    membershipTier: customProfile?.membershipTier || "Free Plan",
+    profilePictureUrl: resolvedInitialPicture,
+    location: resolvedInitialLocation,
+  };
+
+  const [dynamicProfile, setDynamicProfile] = useState<UserProfileSummary>({
+    fullName: profile.fullName || "",
+    membershipTier: profile.membershipTier || "Free Plan",
+    profilePictureUrl: profile.profilePictureUrl,
+    location: profile.location,
+  });
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [dynamicProfile.profilePictureUrl]);
+
+  const loadUserData = useCallback(async () => {
+    if (!user) return;
+
+    const localProfile = getLocalProfile(user.id);
+    const meta = user.user_metadata || {};
+    let name =
+      customProfile?.fullName ||
+      localProfile?.fullName ||
+      meta.full_name ||
+      meta.name ||
+      user.email?.split("@")[0] ||
+      "Patient";
+    const picture =
+      customProfile?.profilePictureUrl ||
+      localProfile?.profilePicture ||
+      meta.avatar_url ||
+      meta.picture ||
+      undefined;
+    const loc =
+      customProfile?.location ||
+      localProfile?.district ||
+      localProfile?.address ||
+      undefined;
+
+    // 1. Fetch user name from DB "user" table
+    try {
+      const { data: userData } = await supabase
+        .from("user")
+        .select("full_name")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (userData?.full_name) {
+        name = userData.full_name;
+      }
+    } catch {
+      /* ignore */
+    }
+
+    // 2. Fetch membership tier
+    let tier = customProfile?.membershipTier || "Free Plan";
+    try {
+      const { data: subData } = await supabase
+        .from("user_plan_subscription")
+        .select(`
+          status,
+          plan:plan_id (
+            name,
+            price
+          )
+        `)
+        .eq("user_id", user.id)
+        .eq("status", "active")
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (subData) {
+        const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
+        tier = planObj?.name || "Pro Plan";
+      }
+    } catch {
+      /* ignore */
+    }
+
+    // 3. Fetch notifications & unread count
+    try {
+      const { data: notifRows } = await supabase
+        .from("user_notification")
+        .select("notif_id, type, title, body, is_read, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(15);
+
+      if (notifRows) {
+        const mapped = notifRows.map((n) => ({
+          id: n.notif_id,
+          type: n.type || "system",
+          title: n.title,
+          body: n.body || "",
+          isRead: Boolean(n.is_read),
+          createdAt: n.created_at,
+        }));
+        setNotifications(mapped);
+        setUnreadCount(mapped.filter((n) => !n.isRead).length);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    setDynamicProfile({
+      fullName: name,
+      membershipTier: tier,
+      profilePictureUrl: picture,
+      location: loc,
+    });
+  }, [user, customProfile]);
+
+  const markAsRead = async (notifId: string) => {
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === notifId ? { ...n, isRead: true } : n))
+    );
+    setUnreadCount((prev) => Math.max(0, prev - 1));
+    try {
+      await supabase
+        .from("user_notification")
+        .update({ is_read: true })
+        .eq("notif_id", notifId);
+    } catch {}
+  };
+
+  const markAllRead = async () => {
+    if (!user) return;
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    setUnreadCount(0);
+    try {
+      await supabase
+        .from("user_notification")
+        .update({ is_read: true })
+        .eq("user_id", user.id)
+        .eq("is_read", false);
+    } catch {}
+  };
+
+  useEffect(() => {
     loadUserData();
-    return () => {
-      cancelled = true;
+
+    const handleProfileUpdate = () => {
+      loadUserData();
     };
-  }, [user, profile]);
+
+    window.addEventListener("derm_profile_updated", handleProfileUpdate);
+    window.addEventListener("storage", handleProfileUpdate);
+
+    // Realtime notifications for logged-in patient
+    let channel: any = null;
+    if (user?.id) {
+      channel = supabase
+        .channel(`patient-notifs-${user.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "user_notification",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            loadUserData();
+          }
+        )
+        .subscribe();
+    }
+
+    return () => {
+      window.removeEventListener("derm_profile_updated", handleProfileUpdate);
+      window.removeEventListener("storage", handleProfileUpdate);
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [loadUserData, user?.id]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -199,6 +353,15 @@ export default function UserLayout({
   const displayFullName = dynamicProfile.fullName || (user?.email?.split("@")[0] ?? "Patient");
   const initial = displayFullName.charAt(0)?.toUpperCase() ?? "P";
   const currentPage = allLinks.find((l) => l.path === location.pathname)?.label || "Dashboard";
+
+  const handleLogout = async () => {
+    if (onLogout) {
+      onLogout();
+    } else {
+      await signOut();
+      navigate("/");
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50/80 flex flex-col lg:flex-row">
@@ -241,8 +404,13 @@ export default function UserLayout({
         <div className="p-6 border-b border-gray-100">
           <div className="flex items-center gap-3 mb-2">
             <div className="w-12 h-12 rounded-full ring-2 ring-magenta-100 bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-lg font-bold shrink-0">
-              {dynamicProfile.profilePictureUrl ? (
-                <img src={dynamicProfile.profilePictureUrl} alt="Profile" className="w-full h-full object-cover" />
+              {dynamicProfile.profilePictureUrl && !imgError ? (
+                <img
+                  src={dynamicProfile.profilePictureUrl}
+                  alt="Profile"
+                  className="w-full h-full object-cover"
+                  onError={() => setImgError(true)}
+                />
               ) : (
                 initial
               )}
@@ -310,23 +478,13 @@ export default function UserLayout({
 
         {/* Logout */}
         <div className="p-4 border-t border-gray-100 bg-gray-50/50">
-          {onLogout ? (
-            <button
-              onClick={onLogout}
-              className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors bg-white border border-gray-200"
-            >
-              <LogOut className="w-4.5 h-4.5" />
-              Logout
-            </button>
-          ) : (
-            <Link
-              to="/"
-              className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors bg-white border border-gray-200"
-            >
-              <LogOut className="w-4.5 h-4.5" />
-              Logout
-            </Link>
-          )}
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors bg-white border border-gray-200"
+          >
+            <LogOut className="w-4.5 h-4.5" />
+            Logout
+          </button>
         </div>
       </aside>
 
@@ -355,29 +513,116 @@ export default function UserLayout({
             >
               <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")} />
               {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none">
+                <span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none animate-pulse">
                   {unreadCount > 9 ? "9+" : unreadCount}
                 </span>
               )}
             </button>
 
             {notifOpen && (
-              <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
-                <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
-                  <Bell className="w-4 h-4 text-magenta-500" />
-                  <span className="font-semibold text-gray-900 text-sm">Notifications</span>
+              <div className="absolute right-0 top-full mt-2 w-80 sm:w-88 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/50">
+                  <div className="flex items-center gap-2">
+                    <Bell className="w-4 h-4 text-magenta-500" />
+                    <span className="font-semibold text-gray-900 text-sm">Notifications</span>
+                  </div>
+                  {unreadCount > 0 ? (
+                    <button
+                      onClick={markAllRead}
+                      className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700"
+                    >
+                      Mark all read
+                    </button>
+                  ) : (
+                    <span className="text-[11px] text-gray-400">All caught up</span>
+                  )}
                 </div>
-                <div className="py-10 text-center">
-                  <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                  <p className="text-sm text-gray-400">No new notifications</p>
-                </div>
-                <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50">
+
+                {notifications.length === 0 ? (
+                  <div className="py-10 text-center">
+                    <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                    <p className="text-sm text-gray-400">No new notifications</p>
+                  </div>
+                ) : (
+                  <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+                    {notifications.map((n) => {
+                      const isBroadcast = n.type === "broadcast";
+                      const isAppointment = n.type.includes("appointment");
+                      const isScan = n.type.includes("scan");
+
+                      return (
+                        <div
+                          key={n.id}
+                          onClick={() => {
+                            if (!n.isRead) markAsRead(n.id);
+                            setNotifOpen(false);
+                            if (isAppointment) {
+                              navigate("/patient/appointments");
+                            } else if (isScan) {
+                              navigate("/dashboard/history");
+                            }
+                          }}
+                          className={cn(
+                            "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
+                            !n.isRead && "bg-magenta-50/20"
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
+                              isBroadcast
+                                ? "bg-amber-100 text-amber-600"
+                                : isAppointment
+                                ? "bg-blue-100 text-blue-600"
+                                : isScan
+                                ? "bg-magenta-100 text-magenta-600"
+                                : "bg-purple-100 text-purple-600"
+                            )}
+                          >
+                            {isBroadcast ? (
+                              <Megaphone className="w-4 h-4" />
+                            ) : isAppointment ? (
+                              <Calendar className="w-4 h-4" />
+                            ) : isScan ? (
+                              <ScanSearch className="w-4 h-4" />
+                            ) : (
+                              <Bell className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-semibold text-gray-900 truncate">
+                              {n.title}
+                            </p>
+                            <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
+                              {n.body}
+                            </p>
+                            <p className="text-[10px] text-gray-400 mt-1">
+                              {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(n.createdAt).toLocaleDateString()}
+                            </p>
+                          </div>
+                          {!n.isRead && (
+                            <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between text-xs">
                   <Link
                     to="/dashboard/history"
                     onClick={() => setNotifOpen(false)}
-                    className="block text-center text-sm font-semibold text-magenta-500 hover:text-magenta-700 transition-colors"
+                    className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors"
                   >
-                    View skin history →
+                    Skin scan history →
+                  </Link>
+                  <Link
+                    to="/patient/appointments"
+                    onClick={() => setNotifOpen(false)}
+                    className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors"
+                  >
+                    Appointments →
                   </Link>
                 </div>
               </div>

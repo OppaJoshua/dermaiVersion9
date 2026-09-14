@@ -1,4 +1,4 @@
-import { Routes, Route, useLocation } from "react-router-dom";
+import { Routes, Route, useLocation, Navigate } from "react-router-dom";
 import Navbar from "./components/layout/Navbar";
 import Footer from "./components/layout/Footer";
 
@@ -19,6 +19,7 @@ import PrivacyPolicyPage from "./pages/public/PrivacyPolicyPage";
 import TermsOfServicePage from "./pages/public/TermsOfServicePage";
 import ContactUsPage from "./pages/public/ContactUsPage";
 import LoginPage from "./pages/public/LoginPage";
+import AuthCallbackPage from "./pages/public/AuthCallbackPage";
 
 // Patient Pages
 import PatientDashboard from "./pages/patient/PatientDashboard";
@@ -31,7 +32,6 @@ import AppointmentStatusPage from "./pages/patient/AppointmentStatusPage";
 import SubscriptionStatusPage from "./pages/patient/SubscriptionStatusPage";
 import SubscriptionUpgradePage from "./pages/patient/SubscriptionUpgradePage";
 import SubscriptionChoicePage from "./pages/patient/SubscriptionChoicePage";
-import AccountSettingsPage from "./pages/patient/settings/AccountSettingsPage";
 import HelpPage from "./pages/patient/settings/HelpPage";
 import BillingSettingsPage from "./pages/patient/settings/BillingSettingsPage";
 
@@ -73,6 +73,7 @@ function App() {
     location.pathname.startsWith("/doctor") ||
     location.pathname.startsWith("/dashboard") ||
     location.pathname.startsWith("/user") ||
+    location.pathname.startsWith("/auth") ||
     location.pathname === "/appointment" ||
     location.pathname === "/login" ||
     location.pathname === "/register" ||
@@ -99,6 +100,7 @@ function App() {
         <Route path="/contact-us" element={<ContactUsPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<LoginPage />} />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
         <Route path="/subscription-choice" element={<SubscriptionChoicePage />} />
 
         {/* Patient / Dashboard Routes */}
@@ -113,7 +115,7 @@ function App() {
         <Route path="/dashboard/subscription-status" element={<UserLayout><SubscriptionStatusPage /></UserLayout>} />
         <Route path="/dashboard/upgrade" element={<UserLayout><SubscriptionUpgradePage /></UserLayout>} />
         <Route path="/user/upgrade" element={<UserLayout><SubscriptionUpgradePage /></UserLayout>} />
-        <Route path="/dashboard/settings/account" element={<UserLayout><AccountSettingsPage /></UserLayout>} />
+        <Route path="/dashboard/settings/account" element={<Navigate to="/dashboard/profile" replace />} />
         <Route path="/dashboard/settings/help" element={<UserLayout><HelpPage /></UserLayout>} />
         <Route path="/dashboard/settings/billing" element={<UserLayout><BillingSettingsPage /></UserLayout>} />
 
@@ -144,6 +146,17 @@ function App() {
         <Route path="/admin/audit-logs" element={<AdminLayout><AdminAuditLogsPage /></AdminLayout>} />
         <Route path="/admin/helpdesk" element={<AdminLayout><AdminHelpdeskPage /></AdminLayout>} />
         <Route path="/admin/settings" element={<AdminLayout><AdminSystemSettingsPage /></AdminLayout>} />
+
+        {/* Patient Appointment Aliases */}
+        <Route path="/patient/appointments" element={<Navigate to="/dashboard/appointment-status" replace />} />
+        <Route path="/patient/appointment" element={<Navigate to="/dashboard/appointment" replace />} />
+
+        {/* Library Aliases */}
+        <Route path="/library" element={<Navigate to="/skin-library" replace />} />
+        <Route path="/library/:id" element={<Navigate to="/skin-library/:id" replace />} />
+
+        {/* Catch-all fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
 
       {!isDashboardOrFullscreen && <Footer />}

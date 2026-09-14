@@ -8,27 +8,38 @@ import {
   ChevronRight,
   Stethoscope,
   History,
-  Settings,
-  X,
+  LifeBuoy,
   User,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useState, useEffect, useRef } from "react";
-import Logo from "../../assets/logo2.png";
+import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
+import Logo from "@/assets/logo2.png";
+import { useAuth } from "@/context/AuthContext";
+
+import { supabase } from "@/lib/supabaseClient";
 
 interface DoctorLayoutProps {
-  children: React.ReactNode;
+  children: ReactNode;
 }
+
+type DoctorNotif = {
+  id: string;
+  title: string;
+  message: string;
+  time: string;
+  type: "assigned" | "system";
+};
 
 const sidebarLinks = [
   { label: "Dashboard", path: "/doctor", icon: LayoutDashboard },
   { label: "Review Patient", path: "/doctor/appointments", icon: Calendar },
   { label: "Assigned Appointment", path: "/doctor/scheduled", icon: Stethoscope },
   { label: "Patient History", path: "/doctor/history", icon: History },
-  { label: "Settings", path: "/doctor/settings", icon: Settings },
+  { label: "Help & Support", path: "/doctor/settings", icon: LifeBuoy },
 ];
 
 export default function DoctorLayout({ children }: DoctorLayoutProps) {
+  const { signOut, user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -37,46 +48,213 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
     name: "",
     clinic: "",
   });
-  // TODO: Load doctor notifications from Supabase real-time subscription
-  const notifications: never[] = [];
-  const unreadCount = 0;
+  const [notifications, setNotifications] = useState<DoctorNotif[]>([]);
+  const [lastReadAt, setLastReadAt] = useState<string>(() => {
+    try {
+      return localStorage.getItem("dermai_doctor_last_read_notifs") || new Date(0).toISOString();
+    } catch {
+      return new Date(0).toISOString();
+    }
+  });
   const bellRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const loadProfile = () => {
-      try {
-        const stored = localStorage.getItem("dermai_doctor_profile");
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (parsed.fullName) {
-            setDocProfile((prev) => ({
-              ...prev,
-              name: parsed.fullName,
-              photo: parsed.photo || prev.photo,
-            }));
-          }
-        }
-        const clinicDocs = localStorage.getItem("dermai_clinic_doctors");
-        if (clinicDocs) {
-          const parsedDocs = JSON.parse(clinicDocs);
-          if (Array.isArray(parsedDocs) && parsedDocs.length > 0) {
-            const first = parsedDocs[0];
-            setDocProfile((prev) => ({
-              name: prev.name || first.name || "Doctor",
-              clinic: first.clinicName || "SkinCare Clinic",
-              photo: prev.photo || first.photo,
-            }));
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-    };
+  const loadDoctorNotifs = async () => {
+    if (!user) return;
+    try {
+      const list: DoctorNotif[] = [];
+      const userEmail = (user.email || "").trim().toLowerCase();
+      const docIds: string[] = [user.id];
 
+      // 1. Check clinic_doctor record
+      const { data: docData } = await supabase
+        .from("clinic_doctor")
+        .select("doctor_id, doctor_name")
+        .or(`user_id.eq.${user.id},email.ilike.${userEmail}`);
+
+      (docData || []).forEach((d) => {
+        if (d.doctor_id) docIds.push(d.doctor_id);
+      });
+
+      // Also check localStorage
+      try {
+        const storedClinicDocs = localStorage.getItem("dermai_clinic_doctors");
+        if (storedClinicDocs) {
+          const parsed = JSON.parse(storedClinicDocs);
+          if (Array.isArray(parsed)) {
+            const matched = parsed.find(
+              (d: any) =>
+                (d.email && d.email.toLowerCase() === userEmail) ||
+                (d.id && docIds.includes(d.id))
+            );
+            if (matched?.id) docIds.push(matched.id);
+          }
+        }
+      } catch { }
+
+      const uniqueDocIds = Array.from(new Set(docIds.filter(Boolean)));
+
+      if (uniqueDocIds.length > 0) {
+        const { data: apps } = await supabase
+          .from("patient_appointment")
+          .select("appointment_id, patient_name, date, time, status, created_at")
+          .in("assigned_doctor_id", uniqueDocIds)
+          .order("created_at", { ascending: false })
+          .limit(10);
+
+        if (apps) {
+          apps.forEach((a: any) => {
+            list.push({
+              id: `doc-app-${a.appointment_id}`,
+              title: "New Assigned Patient",
+              message: `${a.patient_name || "A patient"} was assigned to you for consultation.`,
+              time: a.created_at,
+              type: "assigned",
+            });
+          });
+        }
+      }
+
+      // 2. User notifications
+      const { data: notifs } = await supabase
+        .from("user_notification")
+        .select("notif_id, title, body, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      if (notifs) {
+        notifs.forEach((n: any) => {
+          list.push({
+            id: n.notif_id,
+            title: n.title,
+            message: n.body || "",
+            time: n.created_at,
+            type: "system",
+          });
+        });
+      }
+
+      list.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+      setNotifications(list);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  useEffect(() => {
+    loadDoctorNotifs();
+
+    const channel = supabase
+      .channel(`doctor-notifs-${user?.id || "anon"}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "patient_appointment" },
+        () => {
+          loadDoctorNotifs();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "user_notification" },
+        () => {
+          loadDoctorNotifs();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
+
+  const unreadCount = notifications.filter(
+    (n) => new Date(n.time) > new Date(lastReadAt)
+  ).length;
+
+  const markAllRead = () => {
+    const now = new Date().toISOString();
+    setLastReadAt(now);
+    try {
+      localStorage.setItem("dermai_doctor_last_read_notifs", now);
+    } catch { }
+  };
+
+  const loadProfile = useCallback(async () => {
+    try {
+      if (user) {
+        const userEmail = (user.email || "").trim().toLowerCase();
+        const { data: cd } = await supabase
+          .from("clinic_doctor")
+          .select("doctor_name, clinic:clinic_id(name), photo_url")
+          .or(`user_id.eq.${user.id},email.ilike.${userEmail}`)
+          .limit(1)
+          .single();
+
+        if (cd) {
+          const clinicObj: any = Array.isArray(cd.clinic) ? cd.clinic[0] : cd.clinic;
+          setDocProfile((prev) => ({
+            name: cd.doctor_name || prev.name || "Dr. Audrey Saludaga",
+            clinic: clinicObj?.name || prev.clinic || "DermAI Clinic",
+            photo: prev.photo || cd.photo_url,
+          }));
+          return;
+        }
+      }
+
+      const stored = localStorage.getItem("dermai_doctor_profile");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.fullName) {
+          setDocProfile((prev) => ({
+            ...prev,
+            name: parsed.fullName,
+            photo: parsed.photo || prev.photo,
+          }));
+        }
+      }
+      const clinicDocs = localStorage.getItem("dermai_clinic_doctors");
+      if (clinicDocs) {
+        const parsedDocs = JSON.parse(clinicDocs);
+        if (Array.isArray(parsedDocs) && parsedDocs.length > 0) {
+          const first = parsedDocs[0];
+          setDocProfile((prev) => ({
+            name: first.name || prev.name || "Doctor",
+            clinic: first.clinicName || prev.clinic || "DermAI Clinic",
+            photo: prev.photo || first.photo,
+          }));
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [user]);
+
+  useEffect(() => {
     loadProfile();
+
+    // Supabase Realtime channel for clinic_doctor updates
+    const channel = supabase
+      .channel("doctor-profile-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "clinic_doctor" },
+        () => {
+          loadProfile();
+        }
+      )
+      .subscribe();
+
     window.addEventListener("storage", loadProfile);
-    return () => window.removeEventListener("storage", loadProfile);
-  }, []);
+    window.addEventListener("dermai_doctor_profile_updated", loadProfile);
+    window.addEventListener("focus", loadProfile);
+
+    return () => {
+      supabase.removeChannel(channel);
+      window.removeEventListener("storage", loadProfile);
+      window.removeEventListener("dermai_doctor_profile_updated", loadProfile);
+      window.removeEventListener("focus", loadProfile);
+    };
+  }, [loadProfile]);
 
   useEffect(() => {
     if (!bellOpen) return;
@@ -89,9 +267,9 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
     return () => document.removeEventListener("mousedown", handler);
   }, [bellOpen]);
 
-  const handleLogout = () => {
-    // TODO: Supabase signOut()
-    navigate("/login", { replace: true });
+  const handleLogout = async () => {
+    await signOut();
+    navigate("/", { replace: true });
   };
 
   const currentPage =
@@ -217,12 +395,14 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
                     <Bell className="w-4 h-4 text-blue-500" />
                     <span className="font-semibold text-gray-900 text-sm">Notifications</span>
                   </div>
-                  <button
-                    onClick={() => setBellOpen(false)}
-                    className="p-1 rounded-lg hover:bg-gray-100 text-gray-400"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                  {unreadCount > 0 && (
+                    <button
+                      onClick={markAllRead}
+                      className="text-[11px] font-semibold text-blue-600 hover:text-blue-700"
+                    >
+                      Mark all read
+                    </button>
+                  )}
                 </div>
 
                 <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
@@ -231,7 +411,71 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
                       <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
                       <p className="text-sm text-gray-400">No notifications yet</p>
                     </div>
-                  ) : null}
+                  ) : (
+                    notifications.map((n) => {
+                      const isNew = new Date(n.time) > new Date(lastReadAt);
+                      return (
+                        <div
+                          key={n.id}
+                          onClick={() => {
+                            setBellOpen(false);
+                            markAllRead();
+                            if (n.type === "assigned") {
+                              navigate("/doctor/scheduled");
+                            } else {
+                              navigate("/doctor/appointments");
+                            }
+                          }}
+                          className={cn(
+                            "flex items-start gap-3 px-4 py-3 hover:bg-blue-50/40 transition-colors cursor-pointer text-left",
+                            isNew && "bg-blue-50/20"
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
+                              n.type === "assigned"
+                                ? "bg-blue-100 text-blue-600"
+                                : "bg-purple-100 text-purple-600"
+                            )}
+                          >
+                            {n.type === "assigned" ? (
+                              <Stethoscope className="w-4 h-4" />
+                            ) : (
+                              <Bell className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-semibold text-gray-900 truncate">
+                              {n.title}
+                            </p>
+                            <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
+                              {n.message}
+                            </p>
+                            <p className="text-[10px] text-gray-400 mt-1">
+                              {new Date(n.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(n.time).toLocaleDateString()}
+                            </p>
+                          </div>
+                          {isNew && (
+                            <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0 mt-2" />
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50/50">
+                  <Link
+                    to="/doctor/scheduled"
+                    onClick={() => {
+                      setBellOpen(false);
+                      markAllRead();
+                    }}
+                    className="block text-center text-xs font-semibold text-blue-600 hover:text-blue-800 transition-colors"
+                  >
+                    View assigned appointments →
+                  </Link>
                 </div>
               </div>
             )}

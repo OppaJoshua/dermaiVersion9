@@ -123,17 +123,15 @@ export async function getPlatformScansAsync(): Promise<PlatformScan[]> {
     return [];
   }
 
-  return (data ?? []).map((s: {
-    analysis_id: string;
-    status: string;
-    body_part: string | null;
-    skin_condition: { name: string } | null;
-  }) => ({
-    id: s.analysis_id,
-    status: (["valid", "flagged", "invalid"].includes(s.status) ? s.status : "valid") as PlatformScanStatus,
-    district: s.body_part ?? undefined,
-    condition: s.skin_condition?.name ?? undefined,
-  }));
+  return ((data ?? []) as any[]).map((s: any) => {
+    const skinCond = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+    return {
+      id: s.analysis_id,
+      status: (["valid", "flagged", "invalid"].includes(s.status) ? s.status : "valid") as PlatformScanStatus,
+      district: s.body_part ?? undefined,
+      condition: skinCond?.name ?? undefined,
+    };
+  });
 }
 
 export function getPlatformScans(): PlatformScan[] {
