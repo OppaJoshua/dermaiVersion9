@@ -277,7 +277,10 @@ export default function AdminClinicManagement() {
           target_clinic_id: String(id),
           new_status: "approved",
         }),
-        supabase.from("clinic").update({ status: "approved" }).eq("clinic_id", id),
+        supabase.from("clinic").update({
+          status: "approved",
+          ...(target.logo ? { logo_url: target.logo } : {})
+        }).eq("clinic_id", id),
         target.email
           ? (async () => {
             await sendClinicApprovalEmail({

@@ -8,6 +8,10 @@ import {
   Eye,
   X,
   Loader2,
+  Mail,
+  Phone,
+  ShieldCheck,
+  Building2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
@@ -71,6 +75,7 @@ export default function ClinicDoctorsPage() {
   const [successMsg, setSuccessMsg] = useState("");
 
   // Modals state
+  const [showAddConfirmModal, setShowAddConfirmModal] = useState(false);
   const [selectedDoctorForDetails, setSelectedDoctorForDetails] = useState<DoctorAccount | null>(null);
   const [editingDoctor, setEditingDoctor] = useState<DoctorAccount | null>(null);
   const [editForm, setEditForm] = useState({
@@ -86,6 +91,10 @@ export default function ClinicDoctorsPage() {
   // Delete modal
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deletingDoctor, setDeletingDoctor] = useState(false);
+
+  // Status toggle confirmation modal
+  const [statusConfirmDoctor, setStatusConfirmDoctor] = useState<DoctorAccount | null>(null);
+  const [togglingStatus, setTogglingStatus] = useState(false);
 
   const formSectionRef = useRef<HTMLDivElement>(null);
 
@@ -218,6 +227,41 @@ export default function ClinicDoctorsPage() {
       selectedSpecializationIds: [],
     });
     setFormError("");
+  };
+
+  // Validate form fields and open confirmation modal
+  const handleInitiateAddDoctor = () => {
+    setFormError("");
+    const { name, email, contactNumber, prcLicense, selectedSpecializationIds } = form;
+
+    if (!name.trim()) {
+      setFormError("Doctor name is required.");
+      return;
+    }
+    if (!email.trim() || !/\S+@\S+\.\S+/.test(email)) {
+      setFormError("Valid email is required (e.g. doctor@gmail.com).");
+      return;
+    }
+    if (!contactNumber.trim()) {
+      setFormError("Contact number is required.");
+      return;
+    }
+    if (!prcLicense.trim()) {
+      setFormError("PRC license number is required.");
+      return;
+    }
+    if (selectedSpecializationIds.length === 0) {
+      setFormError("Please select at least one specialization.");
+      return;
+    }
+
+    setShowAddConfirmModal(true);
+  };
+
+  // Confirmed save new doctor & associate multiple specializations
+  const handleConfirmSaveDoctor = async () => {
+    setShowAddConfirmModal(false);
+    await saveDoctor();
   };
 
   // Save new doctor & associate multiple specializations
@@ -450,24 +494,28 @@ export default function ClinicDoctorsPage() {
     }
   };
 
-  // Toggle Doctor Active / Inactive status
-  const toggleDoctorStatus = async (doctor: DoctorAccount) => {
+  // Toggle Doctor Active / Inactive status after confirmation
+  const handleConfirmStatusToggle = async () => {
+    if (!statusConfirmDoctor) return;
+    const doctor = statusConfirmDoctor;
     const nextStatus: "Active" | "Inactive" = doctor.status === "Active" ? "Inactive" : "Active";
-    const updated = allDoctors.map((d) => (d.id === doctor.id ? { ...d, status: nextStatus } : d));
-    setAllDoctors(updated);
-    localStorage.setItem("dermai_clinic_doctors", JSON.stringify(updated));
-
-    if (selectedDoctorForDetails && selectedDoctorForDetails.id === doctor.id) {
-      setSelectedDoctorForDetails({
-        ...selectedDoctorForDetails,
-        status: nextStatus,
-      });
-    }
-
-    setSuccessMsg(`Dr. ${doctor.name} set to ${nextStatus}.`);
-    setTimeout(() => setSuccessMsg(""), 3000);
-
+    
+    setTogglingStatus(true);
     try {
+      const updated = allDoctors.map((d) => (d.id === doctor.id ? { ...d, status: nextStatus } : d));
+      setAllDoctors(updated);
+      localStorage.setItem("dermai_clinic_doctors", JSON.stringify(updated));
+
+      if (selectedDoctorForDetails && selectedDoctorForDetails.id === doctor.id) {
+        setSelectedDoctorForDetails({
+          ...selectedDoctorForDetails,
+          status: nextStatus,
+        });
+      }
+
+      setSuccessMsg(`Dr. ${doctor.name} is now ${nextStatus}.`);
+      setTimeout(() => setSuccessMsg(""), 3000);
+
       await supabase
         .from("clinic_doctor")
         .update({
@@ -476,6 +524,9 @@ export default function ClinicDoctorsPage() {
         .eq("doctor_id", doctor.id);
     } catch {
       // Local state is preserved
+    } finally {
+      setTogglingStatus(false);
+      setStatusConfirmDoctor(null);
     }
   };
 
@@ -504,30 +555,14 @@ export default function ClinicDoctorsPage() {
     }
   };
 
-  const scrollToForm = () => {
-    formSectionRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
   return (
     <div className="space-y-6 pb-12">
       {/* Top Header */}
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-1.5 text-xs text-gray-400 font-medium mb-1">
-            <span>Clinic</span>
-            <span>&gt;</span>
-            <span className="text-gray-700 font-semibold">Doctors</span>
-          </div>
-          <p className="text-sm text-gray-500">
-            Add doctors to your clinic and assign them to patient appointments.
-          </p>
-        </div>
-        <button
-          onClick={scrollToForm}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#c0166a] text-white text-sm font-semibold hover:bg-[#a01258] shadow-sm hover:shadow transition-all"
-        >
-          <UserPlus className="w-4 h-4" /> Add Doctor
-        </button>
+      <div>
+        <h1 className="text-xl font-bold text-gray-900 tracking-tight">Clinic Doctors</h1>
+        <p className="text-sm text-gray-500 mt-0.5">
+          Register attending dermatologists for your clinic and assign them to patient appointments.
+        </p>
       </div>
 
       {/* Success Notification */}
@@ -636,15 +671,15 @@ export default function ClinicDoctorsPage() {
             type="button"
             onClick={resetForm}
             disabled={savingDoctor}
-            className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50"
+            className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
           >
             Cancel
           </button>
           <button
             type="button"
-            onClick={saveDoctor}
+            onClick={handleInitiateAddDoctor}
             disabled={savingDoctor}
-            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#c0166a] text-white text-sm font-semibold hover:bg-[#a01258] transition-colors disabled:opacity-60 shadow-sm"
+            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#c0166a] text-white text-sm font-semibold hover:bg-[#a01258] transition-colors disabled:opacity-60 shadow-sm cursor-pointer"
           >
             {savingDoctor && <Loader2 className="w-4 h-4 animate-spin" />}
             Add Doctor
@@ -720,16 +755,13 @@ export default function ClinicDoctorsPage() {
 
               {/* Status Badge & Actions */}
               <div className="flex items-center gap-3 shrink-0">
-                {/* 1-Click Interactive Status Badge */}
-                <button
-                  type="button"
-                  onClick={() => toggleDoctorStatus(doc)}
-                  className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-all hover:scale-105 active:scale-95 ${
+                {/* Read-Only Status Indicator Badge */}
+                <span
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold select-none ${
                     doc.status === "Active"
-                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80 hover:bg-emerald-100"
-                      : "bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200"
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80"
+                      : "bg-gray-100 text-gray-600 border border-gray-200"
                   }`}
-                  title={doc.status === "Active" ? "Click to Deactivate Doctor" : "Click to Activate Doctor"}
                 >
                   <span
                     className={`w-1.5 h-1.5 rounded-full ${
@@ -737,13 +769,13 @@ export default function ClinicDoctorsPage() {
                     }`}
                   />
                   {doc.status}
-                </button>
+                </span>
 
                 {/* View Details Button */}
                 <button
                   type="button"
                   onClick={() => setSelectedDoctorForDetails(doc)}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-magenta-700 bg-magenta-50 hover:bg-magenta-100 border border-magenta-200/60 transition-all active:scale-[0.97]"
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-magenta-700 bg-magenta-50 hover:bg-magenta-100 border border-magenta-200/60 transition-all active:scale-[0.97] cursor-pointer"
                 >
                   <Eye className="w-3.5 h-3.5" />
                   View Details
@@ -753,6 +785,148 @@ export default function ClinicDoctorsPage() {
           ))
         )}
       </div>
+
+      {/* Add Doctor Confirmation Modal */}
+      <AnimatePresence>
+        {showAddConfirmModal && (
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+            >
+              {/* Header */}
+              <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-gray-100 bg-gradient-to-r from-pink-50/40 via-white to-white shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-pink-100/80 border border-pink-200/70 text-[#c0166a] flex items-center justify-center shrink-0 shadow-xs">
+                    <UserPlus className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900">Confirm Doctor Registration</h3>
+                    <p className="text-xs text-gray-500">Please review doctor information before adding</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAddConfirmModal(false)}
+                  disabled={savingDoctor}
+                  className="p-1.5 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Modal Body / Review Details */}
+              <div className="p-6 overflow-y-auto space-y-4">
+                {/* Doctor Name Card */}
+                <div className="p-4 rounded-2xl bg-gray-50/80 border border-gray-100 flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-full bg-white border border-pink-200 text-[#c0166a] flex items-center justify-center shrink-0 shadow-xs">
+                    <Stethoscope className="w-6 h-6" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Doctor Name</span>
+                    <h4 className="font-bold text-gray-900 text-base truncate">
+                      {form.name.trim()}
+                    </h4>
+                    <span className="inline-block mt-0.5 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold">
+                      Status: Active
+                    </span>
+                  </div>
+                </div>
+
+                {/* Structured Credentials Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  {/* Gmail / Login Email */}
+                  <div className="p-3 rounded-xl bg-gray-50/70 border border-gray-100">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                      <Mail className="w-3 h-3 text-[#c0166a]" /> Email (Login ID)
+                    </span>
+                    <p className="font-semibold text-gray-900 mt-1 truncate">
+                      {form.email.trim().toLowerCase()}
+                    </p>
+                  </div>
+
+                  {/* Contact Number */}
+                  <div className="p-3 rounded-xl bg-gray-50/70 border border-gray-100">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                      <Phone className="w-3 h-3 text-[#c0166a]" /> Contact Number
+                    </span>
+                    <p className="font-semibold text-gray-900 mt-1 truncate">
+                      {form.contactNumber.trim()}
+                    </p>
+                  </div>
+
+                  {/* PRC License */}
+                  <div className="p-3 rounded-xl bg-gray-50/70 border border-gray-100">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                      <ShieldCheck className="w-3 h-3 text-[#c0166a]" /> PRC License #
+                    </span>
+                    <p className="font-semibold text-gray-900 mt-1">
+                      {form.prcLicense.trim()}
+                    </p>
+                  </div>
+
+                  {/* Clinic Assignment */}
+                  <div className="p-3 rounded-xl bg-gray-50/70 border border-gray-100">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                      <Building2 className="w-3 h-3 text-[#c0166a]" /> Assigned Clinic
+                    </span>
+                    <p className="font-semibold text-gray-900 mt-1 truncate">
+                      {clinicDisplayName}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Specializations list */}
+                <div className="p-3.5 rounded-xl bg-gray-50/70 border border-gray-100 text-xs">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">
+                    Selected Specializations ({form.selectedSpecializationIds.length})
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {specializations
+                      .filter((s) => form.selectedSpecializationIds.includes(s.id))
+                      .map((spec) => (
+                        <span
+                          key={spec.id}
+                          className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-magenta-50 text-magenta-700 border border-magenta-100 font-semibold"
+                        >
+                          {spec.name}
+                        </span>
+                      ))}
+                  </div>
+                </div>
+
+                {/* Helpful Info Alert */}
+                <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-100/80 text-[11px] text-blue-700 leading-relaxed">
+                  Doctor will be assigned to <strong>{clinicDisplayName}</strong> and can access patient bookings with the email <strong>{form.email.trim().toLowerCase()}</strong>.
+                </div>
+              </div>
+
+              {/* Modal Footer Actions */}
+              <div className="px-6 py-4 bg-gray-50/60 border-t border-gray-100 flex items-center justify-end gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowAddConfirmModal(false)}
+                  disabled={savingDoctor}
+                  className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-100 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Back to Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmSaveDoctor}
+                  disabled={savingDoctor}
+                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#c0166a] text-white text-xs font-semibold hover:bg-[#a01258] transition-colors disabled:opacity-60 shadow-sm cursor-pointer"
+                >
+                  {savingDoctor && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  Confirm &amp; Add Doctor
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Doctor Details Modal (Screenshot 2) */}
       <AnimatePresence>
@@ -869,8 +1043,8 @@ export default function ClinicDoctorsPage() {
                 <div className="flex items-center justify-between gap-3">
                   <button
                     type="button"
-                    onClick={() => toggleDoctorStatus(selectedDoctorForDetails)}
-                    className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
+                    onClick={() => setStatusConfirmDoctor(selectedDoctorForDetails)}
+                    className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
                       selectedDoctorForDetails.status === "Active"
                         ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
                         : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
@@ -1025,6 +1199,78 @@ export default function ClinicDoctorsPage() {
                 >
                   {savingEdit && <Loader2 className="w-4 h-4 animate-spin" />}
                   Save Changes
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Status Toggle Confirmation Modal */}
+      <AnimatePresence>
+        {statusConfirmDoctor && (
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 border border-gray-100"
+            >
+              <div
+                className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${
+                  statusConfirmDoctor.status === "Active"
+                    ? "bg-amber-50 border border-amber-100 text-amber-600"
+                    : "bg-emerald-50 border border-emerald-100 text-emerald-600"
+                }`}
+              >
+                {statusConfirmDoctor.status === "Active" ? (
+                  <AlertCircle className="w-6 h-6 text-amber-600" />
+                ) : (
+                  <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                )}
+              </div>
+
+              <h3 className="text-center font-bold text-gray-900 text-base mb-2">
+                {statusConfirmDoctor.status === "Active"
+                  ? "Deactivate Doctor Account?"
+                  : "Activate Doctor Account?"}
+              </h3>
+
+              <p className="text-center text-xs text-gray-500 mb-6 leading-relaxed">
+                {statusConfirmDoctor.status === "Active" ? (
+                  <>
+                    Are you sure you want to deactivate{" "}
+                    <strong className="text-gray-800">{statusConfirmDoctor.name}</strong>? They will temporarily no longer receive new patient appointment assignments until reactivated.
+                  </>
+                ) : (
+                  <>
+                    Activate{" "}
+                    <strong className="text-gray-800">{statusConfirmDoctor.name}</strong> to resume receiving patient appointment bookings and consultation reviews.
+                  </>
+                )}
+              </p>
+
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setStatusConfirmDoctor(null)}
+                  disabled={togglingStatus}
+                  className="py-2.5 rounded-xl border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmStatusToggle}
+                  disabled={togglingStatus}
+                  className={`inline-flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-white text-xs font-semibold transition-colors disabled:opacity-60 cursor-pointer shadow-sm ${
+                    statusConfirmDoctor.status === "Active"
+                      ? "bg-amber-600 hover:bg-amber-700"
+                      : "bg-emerald-600 hover:bg-emerald-700"
+                  }`}
+                >
+                  {togglingStatus && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {statusConfirmDoctor.status === "Active" ? "Yes, Deactivate" : "Yes, Activate"}
                 </button>
               </div>
             </motion.div>

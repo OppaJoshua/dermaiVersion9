@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Eye, Lock, Unlock, UserX, ShieldCheck } from "lucide-react";
+import { X, Eye, Lock, Unlock, UserX, ShieldCheck, UserCheck } from "lucide-react";
 import { logAdminAction } from "@/lib/auditLog";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
@@ -58,14 +58,47 @@ export default function AdminUserManagement() {
     let cancelled = false;
     async function loadUsers() {
       try {
-        const { data, error } = await supabase
-          .from("user")
-          .select("user_id, full_name, email, role, phone, account_status, created_at")
-          .order("full_name");
+        const [
+          { data: usersData, error: usersError },
+          { data: scansData },
+          { data: subsData }
+        ] = await Promise.all([
+          supabase
+            .from("user")
+            .select("user_id, full_name, email, role, phone, account_status, created_at")
+            .order("full_name"),
+          supabase
+            .from("ai_scan_result")
+            .select("user_id"),
+          supabase
+            .from("user_plan_subscription")
+            .select("user_id, status, plan:plan_id(name, scan_limit)")
+            .eq("status", "active")
+        ]);
 
-        if (cancelled || error || !data) return;
+        if (cancelled || usersError || !usersData) return;
 
-        const mappedUsers: User[] = data.map((u: any) => {
+        // Count real scans per user
+        const scanCountMap = new Map<string, number>();
+        if (scansData) {
+          scansData.forEach((s: any) => {
+            if (s.user_id) {
+              scanCountMap.set(s.user_id, (scanCountMap.get(s.user_id) || 0) + 1);
+            }
+          });
+        }
+
+        // Active subscriptions per user
+        const subMap = new Map<string, any>();
+        if (subsData) {
+          subsData.forEach((sub: any) => {
+            if (sub.user_id) {
+              subMap.set(sub.user_id, sub);
+            }
+          });
+        }
+
+        const mappedUsers: User[] = usersData.map((u: any) => {
           const userRole: UserRole = (u.role && ["admin", "clinic", "doctor", "patient"].includes(u.role))
             ? u.role
             : "patient";
@@ -74,10 +107,27 @@ export default function AdminUserManagement() {
             ? new Date(u.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
             : "Registered";
 
+          const userSub = subMap.get(u.user_id);
+          const planObj: any = Array.isArray(userSub?.plan) ? userSub.plan[0] : userSub?.plan;
+
           let displayPlan: User["plan"] = "Free";
-          if (userRole === "admin") displayPlan = "Admin Access";
-          else if (userRole === "clinic") displayPlan = "Clinic Partner";
-          else if (userRole === "doctor") displayPlan = "Medical Staff";
+          let limit = 3;
+
+          if (userRole === "admin") {
+            displayPlan = "Admin Access";
+            limit = 999;
+          } else if (userRole === "clinic") {
+            displayPlan = "Clinic Partner";
+            limit = 999;
+          } else if (userRole === "doctor") {
+            displayPlan = "Medical Staff";
+            limit = 999;
+          } else if (planObj?.name) {
+            displayPlan = (planObj.name.includes("Pro") || planObj.name.includes("Premium")) ? "Premium" : "Free";
+            limit = planObj.scan_limit === -1 ? 999 : (planObj.scan_limit || 3);
+          }
+
+          const scansUsed = scanCountMap.get(u.user_id) || 0;
 
           return {
             id: u.user_id,
@@ -88,8 +138,8 @@ export default function AdminUserManagement() {
             joinedAt: joinedDate,
             status: (u.account_status === "suspended" ? "suspended" : u.account_status === "inactive" ? "inactive" : "active") as UserStatus,
             plan: displayPlan,
-            scansUsed: 0,
-            scansLimit: userRole === "patient" ? 3 : 999,
+            scansUsed,
+            scansLimit: limit,
           };
         });
 
@@ -133,6 +183,7 @@ export default function AdminUserManagement() {
   const suspendUser = (id: string) => setUserStatus(id, "suspended", "User Suspended");
   const unsuspendUser = (id: string) => setUserStatus(id, "active", "User Unsuspended");
   const deactivateUser = (id: string) => setUserStatus(id, "inactive", "User Deactivated");
+  const reactivateUser = (id: string) => setUserStatus(id, "active", "User Reactivated");
 
   return (
     <div>
@@ -362,6 +413,17 @@ export default function AdminUserManagement() {
                         className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-50 text-green-600 text-sm font-semibold hover:bg-green-100 transition-colors"
                       >
                         <Unlock className="w-4 h-4" /> Unsuspend
+                      </button>
+                    )}
+                    {modalUser.status === "inactive" && (
+                      <button
+                        onClick={() => {
+                          reactivateUser(modalUser.id);
+                          setReviewModal(null);
+                        }}
+                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 text-sm font-semibold transition-colors cursor-pointer"
+                      >
+                        <UserCheck className="w-4 h-4" /> Reactivate Account
                       </button>
                     )}
                     {(modalUser.status === "active" || modalUser.status === "suspended") && (

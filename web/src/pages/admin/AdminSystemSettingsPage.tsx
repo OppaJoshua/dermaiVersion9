@@ -62,7 +62,6 @@ export default function AdminSystemSettingsPage() {
     district: "",
     profilePicture: "",
   });
-  const [profilePicFile, setProfilePicFile] = useState<File | null>(null);
   const [profileSaved, setProfileSaved] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
 
@@ -131,7 +130,6 @@ export default function AdminSystemSettingsPage() {
   const handleProfilePicChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setProfilePicFile(file);
       const reader = new FileReader();
       reader.onload = (ev) => {
         setAdminProfile((prev) => ({ ...prev, profilePicture: ev.target?.result as string }));
@@ -227,7 +225,7 @@ export default function AdminSystemSettingsPage() {
                     <input type="file" accept="image/*" onChange={handleProfilePicChange} className="hidden"/>
                     <button type="button" className="px-3 py-1.5 rounded-lg bg-white border border-magenta-100 text-magenta-700 text-xs font-semibold hover:bg-magenta-50 transition-colors">Upload New</button>
                   </label>
-                  {adminProfile.profilePicture && (<button type="button" className="px-3 py-1.5 rounded-lg bg-white border border-none text-red-500 text-xs font-semibold hover:underline transition-colors" onClick={() => { setAdminProfile(p => ({ ...p, profilePicture: "" })); setProfilePicFile(null); }}>Remove</button>)}
+                  {adminProfile.profilePicture && (<button type="button" className="px-3 py-1.5 rounded-lg bg-white border border-none text-red-500 text-xs font-semibold hover:underline transition-colors" onClick={() => { setAdminProfile(p => ({ ...p, profilePicture: "" })); }}>Remove</button>)}
                 </div>
               </div>
               {/* Fields - 2 columns */}

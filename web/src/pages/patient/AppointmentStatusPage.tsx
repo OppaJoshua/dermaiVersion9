@@ -103,13 +103,12 @@ function StatusTracker({ app }: { app: Appointment }) {
                 return (
                   <div key={step} className="flex flex-col items-center gap-1.5 w-14">
                     <div
-                      className={`w-5 h-5 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
-                        isDone
+                      className={`w-5 h-5 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${isDone
                           ? isActive
                             ? "bg-magenta-600 border-magenta-500 scale-105 shadow-xs"
                             : "bg-magenta-500 border-magenta-400"
                           : "bg-white border-gray-200"
-                      }`}
+                        }`}
                     >
                       {isDone ? (
                         <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -120,9 +119,8 @@ function StatusTracker({ app }: { app: Appointment }) {
                       )}
                     </div>
                     <span
-                      className={`text-[9px] font-semibold text-center leading-tight uppercase tracking-wide ${
-                        isDone ? "text-magenta-700" : "text-gray-400"
-                      }`}
+                      className={`text-[9px] font-semibold text-center leading-tight uppercase tracking-wide ${isDone ? "text-magenta-700" : "text-gray-400"
+                        }`}
                     >
                       {step}
                     </span>
@@ -217,17 +215,32 @@ const AppointmentStatusPage: React.FC = () => {
           clinic_note,
           doctor_note,
           ai_condition_name,
-          clinic:clinic_id ( name ),
-          doctor:assigned_doctor_id ( doctor_name )
+          assigned_doctor_id,
+          clinic:clinic_id ( name )
         `)
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
       if (!error && data) {
+        const docIds = data.map((a: any) => a.assigned_doctor_id).filter(Boolean);
+        const docNameMap = new Map<string, string>();
+        if (docIds.length > 0) {
+          try {
+            const { data: docData } = await supabase
+              .from("clinic_doctor")
+              .select("doctor_id, doctor_name")
+              .in("doctor_id", docIds);
+            if (docData) {
+              docData.forEach((d: any) => docNameMap.set(d.doctor_id, d.doctor_name));
+            }
+          } catch { }
+        }
+
         const mapped: Appointment[] = data.map((a: any) => {
           const apptDate = a.date ? new Date(a.date) : null;
-          const dateStr = apptDate ? apptDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "Date pending";
-          const timeStr = apptDate ? apptDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : "Time pending";
+          const isValidDate = apptDate && !isNaN(apptDate.getTime());
+          const dateStr = isValidDate ? apptDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "Date pending";
+          const timeStr = isValidDate ? apptDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : "Time pending";
 
           const rawStatus = (a.status || "").toLowerCase();
           let displayStatus: Appointment["status"] = "Pending";
@@ -237,12 +250,14 @@ const AppointmentStatusPage: React.FC = () => {
           else if (rawStatus === "rejected" || a.doctor_status === "rejected") displayStatus = "Rejected";
 
           const clinicObj: any = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
-          const doctorObj: any = Array.isArray(a.doctor) ? a.doctor[0] : a.doctor;
+          const docName = a.assigned_doctor_id && docNameMap.has(a.assigned_doctor_id)
+            ? `Dr. ${docNameMap.get(a.assigned_doctor_id)!.replace(/^dr\.\s*/i, "")}`
+            : "Doctor Assigned by Clinic";
 
           return {
             id: a.appointment_id,
             clinicName: clinicObj?.name ?? "Clinic",
-            doctor: doctorObj?.doctor_name ?? "Doctor Assigned by Clinic",
+            doctor: docName,
             date: dateStr,
             time: timeStr,
             status: displayStatus,
@@ -261,7 +276,34 @@ const AppointmentStatusPage: React.FC = () => {
 
   useEffect(() => {
     fetchAppointments();
-  }, [fetchAppointments]);
+
+    const userId = user?.id;
+    let channel: any = null;
+    if (userId) {
+      channel = supabase
+        .channel(`patient-appointment-status-${userId}`)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "patient_appointment", filter: `user_id=eq.${userId}` },
+          () => fetchAppointments()
+        )
+        .subscribe();
+    }
+
+    const handleSync = () => fetchAppointments();
+    window.addEventListener("dermai_appointments_updated", handleSync);
+    window.addEventListener("appointmentCreated", handleSync);
+    window.addEventListener("storage", handleSync);
+    window.addEventListener("focus", handleSync);
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+      window.removeEventListener("dermai_appointments_updated", handleSync);
+      window.removeEventListener("appointmentCreated", handleSync);
+      window.removeEventListener("storage", handleSync);
+      window.removeEventListener("focus", handleSync);
+    };
+  }, [fetchAppointments, user?.id]);
 
   const handleCancel = async (id?: string) => {
     if (!id) return;

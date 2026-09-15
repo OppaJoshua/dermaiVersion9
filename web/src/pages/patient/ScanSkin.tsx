@@ -464,7 +464,19 @@ export default function ScanSkinPage() {
     try {
       let uploadedFilePath: string | undefined;
 
-      // 1. If user is logged in, upload the close-up photo to private scan-uploads storage
+      // 1. Format full questionnaire answers
+      const questionnaireData = QUESTIONS.map((q) => {
+        const chosenIndex = answers[q.id];
+        const chosenOption = chosenIndex !== undefined ? q.options[chosenIndex] : null;
+        return {
+          id: q.id,
+          question: q.text,
+          answer: chosenOption?.label || "Not specified",
+          severity: chosenOption?.severity ?? null,
+        };
+      });
+
+      // 2. If user is logged in, upload the close-up photo to private scan-uploads storage
       if (user?.id) {
         const filePath = `${user.id}/${Date.now()}_close_up_${closeUpFile.name}`;
         const { error: upErr } = await supabase.storage
@@ -475,17 +487,49 @@ export default function ScanSkinPage() {
           uploadedFilePath = filePath;
         }
 
-        // 2. Insert analysis row into ai_scan_result table
-        await supabase.from("ai_scan_result").insert({
+        // 3. Insert analysis row into ai_scan_result table
+        const { data: scanInsertData } = await supabase.from("ai_scan_result").insert({
           user_id: user.id,
           confidence_score: 0,
           status: "pending",
           photo_url: uploadedFilePath || null,
           body_part: "Skin Assessment",
-        });
+          questionnaire_answers: questionnaireData,
+        }).select("analysis_id").maybeSingle();
+
+        if (scanInsertData?.analysis_id) {
+          try {
+            const skinAnswerRows = questionnaireData.map((item, idx) => ({
+              analysis_id: scanInsertData.analysis_id,
+              question_key: item.id,
+              answer_value: item.answer,
+              sort_order: idx + 1,
+            }));
+            await supabase.from("ai_skin_answer").insert(skinAnswerRows);
+          } catch {
+            /* ignore if ai_skin_answer table is missing */
+          }
+        }
       }
 
-      // 3. Set dynamic assessment based on the user's real questionnaire answers
+      // 4. Cache last scan and questionnaire in localStorage for appointment booking
+      try {
+        localStorage.setItem(
+          "dermai_last_scan",
+          JSON.stringify({
+            predictedClass: "Assessment Queued",
+            confidence: 0,
+            severity: quickPreview.severityLevel,
+            questionnaire: questionnaireData,
+            photoUrl: uploadedFilePath || closeUpImage,
+            timestamp: Date.now(),
+          })
+        );
+      } catch {
+        /* ignore */
+      }
+
+      // 5. Set dynamic assessment based on the user's real questionnaire answers
       setScanResult({
         id: `scan-${Date.now()}`,
         condition: "Assessment Queued",
@@ -1043,7 +1087,7 @@ export default function ScanSkinPage() {
                         </p>
                       </div>
                       <Link
-                        to="/clinics"
+                        to="/dashboard/clinics"
                         className="px-4 py-2 rounded-full bg-magenta-500 text-white text-xs font-semibold hover:bg-magenta-600 transition-colors"
                       >
                         View
@@ -1055,7 +1099,7 @@ export default function ScanSkinPage() {
                   )}
                 </div>
                 <Link
-                  to="/clinics"
+                  to="/dashboard/clinics"
                   className="flex items-center justify-center gap-1 mt-4 text-sm text-magenta-500 font-semibold hover:text-magenta-600"
                 >
                   View all clinics <ArrowRight className="w-4 h-4" />
@@ -1078,7 +1122,7 @@ export default function ScanSkinPage() {
                   Scan Again
                 </button>
                 <Link
-                  to="/clinics"
+                  to="/dashboard/clinics"
                   className="flex-1 py-3.5 rounded-full font-semibold text-sm bg-magenta-500 text-white text-center hover:bg-magenta-600 transition-colors shadow-lg shadow-magenta-500/20 active:scale-[0.96]"
                 >
                   Find a Clinic

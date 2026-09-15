@@ -12,26 +12,37 @@ import {
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 
-type ReviewFilter = "all" | "correct" | "wrong" | "retrain" | "high-confidence-wrong";
+type ReviewFilter = "all" | "correct" | "wrong" | "retrain" | "high-confidence-wrong" | "direct";
 
 export type ReviewRecord = {
   id: string;
   patient: string;
   aiPrediction: string;
-  confidence: number;
+  confidence?: number;
   doctor: string;
   finalDiagnosis: string;
   reviewedAt: string;
   status?: string;
   note?: string;
+  isDirectConsultation?: boolean;
 };
 
 function normalizeDiagnosis(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function isCorrect(record: ReviewRecord) {
-  if (!record.aiPrediction || !record.finalDiagnosis) return false;
+function isDirectConsult(aiName?: string, confidence?: number | null): boolean {
+  if (!aiName) return true;
+  const lower = aiName.toLowerCase();
+  const isGeneric = lower.includes("consultation") || lower.includes("general") || lower.includes("skin condition");
+  const hasValidScore = confidence !== undefined && confidence !== null && Number(confidence) > 0;
+  return isGeneric && !hasValidScore;
+}
+
+function isCorrect(record: ReviewRecord): boolean | null {
+  if (record.isDirectConsultation || !record.aiPrediction || record.aiPrediction.includes("Direct Consultation") || record.aiPrediction.includes("No AI")) {
+    return null;
+  }
   const ai = normalizeDiagnosis(record.aiPrediction);
   const doc = normalizeDiagnosis(record.finalDiagnosis);
   return ai === doc || doc.includes(ai) || ai.includes(doc);
@@ -83,12 +94,25 @@ export default function AdminDoctorAiReviewPage() {
             created_at,
             status,
             assigned_doctor_id,
-            clinic:clinic_id ( name ),
-            doctor:assigned_doctor_id ( doctor_name )
+            clinic:clinic_id ( name )
           `)
           .order("doctor_reviewed_at", { ascending: false });
 
         if (!error && data) {
+          const docIds = (data as any[]).map((r) => r.assigned_doctor_id).filter(Boolean);
+          const docNameMap = new Map<string, string>();
+          if (docIds.length > 0) {
+            try {
+              const { data: docData } = await supabase
+                .from("clinic_doctor")
+                .select("doctor_id, doctor_name")
+                .in("doctor_id", docIds);
+              if (docData) {
+                docData.forEach((d: any) => docNameMap.set(d.doctor_id, d.doctor_name));
+              }
+            } catch { }
+          }
+
           for (const row of data as any[]) {
             // Only include reviewed appointments (or ones with doctor notes/decisions)
             const isReviewed = Boolean(
@@ -101,12 +125,12 @@ export default function AdminDoctorAiReviewPage() {
             if (!isReviewed) continue;
 
             const parsed = parseDoctorNote(row.doctor_note);
-            const doctorObj = Array.isArray(row.doctor) ? row.doctor[0] : row.doctor;
-            const docName = doctorObj?.doctor_name || "Doctor Audrey Saludaga";
+            const docName = (row.assigned_doctor_id && docNameMap.get(row.assigned_doctor_id)) || "Dr. Audrey Saludaga";
 
-            const aiPred = row.ai_condition_name || "Skin condition";
-            const finalDiag = parsed.diagnosis || aiPred;
-            const conf = row.ai_confidence ? Math.round(Number(row.ai_confidence)) : 85;
+            const direct = isDirectConsult(row.ai_condition_name, row.ai_confidence);
+            const aiPred = direct ? "Direct Consultation (No AI)" : (row.ai_condition_name || "Skin condition");
+            const finalDiag = parsed.diagnosis || (direct ? "General Consultation" : aiPred);
+            const conf = direct ? undefined : (row.ai_confidence ? Math.round(Number(row.ai_confidence)) : undefined);
 
             const recId = row.appointment_id
               ? `REV-${row.appointment_id.slice(0, 8).toUpperCase()}`
@@ -122,6 +146,7 @@ export default function AdminDoctorAiReviewPage() {
               reviewedAt: row.doctor_reviewed_at || row.created_at || new Date().toISOString(),
               status: row.doctor_status || "approved",
               note: parsed.note || row.doctor_note || "",
+              isDirectConsultation: direct,
             });
           }
         }
@@ -148,9 +173,11 @@ export default function AdminDoctorAiReviewPage() {
               if (!isReviewed) continue;
               if (item.id && recordMap.has(item.id)) continue;
 
-              const aiPred = item.aiConditionName || item.conditionName || "Skin condition";
-              const finalDiag = item.doctorDiagnosis || aiPred;
-              const conf = item.aiConfidence ? Math.round(Number(item.aiConfidence)) : 85;
+              const direct = isDirectConsult(item.aiConditionName || item.conditionName, item.aiConfidence);
+              const aiPred = direct ? "Direct Consultation (No AI)" : (item.aiConditionName || item.conditionName || "Skin condition");
+              const finalDiag = item.doctorDiagnosis || (direct ? "General Consultation" : aiPred);
+              const conf = direct ? undefined : (item.aiConfidence ? Math.round(Number(item.aiConfidence)) : undefined);
+
               const recId = item.id
                 ? `REV-${String(item.id).slice(0, 8).toUpperCase()}`
                 : `REV-${Math.floor(Math.random() * 100000)}`;
@@ -160,11 +187,12 @@ export default function AdminDoctorAiReviewPage() {
                 patient: item.patientName || "Patient",
                 aiPrediction: aiPred,
                 confidence: conf,
-                doctor: item.assignedDoctorName || "Doctor Audrey Saludaga",
+                doctor: item.assignedDoctorName || "Dr. Audrey Saludaga",
                 finalDiagnosis: finalDiag,
                 reviewedAt: item.doctorReviewedAt || item.createdAt || new Date().toISOString(),
                 status: item.doctorStatus || "approved",
                 note: item.doctorNote || "",
+                isDirectConsultation: direct,
               });
             }
           }
@@ -212,15 +240,19 @@ export default function AdminDoctorAiReviewPage() {
   }, [fetchReviewedAppointments]);
 
   const metrics = useMemo(() => {
-    const correct = records.filter(isCorrect).length;
-    const wrong = records.length - correct;
-    const retrainCandidates = records.filter((record) => !isCorrect(record) && record.confidence >= 70).length;
+    const aiRecords = records.filter((r) => !r.isDirectConsultation && isCorrect(r) !== null);
+    const correct = aiRecords.filter((record) => isCorrect(record) === true).length;
+    const wrong = aiRecords.filter((record) => isCorrect(record) === false).length;
+    const retrainCandidates = aiRecords.filter((record) => isCorrect(record) === false && (record.confidence || 0) >= 70).length;
+    const totalAi = aiRecords.length;
+
     return {
-      total: records.length,
+      total: totalAi,
+      totalAll: records.length,
       correct,
       wrong,
       retrainCandidates,
-      accuracy: records.length ? Math.round((correct / records.length) * 100) : 0,
+      accuracy: totalAi ? Math.round((correct / totalAi) * 100) : 100,
     };
   }, [records]);
 
@@ -228,14 +260,19 @@ export default function AdminDoctorAiReviewPage() {
     const normalizedQuery = query.trim().toLowerCase();
     return records.filter((record) => {
       const correct = isCorrect(record);
+      const isDirect = Boolean(record.isDirectConsultation);
+
       const matchesFilter =
         filter === "all" ||
-        (filter === "correct" && correct) ||
-        (filter === "wrong" && !correct) ||
-        (filter === "retrain" && !correct && record.confidence >= 70) ||
-        (filter === "high-confidence-wrong" && !correct && record.confidence >= 80);
+        (filter === "correct" && correct === true) ||
+        (filter === "wrong" && correct === false) ||
+        (filter === "retrain" && correct === false && (record.confidence || 0) >= 70) ||
+        (filter === "high-confidence-wrong" && correct === false && (record.confidence || 0) >= 80) ||
+        (filter === "direct" && isDirect);
+
       const matchesQuery = !normalizedQuery || [record.patient, record.doctor, record.aiPrediction, record.finalDiagnosis]
-        .some((value) => value.toLowerCase().includes(normalizedQuery));
+        .some((value) => (value || "").toLowerCase().includes(normalizedQuery));
+
       return matchesFilter && matchesQuery;
     });
   }, [filter, query, records]);
@@ -246,6 +283,7 @@ export default function AdminDoctorAiReviewPage() {
     { key: "wrong", label: "AI Wrong" },
     { key: "retrain", label: "Retrain Candidates" },
     { key: "high-confidence-wrong", label: "High Conf. + Wrong" },
+    { key: "direct", label: "Direct Consultations" },
   ];
 
   return (
@@ -265,10 +303,10 @@ export default function AdminDoctorAiReviewPage() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <MetricCard label="AI Accuracy" value={`${metrics.accuracy}%`} detail="Correct doctor-validated diagnoses" icon={Activity} color="magenta" />
-        <MetricCard label="Total Correct" value={String(metrics.correct)} detail={`Out of ${metrics.total} reviewed records`} icon={CheckCircle2} color="green" />
+        <MetricCard label="AI Accuracy" value={`${metrics.accuracy}%`} detail={metrics.total > 0 ? "Correct doctor-validated diagnoses" : "No AI scans evaluated yet"} icon={Activity} color="magenta" />
+        <MetricCard label="Total Correct" value={String(metrics.correct)} detail={`Out of ${metrics.total} AI-evaluated records`} icon={CheckCircle2} color="green" />
         <MetricCard label="Total Wrong" value={String(metrics.wrong)} detail="Did not match doctor diagnosis" icon={XCircle} color="red" />
-        <MetricCard label="Retrain Candidates" value={String(metrics.retrainCandidates)} detail="Wrong high-confidence predictions" icon={RefreshCw} color="violet" />
+        <MetricCard label="Retrain Candidates" value={String(metrics.retrainCandidates)} detail="Wrong high-confidence AI predictions" icon={RefreshCw} color="violet" />
       </div>
 
       <div className="bg-white border border-gray-100 rounded-2xl p-4 flex flex-col xl:flex-row gap-3 xl:items-center xl:justify-between shadow-xs">
@@ -324,29 +362,58 @@ export default function AdminDoctorAiReviewPage() {
               <tbody>
                 {visibleRecords.map((record) => {
                   const correct = isCorrect(record);
-                  const retrain = !correct && record.confidence >= 70;
+                  const isDirect = Boolean(record.isDirectConsultation);
+                  const retrain = correct === false && (record.confidence || 0) >= 70;
                   return (
                     <tr key={record.id} className="border-b border-gray-50 last:border-b-0 hover:bg-gray-50/70 transition-colors">
                       <td className="px-5 py-4 text-xs font-semibold text-gray-600">{record.id}</td>
                       <td className="px-5 py-4 text-sm text-gray-700 font-medium">{record.patient}</td>
-                      <td className="px-5 py-4 text-sm font-medium text-gray-700">{record.aiPrediction}</td>
+                      <td className="px-5 py-4 text-sm font-medium text-gray-700">
+                        {isDirect ? (
+                          <span className="text-xs font-medium text-slate-500 italic flex items-center gap-1.5">
+                            <Stethoscope className="w-3.5 h-3.5 text-slate-400 shrink-0" /> Direct (No AI Scan)
+                          </span>
+                        ) : (
+                          record.aiPrediction
+                        )}
+                      </td>
                       <td className="px-5 py-4 min-w-36">
-                        <div className="flex items-center gap-2">
-                          <span className={cn("text-xs font-bold", record.confidence >= 70 ? "text-emerald-600" : "text-amber-600")}>{record.confidence}%</span>
-                          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-100">
-                            <div className={cn("h-full rounded-full", record.confidence >= 70 ? "bg-emerald-500" : "bg-amber-500")} style={{ width: `${record.confidence}%` }} />
+                        {isDirect || record.confidence === undefined ? (
+                          <span className="text-xs text-gray-300 italic font-mono">—</span>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className={cn("text-xs font-bold", record.confidence >= 70 ? "text-emerald-600" : "text-amber-600")}>{record.confidence}%</span>
+                            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-100">
+                              <div className={cn("h-full rounded-full", record.confidence >= 70 ? "bg-emerald-500" : "bg-amber-500")} style={{ width: `${record.confidence}%` }} />
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </td>
                       <td className="px-5 py-4 text-sm text-gray-600">{record.doctor}</td>
                       <td className="px-5 py-4 text-sm font-medium text-gray-900">{record.finalDiagnosis}</td>
                       <td className="px-5 py-4">
-                        <span className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold", correct ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700")}>
-                          {correct ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />} {correct ? "Correct" : "Wrong"}
-                        </span>
+                        {isDirect ? (
+                          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-slate-100 text-slate-700">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-slate-400" /> Clinical Only
+                          </span>
+                        ) : correct === true ? (
+                          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-emerald-100 text-emerald-700">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Correct
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-red-100 text-red-700">
+                            <XCircle className="w-3.5 h-3.5" /> Wrong
+                          </span>
+                        )}
                       </td>
                       <td className="px-5 py-4">
-                        {retrain ? <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">Retrain candidate</span> : <span className="text-sm text-gray-300">-</span>}
+                        {isDirect ? (
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">Direct Booking</span>
+                        ) : retrain ? (
+                          <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">Retrain candidate</span>
+                        ) : (
+                          <span className="text-sm text-gray-300">-</span>
+                        )}
                       </td>
                       <td className="px-5 py-4 whitespace-nowrap text-sm text-gray-500">{formatDate(record.reviewedAt)}</td>
                     </tr>

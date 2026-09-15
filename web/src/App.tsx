@@ -62,6 +62,7 @@ import AdminNotificationsPage from "./pages/admin/AdminNotificationsPage";
 import AdminAuditLogsPage from "./pages/admin/AdminAuditLogsPage";
 import AdminHelpdeskPage from "./pages/admin/AdminHelpdeskPage";
 import AdminSystemSettingsPage from "./pages/admin/AdminSystemSettingsPage";
+import AccountStatusModal from "./components/common/AccountStatusModal";
 
 function App() {
   const location = useLocation();
@@ -81,6 +82,7 @@ function App() {
 
   return (
     <>
+      <AccountStatusModal />
       {!isDashboardOrFullscreen && <Navbar />}
 
       <Routes>
@@ -146,6 +148,9 @@ function App() {
         <Route path="/admin/audit-logs" element={<AdminLayout><AdminAuditLogsPage /></AdminLayout>} />
         <Route path="/admin/helpdesk" element={<AdminLayout><AdminHelpdeskPage /></AdminLayout>} />
         <Route path="/admin/settings" element={<AdminLayout><AdminSystemSettingsPage /></AdminLayout>} />
+
+        {/* Clinic and Search Aliases */}
+        <Route path="/clinics" element={<Navigate to="/find-clinics" replace />} />
 
         {/* Patient Appointment Aliases */}
         <Route path="/patient/appointments" element={<Navigate to="/dashboard/appointment-status" replace />} />

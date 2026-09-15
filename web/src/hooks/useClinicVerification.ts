@@ -136,6 +136,7 @@ export function useClinicVerification(): ClinicProfile {
     // Map Supabase status values → UI status values
     const statusMap: Record<string, ClinicVerificationStatus> = {
       approved: "verified",
+      verified: "verified",
       pending: "pending",
       rejected: "rejected",
       suspended: "rejected",

@@ -15,6 +15,9 @@ import {
   Clock,
   Stethoscope,
   CheckCircle2,
+  Building2,
+  Images,
+  Maximize2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
@@ -23,6 +26,7 @@ import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 type ClinicData = {
   id: string;
   name: string;
+  logo?: string;
   address: string;
   phone: string;
   verified: boolean;
@@ -31,6 +35,7 @@ type ClinicData = {
   consultationFee: string;
   doctors: Array<{ name: string; specialization: string }>;
   conditionsTreated: string[];
+  photos?: string[];
 };
 
 type ConsultationType = "face-to-face";
@@ -45,6 +50,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   const [selectedClinic, setSelectedClinic] = useState<ClinicData | null>(null);
   const [loadingClinic, setLoadingClinic] = useState(true);
   const [showClinicDetailsModal, setShowClinicDetailsModal] = useState(false);
+  const [activePhotoIdx, setActivePhotoIdx] = useState<number>(0);
+  const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -53,7 +60,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   const [patientEmail, setPatientEmail] = useState(() => user?.email || "");
   const [patientAddress, setPatientAddress] = useState("");
   const [patientContact, setPatientContact] = useState("");
+  const [patientGender, setPatientGender] = useState("");
+  const [patientBirthdate, setPatientBirthdate] = useState("");
   const [notes, setNotes] = useState("");
+  const [questionnaireData, setQuestionnaireData] = useState<any[]>([]);
 
   // Skin photo upload
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -66,26 +76,29 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   const [aiConfidence, setAiConfidence] = useState<string>("");
   const [submitted, setSubmitted] = useState(false);
 
-  // Prefill AI condition from URL params or local scan storage
+  // Prefill AI condition and questionnaire from URL params or local scan storage
   useEffect(() => {
     const condParam = searchParams.get("condition") || searchParams.get("ai_condition");
     const confParam = searchParams.get("confidence") || searchParams.get("score");
     if (condParam) setAiConditionName(condParam);
     if (confParam) setAiConfidence(confParam);
 
-    if (!condParam) {
-      try {
-        const savedScan = localStorage.getItem("dermai_last_scan");
-        if (savedScan) {
-          const parsed = JSON.parse(savedScan);
-          if (parsed.predictedClass) setAiConditionName((prev) => prev || parsed.predictedClass);
-          if (parsed.confidence) {
-            const num = Number(parsed.confidence);
-            setAiConfidence((prev) => prev || String(Math.round(num <= 1 ? num * 100 : num)));
-          }
+    try {
+      const savedScan = localStorage.getItem("dermai_last_scan");
+      if (savedScan) {
+        const parsed = JSON.parse(savedScan);
+        if (!condParam && parsed.predictedClass) {
+          setAiConditionName((prev) => prev || parsed.predictedClass);
         }
-      } catch {}
-    }
+        if (!confParam && parsed.confidence) {
+          const num = Number(parsed.confidence);
+          setAiConfidence((prev) => prev || String(Math.round(num <= 1 ? num * 100 : num)));
+        }
+        if (Array.isArray(parsed.questionnaire) && parsed.questionnaire.length > 0) {
+          setQuestionnaireData(parsed.questionnaire);
+        }
+      }
+    } catch { }
   }, [searchParams]);
 
   // Fetch approved clinic strictly from database with rich details
@@ -106,12 +119,15 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           .select(`
             clinic_id,
             name,
+            logo_url,
             district,
             address,
             phone,
+            email,
             status,
             description,
             consultation_fee,
+            clinic_photo ( photo_url, sort_order ),
             clinic_service_offered ( service_name ),
             clinic_operating_hours ( day_of_week, open_time, close_time ),
             clinic_doctor ( doctor_name, specialization, status )
@@ -144,9 +160,37 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               .filter(Boolean);
           }
 
+          let photosList: string[] = [];
+          if (Array.isArray(data.clinic_photo) && data.clinic_photo.length > 0) {
+            photosList = data.clinic_photo
+              .map((p: any) => (typeof p === "string" ? p : p?.photo_url))
+              .filter(Boolean);
+          }
+
+          let logoUrl = data.logo_url || "";
+          if (!logoUrl || photosList.length === 0) {
+            try {
+              const appsRaw = localStorage.getItem("dermai_clinic_applications");
+              if (appsRaw) {
+                const apps = JSON.parse(appsRaw);
+                if (Array.isArray(apps)) {
+                  const matched = apps.find((a: any) =>
+                    String(a.id) === String(data.clinic_id) ||
+                    (a.name && data.name && a.name.toLowerCase().trim() === data.name.toLowerCase().trim())
+                  );
+                  if (matched?.logo && !logoUrl) logoUrl = matched.logo;
+                  if (photosList.length === 0 && Array.isArray(matched?.clinicPhotos)) {
+                    photosList = matched.clinicPhotos.filter(Boolean);
+                  }
+                }
+              }
+            } catch {}
+          }
+
           setSelectedClinic({
             id: String(data.clinic_id),
             name: data.name || "Clinic",
+            logo: logoUrl,
             address: data.address || data.district || "",
             phone: data.phone || "",
             verified: true,
@@ -155,20 +199,35 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             consultationFee: data.consultation_fee ? String(data.consultation_fee) : "500",
             doctors: doctorsList,
             conditionsTreated: servicesList,
+            photos: photosList,
           });
         } else if (!cancelled) {
           // Fallback query if nested relation was not available
           const { data: simpleData } = await supabase
             .from("clinic")
-            .select("clinic_id, name, district, address, phone, status, description, consultation_fee")
+            .select("clinic_id, name, logo_url, district, address, phone, status, description, consultation_fee")
             .eq("clinic_id", clinicIdFromUrl)
             .or("status.eq.approved,status.eq.verified")
             .maybeSingle();
 
           if (simpleData) {
+            let logoUrl = simpleData.logo_url || "";
+            let photosList: string[] = [];
+            try {
+              const { data: pRows } = await supabase
+                .from("clinic_photo")
+                .select("photo_url")
+                .eq("clinic_id", clinicIdFromUrl)
+                .order("sort_order");
+              if (pRows && pRows.length > 0) {
+                photosList = pRows.map((p: any) => p.photo_url).filter(Boolean);
+              }
+            } catch {}
+
             setSelectedClinic({
               id: String(simpleData.clinic_id),
               name: simpleData.name || "Clinic",
+              logo: logoUrl,
               address: simpleData.address || simpleData.district || "",
               phone: simpleData.phone || "",
               verified: true,
@@ -177,6 +236,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               consultationFee: simpleData.consultation_fee ? String(simpleData.consultation_fee) : "500",
               doctors: [],
               conditionsTreated: [],
+              photos: photosList,
             });
           }
         }
@@ -209,19 +269,28 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             const parsed = JSON.parse(localSaved);
             if (parsed.fullName) setPatientName((prev) => prev || parsed.fullName);
             if (parsed.contactNumber) setPatientContact((prev) => prev || parsed.contactNumber);
+            if (parsed.gender) setPatientGender((prev) => prev || parsed.gender);
+            if (parsed.birthdate) setPatientBirthdate((prev) => prev || parsed.birthdate);
             if (parsed.address) setPatientAddress((prev) => prev || parsed.address);
-          } catch {}
+          } catch { }
         }
+
+        const meta = user?.user_metadata || {};
+        if (meta.gender) setPatientGender((prev) => prev || meta.gender);
+        if (meta.birthdate || meta.birthday) setPatientBirthdate((prev) => prev || meta.birthdate || meta.birthday);
 
         const { data } = await supabase
           .from("user")
-          .select("full_name, phone")
+          .select("full_name, phone, gender, birthdate, address")
           .eq("user_id", userId)
           .maybeSingle();
 
         if (!cancelled && data) {
           if (data.full_name) setPatientName((prev) => prev || data.full_name);
           if (data.phone) setPatientContact((prev) => prev || data.phone);
+          if (data.gender) setPatientGender((prev) => prev || data.gender);
+          if (data.birthdate) setPatientBirthdate((prev) => prev || data.birthdate);
+          if (data.address) setPatientAddress((prev) => prev || data.address);
         }
       } catch (err) {
         console.error("Failed to load user profile:", err);
@@ -257,7 +326,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         activeUserId = session?.user?.id;
-      } catch {}
+      } catch { }
     }
 
     if (!activeUserId) {
@@ -319,6 +388,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         patient_email: patientEmail.trim() || user?.email || null,
         patient_contact: patientContact.trim() || null,
         patient_address: patientAddress.trim() || null,
+        patient_gender: patientGender || null,
+        patient_birthdate: patientBirthdate || null,
+        questionnaire_answers: questionnaireData.length > 0 ? questionnaireData : null,
         notes: notes.trim() || null,
         skin_photo_url: photoPath,
         ai_condition_name: conditionLabel,
@@ -356,17 +428,27 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         return;
       }
 
-      // 4. Optionally log to ai_scan_result (non-blocking)
-      try {
-        await supabase.from("ai_scan_result").insert({
-          user_id: activeUserId,
-          confidence_score: confNum || 0,
-          status: "pending",
-          photo_url: photoPath,
-          body_part: "Skin Consultation",
-        });
-      } catch (scanErr) {
-        console.warn("AI scan result logging skipped:", scanErr);
+      // 4. Optionally log to ai_scan_result — ONLY if patient actually performed an AI scan
+      //    (has a real confidence score > 0 and a specific condition, not a generic consultation)
+      const hasRealAiScan =
+        confNum !== null &&
+        confNum > 0 &&
+        aiConditionName.trim() !== "" &&
+        !aiConditionName.toLowerCase().includes("consultation") &&
+        !aiConditionName.toLowerCase().includes("general");
+
+      if (hasRealAiScan) {
+        try {
+          await supabase.from("ai_scan_result").insert({
+            user_id: activeUserId,
+            confidence_score: confNum,
+            status: "pending",
+            photo_url: photoPath,
+            body_part: "Skin",
+          });
+        } catch (scanErr) {
+          console.warn("AI scan result logging skipped:", scanErr);
+        }
       }
 
       // 5. Save to local cache and notify listeners
@@ -396,7 +478,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         }
         window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
         window.dispatchEvent(new Event("appointmentCreated"));
-      } catch {}
+      } catch { }
 
       setSubmitted(true);
     } catch (err: any) {
@@ -419,6 +501,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   }
 
   if (!selectedClinic) {
+    const isMissingClinicParam = !searchParams.get("clinic");
+
     return (
       <div className="min-h-screen bg-white flex items-center justify-center px-4">
         <motion.div
@@ -426,17 +510,23 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           animate={{ opacity: 1, scale: 1 }}
           className="max-w-md w-full bg-white p-8 rounded-3xl shadow-sm text-center border border-gray-100"
         >
-          <div className="w-16 h-16 bg-red-50 rounded-2xl flex items-center justify-center mx-auto mb-5 text-red-500">
-            <ShieldX className="w-8 h-8" />
+          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-5 ${
+            isMissingClinicParam ? "bg-magenta-50 text-magenta-600" : "bg-red-50 text-red-500"
+          }`}>
+            {isMissingClinicParam ? <Building2 className="w-8 h-8" /> : <ShieldX className="w-8 h-8" />}
           </div>
-          <h1 className="text-xl font-bold text-gray-900 mb-2">Clinic Not Available</h1>
+          <h1 className="text-xl font-bold text-gray-900 mb-2">
+            {isMissingClinicParam ? "Select a Clinic First" : "Clinic Not Available"}
+          </h1>
           <p className="text-gray-500 mb-6 text-sm leading-relaxed">
-            The requested clinic is either not registered or has not been approved yet.
+            {isMissingClinicParam
+              ? "Please choose a verified dermatology clinic to schedule your consultation."
+              : "The requested clinic is either not registered or has not been approved yet."}
           </p>
           <div className="space-y-2.5">
             <Link
-              to="/clinics"
-              className="block w-full py-3 bg-gray-900 text-white rounded-full font-semibold text-sm hover:bg-black transition-colors"
+              to="/dashboard/clinics"
+              className="block w-full py-3 bg-magenta-600 text-white rounded-full font-semibold text-sm hover:bg-magenta-700 transition-colors shadow-sm"
             >
               Browse Verified Clinics
             </Link>
@@ -497,7 +587,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[9999] flex items-center justify-center p-4 sm:p-6 bg-black/40 backdrop-blur-sm"
-            onClick={() => setShowClinicDetailsModal(false)}
+            onClick={() => {
+              setShowClinicDetailsModal(false);
+              setLightboxPhoto(null);
+            }}
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 12 }}
@@ -509,28 +602,39 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             >
               {/* Header */}
               <div className="px-6 py-4 border-b border-gray-100 flex items-start justify-between bg-white">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <h2 className="text-lg sm:text-xl font-bold text-gray-900 tracking-tight leading-snug">
-                      {selectedClinic.name}
-                    </h2>
-                    {selectedClinic.verified && (
-                      <VerifiedBadge size={18} className="w-4.5 h-4.5 shrink-0" title="Verified Clinic" />
-                    )}
-                  </div>
-                  {selectedClinic.verified ? (
-                    <div className="flex items-center gap-1 text-[11px] font-semibold text-blue-600 bg-blue-50/80 border border-blue-100/80 px-2 py-0.5 rounded-full w-fit">
-                      <VerifiedBadge size={11} className="w-2.5 h-2.5" />
-                      <span>Verified Partner Clinic</span>
-                    </div>
+                <div className="flex items-center gap-3.5 min-w-0">
+                  {selectedClinic.logo ? (
+                    <img
+                      src={selectedClinic.logo}
+                      alt={selectedClinic.name}
+                      className="w-12 h-12 rounded-2xl object-cover border border-magenta-100/80 shadow-xs shrink-0 bg-white"
+                    />
                   ) : (
-                    <span className="text-[11px] font-medium text-gray-400">Dermatology Clinic</span>
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-magenta-50 to-pink-100/60 border border-magenta-100 flex items-center justify-center shrink-0 text-magenta-600 shadow-xs">
+                      <Building2 className="w-6 h-6" />
+                    </div>
                   )}
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <h2 className="text-lg sm:text-xl font-bold text-gray-900 tracking-tight leading-snug truncate">
+                        {selectedClinic.name}
+                      </h2>
+                      {selectedClinic.verified && (
+                        <VerifiedBadge size={18} className="w-4.5 h-4.5 shrink-0" title="Verified Clinic" />
+                      )}
+                    </div>
+                    <span className="text-[11px] font-medium text-gray-400">
+                      {selectedClinic.verified ? "Verified Partner Clinic" : "Dermatology Clinic"}
+                    </span>
+                  </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowClinicDetailsModal(false)}
-                  className="p-2 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                  onClick={() => {
+                    setShowClinicDetailsModal(false);
+                    setLightboxPhoto(null);
+                  }}
+                  className="p-2 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer ml-3 shrink-0"
                   title="Close"
                 >
                   <X className="w-5 h-5" />
@@ -549,6 +653,70 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       "Specialized in advanced dermatological care, comprehensive skin assessments, acne & eczema management, and customized treatment plans tailored to each patient."}
                   </div>
                 </div>
+
+                {/* Clinic Photos / Facilities Gallery (Up to 5 Photos) */}
+                {selectedClinic.photos && selectedClinic.photos.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <Images className="w-3.5 h-3.5 text-magenta-500" />
+                        Clinic Facilities &amp; Gallery
+                      </h4>
+                      <span className="text-[10px] font-bold text-magenta-600 bg-magenta-50 px-2 py-0.5 rounded-full border border-magenta-100">
+                        {selectedClinic.photos.length} {selectedClinic.photos.length === 1 ? "Photo" : "Photos"}
+                      </span>
+                    </div>
+
+                    {/* Featured Main Photo Preview */}
+                    <div className="relative group rounded-2xl overflow-hidden border border-magenta-100/80 bg-gray-900 shadow-sm">
+                      <img
+                        src={selectedClinic.photos[Math.min(activePhotoIdx, selectedClinic.photos.length - 1)]}
+                        alt={`${selectedClinic.name} facility`}
+                        className="w-full h-44 sm:h-48 object-cover transition-transform duration-300 group-hover:scale-[1.02] cursor-pointer"
+                        onClick={() => setLightboxPhoto(selectedClinic.photos![Math.min(activePhotoIdx, selectedClinic.photos!.length - 1)])}
+                      />
+                      {/* Click to Enlarge Hover Tag */}
+                      <div
+                        onClick={() => setLightboxPhoto(selectedClinic.photos![Math.min(activePhotoIdx, selectedClinic.photos!.length - 1)])}
+                        className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer pointer-events-auto"
+                      >
+                        <div className="px-3 py-1.5 rounded-full bg-white/95 backdrop-blur-md text-gray-900 text-xs font-bold flex items-center gap-1.5 shadow-lg">
+                          <Maximize2 className="w-3.5 h-3.5 text-magenta-600" />
+                          <span>Click to Enlarge</span>
+                        </div>
+                      </div>
+
+                      {/* Photo Index Counter */}
+                      <div className="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-lg bg-black/60 backdrop-blur-md text-white text-[11px] font-medium pointer-events-none">
+                        {Math.min(activePhotoIdx + 1, selectedClinic.photos.length)} / {selectedClinic.photos.length}
+                      </div>
+                    </div>
+
+                    {/* Thumbnail Strip (if more than 1 photo) */}
+                    {selectedClinic.photos.length > 1 && (
+                      <div className="flex items-center gap-2 mt-2.5 overflow-x-auto pb-1">
+                        {selectedClinic.photos.map((imgUrl, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setActivePhotoIdx(idx)}
+                            className={`relative w-14 h-14 rounded-xl overflow-hidden shrink-0 border-2 transition-all cursor-pointer ${
+                              activePhotoIdx === idx
+                                ? "border-magenta-500 ring-2 ring-magenta-500/30 scale-105 shadow-sm"
+                                : "border-gray-200 opacity-60 hover:opacity-100 hover:border-magenta-300"
+                            }`}
+                          >
+                            <img
+                              src={imgUrl}
+                              alt={`Thumbnail ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Contact & Hours Info Grid */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -590,8 +758,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         {selectedClinic.consultationFee && !isNaN(Number(selectedClinic.consultationFee)) && Number(selectedClinic.consultationFee) > 0
                           ? `Starts at ₱${Number(selectedClinic.consultationFee).toLocaleString()}`
                           : selectedClinic.consultationFee
-                          ? `Starts at ₱${selectedClinic.consultationFee}`
-                          : "Starts at ₱500"}
+                            ? `Starts at ₱${selectedClinic.consultationFee}`
+                            : "Starts at ₱500"}
                       </p>
                     </div>
                   </div>
@@ -643,10 +811,52 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               <div className="p-4 sm:p-5 bg-white border-t border-gray-100">
                 <button
                   type="button"
-                  onClick={() => setShowClinicDetailsModal(false)}
+                  onClick={() => {
+                    setShowClinicDetailsModal(false);
+                    setLightboxPhoto(null);
+                  }}
                   className="w-full py-2.5 rounded-full bg-gray-900 hover:bg-black text-white text-xs font-semibold transition-colors cursor-pointer"
                 >
                   Close
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Fullscreen Photo Lightbox Modal in Appointment Booking ── */}
+      <AnimatePresence>
+        {lightboxPhoto && (
+          <motion.div
+            key="booking-lightbox"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6 bg-black/85 backdrop-blur-md"
+            onClick={() => setLightboxPhoto(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.94, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.94, opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="relative max-w-3xl max-h-[90vh] w-full flex flex-col items-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="relative w-full flex justify-center">
+                <img
+                  src={lightboxPhoto}
+                  alt="Clinic facility enlarged preview"
+                  className="max-w-full max-h-[82vh] rounded-3xl object-contain shadow-2xl border border-white/20"
+                />
+                <button
+                  type="button"
+                  onClick={() => setLightboxPhoto(null)}
+                  className="absolute -top-3 -right-3 sm:top-3 sm:right-3 p-2 rounded-full bg-black/60 hover:bg-black/80 text-white backdrop-blur-md border border-white/20 transition-all cursor-pointer shadow-lg"
+                  title="Close image preview"
+                >
+                  <X className="w-5 h-5" />
                 </button>
               </div>
             </motion.div>
@@ -778,6 +988,40 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       onChange={(e) => setPatientAddress(e.target.value)}
                       placeholder="e.g. Cebu City"
                       className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all bg-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Patient Demographics: Gender & Birthdate */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                      Gender <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      required
+                      value={patientGender}
+                      onChange={(e) => setPatientGender(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all bg-white"
+                    >
+                      <option value="">Select Gender</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                      <option value="Prefer not to say">Prefer not to say</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                      Birthdate <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={patientBirthdate}
+                      onChange={(e) => setPatientBirthdate(e.target.value)}
+                      max={new Date().toISOString().split("T")[0]}
+                      className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all bg-white"
                     />
                   </div>
                 </div>

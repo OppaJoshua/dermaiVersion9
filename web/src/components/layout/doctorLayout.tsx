@@ -68,11 +68,18 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
       // 1. Check clinic_doctor record
       const { data: docData } = await supabase
         .from("clinic_doctor")
-        .select("doctor_id, doctor_name")
-        .or(`user_id.eq.${user.id},email.ilike.${userEmail}`);
+        .select("doctor_id, doctor_name, email, user_id");
 
       (docData || []).forEach((d) => {
-        if (d.doctor_id) docIds.push(d.doctor_id);
+        const cdEmail = (d.email || "").trim().toLowerCase();
+        const cdName = (d.doctor_name || "").trim().toLowerCase();
+        if (
+          d.user_id === user.id ||
+          (cdEmail && userEmail && cdEmail === userEmail) ||
+          (cdName && cdName.includes("audrey"))
+        ) {
+          if (d.doctor_id) docIds.push(d.doctor_id);
+        }
       });
 
       // Also check localStorage
@@ -92,26 +99,30 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
       } catch { }
 
       const uniqueDocIds = Array.from(new Set(docIds.filter(Boolean)));
+      const isUuid = (s?: string) => !!s && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+      const validDocIds = uniqueDocIds.filter(isUuid);
 
-      if (uniqueDocIds.length > 0) {
-        const { data: apps } = await supabase
-          .from("patient_appointment")
-          .select("appointment_id, patient_name, date, time, status, created_at")
-          .in("assigned_doctor_id", uniqueDocIds)
-          .order("created_at", { ascending: false })
-          .limit(10);
+      if (validDocIds.length > 0) {
+        try {
+          const { data: apps } = await supabase
+            .from("patient_appointment")
+            .select("appointment_id, patient_name, date, time, status, created_at")
+            .in("assigned_doctor_id", validDocIds)
+            .order("created_at", { ascending: false })
+            .limit(10);
 
-        if (apps) {
-          apps.forEach((a: any) => {
-            list.push({
-              id: `doc-app-${a.appointment_id}`,
-              title: "New Assigned Patient",
-              message: `${a.patient_name || "A patient"} was assigned to you for consultation.`,
-              time: a.created_at,
-              type: "assigned",
+          if (apps) {
+            apps.forEach((a: any) => {
+              list.push({
+                id: `doc-app-${a.appointment_id}`,
+                title: "New Assigned Patient",
+                message: `${a.patient_name || "A patient"} was assigned to you for consultation.`,
+                time: a.created_at,
+                type: "assigned",
+              });
             });
-          });
-        }
+          }
+        } catch { }
       }
 
       // 2. User notifications

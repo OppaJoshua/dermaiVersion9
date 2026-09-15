@@ -167,8 +167,14 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       .on("postgres_changes", { event: "*", schema: "public", table: "user_notification" }, () => fetchAdminNotifications())
       .subscribe();
 
+    const handleTicketUpdate = () => fetchAdminNotifications();
+    window.addEventListener("dermai_tickets_updated", handleTicketUpdate);
+    window.addEventListener("storage", handleTicketUpdate);
+
     return () => {
       supabase.removeChannel(channel);
+      window.removeEventListener("dermai_tickets_updated", handleTicketUpdate);
+      window.removeEventListener("storage", handleTicketUpdate);
     };
   }, [fetchAdminNotifications]);
 

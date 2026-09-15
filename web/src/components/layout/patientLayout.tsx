@@ -106,7 +106,7 @@ export default function UserLayout({
   profile: customProfile,
   onLogout,
 }: UserLayoutProps) {
-  const { user, session, role, roleLoading, signOut } = useAuth();
+  const { user, session, loading, role, roleLoading, signOut } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -116,7 +116,11 @@ export default function UserLayout({
   const notifRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!roleLoading && location.pathname.startsWith("/dashboard")) {
+    if (!loading && !roleLoading && (location.pathname.startsWith("/dashboard") || location.pathname === "/appointment")) {
+      if (!user && !session) {
+        navigate("/login", { replace: true, state: { from: location.pathname + location.search } });
+        return;
+      }
       if (role === "admin") {
         navigate("/admin", { replace: true });
       } else if (role === "clinic") {
@@ -125,7 +129,7 @@ export default function UserLayout({
         navigate("/doctor", { replace: true });
       }
     }
-  }, [role, roleLoading, location.pathname, navigate]);
+  }, [user, session, loading, role, roleLoading, location.pathname, location.search, navigate]);
 
   const getLocalProfile = (userId?: string) => {
     if (!userId) return null;

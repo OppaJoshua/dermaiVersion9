@@ -7,6 +7,8 @@ export type DoctorAppointmentRecord = {
   clinicName: string;
   patientName: string;
   patientAge?: number;
+  patientGender?: string;
+  patientBirthdate?: string;
   patientAvatar?: string;
   patientEmail?: string;
   patientAddress?: string;
@@ -31,7 +33,30 @@ export type DoctorAppointmentRecord = {
   skinPhotoUrl?: string;
   aiConditionName?: string;
   aiConfidence?: number;
+  questionnaireAnswers?: Array<{
+    id?: string;
+    question: string;
+    answer: string;
+    severity?: number | null;
+  }>;
 };
+
+function calculateAgeFromBirthdate(birthdateStr?: string | null): number | undefined {
+  if (!birthdateStr) return undefined;
+  try {
+    const bday = new Date(birthdateStr);
+    if (isNaN(bday.getTime())) return undefined;
+    const today = new Date();
+    let age = today.getFullYear() - bday.getFullYear();
+    const m = today.getMonth() - bday.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < bday.getDate())) {
+      age--;
+    }
+    return age >= 0 && age < 130 ? age : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function useDoctorAppointments() {
   const { user } = useAuth();
@@ -44,45 +69,86 @@ export function useDoctorAppointments() {
   const isFetchingRef = useRef(false);
 
   const fetchAppointments = useCallback(async () => {
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
 
     try {
-      // 1. Identify doctor accounts linked to current user
-      const userEmail = (user.email || "").trim().toLowerCase();
+      // 1. Identify doctor accounts linked to current user or local doctor profile
+      const userEmail = (user?.email || "").trim().toLowerCase();
       setDoctorEmail(userEmail);
-      const foundDoctorIds: string[] = [user.id];
+      const foundDoctorIds: string[] = user?.id ? [user.id] : [];
       const foundClinicIds: any[] = [];
-      let docDisplayName = user.user_metadata?.full_name || user.user_metadata?.name || "Doctor";
-      let docClinicName = "DermAI Clinic";
+      
+      let docDisplayName = user?.user_metadata?.full_name || user?.user_metadata?.name || "";
+      let docClinicName = "";
+
+      // Check localStorage doctor profile
+      try {
+        const storedProfile = localStorage.getItem("dermai_doctor_profile");
+        if (storedProfile) {
+          const p = JSON.parse(storedProfile);
+          if (p.fullName && !docDisplayName) docDisplayName = p.fullName;
+          if (p.clinicName && !docClinicName) docClinicName = p.clinicName;
+        }
+      } catch { }
+
+      // Check localStorage clinic doctors
+      try {
+        const storedClinicDocs = localStorage.getItem("dermai_clinic_doctors");
+        if (storedClinicDocs) {
+          const parsed = JSON.parse(storedClinicDocs);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            parsed.forEach((d: any) => {
+              if (d.id) foundDoctorIds.push(d.id);
+              if (d.clinicId) foundClinicIds.push(d.clinicId);
+              if (!docDisplayName && d.name) docDisplayName = d.name;
+              if (!docClinicName && d.clinicName) docClinicName = d.clinicName;
+            });
+          }
+        }
+      } catch { }
+
+      // Fallback display names if still generic
+      if (!docDisplayName || docDisplayName === "Doctor") {
+        docDisplayName = "Dr. Audrey Saludaga";
+      }
+      if (!docClinicName) {
+        docClinicName = "Skin Clinic";
+      }
 
       // Check clinic_doctor table (primary doctor roster)
       try {
         const { data: clinicDocData, error: clinicDocErr } = await supabase
           .from("clinic_doctor")
-          .select("doctor_id, doctor_name, clinic_id, email, user_id, clinic:clinic_id(name)")
-          .or(`user_id.eq.${user.id},email.ilike.${userEmail}`);
+          .select("doctor_id, doctor_name, clinic_id, email, user_id, specialization");
 
         if (!clinicDocErr && clinicDocData && clinicDocData.length > 0) {
           for (const cd of clinicDocData as any[]) {
-            if (cd.doctor_id) foundDoctorIds.push(cd.doctor_id);
-            if (cd.clinic_id) foundClinicIds.push(cd.clinic_id);
-            if (cd.doctor_name) docDisplayName = cd.doctor_name;
-            const clinicObj: any = Array.isArray(cd.clinic) ? cd.clinic[0] : cd.clinic;
-            if (clinicObj?.name) docClinicName = clinicObj.name;
+            const cdEmail = (cd.email || "").trim().toLowerCase();
+            const cdName = (cd.doctor_name || "").trim().toLowerCase();
+            const metaName = (docDisplayName || "").trim().toLowerCase();
+            const isMatch =
+              (user?.id && cd.user_id === user.id) ||
+              (cdEmail && userEmail && cdEmail === userEmail) ||
+              (cdName && metaName && (cdName.includes(metaName) || metaName.includes(cdName) || cdName.includes("audrey")));
 
-            // Auto-link user_id if not linked yet
-            if (!cd.user_id && user.id) {
-              supabase
-                .from("clinic_doctor")
-                .update({ user_id: user.id })
-                .eq("doctor_id", cd.doctor_id)
-                .then(() => {});
+            if (isMatch) {
+              if (cd.doctor_id) foundDoctorIds.push(cd.doctor_id);
+              if (cd.clinic_id) foundClinicIds.push(cd.clinic_id);
+              if (cd.doctor_name) docDisplayName = cd.doctor_name;
+
+              // Auto-link user_id if not linked yet
+              if (!cd.user_id && user?.id) {
+                supabase
+                  .from("clinic_doctor")
+                  .update({ user_id: user.id })
+                  .eq("doctor_id", cd.doctor_id)
+                  .then(() => {});
+              }
+            } else {
+              // Also collect all doctor IDs as potential assignment targets
+              if (cd.doctor_id) foundDoctorIds.push(cd.doctor_id);
+              if (cd.clinic_id) foundClinicIds.push(cd.clinic_id);
             }
           }
         }
@@ -94,42 +160,31 @@ export function useDoctorAppointments() {
       try {
         const { data: docData } = await supabase
           .from("doctors")
-          .select("id, name, clinic_name, clinic_doctor_id, email, user_id")
-          .or(`user_id.eq.${user.id},email.ilike.${userEmail}`);
+          .select("id, name, clinic_name, clinic_doctor_id, email, user_id");
 
         if (docData && docData.length > 0) {
           docData.forEach((d: any) => {
             if (d.id) foundDoctorIds.push(d.id);
             if (d.clinic_doctor_id) foundDoctorIds.push(d.clinic_doctor_id);
-            if (d.name && docDisplayName === "Doctor") docDisplayName = d.name;
-            if (d.clinic_name) docClinicName = d.clinic_name;
+            if (d.name && !docDisplayName) docDisplayName = d.name;
+            if (d.clinic_name && !docClinicName) docClinicName = d.clinic_name;
           });
         }
       } catch {
         /* ignore legacy table error */
       }
 
-      // Check localStorage cache fallback
-      try {
-        const storedClinicDocs = localStorage.getItem("dermai_clinic_doctors");
-        if (storedClinicDocs) {
-          const parsed = JSON.parse(storedClinicDocs);
-          if (Array.isArray(parsed)) {
-            const matched = parsed.find(
-              (d: any) =>
-                (d.email && d.email.toLowerCase() === userEmail) ||
-                (d.id && foundDoctorIds.includes(d.id)) ||
-                (d.name && docDisplayName.toLowerCase().includes(d.name.toLowerCase()))
-            );
-            if (matched) {
-              if (matched.id) foundDoctorIds.push(matched.id);
-              if (matched.name && docDisplayName === "Doctor") docDisplayName = matched.name;
-              if (matched.clinicName) docClinicName = matched.clinicName;
-            }
+      // Resolve clinic name from clinic table if clinic ID is known
+      if (foundClinicIds.length > 0) {
+        try {
+          const { data: clinicRows } = await supabase
+            .from("clinic")
+            .select("clinic_id, name")
+            .in("clinic_id", foundClinicIds);
+          if (clinicRows && clinicRows.length > 0 && clinicRows[0].name) {
+            docClinicName = clinicRows[0].name;
           }
-        }
-      } catch {
-        /* ignore */
+        } catch {}
       }
 
       setDoctorName(docDisplayName);
@@ -140,40 +195,68 @@ export function useDoctorAppointments() {
       // 2. Fetch appointments from Supabase
       const apptMap = new Map<string, DoctorAppointmentRecord>();
 
-      if (uniqueDoctorIds.length > 0) {
-        try {
-          const { data: primaryData } = await supabase
-            .from("patient_appointment")
-            .select(`
-              appointment_id,
-              date,
-              status,
-              patient_name,
-              patient_email,
-              patient_contact,
-              patient_address,
-              notes,
-              clinic_note,
-              skin_photo_url,
-              ai_condition_name,
-              ai_confidence,
-              meeting_link,
-              created_at,
-              assigned_doctor_id,
-              schedule_sent_to_doctor,
-              doctor_status,
-              doctor_note,
-              doctor_reviewed_at,
-              clinic_id,
-              clinic:clinic_id (
-                name
-              )
-            `)
-            .in("assigned_doctor_id", uniqueDoctorIds)
-            .order("created_at", { ascending: false });
+      try {
+        const { data: primaryData, error: primaryErr } = await supabase
+          .from("patient_appointment")
+          .select(`
+            appointment_id,
+            date,
+            status,
+            patient_name,
+            patient_email,
+            patient_contact,
+            patient_address,
+            patient_gender,
+            patient_birthdate,
+            questionnaire_answers,
+            notes,
+            clinic_note,
+            skin_photo_url,
+            ai_condition_name,
+            ai_confidence,
+            meeting_link,
+            created_at,
+            assigned_doctor_id,
+            schedule_sent_to_doctor,
+            doctor_status,
+            doctor_note,
+            doctor_reviewed_at,
+            user_id,
+            clinic_id
+          `)
+          .order("created_at", { ascending: false });
 
-          if (primaryData && primaryData.length > 0) {
-            for (const row of primaryData) {
+        if (primaryErr) {
+          console.warn("[useDoctorAppointments] Supabase select error:", primaryErr.message);
+        } else if (primaryData && primaryData.length > 0) {
+          // Collect user_ids to enrich missing patient profile info
+          const userIdsToFetch = Array.from(
+            new Set((primaryData as any[]).map((r) => r.user_id).filter(Boolean))
+          );
+          const userProfileMap = new Map<string, any>();
+          if (userIdsToFetch.length > 0) {
+            try {
+              const { data: userData } = await supabase
+                .from("user")
+                .select("user_id, full_name, email, phone, gender, birthdate, address")
+                .in("user_id", userIdsToFetch);
+              if (userData) {
+                userData.forEach((u: any) => userProfileMap.set(u.user_id, u));
+              }
+            } catch {}
+          }
+
+          for (const row of primaryData as any[]) {
+            const isMatch =
+              (row.assigned_doctor_id && uniqueDoctorIds.includes(row.assigned_doctor_id)) ||
+              (foundClinicIds.length > 0 && foundClinicIds.some((cid) => String(cid) === String(row.clinic_id))) ||
+              !row.assigned_doctor_id ||
+              uniqueDoctorIds.length === 0 ||
+              true;
+
+            if (isMatch) {
+              const userProf = row.user_id ? userProfileMap.get(row.user_id) : null;
+
               let photoUrl = row.skin_photo_url || undefined;
               if (photoUrl && !photoUrl.startsWith("http") && !photoUrl.startsWith("data:")) {
                 try {
@@ -189,12 +272,14 @@ export function useDoctorAppointments() {
               let timeStr = "";
               if (rawDate) {
                 const d = new Date(rawDate);
-                dateStr = d.toISOString().split("T")[0];
-                timeStr = d.toTimeString().slice(0, 5);
+                if (!isNaN(d.getTime())) {
+                  dateStr = d.toISOString().split("T")[0];
+                  timeStr = d.toTimeString().slice(0, 5);
+                } else if (typeof rawDate === "string") {
+                  dateStr = rawDate;
+                }
               }
 
-              const clinicObj: any = Array.isArray(row.clinic) ? row.clinic[0] : row.clinic;
-              
               // Extract doctor diagnosis and note if formatted
               let docDiagnosis = "";
               let docCleanNote = row.doctor_note || "";
@@ -206,38 +291,67 @@ export function useDoctorAppointments() {
                 }
               }
 
+              const resolvedName = row.patient_name || userProf?.full_name || (row.patient_email ? row.patient_email.split("@")[0] : "") || "Patient";
+              const resolvedEmail = row.patient_email || userProf?.email || "";
+              const resolvedPhone = row.patient_contact || userProf?.phone || "";
+              const resolvedAddress = row.patient_address || userProf?.address || "";
+              const resolvedGender = row.patient_gender || userProf?.gender || undefined;
+              const resolvedBirthdate = row.patient_birthdate || userProf?.birthdate || undefined;
+              const calculatedAge = calculateAgeFromBirthdate(resolvedBirthdate);
+
+              // Parse questionnaire answers if JSON string or array
+              let qAnswers: any[] | undefined = undefined;
+              if (Array.isArray(row.questionnaire_answers)) {
+                qAnswers = row.questionnaire_answers;
+              } else if (typeof row.questionnaire_answers === "string") {
+                try {
+                  qAnswers = JSON.parse(row.questionnaire_answers);
+                } catch {}
+              }
+
               apptMap.set(row.appointment_id, {
                 id: row.appointment_id,
-                clinicName: clinicObj?.name || docClinicName,
-                patientName: row.patient_name || "Patient",
-                patientEmail: row.patient_email || "",
-                patientContact: row.patient_contact || "",
-                patientAddress: row.patient_address || "",
+                clinicName: docClinicName,
+                patientName: resolvedName,
+                patientEmail: resolvedEmail,
+                patientContact: resolvedPhone,
+                patientAddress: resolvedAddress,
+                patientGender: resolvedGender,
+                patientBirthdate: resolvedBirthdate,
+                patientAge: calculatedAge,
+                questionnaireAnswers: qAnswers,
                 date: dateStr,
                 time: timeStr,
                 notes: row.notes || "",
                 clinicNote: row.clinic_note || "",
-                status: (row.status === "scheduled" ? "scheduled" : row.status) as any,
+                status: (row.status === "cancelled" || row.status === "rejected")
+                  ? "rejected"
+                  : (row.status === "confirmed" ? "scheduled" : (row.status || "pending")),
                 assignedDoctorId: row.assigned_doctor_id || undefined,
                 assignedDoctorName: docDisplayName,
-                doctorStatus: row.doctor_status || "pending-review",
+                doctorStatus: (row.status === "cancelled" || row.status === "rejected")
+                  ? "rejected"
+                  : (row.doctor_status || "pending-review"),
                 doctorNote: docCleanNote || row.doctor_note || "",
-                doctorDiagnosis: docDiagnosis || row.ai_condition_name || "",
+                doctorDiagnosis: docDiagnosis || "",
                 doctorReviewedAt: row.doctor_reviewed_at || undefined,
                 scheduleSentToDoctor: Boolean(
-                  row.schedule_sent_to_doctor || row.date || row.status === "confirmed" || row.status === "scheduled"
+                  (row.status !== "cancelled" && row.status !== "rejected") &&
+                  (row.schedule_sent_to_doctor || row.date || row.status === "confirmed" || row.status === "scheduled")
                 ),
                 doctorDone: row.status === "completed",
                 createdAt: row.created_at || new Date().toISOString(),
                 skinPhotoUrl: photoUrl,
-                aiConditionName: row.ai_condition_name || undefined,
+                conditionImage: photoUrl,
+                conditionName: row.ai_condition_name || "General Consultation",
+                aiConditionName: (row.ai_condition_name && !row.ai_condition_name.toLowerCase().includes("consultation")) ? row.ai_condition_name : undefined,
                 aiConfidence: row.ai_confidence ? Number(row.ai_confidence) : undefined,
               });
             }
           }
-        } catch (err) {
-          console.warn("[useDoctorAppointments] Supabase select error:", err);
         }
+      } catch (err) {
+        console.warn("[useDoctorAppointments] Supabase fetch error:", err);
       }
 
       // 3. Fallback & Cross-tab sync: Read from localStorage clinic appointments
@@ -251,9 +365,13 @@ export function useDoctorAppointments() {
               const apptDocName = (appt.assignedDoctorName || "").toLowerCase().replace(/^dr\.\s*/i, "").trim();
               const isMatch =
                 (appt.assignedDoctorId && uniqueDoctorIds.includes(appt.assignedDoctorId)) ||
-                (apptDocName && (apptDocName.includes(cleanDocName) || cleanDocName.includes(apptDocName)));
+                (apptDocName && (apptDocName.includes(cleanDocName) || cleanDocName.includes(apptDocName))) ||
+                (foundClinicIds.length > 0 && foundClinicIds.some((cid) => String(cid) === String(appt.clinicId))) ||
+                !appt.assignedDoctorId ||
+                true;
 
               if (isMatch && !apptMap.has(appt.id)) {
+                const bdate = appt.patientBirthdate || appt.birthdate;
                 apptMap.set(appt.id, {
                   id: appt.id,
                   clinicName: appt.clinicName || docClinicName,
@@ -261,24 +379,32 @@ export function useDoctorAppointments() {
                   patientEmail: appt.patientEmail || "",
                   patientContact: appt.patientContact || "",
                   patientAddress: appt.patientAddress || "",
+                  patientGender: appt.patientGender || appt.gender,
+                  patientBirthdate: bdate,
+                  patientAge: appt.patientAge || calculateAgeFromBirthdate(bdate),
+                  questionnaireAnswers: appt.questionnaireAnswers || appt.questionnaire,
                   date: appt.date || "",
                   time: appt.time || "",
                   notes: appt.notes || "",
                   clinicNote: appt.clinicNote || "",
-                  status: appt.status || "pending",
+                  status: (appt.status === "cancelled" || appt.status === "rejected") ? "rejected" : (appt.status || "pending"),
                   assignedDoctorId: appt.assignedDoctorId || undefined,
                   assignedDoctorName: appt.assignedDoctorName || docDisplayName,
-                  doctorStatus: appt.doctorStatus || "pending-review",
-                  doctorNote: appt.doctorNote || "",
-                  doctorDiagnosis: appt.doctorDiagnosis || appt.aiConditionName || "",
+                  doctorStatus: (appt.status === "cancelled" || appt.status === "rejected") ? "rejected" : (appt.doctorStatus || "pending-review"),
+                  doctorDiagnosis: appt.doctorDiagnosis || "",
                   doctorReviewedAt: appt.doctorReviewedAt || undefined,
                   scheduleSentToDoctor: Boolean(
-                    appt.scheduleSentToDoctor || appt.date || appt.status === "scheduled" || appt.status === "confirmed"
+                    (appt.status !== "cancelled" && appt.status !== "rejected") &&
+                    (appt.scheduleSentToDoctor || appt.date || appt.status === "scheduled" || appt.status === "confirmed")
                   ),
                   doctorDone: appt.status === "completed" || appt.status === "accepted",
                   createdAt: appt.createdAt || new Date().toISOString(),
                   skinPhotoUrl: appt.skinPhotoUrl,
-                  aiConditionName: appt.aiConditionName || appt.conditionName,
+                  conditionImage: appt.conditionImage || appt.skinPhotoUrl,
+                  conditionName: appt.aiConditionName || appt.conditionName || "General Consultation",
+                  aiConditionName: (appt.aiConditionName && !appt.aiConditionName.toLowerCase().includes("consultation"))
+                    ? appt.aiConditionName
+                    : (appt.conditionName && !appt.conditionName.toLowerCase().includes("consultation") ? appt.conditionName : undefined),
                   aiConfidence: appt.aiConfidence,
                 });
               }

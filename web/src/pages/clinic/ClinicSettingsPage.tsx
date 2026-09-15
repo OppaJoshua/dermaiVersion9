@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
+import { createHelpdeskTicketAsync } from "@/lib/store";
 import LocationPickerMap from "@/components/common/LocationPickerMap";
 
 /* ── Study-scoped service options ─────────────────────────── */
@@ -344,22 +345,22 @@ export default function ClinicSettingsPage() {
     if (!ticketSubject.trim() || !ticketMessage.trim()) return;
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user?.id) {
-        await supabase.from("user_support_ticket").insert({
-          user_id: session.user.id,
-          subject: ticketSubject.trim(),
-          message: ticketMessage.trim(),
-          category: "Clinic Settings",
-          status: "open",
-        });
-      }
+      await createHelpdeskTicketAsync({
+        userId: session?.user?.id,
+        user: settings.name?.trim() || session?.user?.email?.split("@")[0] || "Clinic Administrator",
+        email: settings.email?.trim() || session?.user?.email || "",
+        subject: ticketSubject.trim(),
+        message: ticketMessage.trim(),
+        category: "Clinic Support",
+        priority: "medium",
+      });
     } catch (err) {
       console.error("Failed to submit clinic ticket:", err);
     }
     setTicketSent(true);
     setTicketSubject("");
     setTicketMessage("");
-    setTimeout(() => setTicketSent(false), 3000);
+    setTimeout(() => setTicketSent(false), 4000);
   };
 
   return (
@@ -514,7 +515,7 @@ export default function ClinicSettingsPage() {
                     ...prev,
                     latitude: lat,
                     longitude: lng,
-                    address: prev.address.trim() ? prev.address : (addressSuggestion || prev.address),
+                    address: addressSuggestion || prev.address,
                   }));
                 }}
               />

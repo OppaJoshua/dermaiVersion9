@@ -16,6 +16,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { createHelpdeskTicketAsync } from "@/lib/store";
 
 interface DoctorProfile {
   id?: string;
@@ -223,9 +224,23 @@ export default function DoctorSettingsPage() {
     };
   }, [loadData]);
 
-  const handleSendTicket = (e: React.FormEvent) => {
+  const handleSendTicket = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ticketSubject.trim() || !ticketMessage.trim()) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      await createHelpdeskTicketAsync({
+        userId: session?.user?.id || profile.id,
+        user: profile.fullName?.trim() || session?.user?.email?.split("@")[0] || "Dr. Practitioner",
+        email: profile.email?.trim() || session?.user?.email || "",
+        subject: ticketSubject.trim(),
+        message: ticketMessage.trim(),
+        category: "Doctor Clinical Support",
+        priority: "medium",
+      });
+    } catch (err) {
+      console.error("Failed to submit doctor ticket:", err);
+    }
     setTicketSent(true);
     setTicketSubject("");
     setTicketMessage("");

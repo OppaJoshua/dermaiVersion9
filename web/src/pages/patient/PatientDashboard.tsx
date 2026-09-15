@@ -402,7 +402,7 @@ export default function PatientDashboard() {
           </motion.div>
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
             <Link
-              to="/appointment"
+              to="/dashboard/clinics"
               className="group flex items-center gap-5 bg-white rounded-2xl p-6 border border-gray-100 hover:border-magenta-200 hover:shadow-sm transition-all"
             >
               <div className="w-14 h-14 rounded-2xl bg-amber-50 flex items-center justify-center group-hover:scale-105 transition-transform shrink-0">
@@ -410,7 +410,7 @@ export default function PatientDashboard() {
               </div>
               <div className="flex-1">
                 <h3 className="font-display font-bold text-lg text-gray-900 mb-0.5">Book Appointment</h3>
-                <p className="text-gray-400 text-sm">Submit request for clinic scheduling</p>
+                <p className="text-gray-400 text-sm">Find verified clinic and schedule</p>
               </div>
               <ChevronRight className="w-5 h-5 text-gray-300 group-hover:translate-x-1 group-hover:text-amber-500 transition-all" />
             </Link>
@@ -425,7 +425,7 @@ export default function PatientDashboard() {
         >
           <div className="px-6 pt-5 pb-3 flex items-center justify-between">
             <h2 className="font-display font-bold text-gray-900">My Appointments</h2>
-            <Link to="/appointment" className="text-xs text-magenta-600 font-semibold hover:text-magenta-700">
+            <Link to="/dashboard/appointment-status" className="text-xs text-magenta-600 font-semibold hover:text-magenta-700">
               Manage
             </Link>
           </div>

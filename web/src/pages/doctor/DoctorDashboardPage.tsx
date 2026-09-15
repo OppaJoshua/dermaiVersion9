@@ -9,13 +9,24 @@ export default function DoctorDashboardPage() {
   const fallbackImage = skinConditions[0]?.image;
   const pendingReview = allAppointments.filter(
     (a) =>
-      a.doctorStatus === "pending-review" ||
-      (!a.doctorStatus && a.status !== "completed" && a.status !== "rejected")
+      a.status !== "rejected" &&
+      a.status !== "cancelled" &&
+      a.status !== "completed" &&
+      a.doctorStatus !== "rejected" &&
+      a.doctorStatus !== "approved"
   );
-  const approved = allAppointments.filter((a) => a.doctorStatus === "approved");
-  const rejected = allAppointments.filter((a) => a.doctorStatus === "rejected");
+  const approved = allAppointments.filter(
+    (a) => a.doctorStatus === "approved" && a.status !== "rejected" && a.status !== "cancelled"
+  );
+  const rejected = allAppointments.filter(
+    (a) => a.doctorStatus === "rejected" || a.status === "rejected" || a.status === "cancelled"
+  );
   const scheduledSent = allAppointments.filter(
-    (a) => a.scheduleSentToDoctor || a.status === "confirmed" || a.status === "scheduled"
+    (a) =>
+      a.status !== "rejected" &&
+      a.status !== "cancelled" &&
+      a.status !== "completed" &&
+      (a.scheduleSentToDoctor || a.status === "confirmed" || a.status === "scheduled")
   );
 
   const stats = [

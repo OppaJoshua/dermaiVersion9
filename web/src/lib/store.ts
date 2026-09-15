@@ -152,18 +152,370 @@ export async function updatePlatformScanStatus(
   if (error) console.error("[store] updatePlatformScanStatus:", error.message);
 }
 
-// PATCH helpdesk ticket status (admin only)
+export type HelpdeskTicketStatus = "open" | "in-progress" | "resolved";
+
+export type HelpdeskTicket = {
+  id: string;
+  userId?: string;
+  user: string;
+  email: string;
+  subject: string;
+  message: string;
+  status: HelpdeskTicketStatus;
+  category: string;
+  priority: "low" | "medium" | "high" | "urgent";
+  response?: string;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+const HELPDESK_STORAGE_KEY = "dermai_helpdesk_tickets";
+
+// Helper to get local fallback tickets
+export function getLocalHelpdeskTickets(): HelpdeskTicket[] {
+  try {
+    const raw = localStorage.getItem(HELPDESK_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((t: any) => ({
+      id: t.id || t.ticket_id || `TKT-${Date.now().toString().slice(-6)}`,
+      userId: t.userId || t.user_id,
+      user: t.user || t.full_name || t.userName || "Platform User",
+      email: t.email || "",
+      subject: t.subject || "Support Inquiry",
+      message: t.message || "",
+      status: (t.status === "in-progress" || t.status === "resolved" ? t.status : "open") as HelpdeskTicketStatus,
+      category: t.category || "General Support",
+      priority: t.priority || "medium",
+      response: t.response || undefined,
+      createdAt: t.createdAt || t.created_at || new Date().toISOString(),
+      updatedAt: t.updatedAt || t.updated_at || undefined,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// Helper to save local fallback tickets
+export function saveLocalHelpdeskTickets(tickets: HelpdeskTicket[]): void {
+  try {
+    localStorage.setItem(HELPDESK_STORAGE_KEY, JSON.stringify(tickets));
+  } catch {
+    /* ignore */
+  }
+}
+
+// GET helpdesk tickets (Strictly real data from Supabase + localStorage)
+export async function getHelpdeskTicketsAsync(userId?: string): Promise<HelpdeskTicket[]> {
+  const localTickets = getLocalHelpdeskTickets();
+  let dbTickets: HelpdeskTicket[] = [];
+
+  try {
+    // Fetch real tickets from Supabase without fragile join syntax
+    let query = supabase
+      .from("user_support_ticket")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (userId) {
+      query = query.eq("user_id", userId);
+    }
+
+    const { data, error } = await query;
+
+    if (!error && data && data.length > 0) {
+      // Fetch sender profiles safely
+      const userIds = Array.from(new Set(data.map((t: any) => t.user_id).filter(Boolean)));
+      const userMap = new Map<string, { full_name: string; email: string }>();
+
+      if (userIds.length > 0) {
+        try {
+          const { data: usersData } = await supabase
+            .from("user")
+            .select("user_id, full_name, email")
+            .in("user_id", userIds);
+
+          if (usersData) {
+            usersData.forEach((u: any) => {
+              userMap.set(u.user_id, {
+                full_name: u.full_name || "Platform User",
+                email: u.email || "",
+              });
+            });
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const statusMap: Record<string, HelpdeskTicketStatus> = {
+        open: "open",
+        pending: "in-progress",
+        closed: "resolved",
+      };
+
+      dbTickets = data.map((t: any) => {
+        const userInfo = userMap.get(t.user_id);
+        const rawStatus = (t.status || "open").toLowerCase();
+        const mappedStatus: HelpdeskTicketStatus =
+          statusMap[rawStatus] ||
+          (rawStatus === "in-progress" || rawStatus === "resolved" ? (rawStatus as HelpdeskTicketStatus) : "open");
+
+        return {
+          id: t.ticket_id || t.id,
+          userId: t.user_id,
+          user: userInfo?.full_name || t.user_name || t.user || "Platform User",
+          email: userInfo?.email || t.email || "",
+          subject: t.subject || "Support Inquiry",
+          message: t.message || "",
+          status: mappedStatus,
+          category: t.category || "General Support",
+          priority: (t.priority as any) || "medium",
+          response: t.response || undefined,
+          createdAt: t.created_at || t.createdAt || new Date().toISOString(),
+          updatedAt: t.updated_at || t.updatedAt || undefined,
+        };
+      });
+    } else if (error) {
+      console.warn("[store] getHelpdeskTicketsAsync query warning:", error.message);
+    }
+  } catch (err) {
+    console.warn("[store] getHelpdeskTicketsAsync network error:", err);
+  }
+
+  // Merge DB tickets and real local tickets created in session
+  const ticketMap = new Map<string, HelpdeskTicket>();
+  dbTickets.forEach((t) => {
+    if (t && t.id) ticketMap.set(t.id, t);
+  });
+  localTickets.forEach((t) => {
+    if (t && t.id) {
+      if (!ticketMap.has(t.id)) {
+        if (!userId || t.userId === userId) {
+          ticketMap.set(t.id, t);
+        }
+      }
+    }
+  });
+
+  const merged = Array.from(ticketMap.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+
+  return merged;
+}
+
+// CREATE helpdesk ticket
+export async function createHelpdeskTicketAsync(input: {
+  userId?: string;
+  user?: string;
+  email?: string;
+  subject: string;
+  message: string;
+  category?: string;
+  priority?: "low" | "medium" | "high" | "urgent";
+}): Promise<HelpdeskTicket> {
+  const generatedId = `TKT-${Date.now().toString().slice(-6)}`;
+  let savedId = generatedId;
+
+  const ticketCategory = input.category || "General Support";
+  const ticketPriority = input.priority || "medium";
+
+  // 1. Resolve an effective user ID for the foreign key constraint
+  let effectiveUserId = input.userId;
+  if (!effectiveUserId) {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      effectiveUserId = sessionData?.session?.user?.id;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 2. If still no user ID, pick or create an existing platform user
+  if (!effectiveUserId) {
+    try {
+      const { data: anyUser } = await supabase
+        .from("user")
+        .select("user_id")
+        .limit(1)
+        .maybeSingle();
+
+      if (anyUser?.user_id) {
+        effectiveUserId = anyUser.user_id;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 3. Ensure effectiveUserId exists in "user" table to avoid FK error (23503)
+  if (effectiveUserId) {
+    try {
+      const { data: userRow } = await supabase
+        .from("user")
+        .select("user_id")
+        .eq("user_id", effectiveUserId)
+        .maybeSingle();
+
+      if (!userRow) {
+        await supabase.from("user").insert({
+          user_id: effectiveUserId,
+          full_name: input.user || "Platform User",
+          email: input.email || "user@dermai.ph",
+          role: "patient",
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 4. Insert ticket into Supabase user_support_ticket
+  if (effectiveUserId) {
+    try {
+      // First attempt with all fields
+      let { data, error } = await supabase
+        .from("user_support_ticket")
+        .insert({
+          user_id: effectiveUserId,
+          subject: input.subject.trim(),
+          message: input.message.trim(),
+          status: "open",
+          category: ticketCategory,
+          priority: ticketPriority,
+        })
+        .select("ticket_id, created_at")
+        .maybeSingle();
+
+      // If category/priority column error, fallback to baseline columns
+      if (error && (error.code === "42703" || error.message?.includes("column"))) {
+        const fallbackRes = await supabase
+          .from("user_support_ticket")
+          .insert({
+            user_id: effectiveUserId,
+            subject: input.subject.trim(),
+            message: input.message.trim(),
+            status: "open",
+          })
+          .select("ticket_id, created_at")
+          .maybeSingle();
+
+        if (!fallbackRes.error && fallbackRes.data?.ticket_id) {
+          savedId = fallbackRes.data.ticket_id;
+        }
+      } else if (!error && data?.ticket_id) {
+        savedId = data.ticket_id;
+      }
+    } catch (err) {
+      console.warn("[store] Supabase insert ticket network error:", err);
+    }
+  }
+
+  const newTicket: HelpdeskTicket = {
+    id: savedId,
+    userId: effectiveUserId,
+    user: input.user || "Current User",
+    email: input.email || "",
+    subject: input.subject.trim(),
+    message: input.message.trim(),
+    status: "open",
+    category: ticketCategory,
+    priority: ticketPriority,
+    createdAt: new Date().toISOString(),
+  };
+
+  // Sync to local storage
+  const currentLocal = getLocalHelpdeskTickets();
+  saveLocalHelpdeskTickets([newTicket, ...currentLocal.filter((t) => t.id !== savedId)]);
+
+  // Dispatch events for cross-tab and cross-component live sync
+  try {
+    window.dispatchEvent(new CustomEvent("dermai_tickets_updated", { detail: newTicket }));
+    window.dispatchEvent(new Event("storage"));
+  } catch {
+    /* ignore */
+  }
+
+  return newTicket;
+}
+
+// PATCH helpdesk ticket status & optional admin response
 export async function updateHelpdeskTicketStatus(
   id: string,
-  status: "open" | "in-progress" | "resolved"
+  status: HelpdeskTicketStatus,
+  response?: string
 ): Promise<void> {
   const mapped = status === "in-progress" ? "pending" : status === "resolved" ? "closed" : "open";
-  const { error } = await supabase
-    .from("user_support_ticket")
-    .update({ status: mapped })
-    .eq("ticket_id", id);
+  const updatePayload: Record<string, any> = {
+    status: mapped,
+    updated_at: new Date().toISOString(),
+  };
+  if (response !== undefined) {
+    updatePayload.response = response;
+  }
 
-  if (error) console.error("[store] updateHelpdeskTicketStatus:", error.message);
+  try {
+    const { error } = await supabase
+      .from("user_support_ticket")
+      .update(updatePayload)
+      .eq("ticket_id", id);
+
+    if (error) console.warn("[store] updateHelpdeskTicketStatus Supabase warn:", error.message);
+  } catch (err) {
+    console.warn("[store] updateHelpdeskTicketStatus error:", err);
+  }
+
+  // Update local storage
+  const local = getLocalHelpdeskTickets();
+  const existingInLocal = local.find((t) => t.id === id);
+
+  if (existingInLocal) {
+    const updatedLocal = local.map((t) =>
+      t.id === id
+        ? {
+            ...t,
+            status,
+            response: response !== undefined ? response : t.response,
+            updatedAt: new Date().toISOString(),
+          }
+        : t
+    );
+    saveLocalHelpdeskTickets(updatedLocal);
+  }
+
+  // Dispatch live sync event
+  try {
+    window.dispatchEvent(new CustomEvent("dermai_tickets_updated", { detail: { id, status, response } }));
+    window.dispatchEvent(new Event("storage"));
+  } catch {
+    /* ignore */
+  }
+}
+
+// DELETE helpdesk ticket
+export async function deleteHelpdeskTicketAsync(id: string): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from("user_support_ticket")
+      .delete()
+      .eq("ticket_id", id);
+
+    if (error) console.warn("[store] deleteHelpdeskTicketAsync Supabase warn:", error.message);
+  } catch (err) {
+    console.warn("[store] deleteHelpdeskTicketAsync error:", err);
+  }
+
+  const local = getLocalHelpdeskTickets();
+  saveLocalHelpdeskTickets(local.filter((t) => t.id !== id));
+
+  try {
+    window.dispatchEvent(new CustomEvent("dermai_tickets_updated", { detail: { id, deleted: true } }));
+    window.dispatchEvent(new Event("storage"));
+  } catch {
+    /* ignore */
+  }
 }
 
 // Upsert subscription plan (admin only)

@@ -17,6 +17,8 @@ import {
     ChevronLeft,
     List,
     RotateCcw,
+    Images,
+    Maximize2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { cn } from "@/lib/utils";
@@ -61,6 +63,7 @@ L.Marker.prototype.options.icon = magentaPinIcon;
 export type ClinicItem = {
     id: string;
     name: string;
+    logo: string;
     address: string;
     phone: string;
     facebook: string;
@@ -73,6 +76,7 @@ export type ClinicItem = {
     conditionsTreated: string[];
     consultationFee: string;
     description: string;
+    photos: string[];
 };
 
 // Fallback coordinates for common Philippine districts if exact lat/lng are pending
@@ -108,7 +112,8 @@ function mapRawClinicToItem(
     c: any,
     doctorsMap?: Map<string, any[]>,
     servicesMap?: Map<string, string[]>,
-    hoursMap?: Map<string, any[]>
+    hoursMap?: Map<string, any[]>,
+    photosMap?: Map<string, string[]>
 ): ClinicItem {
     const clinicId = String(c.clinic_id || c.id);
 
@@ -151,6 +156,40 @@ function mapRawClinicToItem(
         services = c.servicesOffered.split(",").map((s: string) => s.trim()).filter(Boolean);
     }
 
+    // Gallery Photos (up to 5 uploaded during registration)
+    let photosList: string[] = [];
+    const rawPhotos = c.clinic_photo || (photosMap ? photosMap.get(clinicId) : null);
+    if (Array.isArray(rawPhotos) && rawPhotos.length > 0) {
+        photosList = rawPhotos
+            .map((p: any) => (typeof p === "string" ? p : p?.photo_url))
+            .filter(Boolean);
+    } else if (Array.isArray(c.photos) && c.photos.length > 0) {
+        photosList = c.photos.filter(Boolean);
+    } else if (Array.isArray(c.clinicPhotos) && c.clinicPhotos.length > 0) {
+        photosList = c.clinicPhotos.filter(Boolean);
+    }
+
+    if (photosList.length === 0) {
+        try {
+            const appsRaw = localStorage.getItem("dermai_clinic_applications");
+            if (appsRaw) {
+                const apps = JSON.parse(appsRaw);
+                if (Array.isArray(apps)) {
+                    const matchedApp = apps.find((a: any) =>
+                        String(a.id) === clinicId ||
+                        (a.email && c.email && a.email.toLowerCase().trim() === c.email.toLowerCase().trim()) ||
+                        (a.name && c.name && a.name.toLowerCase().trim() === c.name.toLowerCase().trim())
+                    );
+                    if (Array.isArray(matchedApp?.clinicPhotos) && matchedApp.clinicPhotos.length > 0) {
+                        photosList = matchedApp.clinicPhotos.filter(Boolean);
+                    } else if (Array.isArray(matchedApp?.photos) && matchedApp.photos.length > 0) {
+                        photosList = matchedApp.photos.filter(Boolean);
+                    }
+                }
+            }
+        } catch {}
+    }
+
     // Coordinates with district fallback
     const rawLat = c.latitude != null ? Number(c.latitude) : c.lat != null ? Number(c.lat) : null;
     const rawLng = c.longitude != null ? Number(c.longitude) : c.lng != null ? Number(c.lng) : null;
@@ -163,10 +202,41 @@ function mapRawClinicToItem(
     const isVerified = status === "approved" || status === "verified";
 
     const desc = (c.description || c.about || c.bio || c.overview || "").trim();
+    let logoUrl = (c.logo_url || c.logo || (Array.isArray(c.clinic_photo) && c.clinic_photo[0]?.photo_url) || "").trim();
+    if (!logoUrl) {
+        try {
+            const appsRaw = localStorage.getItem("dermai_clinic_applications");
+            if (appsRaw) {
+                const apps = JSON.parse(appsRaw);
+                if (Array.isArray(apps)) {
+                    const matchedApp = apps.find((a: any) =>
+                        String(a.id) === clinicId ||
+                        (a.email && c.email && a.email.toLowerCase().trim() === c.email.toLowerCase().trim()) ||
+                        (a.name && c.name && a.name.toLowerCase().trim() === c.name.toLowerCase().trim())
+                    );
+                    if (matchedApp?.logo) {
+                        logoUrl = matchedApp.logo;
+                    }
+                }
+            }
+        } catch {}
+    }
+    if (!logoUrl) {
+        try {
+            const settRaw = localStorage.getItem("dermai_clinic_settings");
+            if (settRaw) {
+                const sett = JSON.parse(settRaw);
+                if (sett?.logo && (sett.name === c.name || (sett.email && c.email && sett.email.toLowerCase().trim() === c.email.toLowerCase().trim()))) {
+                    logoUrl = sett.logo;
+                }
+            }
+        } catch {}
+    }
 
     return {
         id: clinicId,
         name: (c.name || "Clinic").trim(),
+        logo: logoUrl,
         address: c.address || c.location || c.district || "",
         phone: c.phone || "",
         facebook: c.facebook || "",
@@ -183,6 +253,7 @@ function mapRawClinicToItem(
             ? String(c.consultationFee)
             : "500",
         description: desc,
+        photos: photosList,
     };
 }
 
@@ -191,20 +262,7 @@ function getInitialFindClinics(): ClinicItem[] {
         const cachedFind = localStorage.getItem("dermai_cached_find_clinics");
         if (cachedFind) {
             const parsed = JSON.parse(cachedFind);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-
-        const cachedAdmin =
-            localStorage.getItem("dermai_cached_admin_clinics") ||
-            localStorage.getItem("dermai_clinic_applications");
-        if (cachedAdmin) {
-            const parsed = JSON.parse(cachedAdmin);
-            if (Array.isArray(parsed)) {
-                const approved = parsed
-                    .filter((c: any) => c.status === "approved" || c.status === "verified")
-                    .map((c: any) => mapRawClinicToItem(c));
-                if (approved.length > 0) return approved;
-            }
+            if (Array.isArray(parsed)) return parsed;
         }
     } catch {}
     return [];
@@ -216,6 +274,8 @@ export default function FindClinicsPage() {
     const [searchQuery, setSearchQuery] = useState("");
     const [selectedDistrict, setSelectedDistrict] = useState("All Districts");
     const [selectedClinic, setSelectedClinic] = useState<ClinicItem | null>(null);
+    const [activePhotoIdx, setActivePhotoIdx] = useState<number>(0);
+    const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
     const [flyTarget, setFlyTarget] = useState<[number, number] | null>(null);
     const [activeClinicId, setActiveClinicId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<"all" | "saved">("all");
@@ -284,6 +344,7 @@ export default function FindClinicsPage() {
                 .select(`
                     clinic_id,
                     name,
+                    logo_url,
                     district,
                     address,
                     phone,
@@ -293,6 +354,10 @@ export default function FindClinicsPage() {
                     longitude,
                     consultation_fee,
                     description,
+                    clinic_photo (
+                        photo_url,
+                        sort_order
+                    ),
                     clinic_service_offered (
                         service_name
                     ),
@@ -317,7 +382,7 @@ export default function FindClinicsPage() {
                 // 2. Fallback to independent queries if nested relationship fails
                 const { data: clinicRows, error: clinicErr } = await supabase
                     .from("clinic")
-                    .select("clinic_id, name, district, address, phone, email, status, latitude, longitude, consultation_fee, description")
+                    .select("clinic_id, name, logo_url, district, address, phone, email, status, latitude, longitude, consultation_fee, description")
                     .or("status.eq.approved,status.eq.verified");
 
                 if (!clinicErr && clinicRows && clinicRows.length > 0) {
@@ -325,11 +390,13 @@ export default function FindClinicsPage() {
                     const doctorsMap = new Map<string, any[]>();
                     const servicesMap = new Map<string, string[]>();
                     const hoursMap = new Map<string, any[]>();
+                    const photosMap = new Map<string, string[]>();
 
-                    const [docRes, srvRes, hrsRes] = await Promise.allSettled([
+                    const [docRes, srvRes, hrsRes, photoRes] = await Promise.allSettled([
                         supabase.from("clinic_doctor").select("*").in("clinic_id", clinicIds),
                         supabase.from("clinic_service_offered").select("*").in("clinic_id", clinicIds),
                         supabase.from("clinic_operating_hours").select("*").in("clinic_id", clinicIds),
+                        supabase.from("clinic_photo").select("*").in("clinic_id", clinicIds).order("sort_order"),
                     ]);
 
                     if (docRes.status === "fulfilled" && docRes.value.data) {
@@ -353,36 +420,19 @@ export default function FindClinicsPage() {
                             hoursMap.get(cid)!.push(h);
                         });
                     }
+                    if (photoRes.status === "fulfilled" && photoRes.value.data) {
+                        photoRes.value.data.forEach((p: any) => {
+                            const cid = String(p.clinic_id);
+                            if (!photosMap.has(cid)) photosMap.set(cid, []);
+                            if (p.photo_url) photosMap.get(cid)!.push(p.photo_url);
+                        });
+                    }
 
                     mappedClinics = clinicRows.map((c: any) =>
-                        mapRawClinicToItem(c, doctorsMap, servicesMap, hoursMap)
+                        mapRawClinicToItem(c, doctorsMap, servicesMap, hoursMap, photosMap)
                     );
                 }
             }
-
-            // 3. Merge with local admin cache if newly approved locally
-            try {
-                const cachedAdmin =
-                    localStorage.getItem("dermai_cached_admin_clinics") ||
-                    localStorage.getItem("dermai_clinic_applications");
-                if (cachedAdmin) {
-                    const parsed = JSON.parse(cachedAdmin);
-                    if (Array.isArray(parsed)) {
-                        const localApproved = parsed
-                            .filter((c: any) => c.status === "approved" || c.status === "verified")
-                            .map((c: any) => mapRawClinicToItem(c));
-
-                        // Merge without duplicates
-                        const existingIds = new Set(mappedClinics.map((c) => String(c.id)));
-                        localApproved.forEach((item: ClinicItem) => {
-                            if (!existingIds.has(String(item.id))) {
-                                mappedClinics.push(item);
-                                existingIds.add(String(item.id));
-                            }
-                        });
-                    }
-                }
-            } catch {}
 
             setDbClinics(mappedClinics);
             try {
@@ -456,13 +506,19 @@ export default function FindClinicsPage() {
     const openClinicDetails = (clinic: ClinicItem) => {
         setSelectedClinic(clinic);
         setActiveClinicId(clinic.id);
+        setActivePhotoIdx(0);
+        setLightboxPhoto(null);
         if (clinic.lat !== null && clinic.lng !== null) {
             setFlyTarget([clinic.lat, clinic.lng]);
         }
     };
 
     const goToAppointment = (clinicId: string) => {
-        navigate(`/appointment?clinic=${clinicId}`);
+        if (!currentUserId) {
+            navigate("/login", { state: { from: `/dashboard/appointment?clinic=${clinicId}` } });
+            return;
+        }
+        navigate(`/dashboard/appointment?clinic=${clinicId}`);
     };
 
     return (
@@ -476,7 +532,10 @@ export default function FindClinicsPage() {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         className="fixed inset-0 z-[9999] flex items-center justify-center p-4 sm:p-6 bg-black/40 backdrop-blur-sm"
-                        onClick={() => setSelectedClinic(null)}
+                        onClick={() => {
+                            setSelectedClinic(null);
+                            setLightboxPhoto(null);
+                        }}
                     >
                         <motion.div
                             initial={{ opacity: 0, scale: 0.96, y: 12 }}
@@ -488,23 +547,31 @@ export default function FindClinicsPage() {
                         >
                             {/* Sticky Modal Header */}
                             <div className="px-6 py-4 border-b border-gray-100 flex items-start justify-between bg-white">
-                                <div className="space-y-1">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                        <h2 className="text-lg sm:text-xl font-bold text-gray-900 tracking-tight leading-snug">
-                                            {selectedClinic.name}
-                                        </h2>
-                                        {selectedClinic.verified && (
-                                            <VerifiedBadge size={18} className="w-4.5 h-4.5 shrink-0" title="Verified Clinic" />
-                                        )}
-                                    </div>
-                                    {selectedClinic.verified ? (
-                                        <div className="flex items-center gap-1 text-[11px] font-semibold text-blue-600 bg-blue-50/80 border border-blue-100/80 px-2 py-0.5 rounded-full w-fit">
-                                            <VerifiedBadge size={11} className="w-2.5 h-2.5" />
-                                            <span>Verified Partner Clinic</span>
-                                        </div>
+                                <div className="flex items-center gap-3.5 min-w-0">
+                                    {selectedClinic.logo ? (
+                                        <img
+                                            src={selectedClinic.logo}
+                                            alt={selectedClinic.name}
+                                            className="w-12 h-12 rounded-2xl object-cover border border-magenta-100/80 shadow-xs shrink-0 bg-white"
+                                        />
                                     ) : (
-                                        <span className="text-[11px] font-medium text-gray-400">Dermatology Clinic</span>
+                                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-magenta-50 to-pink-100/60 border border-magenta-100 flex items-center justify-center shrink-0 text-magenta-600 shadow-xs">
+                                            <Building2 className="w-6 h-6" />
+                                        </div>
                                     )}
+                                    <div className="space-y-1 min-w-0">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <h2 className="text-lg sm:text-xl font-bold text-gray-900 tracking-tight leading-snug truncate">
+                                                {selectedClinic.name}
+                                            </h2>
+                                            {selectedClinic.verified && (
+                                                <VerifiedBadge size={18} className="w-4.5 h-4.5 shrink-0" title="Verified Clinic" />
+                                            )}
+                                        </div>
+                                        <span className="text-[11px] font-medium text-gray-400">
+                                            {selectedClinic.verified ? "Verified Partner Clinic" : "Dermatology Clinic"}
+                                        </span>
+                                    </div>
                                 </div>
 
                                 <div className="flex items-center gap-1 shrink-0 ml-3">
@@ -527,7 +594,10 @@ export default function FindClinicsPage() {
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={() => setSelectedClinic(null)}
+                                        onClick={() => {
+                                            setSelectedClinic(null);
+                                            setLightboxPhoto(null);
+                                        }}
                                         className="p-2 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
                                         title="Close"
                                     >
@@ -548,6 +618,71 @@ export default function FindClinicsPage() {
                                             "Specialized in advanced dermatological care, comprehensive skin assessments, acne & eczema management, and customized treatment plans tailored to each patient."}
                                     </div>
                                 </div>
+
+                                {/* Clinic Photos / Facilities Gallery (Up to 5 Photos) */}
+                                {selectedClinic.photos && selectedClinic.photos.length > 0 && (
+                                    <div>
+                                        <div className="flex items-center justify-between mb-2">
+                                            <h4 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                                                <Images className="w-3.5 h-3.5 text-magenta-500" />
+                                                Clinic Facilities &amp; Gallery
+                                            </h4>
+                                            <span className="text-[10px] font-bold text-magenta-600 bg-magenta-50 px-2 py-0.5 rounded-full border border-magenta-100">
+                                                {selectedClinic.photos.length} {selectedClinic.photos.length === 1 ? "Photo" : "Photos"}
+                                            </span>
+                                        </div>
+
+                                        {/* Featured Main Photo Preview */}
+                                        <div className="relative group rounded-2xl overflow-hidden border border-magenta-100/80 bg-gray-900 shadow-sm">
+                                            <img
+                                                src={selectedClinic.photos[Math.min(activePhotoIdx, selectedClinic.photos.length - 1)]}
+                                                alt={`${selectedClinic.name} facility`}
+                                                className="w-full h-44 sm:h-48 object-cover transition-transform duration-300 group-hover:scale-[1.02] cursor-pointer"
+                                                onClick={() => setLightboxPhoto(selectedClinic.photos[Math.min(activePhotoIdx, selectedClinic.photos.length - 1)])}
+                                            />
+                                            {/* Click to Enlarge Hover Tag */}
+                                            <div
+                                                onClick={() => setLightboxPhoto(selectedClinic.photos[Math.min(activePhotoIdx, selectedClinic.photos.length - 1)])}
+                                                className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer pointer-events-auto"
+                                            >
+                                                <div className="px-3 py-1.5 rounded-full bg-white/95 backdrop-blur-md text-gray-900 text-xs font-bold flex items-center gap-1.5 shadow-lg">
+                                                    <Maximize2 className="w-3.5 h-3.5 text-magenta-600" />
+                                                    <span>Click to Enlarge</span>
+                                                </div>
+                                            </div>
+
+                                            {/* Photo Index Counter */}
+                                            <div className="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-lg bg-black/60 backdrop-blur-md text-white text-[11px] font-medium pointer-events-none">
+                                                {Math.min(activePhotoIdx + 1, selectedClinic.photos.length)} / {selectedClinic.photos.length}
+                                            </div>
+                                        </div>
+
+                                        {/* Thumbnail Strip (if more than 1 photo) */}
+                                        {selectedClinic.photos.length > 1 && (
+                                            <div className="flex items-center gap-2 mt-2.5 overflow-x-auto pb-1">
+                                                {selectedClinic.photos.map((imgUrl, idx) => (
+                                                    <button
+                                                        key={idx}
+                                                        type="button"
+                                                        onClick={() => setActivePhotoIdx(idx)}
+                                                        className={cn(
+                                                            "relative w-14 h-14 rounded-xl overflow-hidden shrink-0 border-2 transition-all cursor-pointer",
+                                                            activePhotoIdx === idx
+                                                                ? "border-magenta-500 ring-2 ring-magenta-500/30 scale-105 shadow-sm"
+                                                                : "border-gray-200 opacity-60 hover:opacity-100 hover:border-magenta-300"
+                                                        )}
+                                                    >
+                                                        <img
+                                                            src={imgUrl}
+                                                            alt={`Thumbnail ${idx + 1}`}
+                                                            className="w-full h-full object-cover"
+                                                        />
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
                                 {/* Contact & Hours Info Grid */}
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -664,11 +799,51 @@ export default function FindClinicsPage() {
                                     onClick={() => {
                                         const clinicId = selectedClinic.id;
                                         setSelectedClinic(null);
+                                        setLightboxPhoto(null);
                                         goToAppointment(clinicId);
                                     }}
                                     className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 active:scale-[0.99] text-white text-xs sm:text-sm font-semibold transition-all shadow-sm cursor-pointer"
                                 >
                                     <Calendar className="w-4 h-4" /> Book Appointment
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ── Fullscreen Photo Lightbox Modal ──────────────────────── */}
+            <AnimatePresence>
+                {lightboxPhoto && (
+                    <motion.div
+                        key="gallery-lightbox"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6 bg-black/85 backdrop-blur-md"
+                        onClick={() => setLightboxPhoto(null)}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.94, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.94, opacity: 0 }}
+                            transition={{ duration: 0.18 }}
+                            className="relative max-w-3xl max-h-[90vh] w-full flex flex-col items-center"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="relative w-full flex justify-center">
+                                <img
+                                    src={lightboxPhoto}
+                                    alt="Clinic facility enlarged preview"
+                                    className="max-w-full max-h-[82vh] rounded-3xl object-contain shadow-2xl border border-white/20"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setLightboxPhoto(null)}
+                                    className="absolute -top-3 -right-3 sm:top-3 sm:right-3 p-2 rounded-full bg-black/60 hover:bg-black/80 text-white backdrop-blur-md border border-white/20 transition-all cursor-pointer shadow-lg"
+                                    title="Close image preview"
+                                >
+                                    <X className="w-5 h-5" />
                                 </button>
                             </div>
                         </motion.div>
@@ -706,18 +881,28 @@ export default function FindClinicsPage() {
                                 } as any}
                             >
                                 <Popup>
-                                    <div className="min-w-[190px] p-1 text-left">
-                                        <div className="flex items-center gap-1 flex-wrap">
-                                            <h4 className="font-bold text-gray-900 text-sm">
-                                                {clinic.name}
-                                            </h4>
-                                            {clinic.verified && <VerifiedBadge size={14} className="w-3.5 h-3.5" title="Verified Clinic" />}
+                                    <div className="min-w-[200px] p-1 text-left">
+                                        <div className="flex items-center gap-2 mb-1.5">
+                                            {clinic.logo ? (
+                                                <img
+                                                    src={clinic.logo}
+                                                    alt={clinic.name}
+                                                    className="w-8 h-8 rounded-xl object-cover border border-magenta-100 shrink-0 bg-white"
+                                                />
+                                            ) : (
+                                                <div className="w-8 h-8 rounded-xl bg-magenta-50 text-magenta-600 flex items-center justify-center shrink-0">
+                                                    <Building2 className="w-4 h-4" />
+                                                </div>
+                                            )}
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center gap-1 flex-wrap">
+                                                    <h4 className="font-bold text-gray-900 text-sm truncate">
+                                                        {clinic.name}
+                                                    </h4>
+                                                    {clinic.verified && <VerifiedBadge size={13} className="w-3 h-3" title="Verified Clinic" />}
+                                                </div>
+                                            </div>
                                         </div>
-                                        {clinic.verified && (
-                                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded mt-1">
-                                                Verified Clinic
-                                            </span>
-                                        )}
                                         {clinic.address && <p className="text-xs text-gray-600 mt-1">{clinic.address}</p>}
                                         {clinic.phone && <p className="text-xs text-gray-500 mt-0.5">{clinic.phone}</p>}
                                         
@@ -894,36 +1079,43 @@ export default function FindClinicsPage() {
                                         : "border-magenta-100 hover:border-magenta-200 hover:shadow-sm"
                                 )}
                             >
-                                <div className="flex items-start justify-between gap-2 mb-2">
-                                    <div>
+                                <div className="flex items-start gap-3 mb-2.5">
+                                    {/* Clinic Logo Avatar */}
+                                    {clinic.logo ? (
+                                        <img
+                                            src={clinic.logo}
+                                            alt={clinic.name}
+                                            className="w-11 h-11 rounded-2xl object-cover border border-magenta-100/80 shadow-xs shrink-0 bg-white"
+                                        />
+                                    ) : (
+                                        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-magenta-50 to-pink-100/60 border border-magenta-100 flex items-center justify-center shrink-0 text-magenta-600 shadow-xs">
+                                            <Building2 className="w-5 h-5" />
+                                        </div>
+                                    )}
+
+                                    {/* Name & Address */}
+                                    <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-1.5 flex-wrap">
-                                            <h3 className="font-display font-bold text-magenta-900 text-sm leading-snug">
+                                            <h3 className="font-display font-bold text-magenta-900 text-sm leading-snug truncate">
                                                 {clinic.name}
                                             </h3>
                                             {clinic.verified && (
-                                                <VerifiedBadge size={16} className="w-4 h-4" title="Verified Clinic" />
+                                                <VerifiedBadge size={15} className="w-3.5 h-3.5" title="Verified Clinic" />
                                             )}
                                         </div>
                                         <p className="text-[11px] text-magenta-600/70 mt-0.5 flex items-center gap-1">
                                             <MapPin className="w-3 h-3 text-magenta-400 flex-shrink-0" />
-                                            <span className="truncate max-w-[220px]">{clinic.address || clinic.district || "Cebu"}</span>
+                                            <span className="truncate max-w-[200px] sm:max-w-[240px]">{clinic.address || clinic.district || "Cebu"}</span>
                                         </p>
                                     </div>
-                                    <div className="flex items-center gap-1 flex-shrink-0">
-                                        {clinic.verified ? (
-                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[10px] font-bold border border-blue-200">
-                                                <VerifiedBadge size={11} className="w-2.5 h-2.5" /> Verified
-                                            </span>
-                                        ) : (
-                                            <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[10px] font-medium">
-                                                Pending
-                                            </span>
-                                        )}
+
+                                    {/* Save Action */}
+                                    <div className="flex items-center shrink-0">
                                         <button
                                             type="button"
                                             onClick={(e) => toggleSave(e, clinic.id)}
                                             className={cn(
-                                                "p-1 rounded-lg transition-colors cursor-pointer",
+                                                "p-1.5 rounded-xl transition-colors cursor-pointer",
                                                 savedClinicIds.includes(clinic.id)
                                                     ? "text-magenta-600 bg-magenta-50"
                                                     : "text-magenta-300 hover:text-magenta-600 hover:bg-magenta-50"
@@ -931,9 +1123,9 @@ export default function FindClinicsPage() {
                                             title={savedClinicIds.includes(clinic.id) ? "Unsave clinic" : "Save clinic"}
                                         >
                                             {savedClinicIds.includes(clinic.id) ? (
-                                                <BookmarkCheck className="w-3.5 h-3.5" />
+                                                <BookmarkCheck className="w-4 h-4" />
                                             ) : (
-                                                <Bookmark className="w-3.5 h-3.5" />
+                                                <Bookmark className="w-4 h-4" />
                                             )}
                                         </button>
                                     </div>
@@ -990,18 +1182,33 @@ export default function FindClinicsPage() {
                             <div className="w-12 h-12 rounded-2xl bg-magenta-50 flex items-center justify-center mx-auto mb-3">
                                 <Search className="w-6 h-6 text-magenta-300" />
                             </div>
-                            <p className="text-xs font-bold text-magenta-900 mb-1">No clinics found</p>
-                            <p className="text-[11px] text-magenta-400 mb-3">Try adjusting your search terms or district filter</p>
-                            <button
-                                onClick={() => {
-                                    setSearchQuery("");
-                                    setSelectedDistrict("All Districts");
-                                    setActiveTab("all");
-                                }}
-                                className="px-3 py-1.5 rounded-full bg-magenta-500 text-white text-xs font-semibold hover:bg-magenta-600 transition-colors cursor-pointer"
-                            >
-                                Reset filters
-                            </button>
+                            <p className="text-xs font-bold text-magenta-900 mb-1">
+                                {dbClinics.length === 0 ? "No clinics registered yet" : "No clinics found"}
+                            </p>
+                            <p className="text-[11px] text-magenta-400 mb-3">
+                                {dbClinics.length === 0
+                                    ? "Registered and verified partner clinics will appear here."
+                                    : "Try adjusting your search terms or district filter."}
+                            </p>
+                            {dbClinics.length === 0 ? (
+                                <button
+                                    onClick={() => navigate("/register-clinic")}
+                                    className="px-3.5 py-1.5 rounded-full bg-magenta-500 text-white text-xs font-semibold hover:bg-magenta-600 transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-xs"
+                                >
+                                    <Building2 className="w-3.5 h-3.5" /> Partner With Us
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={() => {
+                                        setSearchQuery("");
+                                        setSelectedDistrict("All Districts");
+                                        setActiveTab("all");
+                                    }}
+                                    className="px-3 py-1.5 rounded-full bg-magenta-500 text-white text-xs font-semibold hover:bg-magenta-600 transition-colors cursor-pointer"
+                                >
+                                    Reset filters
+                                </button>
+                            )}
                         </div>
                     )}
                 </div>

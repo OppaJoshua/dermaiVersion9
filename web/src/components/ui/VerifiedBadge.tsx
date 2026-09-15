@@ -19,10 +19,10 @@ export function VerifiedBadge({
       width={size}
       height={size}
       aria-label={title}
-      title={title}
       className={cn("inline-block shrink-0 align-middle select-none", className)}
       {...props}
     >
+      <title>{title}</title>
       {/* 12-point smooth scalloped rosette */}
       <path
         fill="#1D9BF0"

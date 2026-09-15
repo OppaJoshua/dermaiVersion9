@@ -155,7 +155,7 @@ export default function AdminReportsPage() {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed)) setClinicData(parsed);
           }
-        } catch {}
+        } catch { }
       }
 
       // 3. Users
@@ -182,8 +182,8 @@ export default function AdminReportsPage() {
           doctor_status,
           doctor_note,
           created_at,
-          clinic:clinic_id(name),
-          doctor:assigned_doctor_id(doctor_name)
+          assigned_doctor_id,
+          clinic:clinic_id(name)
         `)
         .order("created_at", { ascending: false });
 
@@ -202,7 +202,7 @@ export default function AdminReportsPage() {
             }
           }
         }
-      } catch {}
+      } catch { }
 
       setAppointmentData(list);
     } catch (err) {
@@ -307,7 +307,7 @@ export default function AdminReportsPage() {
           Date: (a.date || a.created_at || "").slice(0, 10) || "TBD",
           Patient: a.patient_name || a.patientName || "Patient",
           Clinic: clinicObj?.name || a.clinicName || "Skin Clinic",
-          Doctor: doctorObj?.doctor_name || a.assignedDoctorName || "Resident Doctor",
+          Doctor: doctorObj?.doctor_name || a.assignedDoctorName || "Unassigned",
           Condition: a.ai_condition_name || a.aiConditionName || "Consultation",
           Status: a.status || "pending",
           "Doctor Review": a.doctor_status || a.doctorStatus || "pending-review",

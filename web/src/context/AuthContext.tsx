@@ -3,12 +3,14 @@ import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabaseClient";
 
 export type UserRole = "patient" | "doctor" | "clinic" | "admin";
+export type AccountStatus = "active" | "suspended" | "inactive";
 
 type AuthContextType = {
   session: Session | null;
   user: User | null;
   role: UserRole | null;
   roleLoading: boolean;
+  accountStatus: AccountStatus;
   loading: boolean;
   signInWithMagicLink: (email: string) => Promise<{ error: string | null }>;
   signInWithGoogle: () => Promise<{ error: string | null }>;
@@ -21,6 +23,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<UserRole | null>(null);
+  const [accountStatus, setAccountStatus] = useState<AccountStatus>("active");
   const [roleLoading, setRoleLoading] = useState(true);
 
   useEffect(() => {
@@ -30,6 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const email = (data.session?.user?.email || "").toLowerCase().trim();
       if (email === "dermaisupport@gmail.com") {
         setRole("admin");
+        setAccountStatus("active");
         setRoleLoading(false);
       } else if (!data.session) {
         setRoleLoading(false);
@@ -43,9 +47,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const email = (newSession?.user?.email || "").toLowerCase().trim();
       if (email === "dermaisupport@gmail.com") {
         setRole("admin");
+        setAccountStatus("active");
         setRoleLoading(false);
       } else if (!newSession) {
         setRole(null);
+        setAccountStatus("active");
         setRoleLoading(false);
       }
     });
@@ -56,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!session?.user) {
       setRole(null);
+      setAccountStatus("active");
       setRoleLoading(false);
       return;
     }
@@ -63,6 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const userEmail = (session.user.email || "").toLowerCase().trim();
     if (userEmail === "dermaisupport@gmail.com") {
       setRole("admin");
+      setAccountStatus("active");
       setRoleLoading(false);
       return;
     }
@@ -86,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         let dbUser: any = null;
         const { data: userById } = await supabase
           .from("user")
-          .select("role, user_id")
+          .select("role, user_id, account_status")
           .eq("user_id", session!.user.id)
           .maybeSingle();
 
@@ -95,11 +103,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else if (currentEmail) {
           const { data: userByEmail } = await supabase
             .from("user")
-            .select("role, user_id")
+            .select("role, user_id, account_status")
             .ilike("email", currentEmail)
             .maybeSingle();
           if (userByEmail) dbUser = userByEmail;
         }
+
+        const currentStatus: AccountStatus =
+          dbUser?.account_status === "suspended" || dbUser?.account_status === "inactive"
+            ? dbUser.account_status
+            : "active";
 
         // 3. Check Clinic Affiliation (by owner ID or Email)
         let clinicFound: any = null;
@@ -168,7 +181,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           finalRole = session!.user.user_metadata.role as UserRole;
         }
 
-        // 6. Ensure user row exists and has the correct role
+        // 6. Ensure user row exists and preserve existing account status
         const meta = session!.user.user_metadata || {};
         const fullName = meta.full_name || meta.name || session!.user.email?.split("@")[0] || "User";
 
@@ -177,11 +190,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           email: session!.user.email || "",
           full_name: fullName,
           role: finalRole,
-          account_status: "active",
+          account_status: currentStatus,
         });
 
         if (cancelled) return;
 
+        setAccountStatus(currentStatus);
         setRole(finalRole);
         localStorage.setItem(`derm_role_${session!.user.id}`, finalRole);
       } catch (err) {
@@ -195,8 +209,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     fetchUserRole();
 
+    // 7. Realtime listener for account status changes on current user
+    const statusChannel = supabase
+      .channel(`public:user_status_${session.user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "user",
+          filter: `user_id=eq.${session.user.id}`,
+        },
+        (payload: any) => {
+          if (payload.new?.account_status) {
+            setAccountStatus(payload.new.account_status as AccountStatus);
+          }
+        }
+      )
+      .subscribe();
+
     return () => {
       cancelled = true;
+      supabase.removeChannel(statusChannel);
     };
   }, [session]);
 
@@ -204,14 +238,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        // Patients can self-register just by entering an email — no
-        // approval needed. Clinics never hit this path: they submit an
-        // application via RegisterClinic, and an account only gets
-        // created once an admin approves it. Doctors don't sign up at
-        // all — a clinic adds their email to clinic_doctor first; when
-        // that same email later logs in here, the handle_new_user
-        // trigger matches it and assigns role = 'doctor' instead of the
-        // default 'patient'.
         shouldCreateUser: true,
         emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
@@ -233,6 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
     setSession(null);
     setRole(null);
+    setAccountStatus("active");
   };
 
   return (
@@ -242,6 +269,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user: session?.user ?? null,
         role,
         roleLoading,
+        accountStatus,
         loading,
         signInWithMagicLink,
         signInWithGoogle,

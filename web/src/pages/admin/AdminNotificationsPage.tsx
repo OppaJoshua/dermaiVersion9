@@ -116,6 +116,23 @@ export default function AdminNotificationsPage() {
 
     useEffect(() => {
         fetchNotifications();
+
+        const channel = supabase
+            .channel("admin-notifications-page")
+            .on("postgres_changes", { event: "*", schema: "public", table: "user_support_ticket" }, () => fetchNotifications())
+            .on("postgres_changes", { event: "*", schema: "public", table: "user_notification" }, () => fetchNotifications())
+            .on("postgres_changes", { event: "*", schema: "public", table: "clinic" }, () => fetchNotifications())
+            .subscribe();
+
+        const handleUpdate = () => fetchNotifications();
+        window.addEventListener("dermai_tickets_updated", handleUpdate);
+        window.addEventListener("storage", handleUpdate);
+
+        return () => {
+            supabase.removeChannel(channel);
+            window.removeEventListener("dermai_tickets_updated", handleUpdate);
+            window.removeEventListener("storage", handleUpdate);
+        };
     }, []);
 
     const sendBroadcast = async () => {

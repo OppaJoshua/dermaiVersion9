@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { ChangeEvent, FormEvent, DragEvent } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import LocationPickerMap from "@/components/common/LocationPickerMap";
+import logo from "@/assets/logo2.png";
 
 const specializations = [
   "General Dermatology",
@@ -112,6 +113,13 @@ export default function RegisterClinic() {
   // Business Permit state
   const [businessPermit, setBusinessPermit] = useState<UploadedDoc | null>(null);
   const permitInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-scroll to top when application is submitted successfully
+  useEffect(() => {
+    if (submitted) {
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    }
+  }, [submitted]);
 
   // PRC License state
   const [prcLicenseDoc, setPrcLicenseDoc] = useState<UploadedDoc | null>(null);
@@ -446,7 +454,7 @@ export default function RegisterClinic() {
         p_open_time: formData.openTime || "08:00",
         p_close_time: formData.closeTime || "17:00",
         p_prc_license: formData.prcLicense.trim() || "PRC-PENDING",
-        p_logo_url: uploadedLogoUrl || null,
+        p_logo_url: uploadedLogoUrl || logoPreview || null,
         p_business_permit_url: uploadedPermitUrl || businessPermit?.dataUrl || null,
         p_business_permit_name: businessPermit?.name || null,
         p_prc_license_file_url: uploadedPrcUrl || prcLicenseDoc?.dataUrl || null,
@@ -474,7 +482,7 @@ export default function RegisterClinic() {
             p_open_time: formData.openTime || "08:00",
             p_close_time: formData.closeTime || "17:00",
             p_prc_license: formData.prcLicense.trim() || "PRC-PENDING",
-            p_logo_url: uploadedLogoUrl || null,
+            p_logo_url: uploadedLogoUrl || logoPreview || null,
             p_business_permit_url: uploadedPermitUrl || businessPermit?.dataUrl || null,
             p_business_permit_name: businessPermit?.name || null,
             p_prc_license_file_url: uploadedPrcUrl || prcLicenseDoc?.dataUrl || null,
@@ -511,7 +519,7 @@ export default function RegisterClinic() {
           phone: formData.phone.trim(),
           consultation_fee: isNaN(feeNum) ? 500 : feeNum,
           description: formData.description.trim() || null,
-          logo_url: uploadedLogoUrl || null,
+          logo_url: uploadedLogoUrl || logoPreview || null,
           business_permit_url: uploadedPermitUrl || businessPermit?.dataUrl || null,
           business_permit_name: businessPermit?.name || null,
           prc_license_file_url: uploadedPrcUrl || prcLicenseDoc?.dataUrl || null,
@@ -551,6 +559,7 @@ export default function RegisterClinic() {
             phone: formData.phone.trim(),
             consultation_fee: isNaN(feeNum) ? 500 : feeNum,
             description: formData.description.trim() || null,
+            logo_url: uploadedLogoUrl || logoPreview || null,
             latitude: formData.latitude ?? null,
             longitude: formData.longitude ?? null,
             status: "pending",
@@ -667,6 +676,7 @@ export default function RegisterClinic() {
         } catch {}
       }
 
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
       setSubmitted(true);
     } catch (err: any) {
       console.error("Error submitting clinic registration:", err.message);
@@ -679,12 +689,12 @@ export default function RegisterClinic() {
   // SUCCESS SCREEN
   if (submitted) {
     return (
-      <div className="min-h-screen bg-white text-slate-900 flex items-center justify-center px-4 py-12">
+      <div className="min-h-screen bg-white text-slate-900 flex flex-col items-center justify-center px-4 py-8 sm:py-12 selection:bg-magenta-500 selection:text-white">
         <motion.div
-          initial={{ opacity: 0, scale: 0.96 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.3 }}
-          className="w-full max-w-lg bg-white rounded-3xl border border-slate-200/80 shadow-2xl shadow-slate-100 p-8 sm:p-10 text-center"
+          initial={{ opacity: 0, scale: 0.96, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.35, ease: "easeOut" }}
+          className="w-full max-w-lg bg-white rounded-3xl border border-slate-200/80 shadow-2xl shadow-slate-100 p-8 sm:p-10 text-center my-auto"
         >
           <div className="w-20 h-20 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center mx-auto mb-6">
             <CheckCircle2 className="w-10 h-10 text-emerald-500" />
@@ -756,7 +766,87 @@ export default function RegisterClinic() {
   };
 
   return (
-    <div className="min-h-screen bg-white text-slate-900 flex flex-col justify-between selection:bg-magenta-500 selection:text-white">
+    <div className="min-h-screen bg-white text-slate-900 flex flex-col justify-between selection:bg-magenta-500 selection:text-white relative">
+      {/* ========================================================================= */}
+      {/* MINIMAL PROCESSING MODAL OVERLAY */}
+      {/* ========================================================================= */}
+      <AnimatePresence>
+        {isSubmitting && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-50 bg-white/90 backdrop-blur-md flex flex-col items-center justify-center p-6 select-none"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.25 }}
+              className="flex flex-col items-center text-center max-w-sm w-full"
+            >
+              {/* Subtle Breathing Logo with Ambient Ring */}
+              <div className="relative mb-6 flex items-center justify-center">
+                <motion.div
+                  animate={{
+                    scale: [1, 1.25, 1],
+                    opacity: [0.25, 0.5, 0.25],
+                  }}
+                  transition={{
+                    duration: 2.2,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                  }}
+                  className="absolute -inset-4 rounded-full bg-magenta-500/15 blur-lg pointer-events-none"
+                />
+                <motion.img
+                  src={logo}
+                  alt="DermAI Logo"
+                  className="w-16 h-16 object-contain relative z-10"
+                  animate={{
+                    scale: [0.96, 1.04, 0.96],
+                  }}
+                  transition={{
+                    duration: 2,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                  }}
+                />
+              </div>
+
+              {/* Minimal Status Text */}
+              <h3 className="text-base font-display font-bold text-slate-900 mb-1">
+                Processing Verification
+              </h3>
+              <p className="text-xs text-slate-500 font-medium mb-6 min-h-[1.25rem] transition-all">
+                {submitStatus || "Securing and uploading documents..."}
+              </p>
+
+              {/* Minimal Hairline Progress Indicator */}
+              <div className="w-48 h-1 bg-slate-100 rounded-full overflow-hidden relative">
+                <motion.div
+                  className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-magenta-400 via-magenta-600 to-pink-500 rounded-full"
+                  animate={{
+                    width: ["20%", "75%", "92%"],
+                    x: ["0%", "20%", "0%"],
+                  }}
+                  transition={{
+                    duration: 2.5,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                  }}
+                />
+              </div>
+
+              <span className="text-[11px] text-slate-400 mt-4">
+                Please keep this tab open
+              </span>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Main Form Container */}
       <main className="max-w-3xl w-full mx-auto px-4 py-8 sm:py-12">
         {/* Page Header */}
@@ -1101,7 +1191,7 @@ export default function RegisterClinic() {
                           ...prev,
                           latitude: lat,
                           longitude: lng,
-                          address: prev.address.trim() ? prev.address : (addressSuggestion || prev.address),
+                          address: addressSuggestion || prev.address,
                         }));
                       }}
                     />

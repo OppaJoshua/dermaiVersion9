@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { CheckCircle2, XCircle, Clock, ScanSearch, ChevronDown, ChevronUp, AlertTriangle, Calendar, User, FileText, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, ScanSearch, ChevronDown, ChevronUp, AlertTriangle, Calendar, User, FileText, Loader2, ClipboardList } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
@@ -28,10 +28,11 @@ export default function DoctorAppointmentsPage() {
     () =>
       allAppointments.filter(
         (appointment) =>
-          appointment.doctorStatus === "pending-review" ||
-          (!appointment.doctorStatus &&
-            appointment.status !== "completed" &&
-            appointment.status !== "rejected")
+          appointment.status !== "rejected" &&
+          appointment.status !== "cancelled" &&
+          appointment.status !== "completed" &&
+          appointment.doctorStatus !== "rejected" &&
+          appointment.doctorStatus !== "approved"
       ),
     [allAppointments]
   );
@@ -41,13 +42,31 @@ export default function DoctorAppointmentsPage() {
         (appointment) =>
           appointment.doctorStatus === "approved" ||
           appointment.doctorStatus === "rejected" ||
+          appointment.status === "rejected" ||
+          appointment.status === "cancelled" ||
           appointment.status === "completed"
       ),
     [allAppointments]
   );
 
+  const isDirectBooking = (appt?: AppointmentRecord | null) => {
+    if (!appt) return true;
+    const condName = (appt.aiConditionName || appt.conditionName || "").toLowerCase();
+    const isGeneric = !condName || condName.includes("general") || condName.includes("consultation");
+    const hasScore = appt.aiConfidence !== undefined && appt.aiConfidence !== null;
+    return isGeneric && !hasScore;
+  };
+
   const openReview = (appt: AppointmentRecord) => {
-    setReviewModal({ appointment: appt, decision: null, diagnosis: appt.doctorDiagnosis || appt.aiConditionName || "", note: "", showAnalysis: false });
+    const isDirect = isDirectBooking(appt);
+    const initialDiagnosis = appt.doctorDiagnosis || (!isDirect ? (appt.aiConditionName || "") : "");
+    setReviewModal({
+      appointment: appt,
+      decision: null,
+      diagnosis: initialDiagnosis,
+      note: "",
+      showAnalysis: false
+    });
     setSubmitError("");
   };
 
@@ -167,15 +186,17 @@ export default function DoctorAppointmentsPage() {
                 <span className="font-bold">Your note: </span>{appt.doctorNote}
               </div>)}
 
-              {/* AI Analysis preview */}
-              {condDetail && (<div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/50 p-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <ScanSearch className="w-3.5 h-3.5 text-blue-500" />
-                  <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wide">AI Analysis Result</span>
+              {/* AI Analysis preview (only if patient ran AI scan) */}
+              {condDetail && !isDirectBooking(appt) && (
+                <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/50 p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <ScanSearch className="w-3.5 h-3.5 text-blue-500" />
+                    <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wide">AI Analysis Result</span>
+                  </div>
+                  <p className="text-xs font-semibold text-blue-800">{condDetail.name}</p>
+                  <p className="text-[11px] text-blue-600 mt-0.5 line-clamp-2">{condDetail.description}</p>
                 </div>
-                <p className="text-xs font-semibold text-blue-800">{condDetail.name}</p>
-                <p className="text-[11px] text-blue-600 mt-0.5 line-clamp-2">{condDetail.description}</p>
-              </div>)}
+              )}
             </div>
 
             {appt.conditionImage && (<img src={appt.conditionImage} alt={appt.conditionName} className="w-16 h-16 rounded-xl object-cover border border-gray-100 shrink-0 hidden sm:block" />)}
@@ -192,7 +213,11 @@ export default function DoctorAppointmentsPage() {
 
     {/* Review Modal */}
     <AnimatePresence>
-      {reviewModal && (<div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
+      {reviewModal && (() => {
+        const isDirect = isDirectBooking(reviewModal.appointment);
+        const cond = getConditionDetail(reviewModal.appointment.conditionId);
+
+        return (<div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
         <motion.div initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
           {/* Modal Header */}
           <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center gap-4 shrink-0">
@@ -201,10 +226,23 @@ export default function DoctorAppointmentsPage() {
               <p className="text-gray-900 font-bold text-base leading-tight truncate">
                 {reviewModal.appointment.patientName || "Unknown Patient"}
               </p>
-              <div className="flex items-center gap-2 mt-0.5">
-                {reviewModal.appointment.patientAge && (<span className="text-gray-500 text-xs">{reviewModal.appointment.patientAge} years old</span>)}
-                <span className="text-xs font-semibold text-magenta-700 bg-magenta-50 px-2 py-0.5 rounded-full border border-magenta-100">
-                  {reviewModal.appointment.conditionName || "Skin concern"}
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                {reviewModal.appointment.patientGender && (
+                  <span className="text-[11px] font-semibold text-gray-700 bg-gray-100 px-2 py-0.5 rounded-full">
+                    {reviewModal.appointment.patientGender}
+                  </span>
+                )}
+                {reviewModal.appointment.patientAge ? (
+                  <span className="text-gray-500 text-xs">{reviewModal.appointment.patientAge} yrs old</span>
+                ) : reviewModal.appointment.patientBirthdate ? (
+                  <span className="text-gray-500 text-xs">Born {reviewModal.appointment.patientBirthdate}</span>
+                ) : null}
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                  isDirect
+                    ? "text-slate-700 bg-slate-100 border-slate-200"
+                    : "text-magenta-700 bg-magenta-50 border-magenta-100"
+                }`}>
+                  {isDirect ? "Direct General Consultation" : (reviewModal.appointment.conditionName || "Skin concern")}
                 </span>
               </div>
             </div>
@@ -219,6 +257,8 @@ export default function DoctorAppointmentsPage() {
             <div className="grid grid-cols-[130px_1fr] gap-3">
               {[
                 { label: "Full Name", value: reviewModal.appointment.patientName },
+                { label: "Gender", value: reviewModal.appointment.patientGender },
+                { label: "Birthdate", value: reviewModal.appointment.patientBirthdate ? `${reviewModal.appointment.patientBirthdate}${reviewModal.appointment.patientAge ? ` (${reviewModal.appointment.patientAge} yrs old)` : ''}` : undefined },
                 { label: "Email", value: reviewModal.appointment.patientEmail },
                 { label: "Address", value: reviewModal.appointment.patientAddress },
                 { label: "Contact", value: reviewModal.appointment.patientContact },
@@ -228,6 +268,57 @@ export default function DoctorAppointmentsPage() {
                   {value || <span className="text-gray-300 italic">—</span>}
                 </span>
               </div>))}
+            </div>
+
+            {/* Pre-Screening Questionnaire Section */}
+            <div className="rounded-xl border border-magenta-200 overflow-hidden bg-white">
+              <div className="px-4 py-3 bg-magenta-50/80 border-b border-magenta-100 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ClipboardList className="w-4 h-4 text-magenta-600" />
+                  <span className="text-xs font-bold text-magenta-900 uppercase tracking-wide">
+                    Patient Pre-Screening Questionnaire
+                  </span>
+                </div>
+                {reviewModal.appointment.questionnaireAnswers && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-magenta-200 text-magenta-800">
+                    {reviewModal.appointment.questionnaireAnswers.length} questions answered
+                  </span>
+                )}
+              </div>
+
+              <div className="p-4 space-y-2.5 max-h-56 overflow-y-auto">
+                {reviewModal.appointment.questionnaireAnswers && reviewModal.appointment.questionnaireAnswers.length > 0 ? (
+                  reviewModal.appointment.questionnaireAnswers.map((qa, idx) => (
+                    <div key={idx} className="p-2.5 rounded-lg bg-gray-50/80 border border-gray-100 text-xs">
+                      <p className="font-semibold text-gray-800 mb-1">
+                        {idx + 1}. {qa.question}
+                      </p>
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-magenta-700 font-medium bg-magenta-50 px-2 py-0.5 rounded-md border border-magenta-100">
+                          {qa.answer}
+                        </span>
+                        {qa.severity !== undefined && qa.severity !== null && (
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                            qa.severity >= 3
+                              ? "bg-red-100 text-red-700"
+                              : qa.severity >= 2
+                              ? "bg-amber-100 text-amber-700"
+                              : qa.severity >= 1
+                              ? "bg-blue-100 text-blue-700"
+                              : "bg-gray-100 text-gray-600"
+                          }`}>
+                            Severity: Level {qa.severity}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-gray-400 italic text-center py-2">
+                    No pre-screening questionnaire answers recorded for this appointment.
+                  </p>
+                )}
+              </div>
             </div>
 
             {/* Uploaded Skin Photo */}
@@ -246,89 +337,120 @@ export default function DoctorAppointmentsPage() {
               </div>
             </div>)}
 
-            {/* AI Analysis Section */}
-            <div className="rounded-xl border border-blue-200 overflow-hidden">
-              <button onClick={() => setReviewModal((prev) => prev ? { ...prev, showAnalysis: !prev.showAnalysis } : prev)} className="w-full flex items-center justify-between px-4 py-3 bg-blue-50 hover:bg-blue-100 transition-colors">
-                <div className="flex items-center gap-2">
-                  <ScanSearch className="w-4 h-4 text-blue-600" />
-                  <span className="text-sm font-bold text-blue-700">AI Analysis Result</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500 text-white font-bold">
-                    {reviewModal.appointment.aiConditionName || reviewModal.appointment.conditionName}
-                  </span>
+            {/* AI Analysis / Consultation Context Section */}
+            {isDirect ? (
+              <div className="rounded-xl border border-slate-200 overflow-hidden bg-slate-50/60 p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-7 h-7 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600">
+                    <ClipboardList className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                      Direct Consultation Booking
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      Patient did not perform an AI scan prior to booking
+                    </p>
+                  </div>
                 </div>
-                {reviewModal.showAnalysis
-                  ? <ChevronUp className="w-4 h-4 text-blue-500" />
-                  : <ChevronDown className="w-4 h-4 text-blue-500" />}
-              </button>
+                <p className="text-xs text-slate-600 leading-relaxed mt-1">
+                  This patient directly booked a General Dermatology Consultation. Please review their pre-screening questionnaire answers, symptoms, and medical notes above, then formulate and enter your final clinical diagnosis below.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-blue-200 overflow-hidden">
+                <button onClick={() => setReviewModal((prev) => prev ? { ...prev, showAnalysis: !prev.showAnalysis } : prev)} className="w-full flex items-center justify-between px-4 py-3 bg-blue-50 hover:bg-blue-100 transition-colors">
+                  <div className="flex items-center gap-2">
+                    <ScanSearch className="w-4 h-4 text-blue-600" />
+                    <span className="text-sm font-bold text-blue-700">AI Analysis Result</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500 text-white font-bold">
+                      {reviewModal.appointment.aiConditionName || reviewModal.appointment.conditionName}
+                    </span>
+                  </div>
+                  {reviewModal.showAnalysis
+                    ? <ChevronUp className="w-4 h-4 text-blue-500" />
+                    : <ChevronDown className="w-4 h-4 text-blue-500" />}
+                </button>
 
-              <AnimatePresence>
-                {reviewModal.showAnalysis && (() => {
-                  const cond = getConditionDetail(reviewModal.appointment.conditionId);
-                  return (<motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-                    <div className="px-4 py-4 space-y-3 border-t border-blue-100">
-                      {/* Patient-submitted AI result */}
-                      <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 space-y-2">
-                        <p className="text-[11px] font-bold text-blue-700 uppercase tracking-wide">Patient-Submitted AI Result</p>
-                        <div className="flex gap-2 items-center">
-                          <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide w-28 shrink-0">Condition</span>
-                          <span className="text-sm font-semibold text-blue-800">
-                            {reviewModal.appointment.aiConditionName || reviewModal.appointment.conditionName || <span className="text-gray-300 italic">—</span>}
-                          </span>
-                        </div>
-                        <div className="flex gap-2 items-center">
-                          <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide w-28 shrink-0">Confidence</span>
-                          {reviewModal.appointment.aiConfidence !== undefined ? (<div className="flex items-center gap-2 flex-1">
-                            <div className="flex-1 bg-blue-200 rounded-full h-1.5">
-                              <div className="h-1.5 rounded-full bg-blue-600" style={{ width: `${Math.min(reviewModal.appointment.aiConfidence, 100)}%` }} />
-                            </div>
-                            <span className="text-xs font-bold text-blue-700">{reviewModal.appointment.aiConfidence}%</span>
-                          </div>) : (<span className="text-sm text-gray-300 italic">—</span>)}
-                        </div>
-                      </div>
-
-                      {cond ? (<>
-                        <div className="flex gap-4">
-                          <img src={reviewModal.appointment.conditionImage || cond.image} alt={cond.name} className="w-20 h-20 rounded-xl object-cover border border-blue-100 shrink-0" />
-                          <div>
-                            <p className="font-semibold text-blue-800">{cond.name}</p>
-                            {cond.filipinoName && (<p className="text-xs text-blue-600 italic mb-1">{cond.filipinoName}</p>)}
-                            <p className="text-xs text-gray-600 mt-2">{cond.description}</p>
+                <AnimatePresence>
+                  {reviewModal.showAnalysis && (
+                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                      <div className="px-4 py-4 space-y-3 border-t border-blue-100">
+                        {/* Patient-submitted AI result */}
+                        <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 space-y-2">
+                          <p className="text-[11px] font-bold text-blue-700 uppercase tracking-wide">Patient-Submitted AI Result</p>
+                          <div className="flex gap-2 items-center">
+                            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide w-28 shrink-0">Condition</span>
+                            <span className="text-sm font-semibold text-blue-800">
+                              {reviewModal.appointment.aiConditionName || reviewModal.appointment.conditionName || <span className="text-gray-300 italic">—</span>}
+                            </span>
+                          </div>
+                          <div className="flex gap-2 items-center">
+                            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide w-28 shrink-0">Confidence</span>
+                            {reviewModal.appointment.aiConfidence !== undefined ? (<div className="flex items-center gap-2 flex-1">
+                              <div className="flex-1 bg-blue-200 rounded-full h-1.5">
+                                <div className="h-1.5 rounded-full bg-blue-600" style={{ width: `${Math.min(reviewModal.appointment.aiConfidence, 100)}%` }} />
+                              </div>
+                              <span className="text-xs font-bold text-blue-700">{reviewModal.appointment.aiConfidence}%</span>
+                            </div>) : (<span className="text-sm text-gray-300 italic">—</span>)}
                           </div>
                         </div>
 
-                        <div>
-                          <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Key Symptoms</p>
-                          <ul className="space-y-1">
-                            {cond.symptoms.slice(0, 4).map((s) => (<li key={s} className="flex items-start gap-1.5 text-xs text-gray-600">
-                              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 shrink-0" />
-                              {s}
-                            </li>))}
-                          </ul>
-                        </div>
+                        {cond && (<>
+                          <div className="flex gap-4">
+                            <img src={reviewModal.appointment.conditionImage || cond.image} alt={cond.name} className="w-20 h-20 rounded-xl object-cover border border-blue-100 shrink-0" />
+                            <div>
+                              <p className="font-semibold text-blue-800">{cond.name}</p>
+                              {cond.filipinoName && (<p className="text-xs text-blue-600 italic mb-1">{cond.filipinoName}</p>)}
+                              <p className="text-xs text-gray-600 mt-2">{cond.description}</p>
+                            </div>
+                          </div>
 
-                        <div>
-                          <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Who Is Affected</p>
-                          <p className="text-xs text-gray-600">{cond.whoAffected}</p>
-                        </div>
+                          <div>
+                            <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Key Symptoms</p>
+                            <ul className="space-y-1">
+                              {cond.symptoms.slice(0, 4).map((s) => (<li key={s} className="flex items-start gap-1.5 text-xs text-gray-600">
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 shrink-0" />
+                                {s}
+                              </li>))}
+                            </ul>
+                          </div>
 
-                        <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
-                          <p className="text-[11px] font-bold text-amber-700 uppercase tracking-wide mb-0.5">When to See Doctor</p>
-                          <p className="text-xs text-amber-700">{cond.whenToSeeDoctor}</p>
-                        </div>
-                      </>) : (<p className="text-sm text-gray-500">No AI analysis data found for this condition.</p>)}
-                    </div>
-                  </motion.div>);
-                })()}
-              </AnimatePresence>
-            </div>
+                          <div>
+                            <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Who Is Affected</p>
+                            <p className="text-xs text-gray-600">{cond.whoAffected}</p>
+                          </div>
+
+                          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+                            <p className="text-[11px] font-bold text-amber-700 uppercase tracking-wide mb-0.5">When to See Doctor</p>
+                            <p className="text-xs text-amber-700">{cond.whenToSeeDoctor}</p>
+                          </div>
+                        </>)}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
 
             {/* Final diagnosis */}
             <div>
               <label htmlFor="doctor-diagnosis" className="block text-sm font-bold text-gray-700 mb-1.5">
                 Final Diagnosis <span className="text-red-500">*</span>
               </label>
-              <input id="doctor-diagnosis" type="text" value={reviewModal.diagnosis} onChange={(e) => setReviewModal((prev) => prev ? { ...prev, diagnosis: e.target.value } : prev)} placeholder="e.g. Acne vulgaris" className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
-              <p className="mt-1.5 text-xs text-gray-400">This diagnosis is used to evaluate AI accuracy in the admin review dashboard.</p>
+              <input
+                id="doctor-diagnosis"
+                type="text"
+                value={reviewModal.diagnosis}
+                onChange={(e) => setReviewModal((prev) => prev ? { ...prev, diagnosis: e.target.value } : prev)}
+                placeholder={isDirect ? "Enter clinical diagnosis (e.g., Acne Vulgaris, Atopic Dermatitis, Eczema)..." : "e.g. Acne vulgaris"}
+                className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              />
+              <p className="mt-1.5 text-xs text-gray-400">
+                {isDirect
+                  ? "Enter your clinical diagnosis for this consultation record."
+                  : "This diagnosis is used to evaluate AI accuracy in the admin review dashboard."}
+              </p>
             </div>
 
             {/* Decision */}
@@ -397,7 +519,7 @@ export default function DoctorAppointmentsPage() {
             </button>
           </div>
         </motion.div>
-      </div>)}
+      </div>); })()}
     </AnimatePresence>
   </div>);
 }

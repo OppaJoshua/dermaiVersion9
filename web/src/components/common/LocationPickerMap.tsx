@@ -36,11 +36,29 @@ interface LocationPickerMapProps {
   disabled?: boolean;
 }
 
-// Subcomponent to handle map clicks and move marker
-function MapEventsHandler({ onSelect }: { onSelect: (lat: number, lng: number) => void }) {
+// Subcomponent to handle map clicks and move marker with reverse geocoding
+function MapEventsHandler({
+  onSelect,
+}: {
+  onSelect: (lat: number, lng: number, addressSuggestion?: string) => void;
+}) {
   useMapEvents({
-    click: (e) => {
-      onSelect(e.latlng.lat, e.latlng.lng);
+    click: async (e) => {
+      const lat = e.latlng.lat;
+      const lng = e.latlng.lng;
+      let addressSuggestion: string | undefined;
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`
+        );
+        const data = await res.json();
+        if (data?.display_name) {
+          addressSuggestion = data.display_name;
+        }
+      } catch {
+        /* ignore */
+      }
+      onSelect(lat, lng, addressSuggestion);
     },
   });
   return null;
@@ -150,7 +168,7 @@ export default function LocationPickerMap({
     }
   };
 
-  // Get current device GPS location
+  // Get current device GPS location and reverse geocode into Cebu address
   const handleUseCurrentLocation = () => {
     if (disabled) return;
     if (!navigator.geolocation) {
@@ -162,11 +180,26 @@ export default function LocationPickerMap({
     setGeoError(null);
 
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setIsLocating(false);
+      async (pos) => {
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
-        handlePositionSelect(lat, lng);
+
+        let addressSuggestion: string | undefined;
+        try {
+          const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`
+          );
+          const data = await res.json();
+          if (data?.display_name) {
+            addressSuggestion = data.display_name;
+            setSearchQuery(data.display_name.split(",")[0] || data.display_name);
+          }
+        } catch {
+          /* ignore */
+        }
+
+        setIsLocating(false);
+        handlePositionSelect(lat, lng, addressSuggestion);
       },
       (err) => {
         setIsLocating(false);
@@ -275,10 +308,23 @@ export default function LocationPickerMap({
               icon={pickerPinIcon}
               draggable={!disabled}
               eventHandlers={{
-                dragend: (e) => {
+                dragend: async (e) => {
                   const marker = e.target;
                   const newPos = marker.getLatLng();
-                  handlePositionSelect(newPos.lat, newPos.lng);
+                  let addressSuggestion: string | undefined;
+                  try {
+                    const res = await fetch(
+                      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${newPos.lat}&lon=${newPos.lng}&zoom=18&addressdetails=1`
+                    );
+                    const data = await res.json();
+                    if (data?.display_name) {
+                      addressSuggestion = data.display_name;
+                      setSearchQuery(data.display_name.split(",")[0] || data.display_name);
+                    }
+                  } catch {
+                    /* ignore */
+                  }
+                  handlePositionSelect(newPos.lat, newPos.lng, addressSuggestion);
                 },
               }}
             />

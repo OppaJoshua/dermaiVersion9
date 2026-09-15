@@ -11,6 +11,7 @@ import {
   User,
   XCircle,
   X,
+  RefreshCw,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -86,54 +87,63 @@ export default function ClinicAppointmentsPage() {
 
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [clinicDoctors, setClinicDoctors] = useState<DoctorAccount[]>([]);
-  const [, setLoading] = useState(true);
+  const [loadingData, setLoadingData] = useState(true);
 
-  useEffect(() => {
-    if (!clinicId) return;
-    let cancelled = false;
+  const loadData = async () => {
+    setLoadingData(true);
+    let resolvedClinicId = clinicId;
+    if (!resolvedClinicId) {
+      try {
+        const cache = localStorage.getItem("dermai_clinic_profile_cache");
+        if (cache) {
+          const parsed = JSON.parse(cache);
+          if (parsed.clinicId) resolvedClinicId = parsed.clinicId;
+        }
+      } catch { }
+    }
 
-    async function loadData() {
-      setLoading(true);
-
-      // 1. Fetch clinic doctors from clinic_doctor table
-      const { data: docRows } = await supabase
+    // 1. Fetch clinic doctors from clinic_doctor table
+    let docRows: any[] = [];
+    if (resolvedClinicId) {
+      const { data } = await supabase
         .from("clinic_doctor")
         .select("doctor_id, doctor_name, email, photo_url, status")
-        .eq("clinic_id", clinicId)
+        .eq("clinic_id", resolvedClinicId)
         .neq("status", "Inactive");
+      if (data && data.length > 0) {
+        docRows = data;
+        setClinicDoctors(docRows.map((d: any) => ({
+          id: d.doctor_id,
+          name: d.doctor_name,
+          email: d.email || "",
+          specialization: "Dermatology",
+          clinicName: clinicName || "Clinic",
+        })));
+      }
+    }
 
-      if (!cancelled) {
-        if (docRows && docRows.length > 0) {
-          setClinicDoctors(docRows.map((d: any) => ({
-            id: d.doctor_id,
-            name: d.doctor_name,
-            email: d.email || "",
-            specialization: "Dermatology",
-            clinicName: clinicName || "Clinic",
-          })));
-        } else {
-          try {
-            const raw = localStorage.getItem("dermai_clinic_doctors");
-            if (raw) {
-              const parsed = JSON.parse(raw);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                setClinicDoctors(parsed.map((d: any) => ({
-                  id: d.id,
-                  name: d.name,
-                  email: d.email || "",
-                  specialization: d.specialization || "Dermatology",
-                  clinicName: clinicName || d.clinicName || "Clinic",
-                })));
-              }
-            }
-          } catch {
-            /* ignore */
+    if (docRows.length === 0) {
+      try {
+        const raw = localStorage.getItem("dermai_clinic_doctors");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setClinicDoctors(parsed.map((d: any) => ({
+              id: d.id,
+              name: d.name,
+              email: d.email || "",
+              specialization: d.specialization || "Dermatology",
+              clinicName: clinicName || d.clinicName || "Clinic",
+            })));
           }
         }
-      }
+      } catch { }
+    }
 
-      // 2. Fetch appointments from patient_appointment table
-      const { data: apptRows } = await supabase
+    // 2. Fetch appointments from patient_appointment table
+    let dbAppts: any[] = [];
+    if (resolvedClinicId) {
+      const { data: apptRows, error: apptErr } = await supabase
         .from("patient_appointment")
         .select(`
           appointment_id,
@@ -153,89 +163,158 @@ export default function ClinicAppointmentsPage() {
           doctor_note,
           doctor_reviewed_at,
           schedule_sent_to_doctor,
-          created_at,
-          doctor:assigned_doctor_id ( doctor_name )
+          created_at
         `)
-        .eq("clinic_id", clinicId)
+        .eq("clinic_id", resolvedClinicId)
         .order("created_at", { ascending: false });
 
-      if (!cancelled) {
-        if (apptRows && apptRows.length > 0) {
-          const mapped: AppointmentRecord[] = await Promise.all(
-            apptRows.map(async (a: any) => {
-              let photoUrl = a.skin_photo_url || undefined;
-              if (photoUrl && !photoUrl.startsWith("http") && !photoUrl.startsWith("data:")) {
-                try {
-                  const { data: signed } = await supabase.storage
-                    .from("scan-uploads")
-                    .createSignedUrl(photoUrl, 3600);
-                  if (signed?.signedUrl) {
-                    photoUrl = signed.signedUrl;
-                  }
-                } catch {
-                  /* ignore */
-                }
-              }
-
-              const apptDate = a.date ? new Date(a.date) : null;
-              const dateStr = apptDate ? `${apptDate.getFullYear()}-${String(apptDate.getMonth() + 1).padStart(2, "0")}-${String(apptDate.getDate()).padStart(2, "0")}` : "";
-              const timeStr = apptDate ? `${String(apptDate.getHours()).padStart(2, "0")}:${String(apptDate.getMinutes()).padStart(2, "0")}` : "";
-
-              let displayStatus: AppointmentRecord["status"] = "pending";
-              if (a.status === "confirmed") displayStatus = "scheduled";
-              else if (a.status === "completed") displayStatus = "accepted";
-              else if (a.status === "cancelled") displayStatus = "rejected";
-
-              return {
-                id: a.appointment_id,
-                clinicId: 0,
-                clinicName: clinicName || "Clinic",
-                patientName: a.patient_name || "Patient",
-                patientEmail: a.patient_email || undefined,
-                patientAddress: a.patient_address || undefined,
-                patientContact: a.patient_contact || undefined,
-                consultationType: "face-to-face" as const,
-                conditionName: a.ai_condition_name || undefined,
-                date: dateStr,
-                time: timeStr,
-                notes: a.notes || "",
-                status: displayStatus,
-                clinicNote: a.clinic_note || undefined,
-                assignedDoctorId: a.assigned_doctor_id || undefined,
-                assignedDoctorName: a.doctor?.doctor_name || docRows?.find((d: any) => d.doctor_id === a.assigned_doctor_id)?.doctor_name || undefined,
-                doctorStatus: a.doctor_status || undefined,
-                doctorNote: a.doctor_note || undefined,
-                doctorReviewedAt: a.doctor_reviewed_at || undefined,
-                scheduleSentToDoctor: a.schedule_sent_to_doctor || false,
-                createdAt: a.created_at || new Date().toISOString(),
-                skinPhotoUrl: photoUrl,
-                aiConditionName: a.ai_condition_name || undefined,
-                aiConfidence: a.ai_confidence ? Number(a.ai_confidence) : undefined,
-              };
-            })
-          );
-          setAppointments(mapped);
-          try {
-            localStorage.setItem("dermai_clinic_appointments", JSON.stringify(mapped));
-            window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
-          } catch {}
-        } else {
-          try {
-            const raw = localStorage.getItem("dermai_clinic_appointments");
-            if (raw) {
-              const parsed = JSON.parse(raw);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                setAppointments(parsed);
-              }
-            }
-          } catch {}
-        }
+      if (apptErr) {
+        console.warn("[ClinicAppointmentsPage] Failed to fetch patient_appointment from Supabase:", apptErr.message);
+      } else if (apptRows) {
+        dbAppts = apptRows;
       }
-      if (!cancelled) setLoading(false);
     }
 
+    // Map database records
+    const mapped: AppointmentRecord[] = await Promise.all(
+      dbAppts.map(async (a: any) => {
+        let photoUrl = a.skin_photo_url || undefined;
+        if (photoUrl && !photoUrl.startsWith("http") && !photoUrl.startsWith("data:")) {
+          try {
+            const { data: signed } = await supabase.storage
+              .from("scan-uploads")
+              .createSignedUrl(photoUrl, 3600);
+            if (signed?.signedUrl) {
+              photoUrl = signed.signedUrl;
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+
+        const apptDate = a.date ? new Date(a.date) : null;
+        const isValidDate = apptDate && !isNaN(apptDate.getTime());
+        const dateStr = isValidDate ? `${apptDate.getFullYear()}-${String(apptDate.getMonth() + 1).padStart(2, "0")}-${String(apptDate.getDate()).padStart(2, "0")}` : "";
+        const timeStr = isValidDate ? `${String(apptDate.getHours()).padStart(2, "0")}:${String(apptDate.getMinutes()).padStart(2, "0")}` : "";
+
+        let displayStatus: AppointmentRecord["status"] = "pending";
+        if (a.status === "confirmed" || a.status === "scheduled") displayStatus = "scheduled";
+        else if (a.status === "completed") displayStatus = "accepted";
+        else if (a.status === "cancelled" || a.status === "rejected") displayStatus = "rejected";
+
+        const assignedDoc = docRows.find((d: any) => d.doctor_id === a.assigned_doctor_id);
+
+        return {
+          id: a.appointment_id,
+          clinicId: 0,
+          clinicName: clinicName || "Clinic",
+          patientName: a.patient_name || "Patient",
+          patientEmail: a.patient_email || undefined,
+          patientAddress: a.patient_address || undefined,
+          patientContact: a.patient_contact || undefined,
+          consultationType: "face-to-face" as const,
+          conditionName: a.ai_condition_name || undefined,
+          date: dateStr,
+          time: timeStr,
+          notes: a.notes || "",
+          status: displayStatus,
+          clinicNote: a.clinic_note || undefined,
+          assignedDoctorId: a.assigned_doctor_id || undefined,
+          assignedDoctorName: assignedDoc?.doctor_name || undefined,
+          doctorStatus: a.doctor_status || undefined,
+          doctorNote: a.doctor_note || undefined,
+          doctorReviewedAt: a.doctor_reviewed_at || undefined,
+          scheduleSentToDoctor: a.schedule_sent_to_doctor || false,
+          createdAt: a.created_at || new Date().toISOString(),
+          skinPhotoUrl: photoUrl,
+          aiConditionName: a.ai_condition_name || undefined,
+          aiConfidence: a.ai_confidence ? Number(a.ai_confidence) : undefined,
+        };
+      })
+    );
+
+    // Merge with local storage appointments strictly matching this specific clinic_id
+    try {
+      const raw = localStorage.getItem("dermai_clinic_appointments");
+      if (raw && resolvedClinicId) {
+        const localList = JSON.parse(raw);
+        if (Array.isArray(localList)) {
+          localList.forEach((localItem: any) => {
+            const exists = mapped.some((m) => m.id === localItem.id);
+            if (!exists) {
+              const isMatch = Boolean(localItem.clinicId && String(localItem.clinicId) === String(resolvedClinicId));
+              if (isMatch) {
+                mapped.push({
+                  id: localItem.id,
+                  clinicId: 0,
+                  clinicName: localItem.clinicName || clinicName || "Clinic",
+                  patientName: localItem.patientName || "Patient",
+                  patientEmail: localItem.patientEmail || undefined,
+                  patientAddress: localItem.patientAddress || undefined,
+                  patientContact: localItem.patientContact || undefined,
+                  consultationType: "face-to-face" as const,
+                  conditionName: localItem.aiConditionName || localItem.conditionName || undefined,
+                  date: localItem.date || "",
+                  time: localItem.time || "",
+                  notes: localItem.notes || "",
+                  status: localItem.status || "pending",
+                  clinicNote: localItem.clinicNote || undefined,
+                  assignedDoctorId: localItem.assignedDoctorId || undefined,
+                  assignedDoctorName: localItem.assignedDoctorName || undefined,
+                  doctorStatus: localItem.doctorStatus || undefined,
+                  doctorNote: localItem.doctorNote || undefined,
+                  doctorReviewedAt: localItem.doctorReviewedAt || undefined,
+                  scheduleSentToDoctor: localItem.scheduleSentToDoctor || false,
+                  createdAt: localItem.createdAt || new Date().toISOString(),
+                  skinPhotoUrl: localItem.skinPhotoUrl || undefined,
+                  aiConditionName: localItem.aiConditionName || undefined,
+                  aiConfidence: localItem.aiConfidence ? Number(localItem.aiConfidence) : undefined,
+                });
+              }
+            }
+          });
+        }
+      }
+    } catch { }
+
+    setAppointments(mapped);
+    try {
+      localStorage.setItem("dermai_clinic_appointments", JSON.stringify(mapped));
+    } catch { }
+    setLoadingData(false);
+  };
+
+  useEffect(() => {
     loadData();
-    return () => { cancelled = true; };
+
+    // Realtime channel for live incoming appointments and status updates
+    let channel: any = null;
+    if (clinicId) {
+      channel = supabase
+        .channel(`clinic-appointments-realtime-${clinicId}`)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "patient_appointment", filter: `clinic_id=eq.${clinicId}` },
+          () => {
+            loadData();
+          }
+        )
+        .subscribe();
+    }
+
+    const handleSync = () => loadData();
+    window.addEventListener("dermai_appointments_updated", handleSync);
+    window.addEventListener("appointmentCreated", handleSync);
+    window.addEventListener("storage", handleSync);
+    window.addEventListener("focus", handleSync);
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+      window.removeEventListener("dermai_appointments_updated", handleSync);
+      window.removeEventListener("appointmentCreated", handleSync);
+      window.removeEventListener("storage", handleSync);
+      window.removeEventListener("focus", handleSync);
+    };
   }, [clinicId, clinicName]);
 
   const [currentMonth, setCurrentMonth] = useState(() => {
@@ -316,7 +395,7 @@ export default function ClinicAppointmentsPage() {
 
   const appointmentsByDate = useMemo(() => {
     return appointments.reduce<Record<string, AppointmentRecord[]>>((acc, item) => {
-      if (!item.date) return acc;
+      if (!item.date || item.status === "rejected") return acc;
       if (!acc[item.date]) acc[item.date] = [];
       acc[item.date].push(item);
       return acc;
@@ -348,6 +427,7 @@ export default function ClinicAppointmentsPage() {
         .from("patient_appointment")
         .update({
           status: "cancelled",
+          doctor_status: "rejected",
           clinic_note: rejectionReason,
         })
         .eq("appointment_id", id);
@@ -355,13 +435,25 @@ export default function ClinicAppointmentsPage() {
       console.error("Failed to reject appointment in Supabase:", err.message);
     }
 
-    setAppointments((prev) =>
-      prev.map((appt) =>
+    setAppointments((prev) => {
+      const next = prev.map((appt) =>
         appt.id === id
-          ? { ...appt, status: "rejected" as const, clinicNote: rejectionReason, rejectionReason }
+          ? {
+              ...appt,
+              status: "rejected" as const,
+              doctorStatus: "rejected" as const,
+              clinicNote: rejectionReason,
+              rejectionReason,
+            }
           : appt
-      )
-    );
+      );
+      try {
+        localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
+        window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+        window.dispatchEvent(new Event("storage"));
+      } catch { }
+      return next;
+    });
   };
 
   const handleConfirmRejection = () => {
@@ -409,18 +501,26 @@ export default function ClinicAppointmentsPage() {
       return;
     }
 
-    let targetDoctorId = doctor.id;
-    if (!targetDoctorId || targetDoctorId.startsWith("doc-")) {
+    let targetDoctorId: string | null = doctor.id;
+    const isUuid = (id?: string | null): boolean =>
+      !!id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+    if (!targetDoctorId || !isUuid(targetDoctorId)) {
       try {
         const { data: dbDoc } = await supabase
           .from("clinic_doctor")
           .select("doctor_id")
-          .ilike("email", doctor.email)
+          .or(`email.ilike.%${doctor.email || "nomatch"}%,doctor_name.ilike.%${doctor.name || "nomatch"}%`)
+          .limit(1)
           .maybeSingle();
-        if (dbDoc?.doctor_id) {
+        if (dbDoc?.doctor_id && isUuid(dbDoc.doctor_id)) {
           targetDoctorId = dbDoc.doctor_id;
+        } else {
+          targetDoctorId = null;
         }
-      } catch {}
+      } catch {
+        targetDoctorId = null;
+      }
     }
 
     try {
@@ -429,7 +529,7 @@ export default function ClinicAppointmentsPage() {
         .update({
           status: "confirmed",
           date: `${pendingAssign.date}T${pendingAssign.time}:00`,
-          assigned_doctor_id: targetDoctorId,
+          ...(targetDoctorId ? { assigned_doctor_id: targetDoctorId } : {}),
           schedule_sent_to_doctor: true,
           doctor_status: "pending-review",
           clinic_note: "Your schedule has been assigned by the clinic.",
@@ -451,7 +551,7 @@ export default function ClinicAppointmentsPage() {
           date: pendingAssign.date,
           time: pendingAssign.time,
           status: "scheduled" as const,
-          assignedDoctorId: targetDoctorId,
+          assignedDoctorId: targetDoctorId || doctor.id,
           assignedDoctorName: doctor.name,
           doctorStatus: "pending-review" as const,
           scheduleSentToDoctor: true,
@@ -461,7 +561,8 @@ export default function ClinicAppointmentsPage() {
       try {
         localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
         window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
-      } catch {}
+        window.dispatchEvent(new Event("storage"));
+      } catch { }
       return next;
     });
     setPendingAssign(null);
@@ -472,25 +573,33 @@ export default function ClinicAppointmentsPage() {
     const doc = clinicDoctors.find((d) => d.id === selectedDoctorId);
     if (!doc) return;
 
-    let targetDoctorId = doc.id;
-    if (!targetDoctorId || targetDoctorId.startsWith("doc-")) {
+    let targetDoctorId: string | null = doc.id;
+    const isUuid = (id?: string | null): boolean =>
+      !!id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+    if (!targetDoctorId || !isUuid(targetDoctorId)) {
       try {
         const { data: dbDoc } = await supabase
           .from("clinic_doctor")
           .select("doctor_id")
-          .ilike("email", doc.email)
+          .or(`email.ilike.%${doc.email || "nomatch"}%,doctor_name.ilike.%${doc.name || "nomatch"}%`)
+          .limit(1)
           .maybeSingle();
-        if (dbDoc?.doctor_id) {
+        if (dbDoc?.doctor_id && isUuid(dbDoc.doctor_id)) {
           targetDoctorId = dbDoc.doctor_id;
+        } else {
+          targetDoctorId = null;
         }
-      } catch {}
+      } catch {
+        targetDoctorId = null;
+      }
     }
 
     try {
       const { error: updateErr } = await supabase
         .from("patient_appointment")
         .update({
-          assigned_doctor_id: targetDoctorId,
+          ...(targetDoctorId ? { assigned_doctor_id: targetDoctorId } : {}),
           doctor_status: "pending-review",
         })
         .eq("appointment_id", assignDoctorModal.appointmentId);
@@ -507,7 +616,7 @@ export default function ClinicAppointmentsPage() {
         if (a.id !== assignDoctorModal.appointmentId) return a;
         return {
           ...a,
-          assignedDoctorId: targetDoctorId,
+          assignedDoctorId: targetDoctorId || undefined,
           assignedDoctorName: doc.name,
           doctorStatus: "pending-review" as const,
         };
@@ -515,7 +624,7 @@ export default function ClinicAppointmentsPage() {
       try {
         localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
         window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
-      } catch {}
+      } catch { }
       return next;
     });
     setAssignDoctorModal(null);
@@ -578,11 +687,22 @@ export default function ClinicAppointmentsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-display font-bold text-gray-900">Appointments</h1>
-        <p className="text-sm text-gray-400 mt-0.5">
-          Select a patient, set date and time in a modal, then confirm.
-        </p>
+      <div className="flex items-start justify-between flex-wrap gap-4">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-gray-900">Appointments</h1>
+          <p className="text-sm text-gray-400 mt-0.5">
+            Select a patient, set date and time in a modal, then confirm.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={loadData}
+          disabled={loadingData}
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors shadow-xs cursor-pointer"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loadingData ? "animate-spin text-magenta-600" : "text-gray-500"}`} />
+          <span>{loadingData ? "Syncing..." : "Refresh Queue"}</span>
+        </button>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -667,18 +787,16 @@ export default function ClinicAppointmentsPage() {
                     setSelectedDate(cell.key);
                     setDayDetailDate(cell.key);
                   }}
-                  className={`min-h-[106px] rounded-xl border p-2 text-left transition-colors cursor-pointer ${
-                    isSelected
-                      ? "border-magenta-300 bg-magenta-50"
-                      : cell.inCurrentMonth
+                  className={`min-h-[106px] rounded-xl border p-2 text-left transition-colors cursor-pointer ${isSelected
+                    ? "border-magenta-300 bg-magenta-50"
+                    : cell.inCurrentMonth
                       ? "border-gray-100 bg-white hover:bg-gray-50"
                       : "border-gray-100 bg-gray-50 text-gray-300"
-                  }`}
+                    }`}
                 >
                   <p
-                    className={`text-sm font-semibold ${
-                      cell.inCurrentMonth ? "text-gray-900" : "text-gray-300"
-                    }`}
+                    className={`text-sm font-semibold ${cell.inCurrentMonth ? "text-gray-900" : "text-gray-300"
+                      }`}
                   >
                     {cell.date.getDate()}
                   </p>
@@ -689,9 +807,6 @@ export default function ClinicAppointmentsPage() {
                     )}
                     {dayAppointments.some((a) => a.status === "pending") && (
                       <div className="h-1.5 rounded-full bg-amber-400" />
-                    )}
-                    {dayAppointments.some((a) => a.status === "rejected") && (
-                      <div className="h-1.5 rounded-full bg-red-400" />
                     )}
                   </div>
                 </div>
@@ -717,7 +832,7 @@ export default function ClinicAppointmentsPage() {
                 >
                   <div className="flex items-start gap-3">
                     <img
-                      src={appointment.conditionImage || fallbackConditionImage}
+                      src={appointment.patientAvatar || appointment.skinPhotoUrl || appointment.conditionImage || fallbackConditionImage}
                       alt={appointment.conditionName || "Condition"}
                       className="w-12 h-12 rounded-lg object-cover border border-gray-200"
                     />
@@ -775,13 +890,17 @@ export default function ClinicAppointmentsPage() {
           </div>
 
           <p className="text-xs text-gray-500 mb-3">
-            Click "Schedule Date & Time" on a patient card to open the scheduler modal.
+            Click "Schedule &amp; Assign" on a patient card to assign a date, time, and dermatologist.
           </p>
 
           <div className="space-y-2.5 max-h-[650px] overflow-y-auto pr-1">
             {unscheduledQueue.length === 0 && (
-              <div className="border border-dashed border-gray-200 rounded-xl p-4 text-center">
-                <p className="text-xs text-gray-500">No unscheduled requests.</p>
+              <div className="border border-dashed border-gray-200 rounded-2xl p-6 text-center bg-gray-50/50">
+                <Clock className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                <p className="text-xs font-semibold text-gray-600">No pending requests</p>
+                <p className="text-[11px] text-gray-400 mt-1 max-w-xs mx-auto">
+                  When patients request a consultation, they will appear here in the queue for you to assign dates, times, and dermatologists.
+                </p>
               </div>
             )}
 
@@ -799,7 +918,12 @@ export default function ClinicAppointmentsPage() {
                       )}&background=fce7f3&color=c0166a`
                     }
                     alt={appointment.patientName || "Patient"}
-                    className="w-12 h-12 rounded-lg object-cover border border-gray-200"
+                    className="w-12 h-12 rounded-full object-cover border border-gray-200 shrink-0"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                        appointment.patientName || "Patient"
+                      )}&background=fce7f3&color=c0166a`;
+                    }}
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
@@ -840,48 +964,41 @@ export default function ClinicAppointmentsPage() {
                 <div className="space-y-2">
                   {/* Doctor assignment status */}
                   {appointment.assignedDoctorName && (
-                    <div className={`flex items-center gap-1.5 text-[10px] font-semibold px-2 py-1.5 rounded-lg border ${
-                      appointment.doctorStatus === "approved"
-                        ? "bg-green-50 text-green-700 border-green-200"
-                        : appointment.doctorStatus === "rejected"
+                    <div className={`flex items-center gap-1.5 text-[10px] font-semibold px-2 py-1.5 rounded-lg border ${appointment.doctorStatus === "approved"
+                      ? "bg-green-50 text-green-700 border-green-200"
+                      : appointment.doctorStatus === "rejected"
                         ? "bg-red-50 text-red-700 border-red-200"
                         : "bg-amber-50 text-amber-700 border-amber-200"
-                    }`}>
+                      }`}>
                       <Stethoscope className="w-3 h-3 shrink-0" />
                       {appointment.assignedDoctorName} —&nbsp;
                       {appointment.doctorStatus === "approved"
                         ? "Approved"
                         : appointment.doctorStatus === "rejected"
-                        ? "Rejected"
-                        : "Pending Review"}
+                          ? "Rejected"
+                          : "Pending Review"}
                     </div>
                   )}
                   {appointment.doctorNote && (
-                    <p className={`text-[10px] px-2 py-1 rounded-lg ${
-                      appointment.doctorStatus === "rejected"
-                        ? "bg-red-50 text-red-600 border border-red-200"
-                        : "bg-green-50 text-green-600 border border-green-200"
-                    }`}>
+                    <p className={`text-[10px] px-2 py-1 rounded-lg ${appointment.doctorStatus === "rejected"
+                      ? "bg-red-50 text-red-600 border border-red-200"
+                      : "bg-green-50 text-green-600 border border-green-200"
+                      }`}>
                       <strong>Dr. Note:</strong> {appointment.doctorNote}
                     </p>
                   )}
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-2 gap-2 pt-1">
                     <button
                       onClick={() => setViewingPatient(appointment)}
-                      className="inline-flex items-center justify-center gap-1 py-2 rounded-lg bg-[#c0166a] text-white text-[11px] font-semibold hover:bg-[#a01258] transition-colors"
+                      className="inline-flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
                     >
-                      <User className="w-3.5 h-3.5" /> View Details
+                      <User className="w-3.5 h-3.5" /> Details
                     </button>
                     <button
-                      onClick={() => {
-                        setAssignDoctorModal({ appointmentId: appointment.id });
-                        setSelectedDoctorId(appointment.assignedDoctorId || "");
-                      }}
-                      title="Assign to doctor for review"
-                      className="inline-flex items-center justify-center gap-1 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-[11px] font-semibold hover:bg-blue-100 transition-colors"
+                      onClick={() => startScheduleAssignment(appointment.id)}
+                      className="inline-flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-semibold transition-colors shadow-xs cursor-pointer"
                     >
-                      <Stethoscope className="w-3.5 h-3.5" />
-                      {appointment.assignedDoctorId ? "Reassign" : "Assign Doc"}
+                      <Calendar className="w-3.5 h-3.5" /> Schedule &amp; Assign
                     </button>
                   </div>
                 </div>
@@ -891,7 +1008,7 @@ export default function ClinicAppointmentsPage() {
 
           <div className="mt-4 rounded-xl bg-gray-50 border border-gray-100 p-3 text-[11px] text-gray-600">
             <p className="font-semibold mb-1">Queue Rule</p>
-            <p>First submitted requests stay on top. Open scheduler modal, set date/time, then confirm.</p>
+            <p>First submitted requests stay on top. Click "Schedule &amp; Assign" to set date, time, and doctor, then confirm.</p>
           </div>
         </div>
       </div>
@@ -916,7 +1033,7 @@ export default function ClinicAppointmentsPage() {
                   })}
                 </h3>
                 <p className="text-xs text-gray-500 mt-0.5 font-medium">
-                  {(appointmentsByDate[dayDetailDate] || []).filter((a) => a.status !== "rejected").length} patient(s) scheduled
+                  {(appointmentsByDate[dayDetailDate] || []).length} patient(s) scheduled
                 </p>
               </div>
               <button
@@ -931,14 +1048,13 @@ export default function ClinicAppointmentsPage() {
 
             {/* Body */}
             <div className="p-6 max-h-[60vh] overflow-y-auto space-y-3">
-              {(appointmentsByDate[dayDetailDate] || []).filter((a) => a.status !== "rejected").length === 0 ? (
+              {(appointmentsByDate[dayDetailDate] || []).length === 0 ? (
                 <div className="border border-dashed border-gray-200 rounded-2xl p-8 text-center bg-gray-50/50">
                   <Calendar className="w-8 h-8 text-gray-300 mx-auto mb-2" />
                   <p className="text-xs font-semibold text-gray-500">No patients scheduled for this date.</p>
                 </div>
               ) : (
                 (appointmentsByDate[dayDetailDate] || [])
-                  .filter((a) => a.status !== "rejected")
                   .sort((a, b) => a.time.localeCompare(b.time))
                   .map((appt) => (
                     <div key={appt.id} className="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 space-y-3">
@@ -973,11 +1089,10 @@ export default function ClinicAppointmentsPage() {
                             {appt.assignedDoctorName || <span className="text-gray-400 italic">No doctor assigned</span>}
                           </span>
                         </div>
-                        <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold border ${
-                          appt.status === "scheduled" || appt.status === "accepted"
-                            ? "bg-green-50 text-green-700 border-green-200"
-                            : "bg-amber-50 text-amber-700 border-amber-200"
-                        }`}>
+                        <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold border ${appt.status === "scheduled" || appt.status === "accepted"
+                          ? "bg-green-50 text-green-700 border-green-200"
+                          : "bg-amber-50 text-amber-700 border-amber-200"
+                          }`}>
                           {appt.status}
                         </span>
                       </div>
@@ -1219,14 +1334,9 @@ export default function ClinicAppointmentsPage() {
                     setViewingPatient(null);
                     startScheduleAssignment(viewingPatient.id);
                   }}
-                  disabled={
-                    !!(viewingPatient.assignedDoctorId && viewingPatient.doctorStatus !== "approved")
-                  }
-                  className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
                 >
-                  {viewingPatient.assignedDoctorId && viewingPatient.doctorStatus !== "approved"
-                    ? "Awaiting Doctor Review"
-                    : "Schedule Appointment"}
+                  Schedule &amp; Assign Doctor
                 </button>
               </div>
             )}
@@ -1234,7 +1344,7 @@ export default function ClinicAppointmentsPage() {
         </div>
       )}
 
-      {/* ── Schedule Date & Time Modal ─────────────────────── */}
+      {/* ── Schedule & Assign Modal ─────────────────────── */}
       {pendingAssign && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -1245,7 +1355,7 @@ export default function ClinicAppointmentsPage() {
             className="w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
           >
             <div className="flex items-center justify-between mb-1">
-              <h3 className="text-base font-bold text-gray-900">Schedule Date &amp; Time</h3>
+              <h3 className="text-base font-bold text-gray-900">Schedule &amp; Assign Consultation</h3>
               <button
                 type="button"
                 onClick={() => setPendingAssign(null)}
@@ -1254,7 +1364,7 @@ export default function ClinicAppointmentsPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-xs text-gray-500 mb-5">Choose consultation schedule and assign a dermatologist.</p>
+            <p className="text-xs text-gray-500 mb-5">Choose consultation schedule and assign an attending dermatologist.</p>
 
             <div className="space-y-4">
               <div>
@@ -1266,9 +1376,9 @@ export default function ClinicAppointmentsPage() {
                     setPendingAssign((prev) =>
                       prev
                         ? {
-                            ...prev,
-                            date: e.target.value,
-                          }
+                          ...prev,
+                          date: e.target.value,
+                        }
                         : prev
                     )
                   }
@@ -1285,9 +1395,9 @@ export default function ClinicAppointmentsPage() {
                     setPendingAssign((prev) =>
                       prev
                         ? {
-                            ...prev,
-                            time: e.target.value,
-                          }
+                          ...prev,
+                          time: e.target.value,
+                        }
                         : prev
                     )
                   }
@@ -1330,7 +1440,7 @@ export default function ClinicAppointmentsPage() {
                 onClick={confirmAssign}
                 className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
               >
-                Confirm Schedule
+                Confirm &amp; Assign
               </button>
             </div>
           </motion.div>
@@ -1380,11 +1490,10 @@ export default function ClinicAppointmentsPage() {
                     key={doc.id}
                     type="button"
                     onClick={() => setSelectedDoctorId(doc.id)}
-                    className={`w-full text-left px-3.5 py-3 rounded-2xl border text-xs transition-colors cursor-pointer ${
-                      selectedDoctorId === doc.id
-                        ? "border-magenta-500 bg-magenta-50/40 text-magenta-900 ring-1 ring-magenta-500"
-                        : "border-gray-200 hover:border-gray-300 bg-white"
-                    }`}
+                    className={`w-full text-left px-3.5 py-3 rounded-2xl border text-xs transition-colors cursor-pointer ${selectedDoctorId === doc.id
+                      ? "border-magenta-500 bg-magenta-50/40 text-magenta-900 ring-1 ring-magenta-500"
+                      : "border-gray-200 hover:border-gray-300 bg-white"
+                      }`}
                   >
                     <p className="font-bold text-gray-900">{doc.name}</p>
                     <p className="text-[11px] text-gray-500 mt-0.5">{doc.specialization}</p>
@@ -1475,11 +1584,10 @@ export default function ClinicAppointmentsPage() {
                       setRejectReason(preset);
                       setRejectError("");
                     }}
-                    className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-colors border cursor-pointer ${
-                      selectedPresetReason === preset || rejectReason === preset
-                        ? "bg-red-50 border-red-200 text-red-700 font-semibold"
-                        : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
-                    }`}
+                    className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-colors border cursor-pointer ${selectedPresetReason === preset || rejectReason === preset
+                      ? "bg-red-50 border-red-200 text-red-700 font-semibold"
+                      : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
+                      }`}
                   >
                     • {preset}
                   </button>

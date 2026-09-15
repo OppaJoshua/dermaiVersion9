@@ -65,7 +65,7 @@ export default function PatientPersonalInformation() {
       try {
         const { data: dbUser, error: _error } = await supabase
           .from("user")
-          .select("full_name, email")
+          .select("full_name, email, phone, gender, birthdate, district, address")
           .eq("user_id", session.user.id)
           .maybeSingle();
 
@@ -76,14 +76,14 @@ export default function PatientPersonalInformation() {
         const parsed = localSaved ? JSON.parse(localSaved) : {};
 
         setProfile({
-          fullName: dbUser?.full_name || fallbackName,
+          fullName: dbUser?.full_name || meta.full_name || fallbackName,
           email: dbUser?.email || email,
-          contactNumber: parsed.contactNumber || "",
-          gender: parsed.gender || "",
-          birthdate: parsed.birthdate || "",
-          district: parsed.district || "",
-          address: parsed.address || "",
-          profilePicture: parsed.profilePicture || fallbackPicture,
+          contactNumber: dbUser?.phone || meta.phone || parsed.contactNumber || "",
+          gender: dbUser?.gender || meta.gender || parsed.gender || "",
+          birthdate: dbUser?.birthdate || meta.birthdate || meta.birthday || parsed.birthdate || "",
+          district: dbUser?.district || meta.district || parsed.district || "",
+          address: dbUser?.address || meta.address || parsed.address || "",
+          profilePicture: meta.avatar_url || parsed.profilePicture || fallbackPicture,
         });
       } catch (err) {
         console.error("Error loading profile:", err);
@@ -135,10 +135,17 @@ export default function PatientPersonalInformation() {
 
     try {
       if (session?.user) {
-        // 1. Update user full_name in Supabase public.user
+        // 1. Update user in Supabase public.user
         const { error: dbError } = await supabase
           .from("user")
-          .update({ full_name: profile.fullName })
+          .update({
+            full_name: profile.fullName,
+            phone: profile.contactNumber || null,
+            gender: profile.gender || null,
+            birthdate: profile.birthdate || null,
+            district: profile.district || null,
+            address: profile.address || null,
+          })
           .eq("user_id", session.user.id);
 
         if (dbError) {
@@ -159,11 +166,18 @@ export default function PatientPersonalInformation() {
           })
         );
 
-        // 3. Try to sync metadata to Supabase auth user
+        // 3. Sync metadata to Supabase auth user
         try {
           await supabase.auth.updateUser({
             data: {
               full_name: profile.fullName,
+              gender: profile.gender,
+              birthdate: profile.birthdate,
+              birthday: profile.birthdate,
+              phone: profile.contactNumber,
+              district: profile.district,
+              address: profile.address,
+              avatar_url: profile.profilePicture,
             },
           });
         } catch {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { X, Loader2 } from "lucide-react";
 import logo from "@/assets/logo2.png";
 import { useAuth } from "../../context/AuthContext";
@@ -40,14 +40,20 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [linkSent, setLinkSent] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const from = location.state?.from;
   const { session, loading, role, roleLoading, signInWithMagicLink, signInWithGoogle } = useAuth();
 
   useEffect(() => {
     if (loading || roleLoading) return;
     if (session && role) {
-      navigate(ROLE_HOME[role] ?? "/dashboard", { replace: true });
+      if (from && (role === "patient" || !ROLE_HOME[role])) {
+        navigate(from, { replace: true });
+      } else {
+        navigate(ROLE_HOME[role] ?? "/dashboard", { replace: true });
+      }
     }
-  }, [session, loading, role, roleLoading, navigate]);
+  }, [session, loading, role, roleLoading, navigate, from]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -74,9 +80,9 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-magenta-600 flex items-center justify-center px-4 py-12 relative">
       <button
-        onClick={() => navigate(-1)}
+        onClick={() => navigate("/")}
         aria-label="Close"
-        className="absolute top-6 right-6 w-9 h-9 rounded-full bg-white/90 flex items-center justify-center text-magenta-600 hover:bg-white transition-colors"
+        className="absolute top-6 right-6 w-9 h-9 rounded-full bg-white/90 flex items-center justify-center text-magenta-600 hover:bg-white transition-colors cursor-pointer"
       >
         <X className="w-4 h-4" />
       </button>
