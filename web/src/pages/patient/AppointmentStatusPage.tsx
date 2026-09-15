@@ -321,12 +321,32 @@ const AppointmentStatusPage: React.FC = () => {
     }
   };
 
-  const upcomingAppointments = allAppointments.filter(
-    (a) => a.status === "Scheduled" || a.status === "Pending"
-  );
-  const pastAppointments = allAppointments.filter(
-    (a) => a.status === "Completed" || a.status === "Rejected" || a.status === "Cancelled"
-  );
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  const upcomingAppointments = allAppointments.filter((a) => {
+    // Always show Pending in Upcoming (no date constraint — awaiting clinic action)
+    if (a.status === "Pending") return true;
+    // Scheduled = Upcoming only if the date is today or future
+    if (a.status === "Scheduled") {
+      // Try to parse the display date back to a real date
+      const parsed = new Date(a.date);
+      if (!isNaN(parsed.getTime())) return parsed.getTime() >= now.getTime();
+      return true; // date pending — keep in upcoming
+    }
+    return false;
+  });
+
+  const pastAppointments = allAppointments.filter((a) => {
+    if (a.status === "Rejected" || a.status === "Cancelled") return true;
+    if (a.status === "Completed") return true;
+    // Scheduled appointments whose date has already passed → move to Past
+    if (a.status === "Scheduled") {
+      const parsed = new Date(a.date);
+      if (!isNaN(parsed.getTime())) return parsed.getTime() < now.getTime();
+    }
+    return false;
+  });
 
   const renderCards = (apps: Appointment[]) => {
     if (loading) {

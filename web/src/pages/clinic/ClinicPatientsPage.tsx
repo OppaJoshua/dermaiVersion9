@@ -237,7 +237,7 @@ export default function ClinicPatientsPage() {
                   const gender = localItem.patientGender || localItem.patient_gender || "";
                   const birthdate = localItem.patientBirthdate || localItem.patient_birthdate || "";
                   const age = localItem.patientAge || calculateAge(birthdate);
-                  const isCompleted = localItem.status === "completed" || localItem.status === "accepted";
+                  const isCompleted = localItem.status === "completed";
                   const isPending = localItem.status === "pending";
                   const isCancelled = localItem.status === "cancelled" || localItem.status === "rejected";
                   const isScheduled = localItem.status === "scheduled";

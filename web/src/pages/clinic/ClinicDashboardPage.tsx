@@ -32,7 +32,7 @@ type AppointmentRecord = {
   rawDate?: string;
   time: string;
   notes: string;
-  status: "pending" | "accepted" | "scheduled" | "rejected";
+  status: "pending" | "accepted" | "scheduled" | "rejected" | "completed";
   meetingLink?: string;
   clinicNote?: string;
   createdAt: string;
@@ -190,7 +190,7 @@ export default function ClinicDashboardPage() {
           date: parsedDate ? parsedDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "Schedule pending",
           time: parsedDate && a.date?.includes("T") ? parsedDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : "—",
           notes: a.notes || a.ai_condition_name || "",
-          status: (a.status === "confirmed" || a.status === "scheduled" ? "scheduled" : a.status === "completed" ? "accepted" : a.status === "cancelled" || a.status === "rejected" ? "rejected" : "pending") as AppointmentRecord["status"],
+          status: (a.status === "confirmed" || a.status === "scheduled" ? "scheduled" : a.status === "completed" ? "completed" : a.status === "cancelled" || a.status === "rejected" ? "rejected" : a.status === "accepted" ? "accepted" : "pending") as AppointmentRecord["status"],
           createdAt: a.created_at || a.date || new Date().toISOString(),
           patientName: pName,
           patientEmail: a.patient_email || undefined,
@@ -341,6 +341,8 @@ export default function ClinicDashboardPage() {
 
     return appointments
       .filter((appt) => {
+        // Completed appointments must NEVER appear in upcoming
+        if (appt.status === "completed" || appt.status === "rejected") return false;
         if (appt.status !== "scheduled" && appt.status !== "accepted") return false;
         const d = parseDateStringSafe(appt.rawDate || appt.date);
         if (!d) return false;

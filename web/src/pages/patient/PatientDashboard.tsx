@@ -33,7 +33,7 @@ type AppointmentRecord = {
   date: string;
   time: string;
   notes: string;
-  status: "pending" | "accepted" | "scheduled" | "rejected";
+  status: "pending" | "accepted" | "scheduled" | "rejected" | "completed";
   meetingLink?: string;
   clinicNote?: string;
   createdAt: string;
@@ -167,7 +167,7 @@ export default function PatientDashboard() {
             date: new Date(a.date).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
             time: "",
             notes: "",
-            status: (a.status === "confirmed" ? "accepted" : a.status === "completed" ? "scheduled" : a.status === "cancelled" ? "rejected" : "pending") as AppointmentRecord["status"],
+            status: (a.status === "confirmed" ? "accepted" : a.status === "completed" ? "completed" : a.status === "cancelled" ? "rejected" : "pending") as AppointmentRecord["status"],
             createdAt: a.date,
           };
         });

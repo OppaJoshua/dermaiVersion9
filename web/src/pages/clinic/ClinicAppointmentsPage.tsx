@@ -36,7 +36,7 @@ type AppointmentRecord = {
   date: string;
   time: string;
   notes: string;
-  status: "pending" | "accepted" | "scheduled" | "rejected";
+  status: "pending" | "accepted" | "scheduled" | "rejected" | "completed";
   meetingLink?: string;
   clinicNote?: string;
   assignedDoctorId?: string;
@@ -199,8 +199,9 @@ export default function ClinicAppointmentsPage() {
 
         let displayStatus: AppointmentRecord["status"] = "pending";
         if (a.status === "confirmed" || a.status === "scheduled") displayStatus = "scheduled";
-        else if (a.status === "completed") displayStatus = "accepted";
+        else if (a.status === "completed") displayStatus = "completed";
         else if (a.status === "cancelled" || a.status === "rejected") displayStatus = "rejected";
+        else if (a.status === "accepted") displayStatus = "accepted";
 
         const assignedDoc = docRows.find((d: any) => d.doctor_id === a.assigned_doctor_id);
 
