@@ -226,7 +226,7 @@ export default function BillingSettingsPage() {
                 </div>
                 <div>
                   <p className="text-base font-bold text-gray-900">{sub.isPro ? (sub.planName || "Pro Plan") : "Free Plan"}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{sub.isPro ? sub.price : "1 scan per account"}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{sub.isPro ? sub.price : "3 scans per account"}</p>
                 </div>
               </div>
               <span className={`text-xs px-3 py-1 rounded-full font-bold ${sub.isPro ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
@@ -259,7 +259,7 @@ export default function BillingSettingsPage() {
             ) : (
               <div className="space-y-3">
                 <div className="space-y-1.5">
-                  {["1 free AI skin scan", "Basic clinic search", "Limited scan history"].map((feat) => (
+                  {["3 free AI skin scans", "Basic clinic search", "Limited scan history"].map((feat) => (
                     <div key={feat} className="flex items-center gap-2 text-sm text-gray-500">
                       <CheckCircle2 className="w-4 h-4 text-gray-300 shrink-0" />
                       {feat}
