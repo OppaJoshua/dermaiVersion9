@@ -60,6 +60,7 @@ export default function SubscriptionStatusPage() {
             status,
             billing_cycle,
             renews_at,
+            current_period_start,
             plan:plan_id ( name, scan_limit )
           `)
           .eq("user_id", user.id)
@@ -71,11 +72,18 @@ export default function SubscriptionStatusPage() {
           console.warn("user_plan_subscription not available:", subError.message);
         }
 
-        // Count scans used (table may not exist yet)
+        // Determine billing cycle start for usage windowing
+        // Pro users: use current_period_start from DB; Free users: start of current calendar month
+        const cycleStart: string =
+          (subData as any)?.current_period_start ||
+          new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+
+        // Count scans used within the current billing cycle only
         const { count: usedScans, error: scanError } = await supabase
           .from("ai_scan_result")
           .select("*", { count: "exact", head: true })
-          .eq("user_id", user.id);
+          .eq("user_id", user.id)
+          .gte("scanned_at", cycleStart);
 
         if (scanError) {
           console.warn("ai_scan_result not available:", scanError.message);

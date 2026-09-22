@@ -141,9 +141,11 @@ create table if not exists "user" (
   birthdate      date,
   district       varchar(100),
   address        text,
+  avatar_url     text,
   account_status varchar(20) not null default 'active'
                  check (account_status in ('active','suspended','inactive')),
-  created_at     timestamptz not null default now()
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -166,7 +168,9 @@ create table if not exists user_notification (
 create table if not exists user_notification_settings (
   user_id                uuid primary key references "user"(user_id) on delete cascade,
   appointment_reminders  boolean not null default true,
-  scan_alert             boolean not null default true
+  scan_alert             boolean not null default true,
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -211,14 +215,34 @@ create table if not exists plan_feature (
 -- 7. USER_PLAN_SUBSCRIPTION
 -- ----------------------------------------------------------------------------
 create table if not exists user_plan_subscription (
-  subscription_id  uuid primary key default gen_random_uuid(),
-  started_at       timestamptz not null default now(),
-  renews_at        timestamptz,
-  status           varchar(20) not null check (status in ('active','expired','cancelled')),
-  billing_cycle    varchar(20) not null check (billing_cycle in ('monthly','yearly')),
-  user_id          uuid not null references "user"(user_id) on delete cascade,
-  plan_id          uuid not null references plan(plan_id)
+  subscription_id       uuid primary key default gen_random_uuid(),
+  started_at            timestamptz not null default now(),
+  renews_at             timestamptz,
+  status                varchar(20) not null check (status in ('active','expired','cancelled')),
+  billing_cycle         varchar(20) not null check (billing_cycle in ('monthly','yearly')),
+  current_period_start  timestamptz,
+  current_period_end    timestamptz,
+  updated_at            timestamptz not null default now(),
+  paymongo_subscription_id TEXT,
+  paymongo_customer_id  TEXT,
+  paymongo_plan_id     TEXT,
+  user_id               uuid not null references "user"(user_id) on delete cascade,
+  plan_id               uuid not null references plan(plan_id)
 );
+
+-- Ensure period columns and updated_at exist on pre-existing tables
+alter table if exists user_plan_subscription
+  add column if not exists current_period_start timestamptz,
+  add column if not exists current_period_end   timestamptz,
+  add column if not exists updated_at           timestamptz not null default now();
+
+-- FIX #5: Ensure upsert by user_id works — one active subscription row per user.
+-- activateSubscription() uses onConflict: "user_id"; without this constraint
+-- it inserts a NEW row every payment instead of updating the existing one.
+alter table if exists user_plan_subscription
+  drop constraint if exists uq_sub_user_id;
+alter table if exists user_plan_subscription
+  add constraint uq_sub_user_id unique (user_id);
 
 -- ----------------------------------------------------------------------------
 -- 8. USER_PAYMENT
@@ -227,9 +251,14 @@ create table if not exists user_payment (
   payment_id    uuid primary key default gen_random_uuid(),
   amount        decimal(10,2) not null,
   payment_date  timestamptz not null default now(),
+  billing_cycle VARCHAR(20),
   method        varchar(50) not null,
   status        varchar(20) not null check (status in ('success','failed','pending')),
-  user_id       uuid not null references "user"(user_id) on delete cascade,
+  created_at    timestamptz not null default now(),
+  reference_number text,
+  paymongo_payment_id text,
+  paymongo_payment_intent_id text,
+ user_id       uuid not null references "user"(user_id) on delete cascade,
   plan_id       uuid references plan(plan_id) on delete set null
 );
 
@@ -245,6 +274,7 @@ create table if not exists clinic (
                         check (status in ('pending','approved','rejected','suspended')),
   latitude              decimal(10,7),
   longitude             decimal(10,7),
+  verified              boolean not null default false,
   email                 varchar(100),
   phone                 varchar(30),
   address               text,
@@ -261,10 +291,14 @@ create table if not exists clinic (
 -- ----------------------------------------------------------------------------
 -- 10. USER_SAVED_CLINIC
 -- ----------------------------------------------------------------------------
+-- FIX #2: id is the primary key. (user_id, clinic_id) must be UNIQUE, not a second PK.
+-- PostgreSQL does not allow two PRIMARY KEY declarations on the same table.
 create table if not exists user_saved_clinic (
+  id         uuid primary key default gen_random_uuid(),
+  saved_at   timestamptz not null default now(),
   user_id    uuid not null references "user"(user_id) on delete cascade,
   clinic_id  uuid not null references clinic(clinic_id) on delete cascade,
-  primary key (user_id, clinic_id)
+  unique (user_id, clinic_id)   -- prevents duplicate saves
 );
 
 -- ----------------------------------------------------------------------------
@@ -282,7 +316,8 @@ create table if not exists clinic_doctor (
   photo_url       text,
   status          varchar(20) not null default 'Active'
                   check (status in ('Active','Inactive')),
-  created_at      timestamptz not null default now()
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -290,17 +325,20 @@ create table if not exists clinic_doctor (
 -- (Dynamic specialization options managed from DB — used by ClinicDoctorsPage)
 -- ----------------------------------------------------------------------------
 create table if not exists specializations (
-  id    uuid primary key default gen_random_uuid(),
-  name  varchar(200) not null unique
+  id            uuid primary key default gen_random_uuid(),
+  name          varchar(200) not null unique,
+  description   text,
+  created_at    timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
 -- 13. DOCTOR_SPECIALIZATIONS (many-to-many: clinic_doctor <-> specializations)
 -- ----------------------------------------------------------------------------
 create table if not exists doctor_specializations (
+  id                uuid primary key default gen_random_uuid(),
   doctor_id         uuid not null references clinic_doctor(doctor_id) on delete cascade,
   specialization_id uuid not null references specializations(id) on delete cascade,
-  primary key (doctor_id, specialization_id)
+  unique (doctor_id, specialization_id)   -- prevents duplicates; not a second PK
 );
 
 -- ----------------------------------------------------------------------------
@@ -319,7 +357,8 @@ create table if not exists clinic_photo (
   photo_id    uuid primary key default gen_random_uuid(),
   photo_url   text not null,
   sort_order  int not null default 0,
-  clinic_id   uuid not null references clinic(clinic_id) on delete cascade
+  clinic_id   uuid not null references clinic(clinic_id) on delete cascade,
+  created_at  timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -330,7 +369,8 @@ create table if not exists clinic_operating_hours (
   day_of_week    varchar(10) not null,
   open_time      time not null,
   close_time     time not null,
-  clinic_id      uuid not null references clinic(clinic_id) on delete cascade
+  clinic_id      uuid not null references clinic(clinic_id) on delete cascade,
+  created_at     timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -378,7 +418,8 @@ create table if not exists clinic_condition_treated (
   cc_id         uuid primary key default gen_random_uuid(),
   clinic_id     uuid not null references clinic(clinic_id) on delete cascade,
   condition_id  uuid not null references skin_condition(condition_id) on delete cascade,
-  constraint uq_clinic_condition unique (clinic_id, condition_id)
+  constraint uq_clinic_condition unique (clinic_id, condition_id),
+  created_at     timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -404,17 +445,16 @@ create table if not exists patient_appointment (
                            check (status in ('pending','confirmed','cancelled','completed')),
   patient_name             varchar(100),
   patient_email            varchar(100),
-  patient_gender           varchar(30),
-  patient_birthdate        date,
   patient_contact          varchar(30),
   patient_address          text,
+  patient_gender           varchar(30),
+  patient_birthdate        date,
   notes                    text,
   clinic_note              text,
   skin_photo_url           text,
   ai_condition_name        varchar(200),
   ai_confidence            decimal(5,2),
   questionnaire_answers    jsonb,
-  meeting_link             text,
   created_at               timestamptz not null default now(),
   assigned_doctor_id       uuid references clinic_doctor(doctor_id) on delete set null,
   schedule_sent_to_doctor  boolean not null default false,
@@ -456,6 +496,7 @@ create table if not exists ai_skin_answer (
   question_key   varchar(100) not null,
   answer_value   text not null,
   sort_order     int not null default 0,
+  created_at     timestamptz not null default now(),
   analysis_id    uuid not null references ai_scan_result(analysis_id) on delete cascade
 );
 
@@ -513,7 +554,9 @@ create table if not exists system_audit_log (
 -- ============================================================================
 create index if not exists idx_user_notif_uid         on user_notification (user_id);
 create index if not exists idx_user_ticket_uid        on user_support_ticket (user_id);
-create index if not exists idx_user_plan_sub_uid      on user_plan_subscription (user_id);
+create unique index if not exists idx_user_plan_sub_uid      on user_plan_subscription (user_id);
+create unique index if not exists idx_unique_paymongo_subscription on user_plan_subscription(paymongo_subscription_id) where paymongo_subscription_id is not null;
+create unique index if not exists idx_one_active_subscription_per_user  on user_plan_subscription(user_id) where status = 'active';
 create index if not exists idx_user_payment_uid       on user_payment (user_id);
 create index if not exists idx_clinic_owner_uid       on clinic (owner_user_id);
 create index if not exists idx_clinic_doc_cid         on clinic_doctor (clinic_id);
@@ -596,6 +639,40 @@ as $$
       and status = 'Active'
   );
 $$;
+
+-- ----------------------------------------------------------------------------
+-- PAYMONGO_WEBHOOK_EVENT (Idempotency & Audit Log)
+-- ----------------------------------------------------------------------------
+create table if not exists paymongo_webhook_event (
+  event_id      text primary key,
+  event_type    text not null,
+  received_at   timestamptz not null default now(),
+  processed_at  timestamptz,
+  status        text not null default 'received' 
+                check (status in ('received', 'processing', 'processed', 'failed', 'ignored')),
+  error_message text,
+  payload       jsonb
+);
+
+-- Index for monitoring & querying unhandled or failed events
+create index if not exists idx_paymongo_webhook_status_received 
+  on paymongo_webhook_event (status, received_at desc);
+
+-- RLS: Secure so only service_role (backend/edge functions) or admin can view
+alter table paymongo_webhook_event enable row level security;
+
+create policy "Admins can view webhook logs"
+  on paymongo_webhook_event
+  for select
+  to authenticated
+  using (
+    exists (
+      select 1 from "user"
+      where "user".user_id = auth.uid()
+        and "user".role = 'admin'
+    )
+  );
+
 
 -- ============================================================================
 -- ROW LEVEL SECURITY (RLS) — Enable on all 29 tables
@@ -792,6 +869,46 @@ drop policy if exists "ticket_insert_own"   on user_support_ticket;
 drop policy if exists "ticket_update_admin" on user_support_ticket;
 create policy "ticket_all_access" on user_support_ticket for all using (true) with check (true);
 
+-- plan (public read so any visitor can see pricing; admin manages)
+drop policy if exists "plan_public_read" on plan;
+drop policy if exists "plan_admin_all"   on plan;
+create policy "plan_public_read" on plan for select using (true);
+create policy "plan_admin_all"   on plan for all    using (is_admin()) with check (is_admin());
+
+-- plan_feature (same visibility as plan)
+drop policy if exists "plan_feat_public_read" on plan_feature;
+drop policy if exists "plan_feat_admin_all"   on plan_feature;
+create policy "plan_feat_public_read" on plan_feature for select using (true);
+create policy "plan_feat_admin_all"   on plan_feature for all    using (is_admin()) with check (is_admin());
+
+-- user_plan_subscription (users see/manage their own rows; admin sees all)
+drop policy if exists "sub_owner_read"   on user_plan_subscription;
+drop policy if exists "sub_owner_insert" on user_plan_subscription;
+drop policy if exists "sub_owner_update" on user_plan_subscription;
+drop policy if exists "sub_admin_all"    on user_plan_subscription;
+create policy "sub_owner_read"   on user_plan_subscription for select using (user_id = auth.uid() or is_admin());
+create policy "sub_owner_insert" on user_plan_subscription for insert with check (user_id = auth.uid() or is_admin());
+create policy "sub_owner_update" on user_plan_subscription for update using (user_id = auth.uid() or is_admin()) with check (user_id = auth.uid() or is_admin());
+create policy "sub_admin_all"    on user_plan_subscription for delete using (is_admin());
+
+-- user_payment (users see their own receipts; admin sees all; writes are handled securely via backend/webhook)
+drop policy if exists "pay_owner_read"   on user_payment;
+drop policy if exists "pay_owner_insert" on user_payment;
+drop policy if exists "pay_admin_all"    on user_payment;
+
+-- Allow users to update ONLY status = 'cancelled' (so they can cancel, but can't self-activate 'active')
+drop policy if exists "sub_owner_update" on user_plan_subscription;
+
+create policy "sub_owner_cancel" 
+  on user_plan_subscription 
+  for update 
+  using (user_id = auth.uid() or is_admin())
+  with check (status = 'cancelled' or is_admin());
+
+-- Users can only READ receipts (cannot insert or fake payment status from the browser)
+create policy "pay_owner_read"   on user_payment for select using (user_id = auth.uid() or is_admin());
+create policy "pay_admin_all"    on user_payment for all    using (is_admin()) with check (is_admin());
+
 -- ============================================================================
 -- STORAGE BUCKETS & STORAGE POLICIES
 -- ============================================================================
@@ -799,8 +916,15 @@ insert into storage.buckets (id, name, public) values
   ('clinic-photos',   'clinic-photos',   true),
   ('doctor-photos',   'doctor-photos',   true),
   ('scan-photos',     'scan-photos',     false),
+  ('scan-uploads',    'scan-uploads',    false),
   ('patient-records', 'patient-records', false)
 on conflict (id) do nothing;
+
+-- scan-uploads: private bucket for AI scan image uploads (authenticated users only)
+drop policy if exists "scan_uploads_auth" on storage.objects;
+create policy "scan_uploads_auth" on storage.objects for all
+  using   (bucket_id = 'scan-uploads' and auth.role() = 'authenticated')
+  with check (bucket_id = 'scan-uploads' and auth.role() = 'authenticated');
 
 drop policy if exists "clinic_photos_public" on storage.objects;
 create policy "clinic_photos_public" on storage.objects for select using (bucket_id = 'clinic-photos');
@@ -937,6 +1061,28 @@ drop trigger if exists enforce_user_role_protection on "user";
 create trigger enforce_user_role_protection
   before update on "user"
   for each row execute function enforce_user_role_protection();
+
+-- ============================================================================
+-- AUTO-TIMESTAMP TRIGGER: set_updated_at()
+-- Reusable trigger function that stamps updated_at = now() on every UPDATE.
+-- Attach to any table that has an updated_at column.
+-- ============================================================================
+create or replace function set_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+-- Attach to user_plan_subscription
+drop trigger if exists set_user_plan_subscription_updated_at on user_plan_subscription;
+create trigger set_user_plan_subscription_updated_at
+  before update on user_plan_subscription
+  for each row execute function set_updated_at();
+
 
 -- Comprehensive Clinic Registration (SECURITY DEFINER, works unauthenticated or authenticated)
 create or replace function register_new_clinic(
@@ -1106,6 +1252,11 @@ declare
   v_clinic_email varchar(100);
   v_clinic_name varchar(200);
 begin
+  -- Admin privileges check
+  if not is_admin() then
+    raise exception 'Admin privileges required';
+  end if;
+
   update clinic
   set status = new_status
   where clinic_id = target_clinic_id
@@ -1126,7 +1277,7 @@ begin
   -- If approved, promote user role to clinic and insert notification
   if new_status = 'approved' then
     if v_owner_id is not null then
-      update "user" set role = 'clinic' where user_id = v_owner_id;
+      update "user" set role = 'clinic' where user_id = v_owner_id and role != 'admin';
 
       insert into user_notification (user_id, type, subtype, title, body, is_read)
       values (
@@ -1230,55 +1381,40 @@ begin
 end;
 $$;
 
--- Admin: change clinic status (approved → sets owner role to 'clinic')
-create or replace function set_clinic_status(target_clinic_id uuid, new_status varchar)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  clinic_owner uuid;
-begin
-  if not is_admin() then
-    raise exception 'Admin privileges required';
-  end if;
-
-  update clinic set status = new_status where clinic_id = target_clinic_id;
-
-  if new_status = 'approved' then
-    select owner_user_id into clinic_owner from clinic where clinic_id = target_clinic_id;
-    if clinic_owner is not null then
-      update "user" set role = 'clinic' where user_id = clinic_owner and role != 'admin';
-    end if;
-  end if;
-end;
-$$;
-
 -- ============================================================================
 -- SEED DATA (Safe defaults)
 -- ============================================================================
 
--- Subscription plans
+-- Subscription plans (harmonized with frontend UI prices)
+-- Plan IDs are stable UUIDs. On conflict, update price/name/billing_type/status.
 insert into plan (plan_id, name, price, billing_type, scan_limit, status) values
-  ('00000000-0000-0000-0000-000000000001', 'Free',        0.00,  'monthly', 3,  'active'),
-  ('00000000-0000-0000-0000-000000000002', 'Basic',       149.00, 'monthly', 10, 'active'),
-  ('00000000-0000-0000-0000-000000000003', 'Pro',         299.00, 'monthly', -1, 'active'),
-  ('00000000-0000-0000-0000-000000000004', 'Pro (Annual)', 2499.00,'yearly', -1, 'active')
-on conflict (plan_id) do nothing;
+  ('00000000-0000-0000-0000-000000000001', 'Free',        0.00,    'monthly', 3,  'active'),
+  ('00000000-0000-0000-0000-000000000003', 'Pro Monthly', 199.00,  'monthly', -1, 'active'),
+  ('00000000-0000-0000-0000-000000000004', 'Pro Annual',  1999.00, 'yearly',  -1, 'active')
+on conflict (plan_id) do update
+  set name         = excluded.name,
+      price        = excluded.price,
+      billing_type = excluded.billing_type,
+      scan_limit   = excluded.scan_limit,
+      status       = excluded.status;
+
+-- Inactivate legacy Basic plan (soft-delete to preserve FK references)
+insert into plan (plan_id, name, price, billing_type, scan_limit, status) values
+  ('00000000-0000-0000-0000-000000000002', 'Basic (Legacy)', 149.00, 'monthly', 10, 'inactive')
+on conflict (plan_id) do update set status = 'inactive';
 
 -- Plan features
 insert into plan_feature (feature_id, feature_text, plan_id) values
-  ('00000000-0000-0000-0001-000000000001', '3 AI Skin Scans / month',             '00000000-0000-0000-0000-000000000001'),
-  ('00000000-0000-0000-0001-000000000002', 'Access to Clinic Directory',           '00000000-0000-0000-0000-000000000001'),
-  ('00000000-0000-0000-0001-000000000003', '10 AI Skin Scans / month',            '00000000-0000-0000-0000-000000000002'),
-  ('00000000-0000-0000-0001-000000000004', 'Priority Booking',                     '00000000-0000-0000-0000-000000000002'),
-  ('00000000-0000-0000-0001-000000000005', 'Skin Condition Tracking',             '00000000-0000-0000-0000-000000000002'),
-  ('00000000-0000-0000-0001-000000000006', 'Unlimited AI Skin Scans',             '00000000-0000-0000-0000-000000000003'),
-  ('00000000-0000-0000-0001-000000000007', 'Direct Dermatologist Consultation',    '00000000-0000-0000-0000-000000000003'),
-  ('00000000-0000-0000-0001-000000000008', 'Full Scan History & Analytics',       '00000000-0000-0000-0000-000000000003'),
-  ('00000000-0000-0000-0001-000000000009', 'Unlimited AI Skin Scans (Annual Save)','00000000-0000-0000-0000-000000000004')
-on conflict (feature_id) do nothing;
+  ('00000000-0000-0000-0001-000000000001', '3 AI Skin Scans per billing cycle',    '00000000-0000-0000-0000-000000000001'),
+  ('00000000-0000-0000-0001-000000000002', 'Access to Clinic Directory',            '00000000-0000-0000-0000-000000000001'),
+  ('00000000-0000-0000-0001-000000000006', 'Unlimited AI Skin Scans',              '00000000-0000-0000-0000-000000000003'),
+  ('00000000-0000-0000-0001-000000000007', 'Priority Clinic Consultation Booking', '00000000-0000-0000-0000-000000000003'),
+  ('00000000-0000-0000-0001-000000000008', 'Full Scan History & Analytics',        '00000000-0000-0000-0000-000000000003'),
+  ('00000000-0000-0000-0001-000000000009', 'Unlimited AI Skin Scans',              '00000000-0000-0000-0000-000000000004'),
+  ('00000000-0000-0000-0001-000000000010', 'Priority Clinic Consultation Booking', '00000000-0000-0000-0000-000000000004'),
+  ('00000000-0000-0000-0001-000000000011', 'Full Scan History & Analytics',        '00000000-0000-0000-0000-000000000004'),
+  ('00000000-0000-0000-0001-000000000012', 'Save 16% vs monthly billing',          '00000000-0000-0000-0000-000000000004')
+on conflict (feature_id) do update set feature_text = excluded.feature_text, plan_id = excluded.plan_id;
 
 -- Specializations (14 dermatology options used in the UI)
 insert into specializations (name) values

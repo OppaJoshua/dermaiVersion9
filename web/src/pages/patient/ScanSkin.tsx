@@ -27,7 +27,6 @@ const steps = [
   { label: "View Result", number: 3 },
 ];
 
-const MAX_FREE_SCANS = 3;
 
 /* ---------------------------------------------------------------
    Questionnaire data — sourced directly from
@@ -356,7 +355,7 @@ export default function ScanSkinPage() {
   const [scanResult, setScanResult] = useState<ScanResultData | null>(null);
   const [recommendedClinics, setRecommendedClinics] = useState<RecommendedClinic[]>([]);
 
-  const [subData, setSubData] = useState({ scansUsed: 0, isPro: false, isDemoAccount: false });
+  const [subData, setSubData] = useState({ scansUsed: 0, scanLimit: 3, isPro: false });
   const [subLoading, setSubLoading] = useState(true);
 
   useEffect(() => {
@@ -364,28 +363,38 @@ export default function ScanSkinPage() {
       setSubLoading(true);
       try {
         if (!user?.id) {
-          setSubData({ scansUsed: 0, isPro: false, isDemoAccount: false });
+          setSubData({ scansUsed: 0, scanLimit: 3, isPro: false });
           return;
         }
 
+        // Fetch active subscription joined with plan
         const { data: sub } = await supabase
           .from("user_plan_subscription")
-          .select("status, plan:plan_id(scan_limit)")
+          .select("status, started_at, current_period_start, plan:plan_id(scan_limit)")
           .eq("user_id", user.id)
           .eq("status", "active")
           .maybeSingle();
 
-        const isPro = (sub?.plan as any)?.scan_limit === -1;
+        const planScanLimit: number = (sub?.plan as any)?.scan_limit ?? 3;
+        const isPro = planScanLimit === -1;
 
+        // Determine the start of the current billing cycle
+        const cycleStart: string =
+          (sub as any)?.current_period_start ||
+          (sub as any)?.started_at ||
+          new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+
+        // Count scans within the current billing cycle only
         const { count: used } = await supabase
           .from("ai_scan_result")
           .select("*", { count: "exact", head: true })
-          .eq("user_id", user.id);
+          .eq("user_id", user.id)
+          .gte("scanned_at", cycleStart);
 
         setSubData({
           scansUsed: used ?? 0,
-          isPro: Boolean(isPro),
-          isDemoAccount: false,
+          scanLimit: planScanLimit,
+          isPro,
         });
       } catch (err) {
         console.error("Failed to load subscription data:", err);
@@ -395,6 +404,11 @@ export default function ScanSkinPage() {
     };
     loadSubscription();
   }, [user]);
+
+  const isPro = subData.isPro;
+  const remainingScans = isPro ? Infinity : Math.max(0, subData.scanLimit - subData.scansUsed);
+  const scansLeft = isPro ? "Unlimited" : remainingScans;
+  const canScan = isPro || remainingScans > 0;
 
   useEffect(() => {
     if (!showResult || !scanResult) return;
@@ -408,9 +422,6 @@ export default function ScanSkinPage() {
     };
     loadRecommendedClinics();
   }, [showResult, scanResult]);
-
-  const scansLeft = subData.isPro ? "Unlimited" : Math.max(0, MAX_FREE_SCANS - subData.scansUsed);
-  const canScan = subData.isPro || subData.isDemoAccount || subData.scansUsed < MAX_FREE_SCANS;
 
   const selectAnswer = (optIdx: number) => {
     setAnswers((a) => ({ ...a, [currentQuestion.id]: optIdx }));
@@ -452,8 +463,8 @@ export default function ScanSkinPage() {
   };
 
   const handleAnalyze = async () => {
-    if (!subData.isDemoAccount && !subData.isPro && !canScan) {
-      navigate("/user/upgrade");
+    if (!isPro && !canScan) {
+      navigate("/dashboard/upgrade");
       return;
     }
     if (!closeUpFile || !wideFile) return;
@@ -877,7 +888,9 @@ export default function ScanSkinPage() {
                       <Lock className="w-4 h-4 text-magenta-500" />
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-slate-900">Free Plan: {MAX_FREE_SCANS} Scans</p>
+                      <p className="text-sm font-bold text-slate-900">
+                        {isPro ? "Pro Plan: Unlimited Scans" : `Free Plan: ${subData.scanLimit} Scans`}
+                      </p>
                       <p className="text-xs text-slate-500 mt-0.5">
                         You have{" "}
                         <span className="font-semibold text-magenta-600">
@@ -890,7 +903,7 @@ export default function ScanSkinPage() {
                     </div>
                   </div>
                   <Link
-                    to="/user/upgrade"
+                    to="/dashboard/upgrade"
                     className="shrink-0 px-4 py-2 rounded-full bg-magenta-500 text-white text-xs font-bold hover:bg-magenta-600 transition-colors shadow-sm"
                   >
                     Upgrade

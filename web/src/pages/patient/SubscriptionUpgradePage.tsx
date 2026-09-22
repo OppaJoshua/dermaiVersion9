@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Sparkles, ArrowLeft, Crown, CalendarDays, Calendar, AlertCircle } from "lucide-react";
+import { Sparkles, ArrowLeft, Crown, CalendarDays, Calendar, AlertCircle, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSubscriptionPlansAsync, type SubscriptionPlan } from "@/lib/store";
 import { useAuth } from "@/context/AuthContext";
+import { supabase } from "@/lib/supabaseClient";
 import gcashLogo from "@/assets/gcash.png";
 import mayaLogo from "@/assets/maya.png";
 
@@ -19,6 +20,7 @@ export default function SubscriptionUpgradePage() {
   const [isSubscribing, setIsSubscribing] = useState(false);
   const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("monthly");
   const [error, setError] = useState<string | null>(null);
+  const [backendDown, setBackendDown] = useState(false);
 
   // Controlled form state
   const [fullName, setFullName] = useState("");
@@ -42,8 +44,56 @@ export default function SubscriptionUpgradePage() {
   const total = Math.round((basePrice + tax) * 100) / 100;
   const billingLabel = billingCycle === "monthly" ? "Monthly" : "Yearly";
 
-  const activateSubscription = (_cycle: "monthly" | "yearly") => {
-    // TODO: Update user subscription in Supabase
+  const activateSubscription = async (cycle: "monthly" | "yearly", paymentMethodUsed: string = "gcash") => {
+    if (!user?.id) return;
+    const now = new Date();
+    const renewDate = new Date();
+    if (cycle === "yearly") {
+      renewDate.setFullYear(now.getFullYear() + 1);
+    } else {
+      renewDate.setMonth(now.getMonth() + 1);
+    }
+
+    // Find the matching Pro plan (monthly or yearly)
+    const matchedPlan = plans.find((p) => p.billingType === cycle && p.status === "active");
+    // Fallback plan IDs match the seeds: Pro Monthly = ...0003, Pro Annual = ...0004
+    const fallbackPlanId =
+      cycle === "yearly"
+        ? "00000000-0000-0000-0000-000000000004"
+        : "00000000-0000-0000-0000-000000000003";
+    const planId = matchedPlan?.id || fallbackPlanId;
+
+    try {
+      // Upsert subscription row (one active sub per user)
+      const { error: subErr } = await supabase.from("user_plan_subscription").upsert(
+        {
+          user_id: user.id,
+          plan_id: planId,
+          status: "active",
+          billing_cycle: cycle,
+          started_at: now.toISOString(),
+          renews_at: renewDate.toISOString(),
+          current_period_start: now.toISOString(),
+          current_period_end: renewDate.toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+      if (subErr) console.error("[upgrade] subscription upsert error:", subErr.message);
+
+      // Insert payment receipt
+      const { error: payErr } = await supabase.from("user_payment").insert({
+        user_id: user.id,
+        plan_id: planId,
+        amount: total,
+        payment_date: now.toISOString(),
+        method: paymentMethodUsed,
+        status: "success",
+      });
+      if (payErr) console.error("[upgrade] payment insert error:", payErr.message);
+    } catch (dbErr) {
+      console.error("[upgrade] DB write failed:", dbErr);
+    }
+
     sessionStorage.removeItem("dermai_pending_billing_cycle");
     navigate("/dashboard", { replace: true });
   };
@@ -65,8 +115,8 @@ export default function SubscriptionUpgradePage() {
         const data = await res.json();
         if (!isMounted) return;
         if (data?.attributes?.status === "succeeded") {
-          sessionStorage.removeItem("dermai_pending_billing_cycle");
-          navigate("/dashboard", { replace: true });
+          const savedCycle = (sessionStorage.getItem("dermai_pending_billing_cycle") || billingCycle) as "monthly" | "yearly";
+          await activateSubscription(savedCycle, paymentMethod);
         } else {
           setError("Payment was not completed. Please try again.");
           setIsSubscribing(false);
@@ -81,7 +131,8 @@ export default function SubscriptionUpgradePage() {
     return () => {
       isMounted = false;
     };
-  }, [searchParams, navigate]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   function formatMobileNumber(value: string) {
     return value.replace(/\D/g, "").slice(0, 11);
@@ -91,19 +142,30 @@ export default function SubscriptionUpgradePage() {
     e.preventDefault();
     setIsSubscribing(true);
     setError(null);
+    setBackendDown(false);
 
     try {
       // 1. Create Payment Intent via our backend
-      const intentRes = await fetch(`${BACKEND_URL}/api/payments/create-intent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: total,
-          description: `DermAI Premium ${billingLabel} Subscription`,
-          paymentMethod: paymentMethod,
-          mobileNumber: mobileNumber,
-        }),
-      });
+      let intentRes: Response;
+      try {
+        intentRes = await fetch(`${BACKEND_URL}/api/payments/create-intent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount: total,
+            description: `DermAI Premium ${billingLabel} Subscription`,
+            paymentMethod: paymentMethod,
+            mobileNumber: mobileNumber,
+          }),
+        });
+      } catch (networkErr) {
+        // Backend is unreachable — offer sandbox activation
+        console.warn("[upgrade] Backend unreachable:", networkErr);
+        setBackendDown(true);
+        setIsSubscribing(false);
+        return;
+      }
+
       const intentJson = await intentRes.json();
       if (!intentRes.ok) throw new Error(intentJson.error || "Failed to create payment intent");
       const { paymentIntentId, clientKey } = intentJson;
@@ -156,7 +218,7 @@ export default function SubscriptionUpgradePage() {
         if (!redirectUrl) throw new Error("3DS redirect URL not found");
         window.location.href = redirectUrl;
       } else if (status === "succeeded") {
-        activateSubscription(billingCycle);
+        await activateSubscription(billingCycle, paymentMethod);
       } else {
         throw new Error(`Payment was not successful (status: ${status}). Please try again.`);
       }
@@ -313,6 +375,28 @@ export default function SubscriptionUpgradePage() {
                   <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
                     <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
                     <span>{error}</span>
+                  </div>
+                )}
+
+                {backendDown && (
+                  <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs space-y-3">
+                    <div className="flex items-start gap-2">
+                      <WifiOff className="w-4 h-4 shrink-0 text-amber-500 mt-0.5" />
+                      <div>
+                        <p className="font-semibold">Payment server is currently unreachable</p>
+                        <p className="text-amber-700 mt-0.5 leading-relaxed">
+                          The PayMongo backend (localhost:3001) could not be contacted. You can activate your
+                          subscription directly for testing purposes, or try again later when the server is running.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => activateSubscription(billingCycle, paymentMethod)}
+                      className="w-full py-2.5 rounded-xl bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors"
+                    >
+                      Activate Directly (Sandbox / Dev Mode)
+                    </button>
                   </div>
                 )}
 

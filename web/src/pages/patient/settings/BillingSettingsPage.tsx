@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { CreditCard, Crown, Calendar, CheckCircle2, XCircle, X, Loader2 } from "lucide-react";
+import { Crown, Calendar, CheckCircle2, XCircle, X, Loader2, Wallet } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { cn } from "@/lib/utils";
+import gcashLogo from "@/assets/gcash.png";
+import mayaLogo from "@/assets/maya.png";
 
 interface SubData {
   isPro: boolean;
@@ -13,9 +16,12 @@ interface SubData {
   subscriptionId?: string;
 }
 
-interface CardData {
-  last4: string;
-  expiry: string;
+type PaymentMethodType = "gcash" | "maya";
+
+interface SavedPaymentMethod {
+  type: PaymentMethodType;
+  label: string;
+  sublabel: string;
 }
 
 interface BillingHistoryItem {
@@ -24,30 +30,29 @@ interface BillingHistoryItem {
   status: string;
 }
 
-function formatCardNumber(value: string) {
-  const digits = value.replace(/\D/g, "").slice(0, 16);
-  return digits.replace(/(.{4})/g, "$1 ").trim();
+function formatMobileNumber(value: string) {
+  return value.replace(/\D/g, "").slice(0, 11);
 }
 
-function formatExpiry(value: string) {
-  const digits = value.replace(/\D/g, "").slice(0, 4);
-  if (digits.length >= 3) return digits.slice(0, 2) + "/" + digits.slice(2);
-  return digits;
+function maskMobile(value: string) {
+  const clean = value.replace(/\D/g, "");
+  if (clean.length < 11) return clean;
+  return `${clean.slice(0, 4)} •••• ${clean.slice(7)}`;
 }
 
 export default function BillingSettingsPage() {
   const { user } = useAuth();
   const [sub, setSub] = useState<SubData>({ isPro: false });
-  const [card, setCard] = useState<CardData | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<SavedPaymentMethod | null>(null);
   const [billingHistory, setBillingHistory] = useState<BillingHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
-  const [showCardModal, setShowCardModal] = useState(false);
-  const [cardNumber, setCardNumber] = useState("");
-  const [cardExpiry, setCardExpiry] = useState("");
-  const [cardCvv, setCardCvv] = useState("");
-  const [cardName, setCardName] = useState("");
-  const [cardSaved, setCardSaved] = useState(false);
+
+  // Modal & form states
+  const [showModal, setShowModal] = useState(false);
+  const [modalMethodType, setModalMethodType] = useState<PaymentMethodType>("gcash");
+  const [mobileNumber, setMobileNumber] = useState("");
+  const [methodSaved, setMethodSaved] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
 
   const loadBillingData = useCallback(async () => {
@@ -126,8 +131,48 @@ export default function BillingSettingsPage() {
           status: p.status === "success" ? "Paid" : p.status,
         }));
         setBillingHistory(mappedHistory);
+
+        // Check localStorage first, otherwise infer from latest payment
+        const stored = localStorage.getItem(`dermai_payment_method_${user.id}`);
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            if (parsed.type === "gcash" || parsed.type === "maya") {
+              setPaymentMethod(parsed);
+            }
+          } catch {
+            // ignore JSON error
+          }
+        } else {
+          const latestMethod = payments[0]?.method?.toLowerCase();
+          if (latestMethod === "maya") {
+            setPaymentMethod({
+              type: "maya",
+              label: "Maya e-Wallet",
+              sublabel: "Connected via PayMongo",
+            });
+          } else {
+            // default to gcash
+            setPaymentMethod({
+              type: "gcash",
+              label: "GCash e-Wallet",
+              sublabel: "Connected via PayMongo",
+            });
+          }
+        }
       } else {
         setBillingHistory([]);
+        const stored = localStorage.getItem(`dermai_payment_method_${user.id}`);
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            if (parsed.type === "gcash" || parsed.type === "maya") {
+              setPaymentMethod(parsed);
+            }
+          } catch {
+            // ignore
+          }
+        }
       }
     } catch {
       // Fallback
@@ -142,34 +187,44 @@ export default function BillingSettingsPage() {
 
   // Close modal on outside click
   useEffect(() => {
-    if (!showCardModal) return;
+    if (!showModal) return;
     const handler = (e: MouseEvent) => {
       if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
-        setShowCardModal(false);
+        setShowModal(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [showCardModal]);
+  }, [showModal]);
 
-  const openCardModal = () => {
-    setCardNumber("");
-    setCardExpiry(card?.expiry ?? "");
-    setCardCvv("");
-    setCardName("");
-    setCardSaved(false);
-    setShowCardModal(true);
+  const openModal = () => {
+    if (paymentMethod) {
+      setModalMethodType(paymentMethod.type);
+    } else {
+      setModalMethodType("gcash");
+    }
+    setMobileNumber("");
+    setMethodSaved(false);
+    setShowModal(true);
   };
 
-  const handleCardSave = (e: React.FormEvent) => {
+  const handleSaveMethod = (e: React.FormEvent) => {
     e.preventDefault();
-    const digits = cardNumber.replace(/\D/g, "");
-    if (digits.length < 16) return;
-    const last4 = digits.slice(-4);
-    const newCard: CardData = { last4, expiry: cardExpiry };
-    setCard(newCard);
-    setCardSaved(true);
-    setTimeout(() => setShowCardModal(false), 1000);
+    if (!user) return;
+
+    const cleanMobile = mobileNumber.replace(/\D/g, "");
+    if (cleanMobile.length < 11) return;
+
+    const newMethod: SavedPaymentMethod = {
+      type: modalMethodType,
+      label: modalMethodType === "gcash" ? "GCash e-Wallet" : "Maya e-Wallet",
+      sublabel: maskMobile(cleanMobile),
+    };
+
+    setPaymentMethod(newMethod);
+    localStorage.setItem(`dermai_payment_method_${user.id}`, JSON.stringify(newMethod));
+    setMethodSaved(true);
+    setTimeout(() => setShowModal(false), 900);
   };
 
   const handleCancel = async () => {
@@ -202,7 +257,7 @@ export default function BillingSettingsPage() {
     <div className="max-w-2xl mx-auto py-10 px-4 sm:px-6">
       <div className="flex items-center gap-3 mb-8">
         <div className="p-2.5 bg-magenta-100 rounded-2xl text-magenta-600">
-          <CreditCard className="w-6 h-6" />
+          <Wallet className="w-6 h-6" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Billing</h1>
@@ -235,23 +290,21 @@ export default function BillingSettingsPage() {
             </div>
 
             {sub.isPro ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 text-sm text-gray-700">
-                  <Calendar className="w-4 h-4 text-magenta-400" />
-                  <span>Next billing date: <strong>{sub.renewsAt || "End of current billing cycle"}</strong></span>
+              <div className="pt-4 border-t border-magenta-100 space-y-2">
+                <div className="flex items-center justify-between text-xs text-gray-600">
+                  <span className="flex items-center gap-1.5 text-gray-500">
+                    <Calendar className="w-3.5 h-3.5" /> Next billing date
+                  </span>
+                  <span className="font-semibold text-gray-900">{sub.renewsAt}</span>
                 </div>
-                <div className="space-y-1.5">
-                  {["Unlimited AI skin scans", "Priority clinic recommendations", "Full skin analysis history", "Cancel anytime"].map((feat) => (
-                    <div key={feat} className="flex items-center gap-2 text-sm text-gray-700">
-                      <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
-                      {feat}
-                    </div>
-                  ))}
+                <div className="flex items-center justify-between text-xs text-gray-600">
+                  <span className="text-gray-500">Billing cycle</span>
+                  <span className="font-semibold capitalize text-gray-900">{sub.billingCycle}</span>
                 </div>
                 <button
                   onClick={handleCancel}
                   disabled={cancelling}
-                  className="mt-4 flex items-center gap-2 text-sm text-red-500 font-semibold hover:text-red-600 transition-colors disabled:opacity-50"
+                  className="mt-4 flex items-center gap-2 text-sm text-red-500 font-semibold hover:text-red-600 transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   {cancelling ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />} Cancel Subscription
                 </button>
@@ -281,18 +334,22 @@ export default function BillingSettingsPage() {
       {/* Payment Method */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm mb-6">
         <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-4">Payment Method</h2>
-        {card ? (
+        {paymentMethod ? (
           <div className="flex items-center gap-4">
-            <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
-              <CreditCard className="w-6 h-6 text-gray-400" />
+            <div className="p-2.5 bg-gray-50 rounded-2xl border border-gray-100 flex items-center justify-center min-w-14 h-12">
+              {paymentMethod.type === "gcash" ? (
+                <img src={gcashLogo} alt="GCash" className="h-6 w-auto object-contain" />
+              ) : (
+                <img src={mayaLogo} alt="Maya" className="h-6 w-auto object-contain" />
+              )}
             </div>
             <div>
-              <p className="text-sm font-bold text-gray-900">•••• •••• •••• {card.last4}</p>
-              <p className="text-xs text-gray-400 mt-0.5">Expires {card.expiry}</p>
+              <p className="text-sm font-bold text-gray-900">{paymentMethod.label}</p>
+              <p className="text-xs text-gray-400 mt-0.5">{paymentMethod.sublabel}</p>
             </div>
             <button
-              onClick={openCardModal}
-              className="ml-auto text-xs text-magenta-500 font-semibold hover:text-magenta-700 transition-colors"
+              onClick={openModal}
+              className="ml-auto text-xs text-magenta-500 font-semibold hover:text-magenta-700 transition-colors cursor-pointer"
             >
               Update
             </button>
@@ -301,10 +358,10 @@ export default function BillingSettingsPage() {
           <div className="flex items-center justify-between">
             <p className="text-sm text-gray-400">No payment method on file.</p>
             <button
-              onClick={openCardModal}
-              className="text-xs text-magenta-500 font-semibold hover:text-magenta-700 transition-colors"
+              onClick={openModal}
+              className="text-xs text-magenta-500 font-semibold hover:text-magenta-700 transition-colors cursor-pointer"
             >
-              Add Card
+              Add Payment Method
             </button>
           </div>
         )}
@@ -329,8 +386,8 @@ export default function BillingSettingsPage() {
       </div>
     </div>
 
-    {/* ── Update Card Modal ──────────────────────────────── */}
-    {showCardModal && (
+    {/* ── Update Payment Method Modal ──────────────────────── */}
+    {showModal && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm px-4">
         <div
           ref={modalRef}
@@ -339,89 +396,80 @@ export default function BillingSettingsPage() {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold text-gray-900">Update Payment Method</h2>
             <button
-              onClick={() => setShowCardModal(false)}
-              className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors"
+              onClick={() => setShowModal(false)}
+              className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors cursor-pointer"
             >
               <X className="w-4 h-4 text-gray-500" />
             </button>
           </div>
 
-          <form onSubmit={handleCardSave} className="space-y-4">
-            {/* Card Number */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1.5">Card Number</label>
-              <div className="relative">
-                <CreditCard className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  required
-                  value={cardNumber}
-                  onChange={(e) => setCardNumber(formatCardNumber(e.target.value))}
-                  placeholder="1234 5678 9012 3456"
-                  maxLength={19}
-                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 text-sm text-gray-900 placeholder:text-gray-300 focus:outline-none focus:border-magenta-400 focus:ring-2 focus:ring-magenta-500/10"
-                />
-              </div>
+          {/* Payment Method Selector Tabs: GCash & Maya */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-2">Select E-Wallet</label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setModalMethodType("gcash")}
+                className={cn(
+                  "flex flex-col items-center justify-center py-3.5 px-3 rounded-2xl border transition-all cursor-pointer",
+                  modalMethodType === "gcash"
+                    ? "border-blue-500 bg-blue-50/40 ring-2 ring-blue-500/15 font-bold shadow-xs"
+                    : "border-gray-200 bg-white hover:bg-gray-50 text-gray-600 font-medium"
+                )}
+              >
+                <img src={gcashLogo} alt="GCash" className="h-6 w-auto object-contain mb-1.5" />
+                <span className="text-xs">GCash</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalMethodType("maya")}
+                className={cn(
+                  "flex flex-col items-center justify-center py-3.5 px-3 rounded-2xl border transition-all cursor-pointer",
+                  modalMethodType === "maya"
+                    ? "border-emerald-500 bg-emerald-50/40 ring-2 ring-emerald-500/15 font-bold shadow-xs"
+                    : "border-gray-200 bg-white hover:bg-gray-50 text-gray-600 font-medium"
+                )}
+              >
+                <img src={mayaLogo} alt="Maya" className="h-6 w-auto object-contain mb-1.5" />
+                <span className="text-xs">Maya</span>
+              </button>
             </div>
+          </div>
 
-            {/* Cardholder name */}
+          <form onSubmit={handleSaveMethod} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1.5">Cardholder Name</label>
+              <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                {modalMethodType === "gcash" ? "GCash" : "Maya"} Mobile Number <span className="text-red-500">*</span>
+              </label>
               <input
-                type="text"
                 required
-                value={cardName}
-                onChange={(e) => setCardName(e.target.value)}
-                placeholder="Juan Dela Cruz"
-                className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm text-gray-900 placeholder:text-gray-300 focus:outline-none focus:border-magenta-400 focus:ring-2 focus:ring-magenta-500/10"
+                type="tel"
+                inputMode="numeric"
+                placeholder="09XXXXXXXXX"
+                maxLength={11}
+                value={mobileNumber}
+                onChange={(e) => setMobileNumber(formatMobileNumber(e.target.value))}
+                className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-3 text-sm text-gray-900 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-magenta-500/10 focus:border-magenta-400 transition-all"
               />
-            </div>
-
-            {/* Expiry + CVV */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Expiry Date</label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  required
-                  value={cardExpiry}
-                  onChange={(e) => setCardExpiry(formatExpiry(e.target.value))}
-                  placeholder="MM/YY"
-                  maxLength={5}
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm text-gray-900 placeholder:text-gray-300 focus:outline-none focus:border-magenta-400 focus:ring-2 focus:ring-magenta-500/10"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">CVV</label>
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  required
-                  value={cardCvv}
-                  onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                  placeholder="•••"
-                  maxLength={4}
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm text-gray-900 placeholder:text-gray-300 focus:outline-none focus:border-magenta-400 focus:ring-2 focus:ring-magenta-500/10"
-                />
-              </div>
+              <p className="text-[11px] text-gray-400 mt-1.5">
+                Enter the 11-digit mobile number linked to your {modalMethodType === "gcash" ? "GCash" : "Maya"} account.
+              </p>
             </div>
 
             <button
               type="submit"
-              className={`w-full py-3.5 rounded-2xl text-sm font-bold transition-all ${
-                cardSaved
+              className={`w-full py-3.5 rounded-2xl text-sm font-bold transition-all cursor-pointer ${
+                methodSaved
                   ? "bg-green-500 text-white"
                   : "bg-magenta-500 text-white hover:bg-magenta-600 active:scale-[0.98]"
               }`}
             >
-              {cardSaved ? "✓ Card Updated!" : "Save Card"}
+              {methodSaved ? "✓ Payment Method Updated!" : "Save Payment Method"}
             </button>
           </form>
 
           <p className="text-center text-[11px] text-gray-400">
-            Payment information is encrypted and securely processed.
+            Payment information is securely processed via PayMongo.
           </p>
         </div>
       </div>

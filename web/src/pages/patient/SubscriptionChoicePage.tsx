@@ -28,6 +28,12 @@ export default function SubscriptionChoicePage() {
   }, []);
 
   const setPlan = (_planId: string) => {
+    // Persist plan choice so it survives the login/register redirect
+    try {
+      sessionStorage.setItem("dermai_chosen_plan", _planId);
+    } catch {
+      /* ignore storage errors in restricted environments */
+    }
     navigate("/login", { state: { fromRegister: true } });
   };
 
