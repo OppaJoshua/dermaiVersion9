@@ -3,53 +3,99 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
+import { CheckCircle2, Clock, Calendar, Stethoscope, AlertTriangle } from "lucide-react";
 
 interface Appointment {
   id: string;
   clinicName: string;
   doctor: string;
+  assignedDoctorName?: string;
+  assignedDoctorId?: string;
+  doctorStatus?: "pending-review" | "approved" | "rejected";
+  hasDate: boolean;
   date: string;
   time: string;
   status: "Pending" | "Scheduled" | "Rejected" | "Completed" | "Cancelled";
   clinicNote?: string;
+  doctorNote?: string;
+  doctorDiagnosis?: string;
   rejectionReason?: string;
+  createdAt?: string;
 }
 
 const STEPS = ["Request Sent", "Clinic Review", "Scheduled", "Completed"];
 
-function getStepIndex(status: Appointment["status"]): number {
-  if (status === "Completed") return 3;
-  if (status === "Scheduled") return 2;
-  if (status === "Pending") return 1;
+function getStepIndex(app: Appointment): number {
+  if (app.status === "Completed") return 3;
+  if (app.status === "Scheduled" && app.hasDate) return 2;
+  if (app.status === "Pending" || (app.doctorStatus === "approved" && !app.hasDate)) return 1;
   return 0;
 }
 
-function StatusBadge({ status }: { status: Appointment["status"] }) {
-  const styles: Record<string, string> = {
-    Scheduled: "bg-blue-100 text-blue-700 border border-blue-200",
-    Completed: "bg-green-100 text-green-700 border border-green-200",
-    Pending: "bg-amber-100 text-amber-700 border border-amber-200",
-    Rejected: "bg-red-100 text-red-700 border border-red-200",
-    Cancelled: "bg-gray-100 text-gray-600 border border-gray-200",
-  };
+function StatusBadge({ app }: { app: Appointment }) {
+  if (app.status === "Completed") {
+    return (
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-green-100 text-green-700 border border-green-200">
+        Completed
+      </span>
+    );
+  }
+  if (app.status === "Scheduled" && app.hasDate) {
+    return (
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-blue-100 text-blue-700 border border-blue-200">
+        Scheduled
+      </span>
+    );
+  }
+  if (app.status === "Rejected") {
+    return (
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-red-100 text-red-700 border border-red-200">
+        Declined
+      </span>
+    );
+  }
+  if (app.status === "Cancelled") {
+    return (
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-gray-100 text-gray-600 border border-gray-200">
+        Cancelled
+      </span>
+    );
+  }
+
+  // Pending / Review states
+  if (app.doctorStatus === "approved" && !app.hasDate) {
+    return (
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
+        Doctor Approved
+      </span>
+    );
+  }
+  if (app.assignedDoctorId && app.doctorStatus === "pending-review") {
+    return (
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200">
+        Under Review
+      </span>
+    );
+  }
   return (
-    <span
-      className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-widest ${styles[status] ?? "bg-gray-100 text-gray-500"}`}
-    >
-      {status}
+    <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-200">
+      Clinic Review
     </span>
   );
 }
 
 function StatusTracker({ app }: { app: Appointment }) {
   const isCancelled = app.status === "Cancelled" || app.status === "Rejected";
-  const activeStep = isCancelled ? -1 : getStepIndex(app.status);
+  const activeStep = isCancelled ? -1 : getStepIndex(app);
+
+  const isDoctorApprovedAwaitingSchedule = app.doctorStatus === "approved" && !app.hasDate;
+  const isUnderDoctorReview = !!app.assignedDoctorId && app.doctorStatus === "pending-review";
 
   return (
     <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
       <div className="flex items-center justify-between mb-4">
         <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Appointment Progress</p>
-        <StatusBadge status={app.status} />
+        <StatusBadge app={app} />
       </div>
 
       {isCancelled ? (
@@ -59,23 +105,37 @@ function StatusTracker({ app }: { app: Appointment }) {
           </svg>
           <div className="flex-1 min-w-0">
             <p className="text-xs font-bold text-red-800">
-              Appointment {app.status}
+              Appointment {app.status === "Rejected" ? "Declined" : "Cancelled"}
             </p>
             <p className="text-xs text-red-600 mt-0.5 leading-relaxed">
               {app.status === "Rejected"
                 ? <span>Your appointment request with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> was declined.</span>
                 : <span>This appointment with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> was cancelled.</span>}
             </p>
-            {(app.clinicNote || app.rejectionReason) && (
-              <div className="mt-2 rounded-lg bg-white border border-red-200 p-2.5 shadow-xs">
+            {app.doctorDiagnosis && (
+              <div className="mt-2 rounded-lg bg-white border border-red-200 p-2.5 shadow-2xs">
                 <div className="flex items-center gap-1 text-red-700 font-bold text-[10px] uppercase tracking-wider mb-0.5">
-                  <svg className="w-3.5 h-3.5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-                  </svg>
+                  <Stethoscope className="w-3.5 h-3.5 text-red-500" />
+                  <span>Doctor's Assessment / Diagnosis:</span>
+                </div>
+                <p className="text-xs text-gray-900 font-semibold leading-relaxed">
+                  {app.doctorDiagnosis}
+                </p>
+                {app.doctorNote && (
+                  <p className="text-xs text-gray-600 font-medium leading-relaxed mt-0.5">
+                    "{app.doctorNote}"
+                  </p>
+                )}
+              </div>
+            )}
+            {app.clinicNote && (
+              <div className="mt-2 rounded-lg bg-white border border-red-200 p-2.5 shadow-2xs">
+                <div className="flex items-center gap-1 text-red-700 font-bold text-[10px] uppercase tracking-wider mb-0.5">
+                  <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
                   <span>Reason / Note from Clinic:</span>
                 </div>
                 <p className="text-xs text-gray-800 font-medium leading-relaxed">
-                  "{app.clinicNote || app.rejectionReason}"
+                  "{app.clinicNote}"
                 </p>
               </div>
             )}
@@ -105,7 +165,7 @@ function StatusTracker({ app }: { app: Appointment }) {
                     <div
                       className={`w-5 h-5 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${isDone
                           ? isActive
-                            ? "bg-magenta-600 border-magenta-500 scale-105 shadow-xs"
+                            ? "bg-magenta-600 border-magenta-500 scale-105 shadow-2xs"
                             : "bg-magenta-500 border-magenta-400"
                           : "bg-white border-gray-200"
                         }`}
@@ -130,16 +190,77 @@ function StatusTracker({ app }: { app: Appointment }) {
             </div>
           </div>
 
-          <div className="flex items-start gap-2 bg-white border border-gray-100 rounded-xl p-3">
-            <p className="text-[11px] text-gray-600 leading-relaxed">
-              {app.status === "Completed" ? (
-                <span>Your appointment with <strong className="inline-flex items-center gap-1 text-gray-900 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> has been completed.</span>
-              ) : app.status === "Scheduled" ? (
-                <span>Your appointment with <strong className="inline-flex items-center gap-1 text-gray-900 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> is scheduled on {app.date} at {app.time}.</span>
-              ) : (
-                <span>Your request to <strong className="inline-flex items-center gap-1 text-gray-900 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> is pending clinic review.</span>
-              )}
-            </p>
+          {/* Dynamic Workflow Prompt Banners */}
+          <div className="space-y-2">
+            {app.status === "Completed" ? (
+              <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-emerald-900">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+                <p className="text-[11px] leading-relaxed">
+                  Your physical consultation with <strong className="inline-flex items-center gap-1 text-emerald-950 font-bold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> has been completed.
+                </p>
+              </div>
+            ) : app.status === "Scheduled" && app.hasDate ? (
+              <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl p-3 text-blue-900">
+                <Calendar className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                <p className="text-[11px] leading-relaxed">
+                  Your appointment with <strong className="inline-flex items-center gap-1 text-blue-950 font-bold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> is confirmed and scheduled on <strong className="text-blue-950">{app.date}</strong> at <strong className="text-blue-950">{app.time}</strong> with <strong className="text-blue-950">{app.doctor}</strong>. Please arrive 10 minutes prior to your consultation.
+                </p>
+              </div>
+            ) : isDoctorApprovedAwaitingSchedule ? (
+              <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-emerald-900">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-xs font-bold text-emerald-800">
+                    {app.doctor} has approved your appointment!
+                  </p>
+                  <p className="text-[11px] text-emerald-700 mt-0.5 leading-relaxed">
+                    <strong className="inline-flex items-center gap-1 text-emerald-950 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> is currently setting and finalizing your consultation schedule date and time.
+                  </p>
+                </div>
+              </div>
+            ) : isUnderDoctorReview ? (
+              <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl p-3 text-blue-900">
+                <Stethoscope className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-xs font-bold text-blue-800">Under Pre-Consultation Review</p>
+                  <p className="text-[11px] text-blue-700 mt-0.5 leading-relaxed">
+                    Assigned to <strong className="text-blue-950 font-semibold">{app.doctor}</strong> at <strong className="inline-flex items-center gap-1 text-blue-950 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong>. The doctor is reviewing your skin concern and AI assessment.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-900">
+                <Clock className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-xs font-bold text-amber-800">Clinic Review</p>
+                  <p className="text-[11px] text-amber-700 mt-0.5 leading-relaxed">
+                    Your request was received by <strong className="inline-flex items-center gap-1 text-amber-950 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong>. The clinic will coordinate your consultation schedule and assigned dermatologist shortly.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Doctor Clinical Diagnosis / Assessment Card */}
+            {app.doctorDiagnosis && (
+              <div className="rounded-xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200 p-3.5 shadow-2xs">
+                <div className="flex items-center gap-1.5 text-blue-800 font-bold text-[10px] uppercase tracking-wider mb-1">
+                  <Stethoscope className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Dermatologist Clinical Assessment &amp; Diagnosis</span>
+                </div>
+                <p className="text-sm font-bold text-blue-950">{app.doctorDiagnosis}</p>
+                {app.doctorNote && (
+                  <p className="text-xs text-blue-800/90 mt-1 pt-1 border-t border-blue-200/60 leading-relaxed">
+                    <span className="font-semibold text-blue-900">Clinical Notes / Advice:</span> {app.doctorNote}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {app.clinicNote && !isCancelled && (
+              <div className="text-[11px] text-gray-600 bg-white border border-gray-200/80 rounded-xl px-3 py-2">
+                <strong className="text-gray-700">Clinic Note:</strong> {app.clinicNote}
+              </div>
+            )}
           </div>
         </>
       )}
@@ -216,6 +337,7 @@ const AppointmentStatusPage: React.FC = () => {
           doctor_note,
           ai_condition_name,
           assigned_doctor_id,
+          created_at,
           clinic:clinic_id ( name )
         `)
         .eq("user_id", userId)
@@ -244,25 +366,54 @@ const AppointmentStatusPage: React.FC = () => {
 
           const rawStatus = (a.status || "").toLowerCase();
           let displayStatus: Appointment["status"] = "Pending";
-          if (rawStatus === "confirmed" || rawStatus === "scheduled") displayStatus = "Scheduled";
-          else if (rawStatus === "completed") displayStatus = "Completed";
-          else if (rawStatus === "cancelled") displayStatus = "Cancelled";
-          else if (rawStatus === "rejected" || a.doctor_status === "rejected") displayStatus = "Rejected";
+          if (rawStatus === "confirmed" || rawStatus === "scheduled") {
+            displayStatus = isValidDate ? "Scheduled" : "Pending";
+          } else if (rawStatus === "completed") {
+            displayStatus = "Completed";
+          } else if (rawStatus === "cancelled") {
+            displayStatus = "Cancelled";
+          } else if (rawStatus === "rejected") {
+            displayStatus = "Rejected";
+          }
 
           const clinicObj: any = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
-          const docName = a.assigned_doctor_id && docNameMap.has(a.assigned_doctor_id)
+          const isDocRejected = a.doctor_status === "rejected";
+          const docName = (a.assigned_doctor_id && !isDocRejected && docNameMap.has(a.assigned_doctor_id))
             ? `Dr. ${docNameMap.get(a.assigned_doctor_id)!.replace(/^dr\.\s*/i, "")}`
-            : "Doctor Assigned by Clinic";
+            : (a.assigned_doctor_id && !isDocRejected)
+            ? "Doctor Assigned"
+            : "To be assigned";
+
+          let docDiagnosis = "";
+          let docNoteClean = "";
+          if (a.doctor_note) {
+            const match = a.doctor_note.match(/^Diagnosis:\s*([^|\n]+)(?:[|\n]\s*(?:Note:\s*)?(.*))?$/is);
+            if (match) {
+              docDiagnosis = match[1]?.trim() || "";
+              docNoteClean = match[2]?.trim() || "";
+            } else {
+              docDiagnosis = a.doctor_note.trim();
+            }
+          }
 
           return {
             id: a.appointment_id,
             clinicName: clinicObj?.name ?? "Clinic",
             doctor: docName,
+            assignedDoctorName: a.assigned_doctor_id && !isDocRejected && docNameMap.has(a.assigned_doctor_id)
+              ? docNameMap.get(a.assigned_doctor_id)
+              : undefined,
+            assignedDoctorId: !isDocRejected ? (a.assigned_doctor_id || undefined) : undefined,
+            doctorStatus: a.doctor_status || undefined,
+            hasDate: Boolean(isValidDate),
             date: dateStr,
             time: timeStr,
             status: displayStatus,
-            clinicNote: a.clinic_note || (a.ai_condition_name ? `Condition noted: ${a.ai_condition_name}` : undefined),
-            rejectionReason: a.doctor_note || undefined,
+            clinicNote: a.clinic_note || undefined,
+            doctorNote: docNoteClean || undefined,
+            doctorDiagnosis: docDiagnosis || undefined,
+            rejectionReason: a.clinic_note || undefined,
+            createdAt: a.created_at,
           };
         });
         setAllAppointments(mapped);
@@ -310,11 +461,11 @@ const AppointmentStatusPage: React.FC = () => {
     try {
       await supabase
         .from("patient_appointment")
-        .update({ status: "cancelled" })
+        .update({ status: "cancelled", clinic_note: "Cancelled by patient." })
         .eq("appointment_id", id);
 
       setAllAppointments((prev) =>
-        prev.map((a) => (a.id === id ? { ...a, status: "Cancelled" } : a))
+        prev.map((a) => (a.id === id ? { ...a, status: "Cancelled", clinicNote: "Cancelled by patient." } : a))
       );
     } catch (err) {
       console.error("Error cancelling appointment:", err);
@@ -325,14 +476,13 @@ const AppointmentStatusPage: React.FC = () => {
   now.setHours(0, 0, 0, 0);
 
   const upcomingAppointments = allAppointments.filter((a) => {
-    // Always show Pending in Upcoming (no date constraint — awaiting clinic action)
+    // Always show Pending in Upcoming (no date constraint — awaiting clinic action / doctor review)
     if (a.status === "Pending") return true;
     // Scheduled = Upcoming only if the date is today or future
     if (a.status === "Scheduled") {
-      // Try to parse the display date back to a real date
       const parsed = new Date(a.date);
       if (!isNaN(parsed.getTime())) return parsed.getTime() >= now.getTime();
-      return true; // date pending — keep in upcoming
+      return true;
     }
     return false;
   });
@@ -340,7 +490,6 @@ const AppointmentStatusPage: React.FC = () => {
   const pastAppointments = allAppointments.filter((a) => {
     if (a.status === "Rejected" || a.status === "Cancelled") return true;
     if (a.status === "Completed") return true;
-    // Scheduled appointments whose date has already passed → move to Past
     if (a.status === "Scheduled") {
       const parsed = new Date(a.date);
       if (!isNaN(parsed.getTime())) return parsed.getTime() < now.getTime();

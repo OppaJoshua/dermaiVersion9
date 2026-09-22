@@ -149,26 +149,54 @@ export default function PatientDashboard() {
             appointment_id,
             date,
             status,
+            doctor_status,
+            doctor_note,
             ai_condition_name,
+            created_at,
             clinic:clinic_id ( name )
           `)
           .eq("user_id", userId)
-          .order("date", { ascending: false })
+          .order("created_at", { ascending: false })
           .limit(10);
 
         const mappedAppts: AppointmentRecord[] = (apptRows ?? []).map((a: any) => {
           const clinicObj = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
+          const apptDate = a.date ? new Date(a.date) : null;
+          const isValidDate = apptDate && !isNaN(apptDate.getTime());
+          const dateStr = isValidDate
+            ? apptDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })
+            : "Date pending";
+
+          let statusVal: AppointmentRecord["status"] = "pending";
+          if (a.status === "confirmed" || a.status === "scheduled") {
+            statusVal = isValidDate ? "scheduled" : "pending";
+          } else if (a.status === "completed") {
+            statusVal = "completed";
+          } else if (a.status === "cancelled" || a.status === "rejected") {
+            statusVal = "rejected";
+          }
+
+          let docDiagnosis = "";
+          if (a.doctor_note) {
+            const match = a.doctor_note.match(/^Diagnosis:\s*([^|\n]+)(?:[|\n]\s*(?:Note:\s*)?(.*))?$/is);
+            if (match) {
+              docDiagnosis = match[1]?.trim() || "";
+            } else {
+              docDiagnosis = a.doctor_note.trim();
+            }
+          }
+
           return {
             id: a.appointment_id,
             clinicId: 0,
             clinicName: clinicObj?.name ?? "Clinic",
             consultationType: "face-to-face" as const,
-            conditionName: a.ai_condition_name ?? undefined,
-            date: new Date(a.date).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
+            conditionName: docDiagnosis || a.ai_condition_name || undefined,
+            date: dateStr,
             time: "",
             notes: "",
-            status: (a.status === "confirmed" ? "accepted" : a.status === "completed" ? "completed" : a.status === "cancelled" ? "rejected" : "pending") as AppointmentRecord["status"],
-            createdAt: a.date,
+            status: statusVal,
+            createdAt: a.created_at || new Date().toISOString(),
           };
         });
         setAppointments(mappedAppts);

@@ -528,7 +528,7 @@ export default function ScanSkinPage() {
         localStorage.setItem(
           "dermai_last_scan",
           JSON.stringify({
-            predictedClass: "Assessment Queued",
+            predictedClass: "",
             confidence: 0,
             severity: quickPreview.severityLevel,
             questionnaire: questionnaireData,

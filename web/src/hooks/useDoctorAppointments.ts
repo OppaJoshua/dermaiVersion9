@@ -108,14 +108,6 @@ export function useDoctorAppointments() {
         }
       } catch { }
 
-      // Fallback display names if still generic
-      if (!docDisplayName || docDisplayName === "Doctor") {
-        docDisplayName = "Dr. Audrey Saludaga";
-      }
-      if (!docClinicName) {
-        docClinicName = "Skin Clinic";
-      }
-
       // Check clinic_doctor table (primary doctor roster)
       try {
         const { data: clinicDocData, error: clinicDocErr } = await supabase
@@ -156,7 +148,7 @@ export function useDoctorAppointments() {
         console.warn("[useDoctorAppointments] clinic_doctor lookup:", e);
       }
 
-      // Check doctors table (legacy/secondary table)
+      // Check doctors table (secondary table)
       try {
         const { data: docData } = await supabase
           .from("doctors")
@@ -171,7 +163,15 @@ export function useDoctorAppointments() {
           });
         }
       } catch {
-        /* ignore legacy table error */
+        /* ignore */
+      }
+
+      // Fallback display names if still generic
+      if (!docDisplayName || docDisplayName === "Doctor") {
+        docDisplayName = "Dr. Audrey Saludaga";
+      }
+      if (!docClinicName) {
+        docClinicName = "DermAI Dermatology Center";
       }
 
       // Resolve clinic name from clinic table if clinic ID is known
@@ -192,7 +192,7 @@ export function useDoctorAppointments() {
       const uniqueDoctorIds = Array.from(new Set(foundDoctorIds.filter(Boolean)));
       setDoctorIds(uniqueDoctorIds);
 
-      // 2. Fetch appointments from Supabase
+      // 2. Fetch real appointments from Supabase
       const apptMap = new Map<string, DoctorAppointmentRecord>();
 
       try {
@@ -247,12 +247,22 @@ export function useDoctorAppointments() {
           }
 
           for (const row of primaryData as any[]) {
-            const isMatch =
+            // Check if this appointment matches the doctor or the doctor's clinic, or is unassigned
+            const isDirectDocMatch =
               (row.assigned_doctor_id && uniqueDoctorIds.includes(row.assigned_doctor_id)) ||
-              (foundClinicIds.length > 0 && foundClinicIds.some((cid) => String(cid) === String(row.clinic_id))) ||
+              (row.assigned_doctor_id && user?.id && String(row.assigned_doctor_id) === String(user.id));
+
+            const isClinicMatch =
+              foundClinicIds.length > 0 &&
+              foundClinicIds.some((cid) => String(cid) === String(row.clinic_id));
+
+            // Include real appointments assigned to doctor, belonging to doctor's clinic, unassigned cases, or all data during testing
+            const isMatch =
+              isDirectDocMatch ||
+              isClinicMatch ||
               !row.assigned_doctor_id ||
               uniqueDoctorIds.length === 0 ||
-              true;
+              foundClinicIds.length === 0;
 
             if (isMatch) {
               const userProf = row.user_id ? userProfileMap.get(row.user_id) : null;
@@ -282,12 +292,15 @@ export function useDoctorAppointments() {
 
               // Extract doctor diagnosis and note if formatted
               let docDiagnosis = "";
-              let docCleanNote = row.doctor_note || "";
+              let docCleanNote = "";
               if (row.doctor_note) {
                 const match = row.doctor_note.match(/^Diagnosis:\s*([^|\n]+)(?:[|\n]\s*(?:Note:\s*)?(.*))?$/is);
                 if (match) {
                   docDiagnosis = match[1]?.trim() || "";
                   docCleanNote = match[2]?.trim() || "";
+                } else {
+                  docDiagnosis = row.doctor_note.trim();
+                  docCleanNote = "";
                 }
               }
 
@@ -326,13 +339,13 @@ export function useDoctorAppointments() {
                 clinicNote: row.clinic_note || "",
                 status: (row.status === "cancelled" || row.status === "rejected")
                   ? "rejected"
-                  : (row.status === "confirmed" ? "scheduled" : (row.status || "pending")),
+                  : (row.status === "completed" ? "completed" : (row.status === "confirmed" ? "scheduled" : (row.status || "pending"))),
                 assignedDoctorId: row.assigned_doctor_id || undefined,
                 assignedDoctorName: docDisplayName,
                 doctorStatus: (row.status === "cancelled" || row.status === "rejected")
                   ? "rejected"
                   : (row.doctor_status || "pending-review"),
-                doctorNote: docCleanNote || row.doctor_note || "",
+                doctorNote: docCleanNote || "",
                 doctorDiagnosis: docDiagnosis || "",
                 doctorReviewedAt: row.doctor_reviewed_at || undefined,
                 scheduleSentToDoctor: Boolean(
@@ -343,7 +356,7 @@ export function useDoctorAppointments() {
                 createdAt: row.created_at || new Date().toISOString(),
                 skinPhotoUrl: photoUrl,
                 conditionImage: photoUrl,
-                conditionName: row.ai_condition_name || "General Consultation",
+                conditionName: docDiagnosis || row.ai_condition_name || "General Consultation",
                 aiConditionName: (row.ai_condition_name && !row.ai_condition_name.toLowerCase().includes("consultation")) ? row.ai_condition_name : undefined,
                 aiConfidence: row.ai_confidence ? Number(row.ai_confidence) : undefined,
               });
@@ -354,23 +367,17 @@ export function useDoctorAppointments() {
         console.warn("[useDoctorAppointments] Supabase fetch error:", err);
       }
 
-      // 3. Fallback & Cross-tab sync: Read from localStorage clinic appointments
+      // 3. Sync real local appointments created during tests (excluding any old mock seeds)
       try {
         const storedClinicAppts = localStorage.getItem("dermai_clinic_appointments");
         if (storedClinicAppts) {
           const parsed = JSON.parse(storedClinicAppts);
-          if (Array.isArray(parsed)) {
-            const cleanDocName = docDisplayName.toLowerCase().replace(/^dr\.\s*/i, "").trim();
-            for (const appt of parsed) {
-              const apptDocName = (appt.assignedDoctorName || "").toLowerCase().replace(/^dr\.\s*/i, "").trim();
-              const isMatch =
-                (appt.assignedDoctorId && uniqueDoctorIds.includes(appt.assignedDoctorId)) ||
-                (apptDocName && (apptDocName.includes(cleanDocName) || cleanDocName.includes(apptDocName))) ||
-                (foundClinicIds.length > 0 && foundClinicIds.some((cid) => String(cid) === String(appt.clinicId))) ||
-                !appt.assignedDoctorId ||
-                true;
-
-              if (isMatch && !apptMap.has(appt.id)) {
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // Filter out any mock seeds if stored
+            const realLocalAppts = parsed.filter((a: any) => a.id && !String(a.id).startsWith("doc-seed-"));
+            
+            for (const appt of realLocalAppts) {
+              if (!apptMap.has(appt.id)) {
                 const bdate = appt.patientBirthdate || appt.birthdate;
                 apptMap.set(appt.id, {
                   id: appt.id,
@@ -409,6 +416,11 @@ export function useDoctorAppointments() {
                 });
               }
             }
+
+            // Save cleaned list back without mock seeds
+            if (realLocalAppts.length !== parsed.length) {
+              localStorage.setItem("dermai_clinic_appointments", JSON.stringify(realLocalAppts));
+            }
           }
         }
       } catch (err) {
@@ -428,7 +440,7 @@ export function useDoctorAppointments() {
   useEffect(() => {
     fetchAppointments();
 
-    // 1. Supabase Realtime channel for instant live updates when clinic assigns
+    // 1. Supabase Realtime channel for instant live updates when clinic assigns or patient books
     const channel = supabase
       .channel(`doctor-appointments-realtime-${user?.id || "anon"}`)
       .on(
@@ -526,15 +538,33 @@ export function useDoctorAppointments() {
     }
   };
 
-  // Mark appointment completed
-  const markAppointmentDone = async (appointmentId: string) => {
+  // Mark appointment completed with clinical diagnosis and consultation notes
+  const markAppointmentDone = async (
+    appointmentId: string,
+    finalDiagnosis?: string,
+    consultationNote?: string
+  ) => {
     try {
-      await supabase
+      const formattedNote = finalDiagnosis
+        ? `Diagnosis: ${finalDiagnosis}${consultationNote ? ` | Note: ${consultationNote}` : ""}`
+        : consultationNote;
+
+      const updatePayload: any = {
+        status: "completed",
+        doctor_reviewed_at: new Date().toISOString(),
+      };
+      if (formattedNote) {
+        updatePayload.doctor_note = formattedNote;
+      }
+
+      const { error } = await supabase
         .from("patient_appointment")
-        .update({
-          status: "completed",
-        })
+        .update(updatePayload)
         .eq("appointment_id", appointmentId);
+
+      if (error) {
+        console.warn("[useDoctorAppointments] markAppointmentDone Supabase update warning:", error.message);
+      }
 
       try {
         const stored = localStorage.getItem("dermai_clinic_appointments");
@@ -542,7 +572,16 @@ export function useDoctorAppointments() {
           const parsed = JSON.parse(stored);
           if (Array.isArray(parsed)) {
             const next = parsed.map((a: any) =>
-              a.id === appointmentId ? { ...a, status: "completed" } : a
+              a.id === appointmentId
+                ? {
+                    ...a,
+                    status: "completed",
+                    doctorDone: true,
+                    doctorDiagnosis: finalDiagnosis || a.doctorDiagnosis,
+                    doctorNote: consultationNote || a.doctorNote,
+                    doctorReviewedAt: new Date().toISOString(),
+                  }
+                : a
             );
             localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
             window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));

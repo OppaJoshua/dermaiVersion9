@@ -102,28 +102,56 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
       const isUuid = (s?: string) => !!s && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
       const validDocIds = uniqueDocIds.filter(isUuid);
 
-      if (validDocIds.length > 0) {
-        try {
-          const { data: apps } = await supabase
-            .from("patient_appointment")
-            .select("appointment_id, patient_name, date, time, status, created_at")
-            .in("assigned_doctor_id", validDocIds)
-            .order("created_at", { ascending: false })
-            .limit(10);
+      try {
+        let appQuery = supabase
+          .from("patient_appointment")
+          .select("appointment_id, patient_name, date, time, status, created_at")
+          .order("created_at", { ascending: false })
+          .limit(10);
 
-          if (apps) {
-            apps.forEach((a: any) => {
-              list.push({
-                id: `doc-app-${a.appointment_id}`,
-                title: "New Assigned Patient",
-                message: `${a.patient_name || "A patient"} was assigned to you for consultation.`,
-                time: a.created_at,
-                type: "assigned",
-              });
+        if (validDocIds.length > 0) {
+          appQuery = appQuery.in("assigned_doctor_id", validDocIds);
+        }
+
+        const { data: apps } = await appQuery;
+
+        if (apps && apps.length > 0) {
+          apps.forEach((a: any) => {
+            list.push({
+              id: `doc-app-${a.appointment_id}`,
+              title: "Assigned Consultation",
+              message: `${a.patient_name || "A patient"} was assigned to you for clinical review.`,
+              time: a.created_at || new Date().toISOString(),
+              type: "assigned",
             });
+          });
+        }
+      } catch { }
+
+      // Also check real local storage appointments
+      try {
+        const stored = localStorage.getItem("dermai_clinic_appointments");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            parsed
+              .filter((a: any) => a.id && !String(a.id).startsWith("doc-seed-"))
+              .slice(0, 5)
+              .forEach((a: any) => {
+                const alreadyExists = list.some((item) => item.id === `doc-app-${a.id}`);
+                if (!alreadyExists) {
+                  list.push({
+                    id: `doc-app-${a.id}`,
+                    title: a.doctorStatus === "approved" ? "Confirmed Consultation" : "New Assigned Patient",
+                    message: `${a.patientName || "A patient"} is scheduled for ${a.conditionName || "consultation"}.`,
+                    time: a.createdAt || new Date().toISOString(),
+                    type: "assigned",
+                  });
+                }
+              });
           }
-        } catch { }
-      }
+        }
+      } catch { }
 
       // 2. User notifications
       const { data: notifs } = await supabase

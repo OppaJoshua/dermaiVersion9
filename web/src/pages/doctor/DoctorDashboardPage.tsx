@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Calendar, CheckCircle2, XCircle, Clock, ChevronRight, Stethoscope, Loader2 } from "lucide-react";
+import { Calendar, CheckCircle2, XCircle, Clock, ChevronRight, Stethoscope, Loader2, ArrowRight } from "lucide-react";
 import { motion } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useDoctorAppointments } from "@/hooks/useDoctorAppointments";
@@ -7,6 +7,7 @@ import { useDoctorAppointments } from "@/hooks/useDoctorAppointments";
 export default function DoctorDashboardPage() {
   const { doctorName, doctorClinic, appointments: allAppointments, loading } = useDoctorAppointments();
   const fallbackImage = skinConditions[0]?.image;
+
   const pendingReview = allAppointments.filter(
     (a) =>
       a.status !== "rejected" &&
@@ -26,14 +27,51 @@ export default function DoctorDashboardPage() {
       a.status !== "rejected" &&
       a.status !== "cancelled" &&
       a.status !== "completed" &&
+      !!a.date &&
       (a.scheduleSentToDoctor || a.status === "confirmed" || a.status === "scheduled")
   );
 
   const stats = [
-    { label: "Pending Review", value: pendingReview.length, icon: Clock, color: "bg-amber-50 text-amber-600 border-amber-100", iconColor: "text-amber-500", bg: "bg-amber-100" },
-    { label: "Approved", value: approved.length, icon: CheckCircle2, color: "bg-green-50 text-green-600 border-green-100", iconColor: "text-green-500", bg: "bg-green-100" },
-    { label: "Rejected", value: rejected.length, icon: XCircle, color: "bg-red-50 text-red-600 border-red-100", iconColor: "text-red-500", bg: "bg-red-100" },
-    { label: "Schedule Received", value: scheduledSent.length, icon: Calendar, color: "bg-blue-50 text-blue-600 border-blue-100", iconColor: "text-blue-500", bg: "bg-blue-100" },
+    {
+      label: "Awaiting Your Review",
+      sublabel: "Pre-consultation triage queue",
+      value: pendingReview.length,
+      icon: Clock,
+      color: "bg-amber-50 text-amber-700 border-amber-200",
+      iconColor: "text-amber-500",
+      bg: "bg-amber-100",
+      href: "/doctor/appointments",
+    },
+    {
+      label: "Approved by You",
+      sublabel: "Awaiting clinic schedule lock",
+      value: approved.length,
+      icon: CheckCircle2,
+      color: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      iconColor: "text-emerald-500",
+      bg: "bg-emerald-100",
+      href: "/doctor/appointments",
+    },
+    {
+      label: "Declined by You",
+      sublabel: "Clinic alerted to re-assign",
+      value: rejected.length,
+      icon: XCircle,
+      color: "bg-red-50 text-red-700 border-red-200",
+      iconColor: "text-red-500",
+      bg: "bg-red-100",
+      href: "/doctor/appointments",
+    },
+    {
+      label: "Finalized Consultations",
+      sublabel: "Confirmed & ready to conduct",
+      value: scheduledSent.length,
+      icon: Calendar,
+      color: "bg-blue-50 text-blue-700 border-blue-200",
+      iconColor: "text-blue-500",
+      bg: "bg-blue-100",
+      href: "/doctor/scheduled",
+    },
   ];
 
   if (loading) {
@@ -48,27 +86,37 @@ export default function DoctorDashboardPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-display font-bold text-gray-900">
-            Welcome, {doctorName}
+            Welcome, {doctorName || "Doctor"}
           </h1>
-          {doctorClinic && (
-            <p className="text-sm text-gray-400 mt-0.5 flex items-center gap-1.5">
-              <Stethoscope className="w-3.5 h-3.5" /> {doctorClinic}
+          {doctorClinic ? (
+            <p className="text-sm text-gray-500 mt-0.5 flex items-center gap-1.5 font-medium">
+              <Stethoscope className="w-4 h-4 text-blue-600" /> {doctorClinic}
             </p>
+          ) : (
+            <p className="text-sm text-gray-400 mt-0.5">Dermatology Medical Portal</p>
           )}
         </div>
-        <Link
-          to="/doctor/appointments"
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 transition-colors"
-        >
-          <Calendar className="w-4 h-4" /> View All Appointments
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/doctor/appointments"
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition-colors shadow-xs"
+          >
+            <Clock className="w-4 h-4" /> Review Patient Cases
+          </Link>
+          <Link
+            to="/doctor/scheduled"
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-700 text-sm font-semibold hover:bg-gray-50 transition-colors"
+          >
+            <Calendar className="w-4 h-4 text-gray-500" /> Scheduled Sessions
+          </Link>
+        </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
         {stats.map((stat, i) => {
           const Icon = stat.icon;
           return (
@@ -77,34 +125,53 @@ export default function DoctorDashboardPage() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.05 }}
-              className={`bg-white rounded-2xl border p-4 ${stat.color}`}
+              className={`bg-white rounded-2xl border p-4 shadow-xs flex flex-col justify-between hover:border-gray-300 transition-all ${stat.color}`}
             >
-              <div className={`w-9 h-9 rounded-xl ${stat.bg} flex items-center justify-center mb-3`}>
-                <Icon className={`w-5 h-5 ${stat.iconColor}`} />
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className={`w-9 h-9 rounded-xl ${stat.bg} flex items-center justify-center`}>
+                    <Icon className={`w-5 h-5 ${stat.iconColor}`} />
+                  </div>
+                  <span className="text-2xl font-black text-gray-900">{stat.value}</span>
+                </div>
+                <p className="text-sm font-bold text-gray-900">{stat.label}</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">{stat.sublabel}</p>
               </div>
-              <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
-              <p className="text-xs font-medium mt-0.5">{stat.label}</p>
+              <Link
+                to={stat.href}
+                className="mt-3 text-xs font-semibold text-blue-600 flex items-center gap-1 hover:text-blue-800"
+              >
+                View list <ArrowRight className="w-3 h-3" />
+              </Link>
             </motion.div>
           );
         })}
       </div>
 
-      {/* Pending Review */}
-      <div className="bg-white rounded-2xl border border-gray-100">
-        <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-50">
-          <h2 className="font-display font-bold text-gray-900">Awaiting Your Review</h2>
+      {/* Pending Review Section */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-xs overflow-hidden">
+        <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-100">
+          <div>
+            <h2 className="font-display font-bold text-gray-900 text-base">Awaiting Your Clinical Review</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Cases assigned by your clinic triage team that require your decision before scheduling.
+            </p>
+          </div>
           <Link
             to="/doctor/appointments"
-            className="text-xs text-blue-500 font-semibold flex items-center gap-1 hover:text-blue-700"
+            className="text-xs text-blue-600 font-bold flex items-center gap-1 hover:text-blue-800"
           >
-            See all <ChevronRight className="w-3 h-3" />
+            Review All ({pendingReview.length}) <ChevronRight className="w-3.5 h-3.5" />
           </Link>
         </div>
 
         {pendingReview.length === 0 ? (
-          <div className="px-5 py-10 text-center">
-            <CheckCircle2 className="w-10 h-10 text-gray-200 mx-auto mb-2" />
-            <p className="text-sm text-gray-400">No appointments pending your review.</p>
+          <div className="px-5 py-12 text-center">
+            <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-gray-800">Your review queue is clear!</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Any new patient cases assigned to you by the clinic will appear here automatically.
+            </p>
           </div>
         ) : (
           <div className="divide-y divide-gray-50">
@@ -113,90 +180,109 @@ export default function DoctorDashboardPage() {
                 key={appt.id}
                 initial={{ opacity: 0, x: -8 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: i * 0.06 }}
-                className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50/50"
+                transition={{ delay: i * 0.05 }}
+                className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50/60 transition-colors"
               >
                 <img
-                  src={appt.patientAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(appt.patientName || "P")}&background=dbeafe&color=1d4ed8`}
+                  src={
+                    appt.patientAvatar ||
+                    `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                      appt.patientName || "P"
+                    )}&background=dbeafe&color=1d4ed8`
+                  }
                   alt={appt.patientName}
                   className="w-10 h-10 rounded-full object-cover border border-gray-200 shrink-0"
                 />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">
-                    {appt.patientName || "Unknown Patient"}
+                  <p className="text-sm font-bold text-gray-900 truncate">
+                    {appt.patientName || "Patient"}
                   </p>
-                  <p className="text-xs text-blue-600 font-medium truncate">
-                    {appt.conditionName || "Skin concern"}
+                  <p className="text-xs text-blue-600 font-semibold truncate">
+                    {appt.conditionName || "Skin Assessment"}
                   </p>
                   <p className="text-[11px] text-gray-400 mt-0.5">
-                    Submitted {new Date(appt.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                    Requested on{" "}
+                    {new Date(appt.createdAt).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
                   </p>
                 </div>
-                <img
-                  src={appt.conditionImage || fallbackImage}
-                  alt={appt.conditionName}
-                  className="w-12 h-12 rounded-lg object-cover border border-gray-100 shrink-0"
-                />
-                <span className="text-[10px] px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-semibold whitespace-nowrap">
-                  Pending Review
-                </span>
+                {appt.skinPhotoUrl ? (
+                  <img
+                    src={appt.skinPhotoUrl}
+                    alt="Skin preview"
+                    className="w-12 h-12 rounded-lg object-cover border border-gray-100 shrink-0 hidden sm:block"
+                  />
+                ) : appt.conditionImage ? (
+                  <img
+                    src={appt.conditionImage || fallbackImage}
+                    alt={appt.conditionName}
+                    className="w-12 h-12 rounded-lg object-cover border border-gray-100 shrink-0 hidden sm:block"
+                  />
+                ) : null}
+                <Link
+                  to="/doctor/appointments"
+                  className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 text-xs font-bold hover:bg-blue-100 transition-colors shrink-0"
+                >
+                  Review Case &rarr;
+                </Link>
               </motion.div>
             ))}
           </div>
         )}
       </div>
 
-      {/* Schedule Received */}
+      {/* Confirmed Schedule Section */}
       {scheduledSent.length > 0 && (
-        <div className="bg-white rounded-2xl border border-gray-100">
-          <div className="px-5 pt-5 pb-4 border-b border-gray-50">
-            <h2 className="font-display font-bold text-gray-900">Finalized Appointment Schedules</h2>
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-xs overflow-hidden">
+          <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-100">
+            <div>
+              <h2 className="font-display font-bold text-gray-900 text-base">Upcoming Confirmed Sessions</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Approved appointments where the clinic has locked the consultation schedule.
+              </p>
+            </div>
+            <Link
+              to="/doctor/scheduled"
+              className="text-xs text-blue-600 font-bold flex items-center gap-1 hover:text-blue-800"
+            >
+              View Schedule <ChevronRight className="w-3.5 h-3.5" />
+            </Link>
           </div>
           <div className="divide-y divide-gray-50">
-            {scheduledSent.map((appt, i) => (
+            {scheduledSent.slice(0, 4).map((appt, i) => (
               <motion.div
                 key={appt.id}
                 initial={{ opacity: 0, x: -8 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: i * 0.06 }}
-                className="px-5 py-4"
+                transition={{ delay: i * 0.05 }}
+                className="px-5 py-4 hover:bg-gray-50/60 transition-colors"
               >
                 <div className="flex items-center gap-4">
                   <img
-                    src={appt.patientAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(appt.patientName || "P")}&background=dbeafe&color=1d4ed8`}
+                    src={
+                      appt.patientAvatar ||
+                      `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                        appt.patientName || "P"
+                      )}&background=dbeafe&color=1d4ed8`
+                    }
                     alt={appt.patientName}
                     className="w-10 h-10 rounded-full object-cover border border-gray-200 shrink-0"
                   />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{appt.patientName || "Patient"}</p>
-                    <p className="text-xs text-blue-600 font-medium">{appt.conditionName || "Skin concern"}</p>
+                    <p className="text-sm font-bold text-gray-900 truncate">{appt.patientName || "Patient"}</p>
+                    <p className="text-xs text-blue-600 font-semibold truncate">{appt.conditionName || "Dermatology"}</p>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="text-xs font-bold text-gray-800">{appt.date}</p>
-                    <p className="text-[11px] text-gray-500">{appt.time}</p>
+                    <p className="text-xs font-bold text-gray-900">{appt.date}</p>
+                    <p className="text-[11px] text-gray-500 font-medium">{appt.time || "Scheduled"}</p>
                   </div>
-                  <span className="text-[10px] px-2 py-1 rounded-full bg-green-50 text-green-700 border border-green-200 font-semibold shrink-0">
+                  <span className="text-[10px] px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold shrink-0">
                     Confirmed
                   </span>
                 </div>
-                {/* AI Analysis summary */}
-                {(() => {
-                  const cond = appt.conditionId ? skinConditions.find((c) => c.id === appt.conditionId) : null;
-                  return cond ? (
-                    <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/50 p-3 flex gap-3">
-                      <img
-                        src={appt.conditionImage || cond.image}
-                        alt={cond.name}
-                        className="w-12 h-12 rounded-lg object-cover border border-blue-100 shrink-0"
-                      />
-                      <div className="min-w-0">
-                        <p className="text-[11px] font-bold text-blue-700 uppercase tracking-wide mb-0.5">AI Analysis</p>
-                        <p className="text-xs font-semibold text-blue-800">{cond.name}</p>
-                        <p className="text-[11px] text-blue-600 line-clamp-2">{cond.description}</p>
-                      </div>
-                    </div>
-                  ) : null;
-                })()}
               </motion.div>
             ))}
           </div>

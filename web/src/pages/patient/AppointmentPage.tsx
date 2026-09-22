@@ -80,17 +80,17 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   useEffect(() => {
     const condParam = searchParams.get("condition") || searchParams.get("ai_condition");
     const confParam = searchParams.get("confidence") || searchParams.get("score");
-    if (condParam) setAiConditionName(condParam);
-    if (confParam) setAiConfidence(confParam);
+    if (condParam && condParam !== "Assessment Queued") setAiConditionName(condParam);
+    if (confParam && Number(confParam) > 0) setAiConfidence(confParam);
 
     try {
       const savedScan = localStorage.getItem("dermai_last_scan");
       if (savedScan) {
         const parsed = JSON.parse(savedScan);
-        if (!condParam && parsed.predictedClass) {
+        if (!condParam && parsed.predictedClass && parsed.predictedClass !== "Assessment Queued") {
           setAiConditionName((prev) => prev || parsed.predictedClass);
         }
-        if (!confParam && parsed.confidence) {
+        if (!confParam && parsed.confidence && Number(parsed.confidence) > 0) {
           const num = Number(parsed.confidence);
           setAiConfidence((prev) => prev || String(Math.round(num <= 1 ? num * 100 : num)));
         }

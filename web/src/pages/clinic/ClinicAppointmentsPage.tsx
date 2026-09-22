@@ -13,7 +13,7 @@ import {
   X,
   RefreshCw,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
@@ -347,19 +347,47 @@ export default function ClinicAppointmentsPage() {
     return DEFAULT_SETTINGS;
   });
 
-  const [pendingAssign, setPendingAssign] = useState<{
-    appointmentId: string;
-    date: string;
-    time: string;
-    doctorId: string;
-  } | null>(null);
+  // Queue tab filter: all | needs_doctor | in_review | approved | doctor_declined
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get("tab");
+  const validTabs = ["all", "needs_doctor", "in_review", "approved", "doctor_declined"] as const;
+  const [queueFilter, setQueueFilter] = useState<"all" | "needs_doctor" | "in_review" | "approved" | "doctor_declined">(
+    initialTab && (validTabs as readonly string[]).includes(initialTab) ? (initialTab as any) : "all"
+  );
 
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab && (validTabs as readonly string[]).includes(tab)) {
+      setQueueFilter(tab as any);
+    }
+  }, [searchParams]);
+
+  // Modals
   const [viewingPatient, setViewingPatient] = useState<AppointmentRecord | null>(null);
   const [dayDetailDate, setDayDetailDate] = useState<string | null>(null);
 
-  const [assignDoctorModal, setAssignDoctorModal] = useState<{ appointmentId: string } | null>(null);
+  // Assign Doctor for Review Modal (also used for Re-assigning)
+  const [assignDoctorModal, setAssignDoctorModal] = useState<{
+    appointmentId: string;
+    patientName?: string;
+    isReassign?: boolean;
+    currentDoctorName?: string;
+    doctorNote?: string;
+  } | null>(null);
   const [selectedDoctorId, setSelectedDoctorId] = useState("");
 
+  // Finalize Schedule Modal (Used after Doctor Approval or Reschedule)
+  const [finalizeScheduleModal, setFinalizeScheduleModal] = useState<{
+    appointmentId: string;
+    patientName: string;
+    assignedDoctorId?: string;
+    assignedDoctorName?: string;
+    date: string;
+    time: string;
+    isReschedule?: boolean;
+  } | null>(null);
+
+  // Reject / Decline Modal
   const [rejectModal, setRejectModal] = useState<{
     appointmentId: string;
     patientName: string;
@@ -372,6 +400,7 @@ export default function ClinicAppointmentsPage() {
   const [selectedPresetReason, setSelectedPresetReason] = useState("");
   const [rejectError, setRejectError] = useState("");
   const [assignError, setAssignError] = useState("");
+  const [scheduleError, setScheduleError] = useState("");
 
   const calendarCells = useMemo(() => {
     const start = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
@@ -403,9 +432,37 @@ export default function ClinicAppointmentsPage() {
     }, {});
   }, [appointments]);
 
-  const unscheduledQueue = appointments
-    .filter((a) => !a.date && a.status === "pending")
-    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  // Queues categorized by review lifecycle
+  const unscheduledQueue = useMemo(() => {
+    return appointments
+      .filter((a) => !a.date && a.status === "pending")
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [appointments]);
+
+  const needsDoctorQueue = useMemo(
+    () => unscheduledQueue.filter((a) => !a.assignedDoctorId),
+    [unscheduledQueue]
+  );
+  const inReviewQueue = useMemo(
+    () => unscheduledQueue.filter((a) => a.assignedDoctorId && a.doctorStatus === "pending-review"),
+    [unscheduledQueue]
+  );
+  const approvedQueue = useMemo(
+    () => unscheduledQueue.filter((a) => a.doctorStatus === "approved"),
+    [unscheduledQueue]
+  );
+  const doctorDeclinedQueue = useMemo(
+    () => unscheduledQueue.filter((a) => a.doctorStatus === "rejected"),
+    [unscheduledQueue]
+  );
+
+  const displayedQueue = useMemo(() => {
+    if (queueFilter === "needs_doctor") return needsDoctorQueue;
+    if (queueFilter === "in_review") return inReviewQueue;
+    if (queueFilter === "approved") return approvedQueue;
+    if (queueFilter === "doctor_declined") return doctorDeclinedQueue;
+    return unscheduledQueue;
+  }, [queueFilter, unscheduledQueue, needsDoctorQueue, inReviewQueue, approvedQueue, doctorDeclinedQueue]);
 
   const selectedDayAppointments = (appointmentsByDate[selectedDate] || []).sort((a, b) =>
     a.time.localeCompare(b.time)
@@ -444,7 +501,6 @@ export default function ClinicAppointmentsPage() {
               status: "rejected" as const,
               doctorStatus: "rejected" as const,
               clinicNote: rejectionReason,
-              rejectionReason,
             }
           : appt
       );
@@ -471,108 +527,16 @@ export default function ClinicAppointmentsPage() {
     setRejectError("");
   };
 
-  const startScheduleAssignment = (appointmentId: string) => {
-    setAssignError("");
-    const appointment = appointments.find((item) => item.id === appointmentId);
-    setPendingAssign({
-      appointmentId,
-      date: appointment?.date || selectedDate,
-      time: appointment?.time || clinicSettings.openTime,
-      doctorId: clinicDoctors.find((doctor) => doctor.id === appointment?.assignedDoctorId)?.id || "",
-    });
-  };
-
-  const confirmAssign = async () => {
-    if (!pendingAssign) return;
-    setAssignError("");
-
-    const doctor = clinicDoctors.find((item) => item.id === pendingAssign.doctorId);
-    if (!doctor) {
-      setAssignError("Select a doctor to review this appointment before confirming the schedule.");
-      return;
-    }
-
-    if (
-      pendingAssign.time < clinicSettings.openTime ||
-      pendingAssign.time > clinicSettings.closeTime
-    ) {
-      setAssignError(
-        `Time must be between ${clinicSettings.openTime} and ${clinicSettings.closeTime}.`
-      );
-      return;
-    }
-
-    let targetDoctorId: string | null = doctor.id;
-    const isUuid = (id?: string | null): boolean =>
-      !!id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
-
-    if (!targetDoctorId || !isUuid(targetDoctorId)) {
-      try {
-        const { data: dbDoc } = await supabase
-          .from("clinic_doctor")
-          .select("doctor_id")
-          .or(`email.ilike.%${doctor.email || "nomatch"}%,doctor_name.ilike.%${doctor.name || "nomatch"}%`)
-          .limit(1)
-          .maybeSingle();
-        if (dbDoc?.doctor_id && isUuid(dbDoc.doctor_id)) {
-          targetDoctorId = dbDoc.doctor_id;
-        } else {
-          targetDoctorId = null;
-        }
-      } catch {
-        targetDoctorId = null;
-      }
-    }
-
-    try {
-      const { error: updateErr } = await supabase
-        .from("patient_appointment")
-        .update({
-          status: "confirmed",
-          date: `${pendingAssign.date}T${pendingAssign.time}:00`,
-          ...(targetDoctorId ? { assigned_doctor_id: targetDoctorId } : {}),
-          schedule_sent_to_doctor: true,
-          doctor_status: "pending-review",
-          clinic_note: "Your schedule has been assigned by the clinic.",
-        })
-        .eq("appointment_id", pendingAssign.appointmentId);
-
-      if (updateErr) {
-        console.error("Failed to save schedule in Supabase:", updateErr.message);
-      }
-    } catch (err: any) {
-      console.error("Failed to save schedule in Supabase:", err.message);
-    }
-
-    setAppointments((prev) => {
-      const next = prev.map((appt) => {
-        if (appt.id !== pendingAssign.appointmentId) return appt;
-        return {
-          ...appt,
-          date: pendingAssign.date,
-          time: pendingAssign.time,
-          status: "scheduled" as const,
-          assignedDoctorId: targetDoctorId || doctor.id,
-          assignedDoctorName: doctor.name,
-          doctorStatus: "pending-review" as const,
-          scheduleSentToDoctor: true,
-          clinicNote: "Your schedule has been assigned by the clinic.",
-        };
-      });
-      try {
-        localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
-        window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
-        window.dispatchEvent(new Event("storage"));
-      } catch { }
-      return next;
-    });
-    setPendingAssign(null);
-  };
-
-  const assignDoctor = async () => {
+  // 1. Assign doctor for pre-consultation review (or re-assign)
+  const handleConfirmDoctorAssignment = async () => {
     if (!assignDoctorModal || !selectedDoctorId) return;
+    setAssignError("");
+
     const doc = clinicDoctors.find((d) => d.id === selectedDoctorId);
-    if (!doc) return;
+    if (!doc) {
+      setAssignError("Please select a doctor from your clinic roster.");
+      return;
+    }
 
     let targetDoctorId: string | null = doc.id;
     const isUuid = (id?: string | null): boolean =>
@@ -596,12 +560,19 @@ export default function ClinicAppointmentsPage() {
       }
     }
 
+    const clinicNoteMsg = assignDoctorModal.isReassign
+      ? `Re-assigned to Dr. ${doc.name.replace(/^dr\.\s*/i, "")} for review.`
+      : `Assigned to Dr. ${doc.name.replace(/^dr\.\s*/i, "")} for pre-consultation review.`;
+
     try {
       const { error: updateErr } = await supabase
         .from("patient_appointment")
         .update({
           ...(targetDoctorId ? { assigned_doctor_id: targetDoctorId } : {}),
           doctor_status: "pending-review",
+          doctor_note: null,
+          doctor_reviewed_at: null,
+          clinic_note: clinicNoteMsg,
         })
         .eq("appointment_id", assignDoctorModal.appointmentId);
 
@@ -617,20 +588,94 @@ export default function ClinicAppointmentsPage() {
         if (a.id !== assignDoctorModal.appointmentId) return a;
         return {
           ...a,
-          assignedDoctorId: targetDoctorId || undefined,
+          assignedDoctorId: targetDoctorId || doc.id,
           assignedDoctorName: doc.name,
           doctorStatus: "pending-review" as const,
+          doctorNote: undefined,
+          doctorReviewedAt: undefined,
+          clinicNote: clinicNoteMsg,
         };
       });
       try {
         localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
         window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+        window.dispatchEvent(new Event("storage"));
       } catch { }
       return next;
     });
+
     setAssignDoctorModal(null);
     setSelectedDoctorId("");
     setAssignError("");
+  };
+
+  // 2. Finalize schedule after doctor approval (or reschedule existing)
+  const handleConfirmFinalizeSchedule = async () => {
+    if (!finalizeScheduleModal) return;
+    setScheduleError("");
+
+    if (!finalizeScheduleModal.date) {
+      setScheduleError("Please select a consultation date.");
+      return;
+    }
+    if (!finalizeScheduleModal.time) {
+      setScheduleError("Please select a consultation time.");
+      return;
+    }
+
+    if (
+      finalizeScheduleModal.time < clinicSettings.openTime ||
+      finalizeScheduleModal.time > clinicSettings.closeTime
+    ) {
+      setScheduleError(
+        `Time must be between ${clinicSettings.openTime} and ${clinicSettings.closeTime}.`
+      );
+      return;
+    }
+
+    const appt = appointments.find((a) => a.id === finalizeScheduleModal.appointmentId);
+    const doctorDisplayName = finalizeScheduleModal.assignedDoctorName || appt?.assignedDoctorName || "Doctor";
+
+    try {
+      const { error: updateErr } = await supabase
+        .from("patient_appointment")
+        .update({
+          status: "confirmed",
+          date: `${finalizeScheduleModal.date}T${finalizeScheduleModal.time}:00`,
+          schedule_sent_to_doctor: true,
+          clinic_note: `Consultation schedule confirmed for ${finalizeScheduleModal.date} at ${finalizeScheduleModal.time} with Dr. ${doctorDisplayName.replace(/^dr\.\s*/i, "")}.`,
+        })
+        .eq("appointment_id", finalizeScheduleModal.appointmentId);
+
+      if (updateErr) {
+        console.error("Failed to finalize schedule in Supabase:", updateErr.message);
+      }
+    } catch (err: any) {
+      console.error("Failed to finalize schedule in Supabase:", err.message);
+    }
+
+    setAppointments((prev) => {
+      const next = prev.map((item) => {
+        if (item.id !== finalizeScheduleModal.appointmentId) return item;
+        return {
+          ...item,
+          date: finalizeScheduleModal.date,
+          time: finalizeScheduleModal.time,
+          status: "scheduled" as const,
+          scheduleSentToDoctor: true,
+          clinicNote: `Consultation schedule confirmed for ${finalizeScheduleModal.date} at ${finalizeScheduleModal.time} with Dr. ${doctorDisplayName.replace(/^dr\.\s*/i, "")}.`,
+        };
+      });
+      try {
+        localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
+        window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+        window.dispatchEvent(new Event("storage"));
+      } catch { }
+      return next;
+    });
+
+    setFinalizeScheduleModal(null);
+    setScheduleError("");
   };
 
   const sendScheduleToDoctor = async (appointmentId: string) => {
@@ -883,133 +928,336 @@ export default function ClinicAppointmentsPage() {
         </div>
 
         <div className="bg-white border border-gray-100 rounded-2xl p-4 sm:p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-display font-bold text-gray-900">List of Queue</h2>
-            <span className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-semibold">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div className="min-w-0">
+              <h2 className="font-display font-bold text-gray-900 text-base">Incoming Consultation Queue</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Assign a doctor for review &rarr; Await approval &rarr; Finalize consultation date &amp; time.
+              </p>
+            </div>
+            <span className="text-xs px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 border border-magenta-200 font-bold shrink-0 whitespace-nowrap inline-flex items-center gap-1 self-start">
               {unscheduledQueue.length} pending
             </span>
           </div>
 
-          <p className="text-xs text-gray-500 mb-3">
-            Click "Schedule &amp; Assign" on a patient card to assign a date, time, and dermatologist.
-          </p>
+          {/* Queue Stage Filter Pills */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-3 pt-1 text-xs no-scrollbar">
+            {[
+              { key: "all", label: "All Queue", count: unscheduledQueue.length },
+              { key: "needs_doctor", label: "Needs Doctor", count: needsDoctorQueue.length, alert: needsDoctorQueue.length > 0 },
+              { key: "in_review", label: "In Review", count: inReviewQueue.length },
+              { key: "approved", label: "Doctor Approved", count: approvedQueue.length, highlight: approvedQueue.length > 0 },
+              { key: "doctor_declined", label: "Doctor Declined", count: doctorDeclinedQueue.length, warn: doctorDeclinedQueue.length > 0 },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setQueueFilter(tab.key as any)}
+                className={`px-3 py-1.5 rounded-xl font-semibold shrink-0 transition-all flex items-center gap-1.5 cursor-pointer ${
+                  queueFilter === tab.key
+                    ? "bg-magenta-600 text-white shadow-xs"
+                    : tab.highlight
+                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                    : tab.warn
+                    ? "bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
+                    : tab.alert
+                    ? "bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
+                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+                  queueFilter === tab.key ? "bg-white/20 text-white" : "bg-white/80 text-gray-700"
+                }`}>
+                  {tab.count}
+                </span>
+              </button>
+            ))}
+          </div>
 
-          <div className="space-y-2.5 max-h-[650px] overflow-y-auto pr-1">
-            {unscheduledQueue.length === 0 && (
-              <div className="border border-dashed border-gray-200 rounded-2xl p-6 text-center bg-gray-50/50">
+          <div className="space-y-3 max-h-[660px] overflow-y-auto pr-1">
+            {displayedQueue.length === 0 && (
+              <div className="border border-dashed border-gray-200 rounded-2xl p-8 text-center bg-gray-50/50">
                 <Clock className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                <p className="text-xs font-semibold text-gray-600">No pending requests</p>
+                <p className="text-xs font-semibold text-gray-600">No requests in this queue category</p>
                 <p className="text-[11px] text-gray-400 mt-1 max-w-xs mx-auto">
-                  When patients request a consultation, they will appear here in the queue for you to assign dates, times, and dermatologists.
+                  {queueFilter === "needs_doctor"
+                    ? "All consultation requests have been assigned to doctors for review."
+                    : queueFilter === "approved"
+                    ? "No approved appointments currently waiting for schedule finalization."
+                    : queueFilter === "doctor_declined"
+                    ? "No doctor rejections requiring re-assignment."
+                    : "Incoming consultation requests will appear here."}
                 </p>
               </div>
             )}
 
-            {unscheduledQueue.map((appointment) => (
-              <div
-                key={appointment.id}
-                className="rounded-xl border border-gray-100 p-3 bg-gray-50/70"
-              >
-                <div className="flex items-start gap-3 mb-2">
-                  <img
-                    src={
-                      appointment.patientAvatar ||
-                      `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                        appointment.patientName || "Patient"
-                      )}&background=fce7f3&color=c0166a`
-                    }
-                    alt={appointment.patientName || "Patient"}
-                    className="w-12 h-12 rounded-full object-cover border border-gray-200 shrink-0"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                        appointment.patientName || "Patient"
-                      )}&background=fce7f3&color=c0166a`;
-                    }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">
-                          {appointment.patientName || `Queue #${appointment.id.slice(-4)}`}
+            {displayedQueue.map((appointment) => {
+              const isUnassigned = !appointment.assignedDoctorId;
+              const isInReview = appointment.assignedDoctorId && appointment.doctorStatus === "pending-review";
+              const isApproved = appointment.doctorStatus === "approved";
+              const isDoctorDeclined = appointment.doctorStatus === "rejected";
+
+              return (
+                <div
+                  key={appointment.id}
+                  className={`rounded-2xl border p-4 transition-all ${
+                    isApproved
+                      ? "border-emerald-200 bg-emerald-50/30"
+                      : isDoctorDeclined
+                      ? "border-red-200 bg-red-50/30"
+                      : isInReview
+                      ? "border-blue-100 bg-blue-50/20"
+                      : "border-amber-100 bg-amber-50/20"
+                  }`}
+                >
+                  <div className="flex items-start gap-3 mb-2.5">
+                    <img
+                      src={
+                        appointment.patientAvatar ||
+                        `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                          appointment.patientName || "Patient"
+                        )}&background=fce7f3&color=c0166a`
+                      }
+                      alt={appointment.patientName || "Patient"}
+                      className="w-12 h-12 rounded-full object-cover border border-gray-200 shrink-0"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                          appointment.patientName || "Patient"
+                        )}&background=fce7f3&color=c0166a`;
+                      }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-bold text-gray-900">
+                            {appointment.patientName || `Queue #${appointment.id.slice(-4)}`}
+                          </p>
+                          {appointment.patientAge && (
+                            <p className="text-[10px] text-gray-400">{appointment.patientAge} years old</p>
+                          )}
+                          <p className="text-[11px] font-semibold text-magenta-600 mt-0.5">
+                            {appointment.conditionName || "General Consultation"}
+                          </p>
+                          <p className="text-[10px] text-gray-400">
+                            Requested: {new Date(appointment.createdAt).toLocaleString("en-US", {
+                              month: "short",
+                              day: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </p>
+                        </div>
+
+                        {/* Status Badge */}
+                        <div className="shrink-0">
+                          {isUnassigned && (
+                            <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
+                              <Clock className="w-3 h-3" /> Needs Doctor
+                            </span>
+                          )}
+                          {isInReview && (
+                            <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1">
+                              <Stethoscope className="w-3 h-3" /> In Review
+                            </span>
+                          )}
+                          {isApproved && (
+                            <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Doctor Approved
+                            </span>
+                          )}
+                          {isDoctorDeclined && (
+                            <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-red-100 text-red-800 border border-red-200 flex items-center gap-1">
+                              <XCircle className="w-3 h-3 text-red-600" /> Doctor Declined
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Stage Workflow Banners */}
+                  {isApproved && (
+                    <div className="mb-2.5 p-2.5 rounded-xl bg-emerald-100/70 border border-emerald-200 text-xs text-emerald-900 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span className="font-medium truncate">
+                          <strong>Dr. {appointment.assignedDoctorName?.replace(/^dr\.\s*/i, "")} approved!</strong> Ready to finalize schedule.
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {isDoctorDeclined && (
+                    <div className="mb-2.5 p-2.5 rounded-xl bg-red-100/70 border border-red-200 text-xs text-red-900 flex items-start gap-2">
+                      <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="font-bold">Declined by Dr. {appointment.assignedDoctorName?.replace(/^dr\.\s*/i, "")}:</p>
+                        <p className="text-[11px] text-red-700 italic mt-0.5">
+                          "{appointment.doctorNote || "Doctor unavailable for consultation"}"
                         </p>
-                        {appointment.patientAge && (
-                          <p className="text-[10px] text-gray-400">{appointment.patientAge} years old</p>
-                        )}
-                        <p className="text-[11px] text-magenta-600 mt-0.5">
-                          {appointment.conditionName || "Skin concern"}
-                        </p>
-                        <p className="text-[11px] text-gray-500">
-                          {new Date(appointment.createdAt).toLocaleString("en-US", {
-                            month: "short",
-                            day: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                        <p className="text-[10px] text-red-600 mt-1 font-semibold">
+                          &rarr; Please re-assign to another doctor or decline the request.
                         </p>
                       </div>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold border bg-amber-50 text-amber-700 border-amber-200">
-                        pending
+                    </div>
+                  )}
+
+                  {isInReview && appointment.assignedDoctorName && (
+                    <div className="mb-2.5 p-2 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-800 flex items-center gap-1.5">
+                      <Stethoscope className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                      <span className="font-medium">
+                        Assigned to <strong>Dr. {appointment.assignedDoctorName.replace(/^dr\.\s*/i, "")}</strong> for pre-consultation review.
                       </span>
                     </div>
-                  </div>
-                </div>
-
-                <div className="space-y-1 text-xs text-gray-700 mb-2">
-                  <p className="inline-flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5" />
-                    Face-to-Face
-                  </p>
-                  <p className="text-[11px] text-gray-500">{appointment.notes || "No patient notes"}</p>
-                </div>
-
-                <div className="space-y-2">
-                  {/* Doctor assignment status */}
-                  {appointment.assignedDoctorName && (
-                    <div className={`flex items-center gap-1.5 text-[10px] font-semibold px-2 py-1.5 rounded-lg border ${appointment.doctorStatus === "approved"
-                      ? "bg-green-50 text-green-700 border-green-200"
-                      : appointment.doctorStatus === "rejected"
-                        ? "bg-red-50 text-red-700 border-red-200"
-                        : "bg-amber-50 text-amber-700 border-amber-200"
-                      }`}>
-                      <Stethoscope className="w-3 h-3 shrink-0" />
-                      {appointment.assignedDoctorName} —&nbsp;
-                      {appointment.doctorStatus === "approved"
-                        ? "Approved"
-                        : appointment.doctorStatus === "rejected"
-                          ? "Rejected"
-                          : "Pending Review"}
-                    </div>
                   )}
-                  {appointment.doctorNote && (
-                    <p className={`text-[10px] px-2 py-1 rounded-lg ${appointment.doctorStatus === "rejected"
-                      ? "bg-red-50 text-red-600 border border-red-200"
-                      : "bg-green-50 text-green-600 border border-green-200"
-                      }`}>
-                      <strong>Dr. Note:</strong> {appointment.doctorNote}
+
+                  {appointment.notes && (
+                    <p className="text-[11px] text-gray-600 bg-white/80 border border-gray-100 rounded-lg px-2.5 py-1.5 mb-2.5 line-clamp-2">
+                      <strong className="text-gray-700">Patient Note:</strong> {appointment.notes}
                     </p>
                   )}
-                  <div className="grid grid-cols-2 gap-2 pt-1">
-                    <button
-                      onClick={() => setViewingPatient(appointment)}
-                      className="inline-flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
-                    >
-                      <User className="w-3.5 h-3.5" /> Details
-                    </button>
-                    <button
-                      onClick={() => startScheduleAssignment(appointment.id)}
-                      className="inline-flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-semibold transition-colors shadow-xs cursor-pointer"
-                    >
-                      <Calendar className="w-3.5 h-3.5" /> Schedule &amp; Assign
-                    </button>
+
+                  {/* Contextual Action Buttons */}
+                  <div className="pt-1 flex items-center gap-2 flex-wrap">
+                    {/* Scenario A: Unassigned -> Assign Doctor for Review */}
+                    {isUnassigned && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDoctorId("");
+                            setAssignDoctorModal({
+                              appointmentId: appointment.id,
+                              patientName: appointment.patientName,
+                            });
+                          }}
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+                        >
+                          <Stethoscope className="w-3.5 h-3.5" /> Assign Doctor for Review
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setViewingPatient(appointment)}
+                          className="py-2.5 px-4 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          Details
+                        </button>
+                      </>
+                    )}
+
+                    {/* Scenario B: Under Doctor Review -> View Details / Reassign */}
+                    {isInReview && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setViewingPatient(appointment)}
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          <User className="w-3.5 h-3.5" /> View Details
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDoctorId("");
+                            setAssignDoctorModal({
+                              appointmentId: appointment.id,
+                              patientName: appointment.patientName,
+                              isReassign: true,
+                              currentDoctorName: appointment.assignedDoctorName,
+                            });
+                          }}
+                          className="py-2.5 px-3.5 rounded-xl border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          Change Doctor
+                        </button>
+                      </>
+                    )}
+
+                    {/* Scenario C: Doctor Approved -> FINALIZE SCHEDULE */}
+                    {isApproved && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFinalizeScheduleModal({
+                              appointmentId: appointment.id,
+                              patientName: appointment.patientName || "Patient",
+                              assignedDoctorId: appointment.assignedDoctorId,
+                              assignedDoctorName: appointment.assignedDoctorName,
+                              date: appointment.date || selectedDate,
+                              time: appointment.time || clinicSettings.openTime,
+                            });
+                            setScheduleError("");
+                          }}
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+                        >
+                          <Calendar className="w-3.5 h-3.5" /> Finalize Schedule
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setViewingPatient(appointment)}
+                          className="py-2.5 px-4 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          Details
+                        </button>
+                      </>
+                    )}
+
+                    {/* Scenario D: Doctor Declined -> RE-ASSIGN DOCTOR OR DECLINE REQUEST */}
+                    {isDoctorDeclined && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDoctorId("");
+                            setAssignDoctorModal({
+                              appointmentId: appointment.id,
+                              patientName: appointment.patientName,
+                              isReassign: true,
+                              currentDoctorName: appointment.assignedDoctorName,
+                              doctorNote: appointment.doctorNote,
+                            });
+                          }}
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+                        >
+                          <Stethoscope className="w-3.5 h-3.5" /> Re-assign Doctor
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRejectModal({
+                              appointmentId: appointment.id,
+                              patientName: appointment.patientName || "Patient",
+                              clinicName: appointment.clinicName || clinicName,
+                              patientEmail: appointment.patientEmail,
+                            });
+                            setRejectReason(appointment.doctorNote ? `Declined by doctor: ${appointment.doctorNote}` : "Doctor unavailable.");
+                            setSelectedPresetReason("");
+                            setRejectError("");
+                          }}
+                          className="py-2.5 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors shadow-xs cursor-pointer"
+                        >
+                          Decline Request
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setViewingPatient(appointment)}
+                          className="py-2.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          Details
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="mt-4 rounded-xl bg-gray-50 border border-gray-100 p-3 text-[11px] text-gray-600">
-            <p className="font-semibold mb-1">Queue Rule</p>
-            <p>First submitted requests stay on top. Click "Schedule &amp; Assign" to set date, time, and doctor, then confirm.</p>
+            <p className="font-bold text-gray-900 mb-1">Appointment Approval Workflow</p>
+            <p>1. Assign doctor for review &rarr; 2. Attending doctor decides (Approve/Decline) &rarr; 3. If approved, clinic finalizes schedule date &amp; time. If declined, clinic re-assigns or declines request.</p>
           </div>
         </div>
       </div>
@@ -1112,7 +1360,16 @@ export default function ClinicAppointmentsPage() {
                           type="button"
                           onClick={() => {
                             setDayDetailDate(null);
-                            startScheduleAssignment(appt.id);
+                            setFinalizeScheduleModal({
+                              appointmentId: appt.id,
+                              patientName: appt.patientName || "Patient",
+                              assignedDoctorId: appt.assignedDoctorId,
+                              assignedDoctorName: appt.assignedDoctorName,
+                              date: appt.date || selectedDate,
+                              time: appt.time || clinicSettings.openTime,
+                              isReschedule: true,
+                            });
+                            setScheduleError("");
                           }}
                           className="py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer text-center"
                         >
@@ -1168,7 +1425,7 @@ export default function ClinicAppointmentsPage() {
             transition={{ duration: 0.2 }}
             className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[88vh] text-left"
           >
-            {/* Minimal Header (No Gradient) */}
+            {/* Header */}
             <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <img
@@ -1207,6 +1464,40 @@ export default function ClinicAppointmentsPage() {
 
             {/* Body */}
             <div className="p-6 space-y-4 overflow-y-auto">
+              {/* Doctor Review Status Summary */}
+              {viewingPatient.assignedDoctorName && (
+                <div className={`p-3 rounded-2xl border ${
+                  viewingPatient.doctorStatus === "approved"
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+                    : viewingPatient.doctorStatus === "rejected"
+                    ? "bg-red-50 border-red-200 text-red-900"
+                    : "bg-blue-50 border-blue-200 text-blue-900"
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider">Attending Doctor</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
+                      viewingPatient.doctorStatus === "approved"
+                        ? "bg-emerald-200 text-emerald-800"
+                        : viewingPatient.doctorStatus === "rejected"
+                        ? "bg-red-200 text-red-800"
+                        : "bg-blue-200 text-blue-800"
+                    }`}>
+                      {viewingPatient.doctorStatus === "approved"
+                        ? "Approved"
+                        : viewingPatient.doctorStatus === "rejected"
+                        ? "Declined"
+                        : "Reviewing"}
+                    </span>
+                  </div>
+                  <p className="text-xs font-bold mt-1">Dr. {viewingPatient.assignedDoctorName.replace(/^dr\.\s*/i, "")}</p>
+                  {viewingPatient.doctorNote && (
+                    <p className="text-[11px] mt-1 italic">
+                      Note: "{viewingPatient.doctorNote}"
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Personal Information */}
               <div>
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Personal Information</p>
@@ -1231,11 +1522,6 @@ export default function ClinicAppointmentsPage() {
                         {new Date(`${viewingPatient.date}T${viewingPatient.time || "00:00"}`).toLocaleString("en-US", {
                           weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
                         })}
-                        {viewingPatient.assignedDoctorName && (
-                          <span className="block text-xs font-normal text-gray-600 mt-0.5">
-                            Assigned: Dr. {viewingPatient.assignedDoctorName.replace(/^Dr\.\s*/i, "")}
-                          </span>
-                        )}
                       </div>
                     </div>
                   )}
@@ -1296,9 +1582,9 @@ export default function ClinicAppointmentsPage() {
               </p>
             </div>
 
-            {/* Footer actions */}
-            {viewingPatient.status === "scheduled" ? (
-              <div className="px-6 pb-5 pt-3 border-t border-gray-100 bg-white">
+            {/* Contextual Footer actions */}
+            <div className="px-6 pb-5 pt-3 border-t border-gray-100 bg-white">
+              {viewingPatient.status === "scheduled" ? (
                 <button
                   type="button"
                   onClick={() => setViewingPatient(null)}
@@ -1306,47 +1592,131 @@ export default function ClinicAppointmentsPage() {
                 >
                   Close
                 </button>
-              </div>
-            ) : (
-              <div className="px-6 pb-5 pt-3 border-t border-gray-100 bg-white grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRejectModal({
-                      appointmentId: viewingPatient.id,
-                      patientName: viewingPatient.patientName || "Patient",
-                      clinicName: viewingPatient.clinicName || clinicName,
-                      patientEmail: viewingPatient.patientEmail,
-                      date: viewingPatient.date,
-                      time: viewingPatient.time,
-                    });
-                    setRejectReason("");
-                    setSelectedPresetReason("");
-                    setRejectError("");
-                    setViewingPatient(null);
-                  }}
-                  className="py-3 rounded-full border border-red-200 bg-red-50 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors cursor-pointer"
-                >
-                  Decline Request
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setViewingPatient(null);
-                    startScheduleAssignment(viewingPatient.id);
-                  }}
-                  className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
-                >
-                  Schedule &amp; Assign Doctor
-                </button>
-              </div>
-            )}
+              ) : viewingPatient.doctorStatus === "approved" ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRejectModal({
+                        appointmentId: viewingPatient.id,
+                        patientName: viewingPatient.patientName || "Patient",
+                        clinicName: viewingPatient.clinicName || clinicName,
+                        patientEmail: viewingPatient.patientEmail,
+                      });
+                      setRejectReason("");
+                      setSelectedPresetReason("");
+                      setRejectError("");
+                      setViewingPatient(null);
+                    }}
+                    className="py-3 rounded-full border border-red-200 bg-red-50 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors cursor-pointer"
+                  >
+                    Decline Request
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const apptToFinalize = viewingPatient;
+                      setViewingPatient(null);
+                      setFinalizeScheduleModal({
+                        appointmentId: apptToFinalize.id,
+                        patientName: apptToFinalize.patientName || "Patient",
+                        assignedDoctorId: apptToFinalize.assignedDoctorId,
+                        assignedDoctorName: apptToFinalize.assignedDoctorName,
+                        date: apptToFinalize.date || selectedDate,
+                        time: apptToFinalize.time || clinicSettings.openTime,
+                      });
+                      setScheduleError("");
+                    }}
+                    className="py-3 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                  >
+                    Finalize Schedule
+                  </button>
+                </div>
+              ) : viewingPatient.doctorStatus === "rejected" ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRejectModal({
+                        appointmentId: viewingPatient.id,
+                        patientName: viewingPatient.patientName || "Patient",
+                        clinicName: viewingPatient.clinicName || clinicName,
+                        patientEmail: viewingPatient.patientEmail,
+                      });
+                      setRejectReason(viewingPatient.doctorNote ? `Doctor declined: ${viewingPatient.doctorNote}` : "Declined by clinic.");
+                      setSelectedPresetReason("");
+                      setRejectError("");
+                      setViewingPatient(null);
+                    }}
+                    className="py-3 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                  >
+                    Confirm Decline
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const apptToReassign = viewingPatient;
+                      setViewingPatient(null);
+                      setSelectedDoctorId("");
+                      setAssignDoctorModal({
+                        appointmentId: apptToReassign.id,
+                        patientName: apptToReassign.patientName,
+                        isReassign: true,
+                        currentDoctorName: apptToReassign.assignedDoctorName,
+                        doctorNote: apptToReassign.doctorNote,
+                      });
+                    }}
+                    className="py-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                  >
+                    Re-assign Doctor
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRejectModal({
+                        appointmentId: viewingPatient.id,
+                        patientName: viewingPatient.patientName || "Patient",
+                        clinicName: viewingPatient.clinicName || clinicName,
+                        patientEmail: viewingPatient.patientEmail,
+                      });
+                      setRejectReason("");
+                      setSelectedPresetReason("");
+                      setRejectError("");
+                      setViewingPatient(null);
+                    }}
+                    className="py-3 rounded-full border border-red-200 bg-red-50 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors cursor-pointer"
+                  >
+                    Decline Request
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const apptToAssign = viewingPatient;
+                      setViewingPatient(null);
+                      setSelectedDoctorId("");
+                      setAssignDoctorModal({
+                        appointmentId: apptToAssign.id,
+                        patientName: apptToAssign.patientName,
+                        isReassign: !!apptToAssign.assignedDoctorId,
+                        currentDoctorName: apptToAssign.assignedDoctorName,
+                      });
+                    }}
+                    className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                  >
+                    {viewingPatient.assignedDoctorId ? "Change Doctor" : "Assign Doctor for Review"}
+                  </button>
+                </div>
+              )}
+            </div>
           </motion.div>
         </div>
       )}
 
-      {/* ── Schedule & Assign Modal ─────────────────────── */}
-      {pendingAssign && (
+      {/* ── Finalize Schedule Modal (After Doctor Approval) ─────────────────────── */}
+      {finalizeScheduleModal && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.96, y: 10 }}
@@ -1356,34 +1726,43 @@ export default function ClinicAppointmentsPage() {
             className="w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
           >
             <div className="flex items-center justify-between mb-1">
-              <h3 className="text-base font-bold text-gray-900">Schedule &amp; Assign Consultation</h3>
+              <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-emerald-600" />
+                {finalizeScheduleModal.isReschedule ? "Reschedule Consultation" : "Finalize Consultation Schedule"}
+              </h3>
               <button
                 type="button"
-                onClick={() => setPendingAssign(null)}
+                onClick={() => setFinalizeScheduleModal(null)}
                 className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-xs text-gray-500 mb-5">Choose consultation schedule and assign an attending dermatologist.</p>
+            <p className="text-xs text-gray-500 mb-4">
+              Patient: <strong className="text-gray-800">{finalizeScheduleModal.patientName}</strong>
+              {finalizeScheduleModal.assignedDoctorName && (
+                <span> &bull; Attending: <strong className="text-gray-800">Dr. {finalizeScheduleModal.assignedDoctorName.replace(/^dr\.\s*/i, "")}</strong></span>
+              )}
+            </p>
+
+            {scheduleError && (
+              <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                {scheduleError}
+              </div>
+            )}
 
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1.5">Consultation Date</label>
                 <input
                   type="date"
-                  value={pendingAssign.date}
+                  value={finalizeScheduleModal.date}
                   onChange={(e) =>
-                    setPendingAssign((prev) =>
-                      prev
-                        ? {
-                          ...prev,
-                          date: e.target.value,
-                        }
-                        : prev
+                    setFinalizeScheduleModal((prev) =>
+                      prev ? { ...prev, date: e.target.value } : prev
                     )
                   }
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 transition-all bg-white"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 transition-all bg-white"
                 />
               </div>
 
@@ -1391,64 +1770,41 @@ export default function ClinicAppointmentsPage() {
                 <label className="block text-xs font-semibold text-gray-700 mb-1.5">Consultation Time</label>
                 <input
                   type="time"
-                  value={pendingAssign.time}
+                  value={finalizeScheduleModal.time}
                   onChange={(e) =>
-                    setPendingAssign((prev) =>
-                      prev
-                        ? {
-                          ...prev,
-                          time: e.target.value,
-                        }
-                        : prev
+                    setFinalizeScheduleModal((prev) =>
+                      prev ? { ...prev, time: e.target.value } : prev
                     )
                   }
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 transition-all bg-white"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 transition-all bg-white"
                 />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Attending Dermatologist</label>
-                <select
-                  value={pendingAssign.doctorId}
-                  onChange={(e) =>
-                    setPendingAssign((prev) => prev ? { ...prev, doctorId: e.target.value } : prev)
-                  }
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 bg-white text-xs text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 transition-all cursor-pointer"
-                >
-                  <option value="">Select an attending doctor</option>
-                  {clinicDoctors.map((doctor) => (
-                    <option key={doctor.id} value={doctor.id}>
-                      {doctor.name} ({doctor.specialization})
-                    </option>
-                  ))}
-                </select>
-                {clinicDoctors.length === 0 && (
-                  <p className="mt-1.5 text-xs text-amber-600 font-medium">Add a doctor in Doctor Management before scheduling.</p>
-                )}
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Operating hours: {clinicSettings.openTime} &ndash; {clinicSettings.closeTime}
+                </p>
               </div>
             </div>
 
             <div className="mt-6 grid grid-cols-2 gap-2.5">
               <button
                 type="button"
-                onClick={() => setPendingAssign(null)}
+                onClick={() => setFinalizeScheduleModal(null)}
                 className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={confirmAssign}
-                className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                onClick={handleConfirmFinalizeSchedule}
+                className="py-3 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
               >
-                Confirm &amp; Assign
+                Confirm &amp; Schedule
               </button>
             </div>
           </motion.div>
         </div>
       )}
 
-      {/* ── Assign Doctor Modal ─────────────────────── */}
+      {/* ── Assign Doctor for Review Modal (also used for Re-assigning) ─────────────────────── */}
       {assignDoctorModal && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -1460,19 +1816,34 @@ export default function ClinicAppointmentsPage() {
           >
             <div className="flex items-center justify-between mb-1">
               <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
-                <Stethoscope className="w-4 h-4 text-magenta-600" /> Assign Doctor
+                <Stethoscope className="w-4 h-4 text-magenta-600" />
+                {assignDoctorModal.isReassign ? "Re-assign Doctor" : "Assign Doctor for Review"}
               </h3>
               <button
                 type="button"
-                onClick={() => { setAssignDoctorModal(null); setSelectedDoctorId(""); }}
+                onClick={() => { setAssignDoctorModal(null); setSelectedDoctorId(""); setAssignError(""); }}
                 className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-xs text-gray-500 mb-4">
-              Select a doctor to review this patient's case.
+            <p className="text-xs text-gray-500 mb-3">
+              {assignDoctorModal.isReassign
+                ? `Select a new doctor to review this patient consultation request.`
+                : `Select a doctor to review this patient's case and approve the consultation.`}
             </p>
+
+            {assignDoctorModal.doctorNote && (
+              <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+                <strong>Previous Doctor's Note:</strong> "{assignDoctorModal.doctorNote}"
+              </div>
+            )}
+
+            {assignError && (
+              <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                {assignError}
+              </div>
+            )}
 
             <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
               {clinicDoctors.length === 0 ? (
@@ -1506,18 +1877,18 @@ export default function ClinicAppointmentsPage() {
             <div className="mt-5 grid grid-cols-2 gap-2.5">
               <button
                 type="button"
-                onClick={() => { setAssignDoctorModal(null); setSelectedDoctorId(""); }}
+                onClick={() => { setAssignDoctorModal(null); setSelectedDoctorId(""); setAssignError(""); }}
                 className="py-2.5 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={assignDoctor}
+                onClick={handleConfirmDoctorAssignment}
                 disabled={!selectedDoctorId}
                 className="py-2.5 rounded-full bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-xs cursor-pointer"
               >
-                Assign
+                {assignDoctorModal.isReassign ? "Re-assign" : "Assign for Review"}
               </button>
             </div>
           </motion.div>
@@ -1572,9 +1943,9 @@ export default function ClinicAppointmentsPage() {
               </label>
               <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
                 {[
-                  "Doctor unavailable on the requested schedule",
-                  "Clinic has reached full capacity for the selected date",
-                  "Condition requires specialized hospital facility",
+                  "Doctor unavailable for the requested consultation",
+                  "Clinic has reached full capacity for consultations",
+                  "Condition requires specialized tertiary hospital facility",
                   "Incomplete or unclear patient skin condition details",
                 ].map((preset) => (
                   <button

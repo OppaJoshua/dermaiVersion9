@@ -14,6 +14,7 @@ import {
   CalendarX,
   ShieldCheck,
   Calendar,
+  Stethoscope,
 } from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { motion } from "framer-motion";
@@ -35,6 +36,11 @@ type AppointmentRecord = {
   status: "pending" | "accepted" | "scheduled" | "rejected" | "completed";
   meetingLink?: string;
   clinicNote?: string;
+  assignedDoctorId?: string;
+  assignedDoctorName?: string;
+  doctorStatus?: "pending-review" | "approved" | "rejected";
+  doctorNote?: string;
+  doctorReviewedAt?: string;
   createdAt: string;
   patientName?: string;
   patientEmail?: string;
@@ -140,8 +146,20 @@ export default function ClinicDashboardPage() {
         } catch { }
       }
 
+      let docMap = new Map<string, string>();
       let dbList: any[] = [];
       if (resolvedClinicId) {
+        // Fetch doctor names for clinic
+        try {
+          const { data: docRows } = await supabase
+            .from("clinic_doctor")
+            .select("doctor_id, doctor_name")
+            .eq("clinic_id", resolvedClinicId);
+          if (docRows) {
+            docRows.forEach((d: any) => docMap.set(d.doctor_id, d.doctor_name));
+          }
+        } catch { }
+
         const { data, error } = await supabase
           .from("patient_appointment")
           .select(`
@@ -151,6 +169,10 @@ export default function ClinicDashboardPage() {
             status,
             notes,
             clinic_note,
+            assigned_doctor_id,
+            doctor_status,
+            doctor_note,
+            doctor_reviewed_at,
             patient_name,
             patient_email,
             patient_contact,
@@ -169,6 +191,21 @@ export default function ClinicDashboardPage() {
         }
       }
 
+      // Merge doctor names from local cache if missing
+      try {
+        const rawDocs = localStorage.getItem("dermai_clinic_doctors");
+        if (rawDocs) {
+          const parsed = JSON.parse(rawDocs);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((d: any) => {
+              if (d.id && d.name && !docMap.has(d.id)) {
+                docMap.set(d.id, d.name);
+              }
+            });
+          }
+        }
+      } catch { }
+
       const mapped: AppointmentRecord[] = dbList.map((a: any) => {
         const userObj = Array.isArray(a.user) ? a.user[0] : a.user;
         const pName = a.patient_name || userObj?.full_name || "Patient";
@@ -179,6 +216,7 @@ export default function ClinicDashboardPage() {
           : undefined;
 
         const parsedDate = parseDateStringSafe(a.date);
+        const assignedDocName = a.assigned_doctor_id ? docMap.get(a.assigned_doctor_id) : undefined;
 
         return {
           id: a.appointment_id,
@@ -191,6 +229,12 @@ export default function ClinicDashboardPage() {
           time: parsedDate && a.date?.includes("T") ? parsedDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : "—",
           notes: a.notes || a.ai_condition_name || "",
           status: (a.status === "confirmed" || a.status === "scheduled" ? "scheduled" : a.status === "completed" ? "completed" : a.status === "cancelled" || a.status === "rejected" ? "rejected" : a.status === "accepted" ? "accepted" : "pending") as AppointmentRecord["status"],
+          clinicNote: a.clinic_note || undefined,
+          assignedDoctorId: a.assigned_doctor_id || undefined,
+          assignedDoctorName: assignedDocName,
+          doctorStatus: a.doctor_status || undefined,
+          doctorNote: a.doctor_note || undefined,
+          doctorReviewedAt: a.doctor_reviewed_at || undefined,
           createdAt: a.created_at || a.date || new Date().toISOString(),
           patientName: pName,
           patientEmail: a.patient_email || undefined,
@@ -230,6 +274,12 @@ export default function ClinicDashboardPage() {
                     time: localItem.time ? formatTimeString(localItem.time) : (parsedDate && localItem.date?.includes("T") ? parsedDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : "—"),
                     notes: localItem.notes || localItem.aiConditionName || "",
                     status: localItem.status || "pending",
+                    clinicNote: localItem.clinicNote || undefined,
+                    assignedDoctorId: localItem.assignedDoctorId || undefined,
+                    assignedDoctorName: localItem.assignedDoctorName || (localItem.assignedDoctorId ? docMap.get(localItem.assignedDoctorId) : undefined),
+                    doctorStatus: localItem.doctorStatus || undefined,
+                    doctorNote: localItem.doctorNote || undefined,
+                    doctorReviewedAt: localItem.doctorReviewedAt || undefined,
                     createdAt: localItem.createdAt || new Date().toISOString(),
                     patientName: localPName,
                     patientEmail: localItem.patientEmail || undefined,
@@ -602,6 +652,12 @@ export default function ClinicDashboardPage() {
                       concern: appointment.notes || appointment.conditionName || "Appointment request",
                       avatar,
                     };
+
+                    const isUnassigned = !appointment.assignedDoctorId;
+                    const isInReview = appointment.assignedDoctorId && appointment.doctorStatus === "pending-review";
+                    const isDoctorDeclined = appointment.doctorStatus === "rejected";
+                    const isDoctorApproved = appointment.doctorStatus === "approved";
+
                     return (
                       <div key={p.id} className="rounded-2xl border border-magenta-100 shadow-sm p-4 flex flex-col items-center text-center gap-2 hover:border-pink-200 transition-all bg-white">
                         <div className="relative">
@@ -622,12 +678,68 @@ export default function ClinicDashboardPage() {
                           <p className="text-sm font-bold text-gray-900">{p.name}</p>
                           {p.age && <p className="text-[10px] text-gray-400">{p.age} years old</p>}
                         </div>
+
+                        {/* Doctor Triage Stage Pill */}
+                        <div className="w-full flex justify-center">
+                          {isUnassigned && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                              <Stethoscope className="w-3 h-3 text-amber-500" /> Needs Doctor Review
+                            </span>
+                          )}
+                          {isInReview && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 truncate max-w-[170px]" title={appointment.assignedDoctorName ? `Under Dr. ${appointment.assignedDoctorName} Review` : "Under Doctor Review"}>
+                              <Clock className="w-3 h-3 text-sky-500 shrink-0" /> {appointment.assignedDoctorName ? `Dr. ${appointment.assignedDoctorName}` : "Doctor Review"}
+                            </span>
+                          )}
+                          {isDoctorDeclined && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                              <AlertTriangle className="w-3 h-3 text-rose-500" /> Doctor Declined
+                            </span>
+                          )}
+                          {isDoctorApproved && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Doctor Approved
+                            </span>
+                          )}
+                        </div>
+
                         <p className="text-[11px] text-gray-500 leading-snug line-clamp-2">{p.concern}</p>
+
+                        {/* Dynamic Action Button */}
                         <div className="flex items-center gap-2 mt-auto w-full pt-1">
-                          <Link to="/clinic/appointments" className="flex-1 bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-semibold py-2 rounded-xl transition-colors text-center shadow-sm">
-                            Schedule Date & Time
-                          </Link>
-                          <Link to="/clinic/appointments" className="w-8 h-8 rounded-xl border border-gray-100 flex items-center justify-center hover:bg-pink-50 transition-colors" title="View details">
+                          {isUnassigned && (
+                            <Link
+                              to="/clinic/appointments?tab=needs_doctor"
+                              className="flex-1 bg-[#c0166a] hover:bg-[#a01258] text-white text-[11px] font-semibold py-2 rounded-xl transition-colors text-center shadow-sm flex items-center justify-center gap-1"
+                            >
+                              <Stethoscope className="w-3 h-3" /> Assign Doctor
+                            </Link>
+                          )}
+                          {isInReview && (
+                            <Link
+                              to="/clinic/appointments?tab=in_review"
+                              className="flex-1 bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-semibold py-2 rounded-xl transition-colors text-center shadow-sm flex items-center justify-center gap-1"
+                            >
+                              <Clock className="w-3 h-3" /> In Review
+                            </Link>
+                          )}
+                          {isDoctorDeclined && (
+                            <Link
+                              to="/clinic/appointments?tab=doctor_declined"
+                              className="flex-1 bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-semibold py-2 rounded-xl transition-colors text-center shadow-sm flex items-center justify-center gap-1"
+                            >
+                              <AlertTriangle className="w-3 h-3" /> Re-assign
+                            </Link>
+                          )}
+                          {isDoctorApproved && (
+                            <Link
+                              to="/clinic/appointments?tab=approved"
+                              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold py-2 rounded-xl transition-colors text-center shadow-sm flex items-center justify-center gap-1"
+                            >
+                              <Calendar className="w-3 h-3" /> Finalize Date
+                            </Link>
+                          )}
+                          <Link to="/clinic/appointments" className="w-8 h-8 rounded-xl border border-gray-100 flex items-center justify-center hover:bg-pink-50 transition-colors shrink-0" title="View details in Appointments">
                             <MoreVertical className="w-3.5 h-3.5 text-gray-400" />
                           </Link>
                         </div>
@@ -814,26 +926,23 @@ export default function ClinicDashboardPage() {
                       );
                     })}
                   </div>
-                ) : pending > 0 ? (
-                  <div className="py-4 px-3 flex flex-col items-center justify-center text-center rounded-xl bg-pink-50/40 border border-pink-100/60">
-                    <Clock className="w-6 h-6 text-[#c0166a] mb-1.5 opacity-80" />
-                    <p className="text-xs font-bold text-gray-800">No scheduled visits yet</p>
-                    <p className="text-[10px] text-gray-500 mt-0.5">
-                      {pending} patient request{pending > 1 ? "s" : ""} waiting for a schedule.
+                ) : (
+                  <div className="py-6 px-2 flex flex-col items-center justify-center text-center text-gray-400">
+                    <div className="w-10 h-10 rounded-full bg-pink-50 flex items-center justify-center mb-2">
+                      <Calendar className="w-5 h-5 text-[#c0166a]/70" />
+                    </div>
+                    <p className="text-xs font-bold text-gray-700">
+                      No visits scheduled for {isSameDay(selectedDate, new Date()) ? "today" : selectedDate.toLocaleDateString("en-PH", { month: "short", day: "numeric" })}
+                    </p>
+                    <p className="text-[10px] text-gray-400 mt-0.5 max-w-[200px]">
+                      Confirmed patient appointments for this date will appear here.
                     </p>
                     <Link
                       to="/clinic/appointments"
-                      className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#c0166a] hover:bg-[#a01258] text-white text-[11px] font-bold rounded-xl transition-colors shadow-sm"
+                      className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-[#c0166a] hover:underline"
                     >
-                      <Calendar className="w-3 h-3" />
-                      Schedule Date & Time
+                      <Calendar className="w-3 h-3" /> View appointment calendar →
                     </Link>
-                  </div>
-                ) : (
-                  <div className="py-6 flex flex-col items-center justify-center text-center text-gray-400">
-                    <CalendarX className="w-7 h-7 text-pink-200 mb-1.5" />
-                    <p className="text-xs font-semibold text-gray-600">No appointments scheduled</p>
-                    <p className="text-[10px] text-gray-400 mt-0.5">When visits are scheduled, they will show here.</p>
                   </div>
                 )}
               </div>
