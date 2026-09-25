@@ -20,6 +20,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "../../lib/utils";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
+import { predictSkinCondition, getConditionUUID, AIPredictionError } from "../../lib/aiApi";
 
 const steps = [
   { label: "Answer Questions", number: 1 },
@@ -462,7 +463,7 @@ export default function ScanSkinPage() {
     }
   };
 
-  const handleAnalyze = async () => {
+const handleAnalyze = async () => {
     if (!isPro && !canScan) {
       navigate("/dashboard/upgrade");
       return;
@@ -472,10 +473,15 @@ export default function ScanSkinPage() {
     setIsAnalyzing(true);
     setAnalyzeError(null);
 
-    try {
-      let uploadedFilePath: string | undefined;
+    // Reference to the DB row so we can update status later
+    let analysisId: string | null = null;
+    let uploadedCloseUpPath: string | undefined;
+    let uploadedWidePath: string | undefined;
 
-      // 1. Format full questionnaire answers
+    try {
+      // ==========================================================
+      // STEP 1: Build questionnaire payload (unchanged)
+      // ==========================================================
       const questionnaireData = QUESTIONS.map((q) => {
         const chosenIndex = answers[q.id];
         const chosenOption = chosenIndex !== undefined ? q.options[chosenIndex] : null;
@@ -487,31 +493,49 @@ export default function ScanSkinPage() {
         };
       });
 
-      // 2. If user is logged in, upload the close-up photo to private scan-uploads storage
+      // ==========================================================
+      // STEP 2: If authenticated — upload BOTH photos + insert DB row (status: pending)
+      // ==========================================================
       if (user?.id) {
-        const filePath = `${user.id}/${Date.now()}_close_up_${closeUpFile.name}`;
-        const { error: upErr } = await supabase.storage
+        const ts = Date.now();
+        // Upload close-up
+        const closeUpPath = `${user.id}/${ts}_close_up_${closeUpFile.name}`;
+        const { error: upErr1 } = await supabase.storage
           .from("scan-uploads")
-          .upload(filePath, closeUpFile, { upsert: false });
+          .upload(closeUpPath, closeUpFile, { upsert: false });
+        if (!upErr1) uploadedCloseUpPath = closeUpPath;
 
-        if (!upErr) {
-          uploadedFilePath = filePath;
-        }
+        // Upload wide view (context only, not analyzed)
+        const widePath = `${user.id}/${ts}_wide_${wideFile.name}`;
+        const { error: upErr2 } = await supabase.storage
+          .from("scan-uploads")
+          .upload(widePath, wideFile, { upsert: false });
+        if (!upErr2) uploadedWidePath = widePath;
 
-        // 3. Insert analysis row into ai_scan_result table
-        const { data: scanInsertData } = await supabase.from("ai_scan_result").insert({
-          user_id: user.id,
-          confidence_score: 0,
-          status: "pending",
-          photo_url: uploadedFilePath || null,
-          body_part: "Skin Assessment",
-          questionnaire_answers: questionnaireData,
-        }).select("analysis_id").maybeSingle();
+        // Insert scan record with status 'pending'
+        const { data: scanInsertData, error: insertErr } = await supabase
+          .from("ai_scan_result")
+          .insert({
+            user_id: user.id,
+            confidence_score: 0,
+            status: "pending",
+            photo_url: uploadedCloseUpPath || null,
+            photo_url_wide: uploadedWidePath || null,
+            body_part: "Skin Assessment",
+            questionnaire_answers: questionnaireData,
+          })
+          .select("analysis_id")
+          .maybeSingle();
 
-        if (scanInsertData?.analysis_id) {
+        if (insertErr) {
+          console.warn("Failed to insert ai_scan_result:", insertErr.message);
+        } else if (scanInsertData?.analysis_id) {
+          analysisId = scanInsertData.analysis_id;
+
+          // Also save questionnaire answers (existing behavior)
           try {
             const skinAnswerRows = questionnaireData.map((item, idx) => ({
-              analysis_id: scanInsertData.analysis_id,
+              analysis_id: analysisId,
               question_key: item.id,
               answer_value: item.answer,
               sort_order: idx + 1,
@@ -523,16 +547,68 @@ export default function ScanSkinPage() {
         }
       }
 
-      // 4. Cache last scan and questionnaire in localStorage for appointment booking
+      // ==========================================================
+      // STEP 3: Mark as 'processing' (DB update) + call FastAPI
+      // ==========================================================
+      if (analysisId) {
+        await supabase
+          .from("ai_scan_result")
+          .update({ status: "processing" })
+          .eq("analysis_id", analysisId);
+      }
+
+      // Call FastAPI /predict with the close-up image
+      let aiResult;
+      try {
+        aiResult = await predictSkinCondition(closeUpFile);
+      } catch (err) {
+        const errMsg =
+          err instanceof AIPredictionError
+            ? err.message
+            : "AI prediction failed.";
+        // Mark failed in DB
+        if (analysisId) {
+          await supabase
+            .from("ai_scan_result")
+            .update({ status: "failed" })
+            .eq("analysis_id", analysisId);
+        }
+        throw new Error(errMsg);
+      }
+
+      // ==========================================================
+      // STEP 4: Save AI result to DB + mark 'completed'
+      // ==========================================================
+      const conditionUUID = getConditionUUID(aiResult.predicted_class);
+
+      if (analysisId) {
+        const { error: updateErr } = await supabase
+          .from("ai_scan_result")
+          .update({
+            status: "completed",
+            confidence_score: aiResult.confidence,
+            condition_id: conditionUUID,
+          })
+          .eq("analysis_id", analysisId);
+        if (updateErr) {
+          console.warn("Failed to update ai_scan_result:", updateErr.message);
+        }
+      }
+
+      // ==========================================================
+      // STEP 5: Cache last scan in localStorage (for appointment booking)
+      // ==========================================================
       try {
         localStorage.setItem(
           "dermai_last_scan",
           JSON.stringify({
-            predictedClass: "",
-            confidence: 0,
+            predictedClass: aiResult.predicted_class,
+            displayName: aiResult.display_name,
+            confidence: aiResult.confidence,
             severity: quickPreview.severityLevel,
             questionnaire: questionnaireData,
-            photoUrl: uploadedFilePath || closeUpImage,
+            photoUrl: uploadedCloseUpPath || closeUpImage,
+            analysisId,
             timestamp: Date.now(),
           })
         );
@@ -540,19 +616,27 @@ export default function ScanSkinPage() {
         /* ignore */
       }
 
-      // 5. Set dynamic assessment based on the user's real questionnaire answers
+      // ==========================================================
+      // STEP 6: Set UI result with the ACTUAL AI prediction
+      // ==========================================================
       setScanResult({
-        id: `scan-${Date.now()}`,
-        condition: "Assessment Queued",
-        localName: "Pansamantalang Pagsusuri",
-        confidence: 0,
-        bodyPart: "Uploaded Photos & Questionnaire",
-        date: new Date().toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }),
+        id: analysisId || `scan-${Date.now()}`,
+        condition: aiResult.display_name,
+        localName: aiResult.display_name,
+        confidence: aiResult.confidence,
+        bodyPart: "Uploaded Photo & Questionnaire",
+        date: new Date().toLocaleDateString("en-PH", {
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        }),
         severity: quickPreview.severityLevel,
-        description: "Your responses and skin photos have been securely logged. A certified dermatologist can review these during your clinic appointment.",
+        description:
+          "AI-generated preliminary assessment based on your uploaded photo. " +
+          "This is not a medical diagnosis — please consult a licensed dermatologist.",
         symptoms: quickPreview.urgentMessage
           ? [quickPreview.urgentMessage]
-          : ["Symptoms recorded from pre-screening questionnaire"],
+          : ["Detected from uploaded skin photo"],
         whoAffected: "General assessment",
         careTips: [
           "Do not scratch, peel, or apply unprescribed topical steroids to the area.",
@@ -569,7 +653,11 @@ export default function ScanSkinPage() {
       setCurrentStep(3);
     } catch (err) {
       console.error("Analysis failed:", err);
-      setAnalyzeError("Something went wrong while analyzing your photo. Please try again.");
+      setAnalyzeError(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong while analyzing your photo. Please try again."
+      );
     } finally {
       setIsAnalyzing(false);
     }

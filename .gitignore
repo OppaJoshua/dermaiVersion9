@@ -18,3 +18,10 @@ supabase/.temp/
 
 # VS Code
 .vscode/
+ai-backend/.venv/
+
+ai-backend/.env
+
+# Python cache
+__pycache__/
+*.pyc
