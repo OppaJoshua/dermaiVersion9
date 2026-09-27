@@ -167,9 +167,13 @@ export default function PatientDashboard() {
             ? apptDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })
             : "Date pending";
 
+          const timeStr = isValidDate && a.date?.includes("T")
+            ? apptDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true })
+            : "";
+
           let statusVal: AppointmentRecord["status"] = "pending";
-          if (a.status === "confirmed" || a.status === "scheduled") {
-            statusVal = isValidDate ? "scheduled" : "pending";
+          if (a.status === "confirmed" || a.status === "scheduled" || a.doctor_status === "approved") {
+            statusVal = "scheduled";
           } else if (a.status === "completed") {
             statusVal = "completed";
           } else if (a.status === "cancelled" || a.status === "rejected") {
@@ -193,12 +197,41 @@ export default function PatientDashboard() {
             consultationType: "face-to-face" as const,
             conditionName: docDiagnosis || a.ai_condition_name || undefined,
             date: dateStr,
-            time: "",
+            time: timeStr,
             notes: "",
             status: statusVal,
             createdAt: a.created_at || new Date().toISOString(),
           };
         });
+
+        // Merge offline/optimistic appointments from local storage
+        try {
+          const rawLocal = localStorage.getItem("dermai_clinic_appointments");
+          if (rawLocal) {
+            const parsedLocal = JSON.parse(rawLocal);
+            if (Array.isArray(parsedLocal)) {
+              parsedLocal.forEach((localItem: any) => {
+                if (!mappedAppts.some((m) => m.id === localItem.id)) {
+                  const pDate = localItem.date ? new Date(localItem.date) : null;
+                  const isValid = pDate && !isNaN(pDate.getTime());
+                  mappedAppts.unshift({
+                    id: localItem.id,
+                    clinicId: localItem.clinicId || 0,
+                    clinicName: localItem.clinicName || "Clinic",
+                    consultationType: "face-to-face" as const,
+                    conditionName: localItem.aiConditionName || localItem.conditionName || "Skin concern",
+                    date: isValid ? pDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : (localItem.date || "Date pending"),
+                    time: localItem.time || (isValid && localItem.date?.includes("T") ? pDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : ""),
+                    notes: localItem.notes || "",
+                    status: (localItem.status === "confirmed" || localItem.status === "scheduled" || localItem.doctorStatus === "approved" ? "scheduled" : localItem.status === "completed" ? "completed" : localItem.status === "rejected" || localItem.status === "cancelled" ? "rejected" : "pending") as AppointmentRecord["status"],
+                    createdAt: localItem.createdAt || new Date().toISOString(),
+                  });
+                }
+              });
+            }
+          }
+        } catch {}
+
         setAppointments(mappedAppts);
 
         // Fetch scan history
@@ -469,15 +502,23 @@ export default function PatientDashboard() {
                   <div className="flex items-start justify-between gap-2 mb-1">
                     <p className="text-xs font-semibold text-gray-900 truncate">{item.conditionName || "Skin concern"}</p>
                     <span
-                      className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold capitalize ${
-                        (item.status === "accepted" ? "scheduled" : item.status) === "scheduled"
-                          ? "bg-green-50 text-green-700 border-green-200"
+                      className={`text-[10px] px-2.5 py-0.5 rounded-full border font-semibold ${
+                        item.status === "scheduled" || item.status === "accepted"
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                           : item.status === "rejected"
-                          ? "bg-red-50 text-red-700 border-red-200"
+                          ? "bg-rose-50 text-rose-700 border-rose-200"
+                          : item.status === "completed"
+                          ? "bg-green-50 text-green-700 border-green-200"
                           : "bg-amber-50 text-amber-700 border-amber-200"
                       }`}
                     >
-                      {item.status === "accepted" ? "scheduled" : item.status}
+                      {item.status === "scheduled" || item.status === "accepted"
+                        ? "Scheduled"
+                        : item.status === "rejected"
+                        ? "Declined"
+                        : item.status === "completed"
+                        ? "Completed"
+                        : "Pending Review"}
                     </span>
                   </div>
                   <div className="flex items-center gap-1">
@@ -490,7 +531,7 @@ export default function PatientDashboard() {
                       Face-to-face
                     </span>
                     <span className="inline-flex items-center gap-1">
-                      <Calendar className="w-3 h-3" /> {item.date || "To be assigned"}
+                      <Calendar className="w-3 h-3" /> {item.date || "Schedule pending"} {item.time ? `· ${item.time}` : ""}
                     </span>
                   </div>
                 </div>

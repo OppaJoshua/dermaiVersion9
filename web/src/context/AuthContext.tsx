@@ -28,7 +28,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // Check for an existing session on first load
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(async ({ data, error }) => {
+      if (error || !data.session) {
+        setSession(null);
+        setRole(null);
+        setRoleLoading(false);
+        setLoading(false);
+        return;
+      }
+
+      // Check if user still exists in auth.users (prevents zombie session after database wipe)
+      const { error: userErr } = await supabase.auth.getUser();
+      if (userErr) {
+        console.warn("[Auth] Stale session detected, auto-purging cached session.");
+        await supabase.auth.signOut();
+        setSession(null);
+        setRole(null);
+        setRoleLoading(false);
+        setLoading(false);
+        return;
+      }
+
       setSession(data.session);
       const email = (data.session?.user?.email || "").toLowerCase().trim();
       if (email === "dermaisupport@gmail.com") {

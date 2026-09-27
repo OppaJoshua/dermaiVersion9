@@ -679,6 +679,14 @@ export default function ClinicDashboardPage() {
                           {p.age && <p className="text-[10px] text-gray-400">{p.age} years old</p>}
                         </div>
 
+                        {/* Patient Requested Schedule Badge */}
+                        {appointment.date && appointment.date !== "Schedule pending" && (
+                          <div className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-pink-50/70 border border-pink-100 text-[10px] text-[#c0166a] font-semibold">
+                            <Calendar className="w-3 h-3 text-[#c0166a] shrink-0" />
+                            <span className="truncate">{appointment.date} {appointment.time && appointment.time !== "—" ? `· ${appointment.time}` : ""}</span>
+                          </div>
+                        )}
+
                         {/* Doctor Triage Stage Pill */}
                         <div className="w-full flex justify-center">
                           {isUnassigned && (
@@ -698,7 +706,7 @@ export default function ClinicDashboardPage() {
                           )}
                           {isDoctorApproved && (
                             <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Doctor Approved
+                              <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Schedule Finalized
                             </span>
                           )}
                         </div>
@@ -736,7 +744,7 @@ export default function ClinicDashboardPage() {
                               to="/clinic/appointments?tab=approved"
                               className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold py-2 rounded-xl transition-colors text-center shadow-sm flex items-center justify-center gap-1"
                             >
-                              <Calendar className="w-3 h-3" /> Finalize Date
+                              <CheckCircle2 className="w-3 h-3" /> Confirmed
                             </Link>
                           )}
                           <Link to="/clinic/appointments" className="w-8 h-8 rounded-xl border border-gray-100 flex items-center justify-center hover:bg-pink-50 transition-colors shrink-0" title="View details in Appointments">

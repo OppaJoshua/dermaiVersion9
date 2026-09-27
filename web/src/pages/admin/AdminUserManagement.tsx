@@ -98,7 +98,8 @@ export default function AdminUserManagement() {
           });
         }
 
-        const mappedUsers: User[] = usersData.map((u: any) => {
+        const validUsersData = usersData.filter((u: any) => !u.email?.includes("_old_"));
+        const mappedUsers: User[] = validUsersData.map((u: any) => {
           const userRole: UserRole = (u.role && ["admin", "clinic", "doctor", "patient"].includes(u.role))
             ? u.role
             : "patient";
@@ -184,6 +185,24 @@ export default function AdminUserManagement() {
   const unsuspendUser = (id: string) => setUserStatus(id, "active", "User Unsuspended");
   const deactivateUser = (id: string) => setUserStatus(id, "inactive", "User Deactivated");
   const reactivateUser = (id: string) => setUserStatus(id, "active", "User Reactivated");
+
+  const changeUserRole = async (id: string, newRole: UserRole) => {
+    const targetUser = users.find((u) => u.id === id);
+    if (!targetUser) return;
+
+    setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, role: newRole } : u)));
+
+    try {
+      await supabase
+        .from("user")
+        .update({ role: newRole })
+        .eq("user_id", id);
+    } catch (err: any) {
+      console.warn("Failed to persist user role in Supabase:", err.message);
+    }
+
+    logAdminAction("Role Changed", targetUser.name, `Role updated to ${newRole} by admin.`, "user");
+  };
 
   return (
     <div>
@@ -288,10 +307,16 @@ export default function AdminUserManagement() {
                     </td>
 
                     <td className="px-3 py-3.5 text-xs text-gray-600 whitespace-nowrap">
-                      {isAdmin || user.role === "doctor" || user.role === "clinic" ? (
-                        <span className="text-gray-400 italic text-xs">Unlimited</span>
+                      {user.role === "admin" ? (
+                        <span className="text-gray-400 text-xs">N/A (Admin)</span>
+                      ) : user.role === "clinic" ? (
+                        <span className="text-gray-400 text-xs">N/A (Clinic)</span>
+                      ) : user.role === "doctor" ? (
+                        <span className="text-gray-400 text-xs">N/A (Staff)</span>
+                      ) : user.plan === "Premium" || user.scansLimit === 999 ? (
+                        <span className="text-magenta-600 font-semibold text-xs">Unlimited</span>
                       ) : (
-                        `${user.scansUsed}/${user.scansLimit}`
+                        <span className="font-medium text-gray-700">{user.scansUsed}/{user.scansLimit}</span>
                       )}
                     </td>
 
@@ -366,10 +391,23 @@ export default function AdminUserManagement() {
 
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-400">Platform Role</span>
-                  <span className={cn("inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border", roleBadge[modalUser.role]?.bg)}>
-                    {modalUser.role === "admin" && <ShieldCheck className="w-3.5 h-3.5 text-purple-700" />}
-                    {roleBadge[modalUser.role]?.label || modalUser.role}
-                  </span>
+                  {modalUser.id === currentAuthUser?.id ? (
+                    <span className={cn("inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border", roleBadge[modalUser.role]?.bg)}>
+                      <ShieldCheck className="w-3.5 h-3.5 text-purple-700" />
+                      {roleBadge[modalUser.role]?.label || modalUser.role}
+                    </span>
+                  ) : (
+                    <select
+                      value={modalUser.role}
+                      onChange={(e) => changeUserRole(modalUser.id, e.target.value as UserRole)}
+                      className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-200 bg-white text-gray-800 focus:outline-none focus:ring-1 focus:ring-magenta-500 cursor-pointer"
+                    >
+                      <option value="patient">Patient</option>
+                      <option value="clinic">Clinic Owner</option>
+                      <option value="doctor">Doctor</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  )}
                 </div>
 
                 {[
@@ -380,7 +418,16 @@ export default function AdminUserManagement() {
                   { label: "Joined", value: modalUser.joinedAt },
                   {
                     label: "Scans",
-                    value: modalUser.role === "patient" ? `${modalUser.scansUsed}/${modalUser.scansLimit}` : "Unlimited (Staff Access)",
+                    value:
+                      modalUser.role === "admin"
+                        ? "N/A (Admin Access)"
+                        : modalUser.role === "clinic"
+                        ? "N/A (Clinic Partner Access)"
+                        : modalUser.role === "doctor"
+                        ? "N/A (Medical Staff Access)"
+                        : modalUser.plan === "Premium" || modalUser.scansLimit === 999
+                        ? "Unlimited (Premium Plan)"
+                        : `${modalUser.scansUsed}/${modalUser.scansLimit} scans used`,
                   },
                 ].map((item) => (
                   <div key={item.label}>

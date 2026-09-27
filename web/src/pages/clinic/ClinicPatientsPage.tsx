@@ -29,6 +29,9 @@ export type ClinicPatient = {
   email: string;
   phone?: string;
   address?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  emergencyRelationship?: string;
   condition?: string;
   confidence?: number;
   skinPhotoUrl?: string;
@@ -189,6 +192,9 @@ export default function ClinicPatientsPage() {
                 gender,
                 birthdate,
                 age,
+                emergencyContactName: row.emergency_contact_name || undefined,
+                emergencyContactPhone: row.emergency_contact_phone || undefined,
+                emergencyRelationship: row.emergency_contact_relationship || undefined,
                 condition: row.ai_condition_name || "General Dermatology",
                 confidence,
                 skinPhotoUrl: row.skin_photo_url || undefined,
@@ -623,6 +629,14 @@ export default function ClinicPatientsPage() {
                         <span>{selectedPatient.address || "—"}</span>
                       </span>
                     </div>
+                    {selectedPatient.emergencyContactName && (
+                      <div className="sm:col-span-2 pt-2 border-t border-gray-200/50">
+                        <span className="font-semibold text-rose-500 block text-[10px] uppercase">Emergency Contact</span>
+                        <span className="text-gray-900 font-medium">
+                          {selectedPatient.emergencyContactName} {selectedPatient.emergencyRelationship ? `(${selectedPatient.emergencyRelationship})` : ""} • {selectedPatient.emergencyContactPhone || "No phone"}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
 

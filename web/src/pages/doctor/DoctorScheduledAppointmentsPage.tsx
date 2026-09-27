@@ -5,13 +5,16 @@ import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/use
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
-function formatDate(dateStr: string): string {
-  if (!dateStr) return "—";
+function formatDate(dateStr?: string): string {
+  if (!dateStr || dateStr === "—") return "—";
   try {
-    return new Date(dateStr + "T00:00:00").toLocaleDateString("en-PH", {
-      weekday: "long",
+    const isIso = dateStr.includes("T");
+    const parsed = new Date(isIso ? dateStr : dateStr + "T00:00:00");
+    if (isNaN(parsed.getTime())) return dateStr;
+    return parsed.toLocaleDateString("en-PH", {
+      weekday: "short",
       year: "numeric",
-      month: "long",
+      month: "short",
       day: "numeric",
     });
   } catch {
@@ -19,16 +22,25 @@ function formatDate(dateStr: string): string {
   }
 }
 
-function formatTime(timeStr: string): string {
-  if (!timeStr) return "—";
-  try {
-    const [h, m] = timeStr.split(":").map(Number);
-    const ampm = h >= 12 ? "PM" : "AM";
-    const hour = h % 12 || 12;
-    return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
-  } catch {
-    return timeStr;
+function formatTime(timeStr?: string, dateStr?: string): string {
+  if (timeStr && timeStr !== "—") {
+    try {
+      if (timeStr.includes("AM") || timeStr.includes("PM")) return timeStr;
+      const [h, m] = timeStr.split(":").map(Number);
+      const ampm = h >= 12 ? "PM" : "AM";
+      const hour = h % 12 || 12;
+      return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+    } catch {
+      return timeStr;
+    }
   }
+  if (dateStr && dateStr.includes("T")) {
+    const parsed = new Date(dateStr);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true });
+    }
+  }
+  return "—";
 }
 
 export default function DoctorScheduledAppointmentsPage() {
@@ -86,7 +98,7 @@ export default function DoctorScheduledAppointmentsPage() {
           a.doctorStatus !== "rejected" &&
           !a.doctorDone &&
           !!a.date &&
-          (a.status === "confirmed" || a.status === "scheduled" || a.scheduleSentToDoctor)
+          (a.status === "confirmed" || a.status === "scheduled" || a.scheduleSentToDoctor || a.doctorStatus === "approved")
       )
       .sort((a, b) => (a.date > b.date ? 1 : -1));
   }, [appointments]);
@@ -221,7 +233,7 @@ export default function DoctorScheduledAppointmentsPage() {
                 </div>
                 <div className="shrink-0 text-right hidden sm:block">
                   <p className="text-xs font-bold text-gray-900">{formatDate(appt.date)}</p>
-                  <p className="text-xs font-semibold text-blue-600">{formatTime(appt.time)}</p>
+                  <p className="text-xs font-semibold text-blue-600">{formatTime(appt.time, appt.date)}</p>
                 </div>
                 {appt.status === "completed" || appt.doctorDone ? (
                   <button
@@ -265,7 +277,7 @@ export default function DoctorScheduledAppointmentsPage() {
                   <Stethoscope className="w-5 h-5 text-blue-600" />
                   <div>
                     <h3 className="font-bold text-gray-900 text-base">Consultation &amp; Clinical Result</h3>
-                    <p className="text-xs text-gray-400">Scheduled Visit for {formatDate(viewingAppt.date)} at {formatTime(viewingAppt.time)}</p>
+                    <p className="text-xs text-gray-400">Scheduled Visit for {formatDate(viewingAppt.date)} at {formatTime(viewingAppt.time, viewingAppt.date)}</p>
                   </div>
                 </div>
                 <button
@@ -304,6 +316,14 @@ export default function DoctorScheduledAppointmentsPage() {
                         <span className="text-sm text-gray-400">Born {viewingAppt.patientBirthdate}</span>
                       ) : null}
                     </div>
+                    {viewingAppt.emergencyContactName && (
+                      <p className="text-xs text-rose-600 font-medium mt-1">
+                        <span className="font-semibold text-rose-700">Emergency Contact:</span>{" "}
+                        {viewingAppt.emergencyContactName}{" "}
+                        {viewingAppt.emergencyRelationship ? `(${viewingAppt.emergencyRelationship})` : ""}{" "}
+                        {viewingAppt.emergencyContactPhone ? `· ${viewingAppt.emergencyContactPhone}` : ""}
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -319,7 +339,7 @@ export default function DoctorScheduledAppointmentsPage() {
                     </div>
                     <div className="bg-white rounded-xl border border-blue-100 p-2.5">
                       <span className="text-[10px] text-gray-400 font-semibold block uppercase">Time</span>
-                      <span className="font-bold text-blue-700">{formatTime(viewingAppt.time)}</span>
+                      <span className="font-bold text-blue-700">{formatTime(viewingAppt.time, viewingAppt.date)}</span>
                     </div>
                   </div>
                 </div>

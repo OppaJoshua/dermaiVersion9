@@ -7,6 +7,7 @@ import {
   XCircle,
   Eye,
   FileText,
+  FileCheck,
   Building2,
   ShieldCheck,
   RefreshCw,
@@ -35,6 +36,10 @@ interface ClinicApplication {
   prcLicense?: string;
   businessPermitUrl?: string;
   businessPermitName?: string;
+  dtiSecUrl?: string;
+  dtiSecName?: string;
+  birUrl?: string;
+  birName?: string;
   prcLicenseFileUrl?: string;
   prcLicenseFileName?: string;
   clinicPhotos?: string[];
@@ -145,75 +150,85 @@ export default function AdminClinicManagement() {
         /* ignore */
       }
 
-      if (clinicRows && clinicRows.length > 0) {
-        const dbApps: ClinicApplication[] = clinicRows.map((c: any) => {
-          const docObj = Array.isArray(c.clinic_doctor)
-            ? c.clinic_doctor[0]
-            : c.clinic_doctor || doctorsMap.get(c.clinic_id);
+      const dbApps: ClinicApplication[] = clinicRows.map((c: any) => {
+        const docObj = Array.isArray(c.clinic_doctor)
+          ? c.clinic_doctor[0]
+          : c.clinic_doctor || doctorsMap.get(c.clinic_id);
 
-          const schedObj = Array.isArray(c.clinic_operating_hours)
-            ? c.clinic_operating_hours[0]
-            : c.clinic_operating_hours || hoursMap.get(c.clinic_id);
+        const schedObj = Array.isArray(c.clinic_operating_hours)
+          ? c.clinic_operating_hours[0]
+          : c.clinic_operating_hours || hoursMap.get(c.clinic_id);
 
-          const services = Array.isArray(c.clinic_service_offered)
-            ? c.clinic_service_offered.map((s: any) => s.service_name).join(", ")
-            : (servicesMap.get(c.clinic_id) || []).join(", ");
+        const services = Array.isArray(c.clinic_service_offered)
+          ? c.clinic_service_offered.map((s: any) => s.service_name).join(", ")
+          : (servicesMap.get(c.clinic_id) || []).join(", ");
 
-          const photos = Array.isArray(c.clinic_photo)
-            ? c.clinic_photo.map((p: any) => p.photo_url)
-            : photosMap.get(c.clinic_id) || [];
+        const photos = Array.isArray(c.clinic_photo)
+          ? c.clinic_photo.map((p: any) => p.photo_url)
+          : photosMap.get(c.clinic_id) || [];
 
-          const localMatch = localApps.find(
-            (l) =>
-              String(l.id) === String(c.clinic_id) ||
-              (l.email && c.email && l.email.toLowerCase().trim() === c.email.toLowerCase().trim())
-          );
+        const localMatch = localApps.find(
+          (l) =>
+            String(l.id) === String(c.clinic_id) ||
+            (l.email && c.email && l.email.toLowerCase().trim() === c.email.toLowerCase().trim())
+        );
 
-          return {
-            id: c.clinic_id,
-            logo: c.logo_url || localMatch?.logo || "",
-            name: c.name,
-            location: c.district ?? "Cebu",
-            address: c.address ?? localMatch?.address ?? "",
-            email: c.email ?? localMatch?.email ?? "",
-            phone: c.phone ?? localMatch?.phone ?? "",
-            operatingDays: schedObj?.day_of_week ?? localMatch?.operatingDays ?? "Monday - Saturday",
-            openTime: schedObj?.open_time ?? localMatch?.openTime ?? "08:00",
-            closeTime: schedObj?.close_time ?? localMatch?.closeTime ?? "17:00",
-            doctor: docObj?.doctor_name ?? localMatch?.doctor ?? "—",
-            specialization: c.specialization ?? docObj?.specialization ?? localMatch?.specialization ?? "General Dermatology",
-            servicesOffered: services || localMatch?.servicesOffered || "—",
-            description: c.description ?? localMatch?.description ?? "—",
-            prcLicense: docObj?.prc_license ?? localMatch?.prcLicense ?? "—",
-            businessPermitUrl: c.business_permit_url || localMatch?.businessPermitUrl || "",
-            businessPermitName: c.business_permit_name || localMatch?.businessPermitName || "Business Permit",
-            prcLicenseFileUrl: c.prc_license_file_url || docObj?.photo_url || localMatch?.prcLicenseFileUrl || "",
-            prcLicenseFileName: c.prc_license_file_name || localMatch?.prcLicenseFileName || "PRC License Copy",
-            clinicPhotos: photos.length > 0 ? photos : localMatch?.clinicPhotos || [],
-            latitude: c.latitude != null ? Number(c.latitude) : localMatch?.latitude,
-            longitude: c.longitude != null ? Number(c.longitude) : localMatch?.longitude,
-            dateApplied: localMatch?.dateApplied || "Recent",
-            status: (
-              String(c.status || "").toLowerCase().trim() === "approved"
-                ? "verified"
-                : String(c.status || "").toLowerCase().trim() === "rejected"
-                  ? "rejected"
-                  : "pending"
-            ) as ClinicStatus,
-          };
-        });
+        return {
+          id: c.clinic_id,
+          logo: c.logo_url || localMatch?.logo || "",
+          name: c.name,
+          location: c.district ?? "Cebu",
+          address: c.address ?? localMatch?.address ?? "",
+          email: c.email ?? localMatch?.email ?? "",
+          phone: c.phone ?? localMatch?.phone ?? "",
+          operatingDays: schedObj?.day_of_week ?? localMatch?.operatingDays ?? "Monday - Saturday",
+          openTime: schedObj?.open_time ?? localMatch?.openTime ?? "08:00",
+          closeTime: schedObj?.close_time ?? localMatch?.closeTime ?? "17:00",
+          doctor: docObj?.doctor_name ?? localMatch?.doctor ?? "—",
+          specialization: c.specialization ?? docObj?.specialization ?? localMatch?.specialization ?? "General Dermatology",
+          servicesOffered: services || localMatch?.servicesOffered || "—",
+          description: c.description ?? localMatch?.description ?? "—",
+          prcLicense: docObj?.prc_license ?? localMatch?.prcLicense ?? "—",
+          businessPermitUrl: c.business_permit_url || localMatch?.businessPermitUrl || "",
+          businessPermitName: c.business_permit_name || localMatch?.businessPermitName || "Mayor's / Business Permit",
+          dtiSecUrl: c.dti_sec_url || localMatch?.dtiSecUrl || "",
+          dtiSecName: c.dti_sec_name || localMatch?.dtiSecName || "DTI / SEC Certificate",
+          birUrl: c.bir_url || localMatch?.birUrl || "",
+          birName: c.bir_name || localMatch?.birName || "BIR 2303 Certificate",
+          prcLicenseFileUrl: c.prc_license_file_url || docObj?.photo_url || localMatch?.prcLicenseFileUrl || "",
+          prcLicenseFileName: c.prc_license_file_name || localMatch?.prcLicenseFileName || "PRC License Copy",
+          clinicPhotos: photos.length > 0 ? photos : localMatch?.clinicPhotos || [],
+          latitude: c.latitude != null ? Number(c.latitude) : localMatch?.latitude,
+          longitude: c.longitude != null ? Number(c.longitude) : localMatch?.longitude,
+          dateApplied: localMatch?.dateApplied || "Recent",
+          status: (
+            String(c.status || "").toLowerCase().trim() === "approved"
+              ? "verified"
+              : String(c.status || "").toLowerCase().trim() === "rejected"
+                ? "rejected"
+                : "pending"
+          ) as ClinicStatus,
+        };
+      });
 
-        setApplications(dbApps);
-        try {
-          localStorage.setItem("dermai_cached_admin_clinics", JSON.stringify(dbApps));
-        } catch { }
-      } else {
-        setApplications([]);
-        try {
-          localStorage.removeItem("dermai_cached_admin_clinics");
-          localStorage.removeItem("dermai_clinic_applications");
-        } catch { }
-      }
+      // Merge local-only apps that have not yet replicated to DB
+      const combinedApps = [...dbApps];
+      localApps.forEach((la) => {
+        if (
+          !combinedApps.some(
+            (ca) =>
+              String(ca.id) === String(la.id) ||
+              (ca.email && la.email && ca.email.toLowerCase().trim() === la.email.toLowerCase().trim())
+          )
+        ) {
+          combinedApps.push(la);
+        }
+      });
+
+      setApplications(combinedApps);
+      try {
+        localStorage.setItem("dermai_cached_admin_clinics", JSON.stringify(combinedApps));
+      } catch { }
     } catch (err) {
       console.error("Failed to load clinics:", err);
     } finally {
@@ -535,7 +550,7 @@ export default function AdminClinicManagement() {
               <tr className="border-b border-gray-100">
                 <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Clinic Name</th>
                 <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Location</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Doctor in Charge</th>
+                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Contact</th>
                 <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Status</th>
                 <th className="text-right text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Actions</th>
               </tr>
@@ -564,7 +579,10 @@ export default function AdminClinicManagement() {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-600">{clinic.location}</td>
-                  <td className="px-6 py-4 text-sm text-gray-600">{clinic.doctor || "—"}</td>
+                  <td className="px-6 py-4 text-xs text-gray-600">
+                    <p className="font-semibold text-gray-900">{clinic.phone || "—"}</p>
+                    <p className="text-gray-400 truncate max-w-[140px]">{clinic.email || ""}</p>
+                  </td>
                   <td className="px-6 py-4">
                     <span className={cn("px-3 py-1 rounded-full text-xs font-semibold capitalize", statusBadge[clinic.status])}>
                       {clinic.status}
@@ -673,9 +691,9 @@ export default function AdminClinicManagement() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
                   <div className="p-3 bg-gray-50 rounded-xl">
-                    <span className="text-gray-400 block mb-0.5">Email Address</span>
+                    <span className="text-gray-400 block mb-0.5">Official Email</span>
                     <p className="font-semibold text-gray-900 truncate">{modalClinic.email || "—"}</p>
                   </div>
                   <div className="p-3 bg-gray-50 rounded-xl">
@@ -683,12 +701,8 @@ export default function AdminClinicManagement() {
                     <p className="font-semibold text-gray-900">{modalClinic.phone || "—"}</p>
                   </div>
                   <div className="p-3 bg-gray-50 rounded-xl">
-                    <span className="text-gray-400 block mb-0.5">Doctor in Charge</span>
-                    <p className="font-semibold text-gray-900">{modalClinic.doctor || "—"}</p>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded-xl">
-                    <span className="text-gray-400 block mb-0.5">PRC License #</span>
-                    <p className="font-semibold text-gray-900">{modalClinic.prcLicense || "—"}</p>
+                    <span className="text-gray-400 block mb-0.5">Operating Hours</span>
+                    <p className="font-semibold text-gray-900">{modalClinic.operatingDays || "Mon - Sat"} ({modalClinic.openTime || "08:00"} - {modalClinic.closeTime || "17:00"})</p>
                   </div>
                 </div>
 
@@ -698,63 +712,89 @@ export default function AdminClinicManagement() {
                     <span className="text-gray-400 font-medium">Services Offered:</span>
                     <p className="text-gray-900 font-semibold mt-0.5">{modalClinic.servicesOffered || "—"}</p>
                   </div>
-                  <div>
-                    <span className="text-gray-400 font-medium">Description:</span>
-                    <p className="text-gray-700 mt-0.5 leading-relaxed">{modalClinic.description || "—"}</p>
-                  </div>
+                  {modalClinic.description && modalClinic.description !== "—" && (
+                    <div>
+                      <span className="text-gray-400 font-medium">Description:</span>
+                      <p className="text-gray-700 mt-0.5 leading-relaxed">{modalClinic.description}</p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Uploaded Documents */}
                 <div className="pt-2 border-t">
                   <p className="text-xs font-bold text-gray-900 uppercase tracking-wider mb-2.5">
-                    Uploaded Verification Documents
+                    Legal Business Verification Documents
                   </p>
-                  <div className="grid grid-cols-2 gap-2.5">
-                    {/* Business Permit */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {/* 1. Mayor's / Business Permit */}
                     <div className="bg-magenta-50/60 border border-magenta-100 rounded-2xl p-3 flex flex-col justify-between">
                       <div className="flex items-center gap-2.5 mb-2">
-                        <div className="w-8 h-8 rounded-xl bg-white flex items-center justify-center text-red-500 shadow-sm border border-magenta-100">
+                        <div className="w-8 h-8 rounded-xl bg-white flex items-center justify-center text-rose-500 shadow-sm border border-magenta-100">
                           <FileText className="w-4 h-4" />
                         </div>
                         <div className="truncate">
-                          <p className="text-xs font-bold text-magenta-900">Business Permit</p>
-                          <p className="text-[10px] text-magenta-500 truncate">{modalClinic.businessPermitName || "Scanned copy"}</p>
+                          <p className="text-xs font-bold text-magenta-900 truncate">Mayor's Permit</p>
+                          <p className="text-[10px] text-magenta-500 truncate">{modalClinic.businessPermitName || "Business Permit"}</p>
                         </div>
                       </div>
                       {modalClinic.businessPermitUrl ? (
                         <button
                           type="button"
                           onClick={() => openDocument(modalClinic.businessPermitUrl!)}
-                          className="w-full py-1.5 px-3 rounded-lg bg-magenta-500 text-white text-[11px] font-semibold hover:bg-magenta-600 transition-colors flex items-center justify-center gap-1.5"
+                          className="w-full py-1.5 px-3 rounded-lg bg-magenta-500 text-white text-[11px] font-semibold hover:bg-magenta-600 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                         >
-                          <Eye className="w-3.5 h-3.5" /> View Document
+                          <Eye className="w-3.5 h-3.5" /> View Permit
                         </button>
                       ) : (
                         <span className="text-[10px] text-gray-400 italic text-center py-1">No file attached</span>
                       )}
                     </div>
 
-                    {/* PRC License Copy */}
+                    {/* 2. DTI Certificate / SEC Registration */}
                     <div className="bg-magenta-50/60 border border-magenta-100 rounded-2xl p-3 flex flex-col justify-between">
                       <div className="flex items-center gap-2.5 mb-2">
                         <div className="w-8 h-8 rounded-xl bg-white flex items-center justify-center text-blue-600 shadow-sm border border-magenta-100">
                           <ShieldCheck className="w-4 h-4" />
                         </div>
                         <div className="truncate">
-                          <p className="text-xs font-bold text-magenta-900">PRC License</p>
-                          <p className="text-[10px] text-magenta-500 truncate">{modalClinic.prcLicenseFileName || "Scanned copy"}</p>
+                          <p className="text-xs font-bold text-magenta-900 truncate">DTI / SEC</p>
+                          <p className="text-[10px] text-magenta-500 truncate">{modalClinic.dtiSecName || "DTI/SEC Doc"}</p>
                         </div>
                       </div>
-                      {modalClinic.prcLicenseFileUrl ? (
+                      {modalClinic.dtiSecUrl ? (
                         <button
                           type="button"
-                          onClick={() => openDocument(modalClinic.prcLicenseFileUrl!)}
-                          className="w-full py-1.5 px-3 rounded-lg bg-magenta-500 text-white text-[11px] font-semibold hover:bg-magenta-600 transition-colors flex items-center justify-center gap-1.5"
+                          onClick={() => openDocument(modalClinic.dtiSecUrl!)}
+                          className="w-full py-1.5 px-3 rounded-lg bg-magenta-500 text-white text-[11px] font-semibold hover:bg-magenta-600 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                         >
-                          <Eye className="w-3.5 h-3.5" /> View Document
+                          <Eye className="w-3.5 h-3.5" /> View DTI / SEC
                         </button>
                       ) : (
                         <span className="text-[10px] text-gray-400 italic text-center py-1">No file attached</span>
+                      )}
+                    </div>
+
+                    {/* 3. BIR Form 2303 Certificate */}
+                    <div className="bg-magenta-50/60 border border-magenta-100 rounded-2xl p-3 flex flex-col justify-between">
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div className="w-8 h-8 rounded-xl bg-white flex items-center justify-center text-emerald-600 shadow-sm border border-magenta-100">
+                          <FileCheck className="w-4 h-4" />
+                        </div>
+                        <div className="truncate">
+                          <p className="text-xs font-bold text-magenta-900 truncate">BIR 2303</p>
+                          <p className="text-[10px] text-magenta-500 truncate">{modalClinic.birName || "BIR Certificate"}</p>
+                        </div>
+                      </div>
+                      {modalClinic.birUrl ? (
+                        <button
+                          type="button"
+                          onClick={() => openDocument(modalClinic.birUrl!)}
+                          className="w-full py-1.5 px-3 rounded-lg bg-magenta-500 text-white text-[11px] font-semibold hover:bg-magenta-600 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                        >
+                          <Eye className="w-3.5 h-3.5" /> View BIR 2303
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-gray-400 italic text-center py-1">Optional / Not added</span>
                       )}
                     </div>
                   </div>

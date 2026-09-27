@@ -72,11 +72,9 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
 
       (docData || []).forEach((d) => {
         const cdEmail = (d.email || "").trim().toLowerCase();
-        const cdName = (d.doctor_name || "").trim().toLowerCase();
         if (
           d.user_id === user.id ||
-          (cdEmail && userEmail && cdEmail === userEmail) ||
-          (cdName && cdName.includes("audrey"))
+          (cdEmail && userEmail && cdEmail === userEmail)
         ) {
           if (d.doctor_id) docIds.push(d.doctor_id);
         }

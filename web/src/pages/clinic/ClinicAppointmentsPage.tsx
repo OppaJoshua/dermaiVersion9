@@ -25,10 +25,15 @@ type AppointmentRecord = {
   clinicName: string;
   patientName?: string;
   patientAge?: number;
+  patientGender?: string;
+  patientBirthdate?: string;
   patientAvatar?: string;
   patientEmail?: string;
   patientAddress?: string;
   patientContact?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  emergencyRelationship?: string;
   consultationType: "face-to-face";
   conditionId?: string;
   conditionName?: string;
@@ -36,7 +41,7 @@ type AppointmentRecord = {
   date: string;
   time: string;
   notes: string;
-  status: "pending" | "accepted" | "scheduled" | "rejected" | "completed";
+  status: "pending" | "accepted" | "scheduled" | "confirmed" | "rejected" | "completed" | "cancelled";
   meetingLink?: string;
   clinicNote?: string;
   assignedDoctorId?: string;
@@ -69,6 +74,13 @@ const DEFAULT_SETTINGS: ClinicSettings = {
   closeTime: "18:00",
 };
 
+function formatDoctorDisplay(name?: string): string {
+  if (!name) return "";
+  const cleaned = name.replace(/^(?:dr\.?|doctor)\s*/i, "").trim();
+  if (!cleaned || cleaned.toLowerCase() === "dr") return "";
+  return `Dr. ${cleaned}`;
+}
+
 export default function ClinicAppointmentsPage() {
   const { status: verificationStatus, clinicName: verifiedClinicName, clinicId, loading } = useClinicVerification();
   const fallbackConditionImage = skinConditions[0]?.image;
@@ -91,27 +103,49 @@ export default function ClinicAppointmentsPage() {
 
   const loadData = async () => {
     setLoadingData(true);
-    let resolvedClinicId = clinicId;
+    let resolvedClinicId: string | null = clinicId ? String(clinicId) : null;
+
+    // Step 1: Try localStorage profile cache
     if (!resolvedClinicId) {
       try {
         const cache = localStorage.getItem("dermai_clinic_profile_cache");
         if (cache) {
           const parsed = JSON.parse(cache);
-          if (parsed.clinicId) resolvedClinicId = parsed.clinicId;
+          if (parsed.clinicId) resolvedClinicId = String(parsed.clinicId);
         }
       } catch { }
     }
 
+    // Step 2: Try direct Supabase session query (same as Dashboard)
+    if (!resolvedClinicId) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          const userEmail = session.user.email?.toLowerCase().trim();
+          const { data: clinicRow } = await supabase
+            .from("clinic")
+            .select("clinic_id, name")
+            .or(`owner_user_id.eq.${session.user.id}${userEmail ? `,email.ilike.${userEmail}` : ""}`)
+            .maybeSingle();
+          if (clinicRow?.clinic_id) {
+            resolvedClinicId = String(clinicRow.clinic_id);
+          }
+        }
+      } catch { }
+    }
+
+    console.log("[ClinicAppointments] resolvedClinicId =", resolvedClinicId);
+
     // 1. Fetch clinic doctors from clinic_doctor table
     let docRows: any[] = [];
     if (resolvedClinicId) {
-      const { data } = await supabase
+      const { data, error: docErr } = await supabase
         .from("clinic_doctor")
         .select("doctor_id, doctor_name, email, photo_url, status")
-        .eq("clinic_id", resolvedClinicId)
-        .neq("status", "Inactive");
+        .eq("clinic_id", resolvedClinicId);
+      console.log("[ClinicAppointments] clinic_doctor rows:", data?.length ?? 0, docErr?.message);
       if (data && data.length > 0) {
-        docRows = data;
+        docRows = data.filter((d: any) => (d.status || "").toLowerCase() !== "inactive");
         setClinicDoctors(docRows.map((d: any) => ({
           id: d.doctor_id,
           name: d.doctor_name,
@@ -143,35 +177,37 @@ export default function ClinicAppointmentsPage() {
     // 2. Fetch appointments from patient_appointment table
     let dbAppts: any[] = [];
     if (resolvedClinicId) {
+      // Try exact match first
       const { data: apptRows, error: apptErr } = await supabase
         .from("patient_appointment")
-        .select(`
-          appointment_id,
-          date,
-          status,
-          notes,
-          clinic_note,
-          skin_photo_url,
-          patient_name,
-          patient_email,
-          patient_contact,
-          patient_address,
-          ai_condition_name,
-          ai_confidence,
-          assigned_doctor_id,
-          doctor_status,
-          doctor_note,
-          doctor_reviewed_at,
-          schedule_sent_to_doctor,
-          created_at
-        `)
+        .select("*")
         .eq("clinic_id", resolvedClinicId)
         .order("created_at", { ascending: false });
 
+      console.log("[ClinicAppointments] patient_appointment rows (filtered):", apptRows?.length ?? 0, apptErr?.message);
+
       if (apptErr) {
         console.warn("[ClinicAppointmentsPage] Failed to fetch patient_appointment from Supabase:", apptErr.message);
-      } else if (apptRows) {
+      } else if (apptRows && apptRows.length > 0) {
         dbAppts = apptRows;
+      } else {
+        // Fallback: fetch all and filter client-side (handles type mismatch e.g. int vs string)
+        const { data: allAppts, error: allErr } = await supabase
+          .from("patient_appointment")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(200);
+
+        console.log("[ClinicAppointments] all patient_appointment rows:", allAppts?.length ?? 0, allErr?.message);
+
+        if (allAppts && allAppts.length > 0) {
+          dbAppts = allAppts.filter((r: any) =>
+            r.clinic_id !== null &&
+            r.clinic_id !== undefined &&
+            String(r.clinic_id) === String(resolvedClinicId)
+          );
+          console.log("[ClinicAppointments] client-side filtered rows:", dbAppts.length);
+        }
       }
     }
 
@@ -203,16 +239,60 @@ export default function ClinicAppointmentsPage() {
         else if (a.status === "cancelled" || a.status === "rejected") displayStatus = "rejected";
         else if (a.status === "accepted") displayStatus = "accepted";
 
-        const assignedDoc = docRows.find((d: any) => d.doctor_id === a.assigned_doctor_id);
+        // Robust doctor name resolution
+        let docName: string | undefined = undefined;
+        if (a.assigned_doctor_id) {
+          const matchedDoc = docRows.find((d: any) => d.doctor_id === a.assigned_doctor_id);
+          if (matchedDoc?.doctor_name) docName = matchedDoc.doctor_name;
+        }
+        if (!docName && a.assigned_doctor_id) {
+          try {
+            const rawDocs = localStorage.getItem("dermai_clinic_doctors");
+            if (rawDocs) {
+              const parsed = JSON.parse(rawDocs);
+              if (Array.isArray(parsed)) {
+                const found = parsed.find((d: any) => d.id === a.assigned_doctor_id);
+                if (found?.name) docName = found.name;
+              }
+            }
+          } catch { }
+        }
+        if (!docName && a.assigned_doctor_id && a.clinic_note) {
+          const match = a.clinic_note.match(/(?:Assigned to|Re-assigned to)\s+(?:Dr\.\s*)?([A-Za-z\s]+?)(?:\s+for|\s+accepted|\s+declined|\.|$)/i);
+          if (match && match[1] && match[1].trim().toLowerCase() !== "dr") {
+            docName = match[1].trim();
+          }
+        }
+        const resolvedDoctorDisplay = formatDoctorDisplay(docName);
+
+        let calculatedAge: number | undefined = undefined;
+        if (a.patient_birthdate) {
+          try {
+            const b = new Date(a.patient_birthdate);
+            if (!isNaN(b.getTime())) {
+              const today = new Date();
+              let age = today.getFullYear() - b.getFullYear();
+              const m = today.getMonth() - b.getMonth();
+              if (m < 0 || (m === 0 && today.getDate() < b.getDate())) age--;
+              if (age >= 0 && age < 130) calculatedAge = age;
+            }
+          } catch {}
+        }
 
         return {
           id: a.appointment_id,
           clinicId: 0,
           clinicName: clinicName || "Clinic",
           patientName: a.patient_name || "Patient",
+          patientAge: calculatedAge,
+          patientGender: a.patient_gender || undefined,
+          patientBirthdate: a.patient_birthdate || undefined,
           patientEmail: a.patient_email || undefined,
           patientAddress: a.patient_address || undefined,
           patientContact: a.patient_contact || undefined,
+          emergencyContactName: a.emergency_contact_name || undefined,
+          emergencyContactPhone: a.emergency_contact_phone || undefined,
+          emergencyRelationship: a.emergency_contact_relationship || undefined,
           consultationType: "face-to-face" as const,
           conditionName: a.ai_condition_name || undefined,
           date: dateStr,
@@ -221,7 +301,7 @@ export default function ClinicAppointmentsPage() {
           status: displayStatus,
           clinicNote: a.clinic_note || undefined,
           assignedDoctorId: a.assigned_doctor_id || undefined,
-          assignedDoctorName: assignedDoc?.doctor_name || undefined,
+          assignedDoctorName: resolvedDoctorDisplay || undefined,
           doctorStatus: a.doctor_status || undefined,
           doctorNote: a.doctor_note || undefined,
           doctorReviewedAt: a.doctor_reviewed_at || undefined,
@@ -234,17 +314,20 @@ export default function ClinicAppointmentsPage() {
       })
     );
 
-    // Merge with local storage appointments strictly matching this specific clinic_id
+    // Merge with local storage appointments
     try {
       const raw = localStorage.getItem("dermai_clinic_appointments");
-      if (raw && resolvedClinicId) {
+      if (raw) {
         const localList = JSON.parse(raw);
         if (Array.isArray(localList)) {
           localList.forEach((localItem: any) => {
             const exists = mapped.some((m) => m.id === localItem.id);
             if (!exists) {
-              const isMatch = Boolean(localItem.clinicId && String(localItem.clinicId) === String(resolvedClinicId));
-              if (isMatch) {
+              const isClinicMatch =
+                (resolvedClinicId && localItem.clinicId && String(localItem.clinicId) === String(resolvedClinicId)) ||
+                (clinicName && localItem.clinicName && localItem.clinicName.toLowerCase().trim() === clinicName.toLowerCase().trim()) ||
+                (!resolvedClinicId);
+              if (isClinicMatch) {
                 mapped.push({
                   id: localItem.id,
                   clinicId: 0,
@@ -253,6 +336,9 @@ export default function ClinicAppointmentsPage() {
                   patientEmail: localItem.patientEmail || undefined,
                   patientAddress: localItem.patientAddress || undefined,
                   patientContact: localItem.patientContact || undefined,
+                  emergencyContactName: localItem.emergencyContactName || localItem.emergency_contact_name || undefined,
+                  emergencyContactPhone: localItem.emergencyContactPhone || localItem.emergency_contact_phone || undefined,
+                  emergencyRelationship: localItem.emergencyRelationship || localItem.emergency_relationship || undefined,
                   consultationType: "face-to-face" as const,
                   conditionName: localItem.aiConditionName || localItem.conditionName || undefined,
                   date: localItem.date || "",
@@ -278,12 +364,15 @@ export default function ClinicAppointmentsPage() {
       }
     } catch { }
 
+    console.log("[ClinicAppointments] final mapped appointments:", mapped.length);
     setAppointments(mapped);
     try {
       localStorage.setItem("dermai_clinic_appointments", JSON.stringify(mapped));
     } catch { }
     setLoadingData(false);
   };
+
+
 
   useEffect(() => {
     loadData();
@@ -316,7 +405,7 @@ export default function ClinicAppointmentsPage() {
       window.removeEventListener("storage", handleSync);
       window.removeEventListener("focus", handleSync);
     };
-  }, [clinicId, clinicName]);
+  }, [clinicId, clinicName, loading]);
 
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
@@ -433,27 +522,27 @@ export default function ClinicAppointmentsPage() {
   }, [appointments]);
 
   // Queues categorized by review lifecycle
-  const unscheduledQueue = useMemo(() => {
+  const incomingQueue = useMemo(() => {
     return appointments
-      .filter((a) => !a.date && a.status === "pending")
+      .filter((a) => a.status === "pending" || a.doctorStatus === "pending-review" || a.doctorStatus === "rejected")
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [appointments]);
 
   const needsDoctorQueue = useMemo(
-    () => unscheduledQueue.filter((a) => !a.assignedDoctorId),
-    [unscheduledQueue]
+    () => incomingQueue.filter((a) => !a.assignedDoctorId && a.doctorStatus !== "rejected"),
+    [incomingQueue]
   );
   const inReviewQueue = useMemo(
-    () => unscheduledQueue.filter((a) => a.assignedDoctorId && a.doctorStatus === "pending-review"),
-    [unscheduledQueue]
-  );
-  const approvedQueue = useMemo(
-    () => unscheduledQueue.filter((a) => a.doctorStatus === "approved"),
-    [unscheduledQueue]
+    () => incomingQueue.filter((a) => a.assignedDoctorId && a.doctorStatus === "pending-review"),
+    [incomingQueue]
   );
   const doctorDeclinedQueue = useMemo(
-    () => unscheduledQueue.filter((a) => a.doctorStatus === "rejected"),
-    [unscheduledQueue]
+    () => incomingQueue.filter((a) => a.doctorStatus === "rejected"),
+    [incomingQueue]
+  );
+  const approvedQueue = useMemo(
+    () => appointments.filter((a) => a.status === "scheduled" || a.status === "confirmed" || a.status === "accepted" || a.doctorStatus === "approved"),
+    [appointments]
   );
 
   const displayedQueue = useMemo(() => {
@@ -461,8 +550,8 @@ export default function ClinicAppointmentsPage() {
     if (queueFilter === "in_review") return inReviewQueue;
     if (queueFilter === "approved") return approvedQueue;
     if (queueFilter === "doctor_declined") return doctorDeclinedQueue;
-    return unscheduledQueue;
-  }, [queueFilter, unscheduledQueue, needsDoctorQueue, inReviewQueue, approvedQueue, doctorDeclinedQueue]);
+    return incomingQueue;
+  }, [queueFilter, incomingQueue, needsDoctorQueue, inReviewQueue, approvedQueue, doctorDeclinedQueue]);
 
   const selectedDayAppointments = (appointmentsByDate[selectedDate] || []).sort((a, b) =>
     a.time.localeCompare(b.time)
@@ -538,49 +627,116 @@ export default function ClinicAppointmentsPage() {
       return;
     }
 
-    let targetDoctorId: string | null = doc.id;
     const isUuid = (id?: string | null): boolean =>
       !!id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
-    if (!targetDoctorId || !isUuid(targetDoctorId)) {
+    let targetDoctorId: string | null = isUuid(doc.id) ? doc.id : null;
+
+    if (!targetDoctorId && doc.email) {
       try {
         const { data: dbDoc } = await supabase
           .from("clinic_doctor")
           .select("doctor_id")
-          .or(`email.ilike.%${doc.email || "nomatch"}%,doctor_name.ilike.%${doc.name || "nomatch"}%`)
-          .limit(1)
+          .eq("email", doc.email.trim().toLowerCase())
           .maybeSingle();
         if (dbDoc?.doctor_id && isUuid(dbDoc.doctor_id)) {
           targetDoctorId = dbDoc.doctor_id;
-        } else {
-          targetDoctorId = null;
         }
-      } catch {
-        targetDoctorId = null;
+      } catch { }
+    }
+
+    if (!targetDoctorId && doc.name) {
+      try {
+        const { data: dbDoc } = await supabase
+          .from("clinic_doctor")
+          .select("doctor_id")
+          .ilike("doctor_name", `%${doc.name.trim()}%`)
+          .maybeSingle();
+        if (dbDoc?.doctor_id && isUuid(dbDoc.doctor_id)) {
+          targetDoctorId = dbDoc.doctor_id;
+        }
+      } catch { }
+    }
+
+    // Auto-create doctor record in clinic_doctor if not found in database
+    let activeClinicId: string | null = clinicId ? String(clinicId) : null;
+    if (!activeClinicId) {
+      try {
+        const cache = localStorage.getItem("dermai_clinic_profile_cache");
+        if (cache) {
+          const parsed = JSON.parse(cache);
+          if (parsed.clinicId) activeClinicId = String(parsed.clinicId);
+        }
+      } catch { }
+    }
+
+    if (!targetDoctorId && activeClinicId && isUuid(activeClinicId)) {
+      try {
+        // Look up corresponding user record if available
+        let linkedUserId: string | null = null;
+        if (doc.email) {
+          const { data: uRow } = await supabase
+            .from("user")
+            .select("user_id")
+            .eq("email", doc.email.trim().toLowerCase())
+            .maybeSingle();
+          if (uRow?.user_id) linkedUserId = uRow.user_id;
+        }
+
+        const { data: createdDoc, error: createDocErr } = await supabase
+          .from("clinic_doctor")
+          .insert({
+            clinic_id: activeClinicId,
+            doctor_name: doc.name.trim(),
+            email: doc.email?.trim().toLowerCase() || `${doc.name.toLowerCase().replace(/[^a-z0-9]/g, "")}@clinic.internal`,
+            prc_license: (doc as any).prcLicense || "PRC-VERIFIED",
+            user_id: linkedUserId,
+            status: "Active",
+          })
+          .select("doctor_id")
+          .maybeSingle();
+        if (createdDoc?.doctor_id && isUuid(createdDoc.doctor_id)) {
+          targetDoctorId = createdDoc.doctor_id;
+        } else if (createDocErr) {
+          console.error("Failed to auto-create clinic_doctor row:", createDocErr.message);
+        }
+      } catch (err: any) {
+        console.error("Auto-create doctor exception:", err?.message);
       }
+    }
+
+    if (!targetDoctorId) {
+      setAssignError("Could not link doctor to the clinic database. Please make sure the doctor is registered in the Doctors roster.");
+      return;
     }
 
     const clinicNoteMsg = assignDoctorModal.isReassign
       ? `Re-assigned to Dr. ${doc.name.replace(/^dr\.\s*/i, "")} for review.`
       : `Assigned to Dr. ${doc.name.replace(/^dr\.\s*/i, "")} for pre-consultation review.`;
 
+    const updatePayload: Record<string, any> = {
+      assigned_doctor_id: targetDoctorId,
+      doctor_status: "pending-review",
+      doctor_note: null,
+      doctor_reviewed_at: null,
+      clinic_note: clinicNoteMsg,
+    };
+
     try {
       const { error: updateErr } = await supabase
         .from("patient_appointment")
-        .update({
-          ...(targetDoctorId ? { assigned_doctor_id: targetDoctorId } : {}),
-          doctor_status: "pending-review",
-          doctor_note: null,
-          doctor_reviewed_at: null,
-          clinic_note: clinicNoteMsg,
-        })
+        .update(updatePayload)
         .eq("appointment_id", assignDoctorModal.appointmentId);
 
       if (updateErr) {
         console.error("Failed to assign doctor in Supabase:", updateErr.message);
+        setAssignError(`Failed to save doctor assignment: ${updateErr.message}`);
+        return;
       }
     } catch (err: any) {
       console.error("Failed to assign doctor in Supabase:", err.message);
+      setAssignError(err.message || "An error occurred while saving doctor assignment.");
+      return;
     }
 
     setAppointments((prev) => {
@@ -607,6 +763,7 @@ export default function ClinicAppointmentsPage() {
     setAssignDoctorModal(null);
     setSelectedDoctorId("");
     setAssignError("");
+    setQueueFilter("in_review");
   };
 
   // 2. Finalize schedule after doctor approval (or reschedule existing)
@@ -754,7 +911,7 @@ export default function ClinicAppointmentsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         {[
           { label: "Total Requests", value: appointments.length, icon: Calendar },
-          { label: "Queue", value: unscheduledQueue.length, icon: Clock },
+          { label: "Queue", value: incomingQueue.length, icon: Clock },
           { label: "Scheduled", value: scheduledCount, icon: CheckCircle2 },
           { label: "Rejected", value: rejectedCount, icon: XCircle },
         ].map((item, index) => {
@@ -932,22 +1089,22 @@ export default function ClinicAppointmentsPage() {
             <div className="min-w-0">
               <h2 className="font-display font-bold text-gray-900 text-base">Incoming Consultation Queue</h2>
               <p className="text-xs text-gray-500 mt-0.5">
-                Assign a doctor for review &rarr; Await approval &rarr; Finalize consultation date &amp; time.
+                Assign a doctor for review &rarr; Doctor accepts &rarr; Schedule finalized automatically.
               </p>
             </div>
             <span className="text-xs px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 border border-magenta-200 font-bold shrink-0 whitespace-nowrap inline-flex items-center gap-1 self-start">
-              {unscheduledQueue.length} pending
+              {incomingQueue.length} pending
             </span>
           </div>
 
           {/* Queue Stage Filter Pills */}
           <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-3 pt-1 text-xs no-scrollbar">
             {[
-              { key: "all", label: "All Queue", count: unscheduledQueue.length },
+              { key: "all", label: "All Incoming", count: incomingQueue.length },
               { key: "needs_doctor", label: "Needs Doctor", count: needsDoctorQueue.length, alert: needsDoctorQueue.length > 0 },
               { key: "in_review", label: "In Review", count: inReviewQueue.length },
-              { key: "approved", label: "Doctor Approved", count: approvedQueue.length, highlight: approvedQueue.length > 0 },
               { key: "doctor_declined", label: "Doctor Declined", count: doctorDeclinedQueue.length, warn: doctorDeclinedQueue.length > 0 },
+              { key: "approved", label: "Confirmed / Scheduled", count: approvedQueue.length, highlight: approvedQueue.length > 0 },
             ].map((tab) => (
               <button
                 key={tab.key}
@@ -984,7 +1141,7 @@ export default function ClinicAppointmentsPage() {
                   {queueFilter === "needs_doctor"
                     ? "All consultation requests have been assigned to doctors for review."
                     : queueFilter === "approved"
-                    ? "No approved appointments currently waiting for schedule finalization."
+                    ? "No approved or confirmed appointments yet."
                     : queueFilter === "doctor_declined"
                     ? "No doctor rejections requiring re-assignment."
                     : "Incoming consultation requests will appear here."}
@@ -993,10 +1150,11 @@ export default function ClinicAppointmentsPage() {
             )}
 
             {displayedQueue.map((appointment) => {
-              const isUnassigned = !appointment.assignedDoctorId;
-              const isInReview = appointment.assignedDoctorId && appointment.doctorStatus === "pending-review";
-              const isApproved = appointment.doctorStatus === "approved";
+              const hasDoctor = Boolean(appointment.assignedDoctorId || appointment.assignedDoctorName);
+              const isApproved = appointment.doctorStatus === "approved" || appointment.status === "scheduled" || appointment.status === "confirmed";
               const isDoctorDeclined = appointment.doctorStatus === "rejected";
+              const isInReview = hasDoctor && !isApproved && !isDoctorDeclined;
+              const isUnassigned = !hasDoctor && !isApproved && !isDoctorDeclined;
 
               return (
                 <div
@@ -1063,7 +1221,7 @@ export default function ClinicAppointmentsPage() {
                           )}
                           {isApproved && (
                             <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Doctor Approved
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Confirmed &amp; Locked
                             </span>
                           )}
                           {isDoctorDeclined && (
@@ -1076,13 +1234,24 @@ export default function ClinicAppointmentsPage() {
                     </div>
                   </div>
 
+                  {/* Patient Requested Schedule Banner */}
+                  <div className="mb-2.5 p-2 rounded-xl bg-magenta-50/70 border border-magenta-100 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-1.5 font-bold text-magenta-950">
+                      <Calendar className="w-3.5 h-3.5 text-magenta-600" />
+                      <span>Requested: {appointment.date || "Date pending"} {appointment.time ? `· ${appointment.time}` : ""}</span>
+                    </div>
+                    <span className="text-[10px] font-semibold text-magenta-700 bg-white px-2 py-0.5 rounded-full border border-magenta-200">
+                      Patient Choice
+                    </span>
+                  </div>
+
                   {/* Stage Workflow Banners */}
                   {isApproved && (
                     <div className="mb-2.5 p-2.5 rounded-xl bg-emerald-100/70 border border-emerald-200 text-xs text-emerald-900 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                         <span className="font-medium truncate">
-                          <strong>Dr. {appointment.assignedDoctorName?.replace(/^dr\.\s*/i, "")} approved!</strong> Ready to finalize schedule.
+                          <strong>{formatDoctorDisplay(appointment.assignedDoctorName) || "Doctor"} accepted!</strong> Schedule confirmed &amp; finalized.
                         </span>
                       </div>
                     </div>
@@ -1092,7 +1261,7 @@ export default function ClinicAppointmentsPage() {
                     <div className="mb-2.5 p-2.5 rounded-xl bg-red-100/70 border border-red-200 text-xs text-red-900 flex items-start gap-2">
                       <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                       <div className="min-w-0">
-                        <p className="font-bold">Declined by Dr. {appointment.assignedDoctorName?.replace(/^dr\.\s*/i, "")}:</p>
+                        <p className="font-bold">Declined by {formatDoctorDisplay(appointment.assignedDoctorName) || "Doctor"}:</p>
                         <p className="text-[11px] text-red-700 italic mt-0.5">
                           "{appointment.doctorNote || "Doctor unavailable for consultation"}"
                         </p>
@@ -1103,11 +1272,11 @@ export default function ClinicAppointmentsPage() {
                     </div>
                   )}
 
-                  {isInReview && appointment.assignedDoctorName && (
+                  {isInReview && (
                     <div className="mb-2.5 p-2 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-800 flex items-center gap-1.5">
                       <Stethoscope className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                       <span className="font-medium">
-                        Assigned to <strong>Dr. {appointment.assignedDoctorName.replace(/^dr\.\s*/i, "")}</strong> for pre-consultation review.
+                        Assigned to <strong>{formatDoctorDisplay(appointment.assignedDoctorName) || "Doctor"}</strong> for pre-consultation review.
                       </span>
                     </div>
                   )}
@@ -1174,9 +1343,16 @@ export default function ClinicAppointmentsPage() {
                       </>
                     )}
 
-                    {/* Scenario C: Doctor Approved -> FINALIZE SCHEDULE */}
+                    {/* Scenario C: Doctor Approved -> Confirmed & Finalized */}
                     {isApproved && (
                       <>
+                        <button
+                          type="button"
+                          onClick={() => setViewingPatient(appointment)}
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Confirmed Details
+                        </button>
                         <button
                           type="button"
                           onClick={() => {
@@ -1187,19 +1363,13 @@ export default function ClinicAppointmentsPage() {
                               assignedDoctorName: appointment.assignedDoctorName,
                               date: appointment.date || selectedDate,
                               time: appointment.time || clinicSettings.openTime,
+                              isReschedule: true,
                             });
                             setScheduleError("");
                           }}
-                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+                          className="py-2.5 px-3.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
                         >
-                          <Calendar className="w-3.5 h-3.5" /> Finalize Schedule
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setViewingPatient(appointment)}
-                          className="py-2.5 px-4 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
-                        >
-                          Details
+                          Reschedule
                         </button>
                       </>
                     )}
@@ -1508,9 +1678,15 @@ export default function ClinicAppointmentsPage() {
                       { label: "Email", value: viewingPatient.patientEmail },
                       { label: "Address", value: viewingPatient.patientAddress },
                       { label: "Contact", value: viewingPatient.patientContact },
+                      {
+                        label: "Emergency Contact",
+                        value: viewingPatient.emergencyContactName
+                          ? `${viewingPatient.emergencyContactName} ${viewingPatient.emergencyRelationship ? `(${viewingPatient.emergencyRelationship})` : ""} - ${viewingPatient.emergencyContactPhone || ""}`
+                          : undefined,
+                      },
                     ] as { label: string; value?: string }[]
                   ).map(({ label, value }) => (
-                    <div key={label} className="grid grid-cols-[110px_1fr] items-center text-xs">
+                    <div key={label} className="grid grid-cols-[120px_1fr] items-center text-xs">
                       <span className="font-semibold text-gray-400">{label}:</span>
                       <span className="text-gray-900 font-medium truncate">{value || <span className="text-gray-300 italic">—</span>}</span>
                     </div>

@@ -160,14 +160,15 @@ export default function ClinicSettingsPage() {
 
         if (!userId && !userEmail) return;
 
-        // Fetch clinic and doctors in parallel
+        // Fetch clinic, operating hours, and doctors in parallel
         const clinicQuery = clinicId
           ? supabase
               .from("clinic")
               .select(`
                 clinic_id, name, district, address, phone, email, consultation_fee, description, status, logo_url,
                 latitude, longitude,
-                clinic_service_offered ( service_name )
+                clinic_service_offered ( service_name ),
+                clinic_operating_hours ( day_of_week, open_time, close_time )
               `)
               .eq("clinic_id", clinicId)
               .maybeSingle()
@@ -176,7 +177,8 @@ export default function ClinicSettingsPage() {
               .select(`
                 clinic_id, name, district, address, phone, email, consultation_fee, description, status, logo_url,
                 latitude, longitude,
-                clinic_service_offered ( service_name )
+                clinic_service_offered ( service_name ),
+                clinic_operating_hours ( day_of_week, open_time, close_time )
               `)
               .or(`owner_user_id.eq.${userId}${userEmail ? `,email.ilike.${userEmail}` : ""}`)
               .maybeSingle();
@@ -208,6 +210,17 @@ export default function ClinicSettingsPage() {
         if (cancelled) return;
 
         setSettings((prev) => {
+          let loadedOperatingDays = prev.operatingDays;
+          let loadedOpenTime = prev.openTime;
+          let loadedCloseTime = prev.closeTime;
+
+          if (Array.isArray(dbClinic.clinic_operating_hours) && dbClinic.clinic_operating_hours.length > 0) {
+            const h = dbClinic.clinic_operating_hours[0];
+            if (h.day_of_week) loadedOperatingDays = h.day_of_week;
+            if (h.open_time) loadedOpenTime = h.open_time.slice(0, 5);
+            if (h.close_time) loadedCloseTime = h.close_time.slice(0, 5);
+          }
+
           const next: ClinicSettings = {
             ...prev,
             name: dbClinic.name || prev.name,
@@ -221,6 +234,9 @@ export default function ClinicSettingsPage() {
             latitude: dbClinic.latitude != null ? Number(dbClinic.latitude) : prev.latitude,
             longitude: dbClinic.longitude != null ? Number(dbClinic.longitude) : prev.longitude,
             status: (dbClinic.status === "approved" ? "verified" : dbClinic.status) as any || prev.status,
+            operatingDays: loadedOperatingDays,
+            openTime: loadedOpenTime,
+            closeTime: loadedCloseTime,
             doctors: loadedDoctors.length > 0 ? loadedDoctors : prev.doctors,
           };
           try {
@@ -245,24 +261,67 @@ export default function ClinicSettingsPage() {
   }, [clinicId]);
 
   const onSave = async () => {
+    const targetClinicId = clinicId || dbClinicId;
+
     // 1. Save settings to localStorage for instant 0ms synchronization
     const settingsToSave = {
       ...settings,
+      id: targetClinicId || undefined,
       consultationFee: settings.consultationFee || "",
       servicesOffered: JSON.stringify(selectedServices),
+      hours: `${settings.operatingDays || "Monday - Saturday"}: ${settings.openTime || "08:00"} - ${settings.closeTime || "17:00"}`,
     };
     localStorage.setItem("dermai_clinic_settings", JSON.stringify(settingsToSave));
+
+    // Also update matching clinic application cache for search and booking
+    try {
+      const appsRaw = localStorage.getItem("dermai_clinic_applications");
+      if (appsRaw) {
+        const apps = JSON.parse(appsRaw);
+        if (Array.isArray(apps)) {
+          const updatedApps = apps.map((app: any) => {
+            if (
+              (targetClinicId && String(app.id) === String(targetClinicId)) ||
+              (settings.name && app.name && app.name.toLowerCase().trim() === settings.name.toLowerCase().trim()) ||
+              (settings.email && app.email && app.email.toLowerCase().trim() === settings.email.toLowerCase().trim())
+            ) {
+              return {
+                ...app,
+                name: settings.name || app.name,
+                address: settings.address || app.address,
+                district: settings.location || app.district,
+                phone: settings.phone || app.phone,
+                email: settings.email || app.email,
+                consultationFee: settings.consultationFee || app.consultationFee,
+                description: settings.description || app.description,
+                operatingDays: settings.operatingDays,
+                openTime: settings.openTime,
+                closeTime: settings.closeTime,
+                hours: `${settings.operatingDays || "Monday - Saturday"}: ${settings.openTime || "08:00"} - ${settings.closeTime || "17:00"}`,
+                services: selectedServices,
+                servicesOffered: JSON.stringify(selectedServices),
+                latitude: settings.latitude,
+                longitude: settings.longitude,
+              };
+            }
+            return app;
+          });
+          localStorage.setItem("dermai_clinic_applications", JSON.stringify(updatedApps));
+        }
+      }
+    } catch {}
+
     window.dispatchEvent(new Event("storage"));
     window.dispatchEvent(new CustomEvent("clinicSettingsUpdated", { detail: settingsToSave }));
+    window.dispatchEvent(new CustomEvent("dermai_clinic_updated"));
 
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
 
-    // 2. Synchronize clinic details, consultation fee and services to Supabase
+    // 2. Synchronize clinic details, operating hours, consultation fee and services to Supabase
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
-      const targetClinicId = clinicId || dbClinicId;
       const feeNumber = settings.consultationFee.trim() !== "" ? parseFloat(settings.consultationFee) : null;
 
       if (targetClinicId || userId) {
@@ -292,14 +351,34 @@ export default function ClinicSettingsPage() {
         const effectiveClinicId = targetClinicId || updatedClinic?.clinic_id;
 
         if (effectiveClinicId) {
-          await supabase.from("clinic_service_offered").delete().eq("clinic_id", effectiveClinicId);
-          if (selectedServices.length > 0) {
-            await supabase.from("clinic_service_offered").insert(
-              selectedServices.map((s) => ({
+          // Update operating hours
+          try {
+            await supabase.from("clinic_operating_hours").delete().eq("clinic_id", effectiveClinicId);
+            if (settings.operatingDays) {
+              await supabase.from("clinic_operating_hours").insert({
                 clinic_id: effectiveClinicId,
-                service_name: s,
-              }))
-            );
+                day_of_week: settings.operatingDays,
+                open_time: settings.openTime || "08:00",
+                close_time: settings.closeTime || "17:00",
+              });
+            }
+          } catch (ohEx) {
+            console.warn("Could not write clinic_operating_hours:", ohEx);
+          }
+
+          // Update services
+          try {
+            await supabase.from("clinic_service_offered").delete().eq("clinic_id", effectiveClinicId);
+            if (selectedServices.length > 0) {
+              await supabase.from("clinic_service_offered").insert(
+                selectedServices.map((s) => ({
+                  clinic_id: effectiveClinicId,
+                  service_name: s,
+                }))
+              );
+            }
+          } catch (svEx) {
+            console.warn("Could not write clinic_service_offered:", svEx);
           }
         }
       }

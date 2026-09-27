@@ -109,6 +109,10 @@ export default function PatientPersonalInformation() {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
+    if (name === "contactNumber") {
+      setProfile((prev) => ({ ...prev, contactNumber: value.replace(/\D/g, "").slice(0, 11) }));
+      return;
+    }
     setProfile((prev) => ({ ...prev, [name]: value }));
   };
 
@@ -130,6 +134,10 @@ export default function PatientPersonalInformation() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (profile.contactNumber.trim() && profile.contactNumber.trim().length !== 11) {
+      setMessage({ type: "error", text: "Contact number must be exactly 11 digits (e.g. 09123456789)." });
+      return;
+    }
     setIsSaving(true);
     setMessage(null);
 
@@ -314,10 +322,11 @@ export default function PatientPersonalInformation() {
                 <input
                   type="tel"
                   name="contactNumber"
+                  maxLength={11}
                   value={profile.contactNumber}
                   onChange={handleChange}
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
-                  placeholder="e.g. 09123456789"
+                  placeholder="09123456789"
                 />
               </div>
 

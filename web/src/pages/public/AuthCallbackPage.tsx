@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useSearchParams } from "react-router-dom";
+import { supabase } from "../../lib/supabaseClient";
 import { useAuth } from "../../context/AuthContext";
 import logo from "@/assets/logo2.png";
 import { motion } from "framer-motion";
@@ -13,27 +14,86 @@ const ROLE_HOME: Record<string, string> = {
 };
 
 export default function AuthCallbackPage() {
-  const { session, loading, role, roleLoading } = useAuth();
+  const { session, role, roleLoading } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(true);
 
   useEffect(() => {
-    if (loading) return;
+    let isMounted = true;
 
-    if (!session) {
-      setError("This sign-in link is invalid or has expired. Please request a new one.");
-      return;
+    async function handleAuthExchange() {
+      // 1. Check for explicit error query parameters from Supabase / Google
+      const errorParam = searchParams.get("error");
+      const errorDesc = searchParams.get("error_description");
+      if (errorParam || errorDesc) {
+        if (isMounted) {
+          setError(errorDesc || errorParam || "Authentication link is invalid or has expired.");
+          setIsProcessing(false);
+        }
+        return;
+      }
+
+      const code = searchParams.get("code");
+
+      if (code) {
+        try {
+          // Explicitly exchange the PKCE auth code for a session
+          const { error: exchangeErr } = await supabase.auth.exchangeCodeForSession(code);
+          if (exchangeErr) {
+            console.warn("PKCE code exchange notice:", exchangeErr.message);
+            // Verify if a valid session exists regardless
+            const { data: currentSession } = await supabase.auth.getSession();
+            if (!currentSession.session && isMounted) {
+              setError("This sign-in link is invalid or has expired. Please request a new one.");
+              setIsProcessing(false);
+              return;
+            }
+          }
+        } catch (err: any) {
+          console.error("Code exchange exception:", err);
+        }
+      }
+
+      // 2. Poll briefly (up to 1.5 seconds) for session & role propagation
+      let activeSession = (await supabase.auth.getSession()).data.session;
+      if (!activeSession) {
+        for (let i = 0; i < 3; i++) {
+          await new Promise((res) => setTimeout(res, 500));
+          activeSession = (await supabase.auth.getSession()).data.session;
+          if (activeSession) break;
+        }
+      }
+
+      if (!activeSession && isMounted) {
+        setError("This sign-in link is invalid or has expired. Please request a new one.");
+      }
+
+      if (isMounted) {
+        setIsProcessing(false);
+      }
     }
 
+    handleAuthExchange();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (isProcessing || error) return;
+    if (!session) return;
     if (roleLoading || !role) return;
 
     const destination = ROLE_HOME[role] ?? "/dashboard";
     const timer = setTimeout(() => {
       navigate(destination, { replace: true });
-    }, 500);
+    }, 400);
 
     return () => clearTimeout(timer);
-  }, [session, loading, role, roleLoading, navigate]);
+  }, [session, role, roleLoading, isProcessing, error, navigate]);
 
   return (
     <div className="min-h-screen bg-white flex items-center justify-center p-4">
@@ -49,7 +109,7 @@ export default function AuthCallbackPage() {
 
           <div>
             <h2 className="text-base font-bold text-slate-900">
-              Link Expired
+              {error.toLowerCase().includes("database") || error.toLowerCase().includes("failed") || error.toLowerCase().includes("error") ? "Sign-in Notice" : "Link Expired"}
             </h2>
             <p className="text-xs text-slate-500 leading-relaxed mt-1">{error}</p>
           </div>

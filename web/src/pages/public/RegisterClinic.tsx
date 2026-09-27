@@ -17,11 +17,9 @@ import {
   Plus,
   ShieldCheck,
   FileCheck,
-  Stethoscope,
   MapPin,
   Phone,
   Mail,
-  User,
   Check,
   FileBadge,
 } from "lucide-react";
@@ -73,10 +71,9 @@ function formatFileSize(bytes: number): string {
 }
 
 const STEPS = [
-  { id: 1, title: "Clinic Info", subtitle: "Identity & Contact", icon: Building2 },
-  { id: 2, title: "Location & Hours", subtitle: "Address & Map Pin", icon: MapPin },
-  { id: 3, title: "Medical Staff", subtitle: "Doctor & Practice", icon: Stethoscope },
-  { id: 4, title: "Documents & Review", subtitle: "Permits & Photos", icon: FileBadge },
+  { id: 1, title: "Clinic Identity", subtitle: "Brand & Contact", icon: Building2 },
+  { id: 2, title: "Location & Schedule", subtitle: "Address & Hours", icon: MapPin },
+  { id: 3, title: "Legal Documents", subtitle: "Permits & Review", icon: FileBadge },
 ];
 
 export default function RegisterClinic() {
@@ -92,7 +89,6 @@ export default function RegisterClinic() {
     address: "",
     email: "",
     phone: "",
-    doctorName: "",
     specialization: specializations[0],
     servicesOffered: "",
     consultationFee: "500",
@@ -100,7 +96,6 @@ export default function RegisterClinic() {
     operatingDays: "Monday - Saturday",
     openTime: "08:00",
     closeTime: "17:00",
-    prcLicense: "",
     latitude: null as number | null,
     longitude: null as number | null,
   });
@@ -110,9 +105,21 @@ export default function RegisterClinic() {
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
 
-  // Business Permit state
+  // 1. Business / Mayor's Permit state (Required)
   const [businessPermit, setBusinessPermit] = useState<UploadedDoc | null>(null);
   const permitInputRef = useRef<HTMLInputElement>(null);
+
+  // 2. DTI Certificate or SEC Registration (Required)
+  const [dtiSecDoc, setDtiSecDoc] = useState<UploadedDoc | null>(null);
+  const dtiSecInputRef = useRef<HTMLInputElement>(null);
+
+  // 3. BIR Form 2303 Certificate (Optional / Recommended)
+  const [birDoc, setBirDoc] = useState<UploadedDoc | null>(null);
+  const birInputRef = useRef<HTMLInputElement>(null);
+
+  // Clinic Facility Photos state (up to 5)
+  const [clinicPhotos, setClinicPhotos] = useState<PhotoItem[]>([]);
+  const photosInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-scroll to top when application is submitted successfully
   useEffect(() => {
@@ -120,14 +127,6 @@ export default function RegisterClinic() {
       window.scrollTo({ top: 0, left: 0, behavior: "instant" });
     }
   }, [submitted]);
-
-  // PRC License state
-  const [prcLicenseDoc, setPrcLicenseDoc] = useState<UploadedDoc | null>(null);
-  const prcInputRef = useRef<HTMLInputElement>(null);
-
-  // Clinic Photos state (up to 5)
-  const [clinicPhotos, setClinicPhotos] = useState<PhotoItem[]>([]);
-  const photosInputRef = useRef<HTMLInputElement>(null);
 
   // Logo handlers
   const handleLogoChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -147,12 +146,12 @@ export default function RegisterClinic() {
     if (logoInputRef.current) logoInputRef.current.value = "";
   };
 
-  // Business Permit handlers
-  const processPermitFile = (file: File) => {
+  // Generic document parser helper
+  const processDocumentFile = (file: File, setter: (doc: UploadedDoc) => void) => {
     const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
     const reader = new FileReader();
     reader.onload = () => {
-      setBusinessPermit({
+      setter({
         file,
         name: file.name,
         size: file.size,
@@ -164,41 +163,34 @@ export default function RegisterClinic() {
     reader.readAsDataURL(file);
   };
 
+  // Business Permit handlers
   const handlePermitChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) processPermitFile(file);
+    if (file) processDocumentFile(file, setBusinessPermit);
   };
-
   const clearPermit = () => {
     setBusinessPermit(null);
     if (permitInputRef.current) permitInputRef.current.value = "";
   };
 
-  // PRC License handlers
-  const processPrcFile = (file: File) => {
-    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-    const reader = new FileReader();
-    reader.onload = () => {
-      setPrcLicenseDoc({
-        file,
-        name: file.name,
-        size: file.size,
-        dataUrl: reader.result as string,
-        isPdf,
-      });
-      setErrorMessage(null);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handlePrcChange = (e: ChangeEvent<HTMLInputElement>) => {
+  // DTI / SEC handlers
+  const handleDtiSecChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) processPrcFile(file);
+    if (file) processDocumentFile(file, setDtiSecDoc);
+  };
+  const clearDtiSec = () => {
+    setDtiSecDoc(null);
+    if (dtiSecInputRef.current) dtiSecInputRef.current.value = "";
   };
 
-  const clearPrc = () => {
-    setPrcLicenseDoc(null);
-    if (prcInputRef.current) prcInputRef.current.value = "";
+  // BIR 2303 handlers
+  const handleBirChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processDocumentFile(file, setBirDoc);
+  };
+  const clearBir = () => {
+    setBirDoc(null);
+    if (birInputRef.current) birInputRef.current.value = "";
   };
 
   // Clinic Photos handlers (up to 5)
@@ -208,7 +200,7 @@ export default function RegisterClinic() {
 
     const availableSlots = 5 - clinicPhotos.length;
     if (availableSlots <= 0) {
-      setErrorMessage("You can upload a maximum of 5 clinic photos.");
+      setErrorMessage("You can upload a maximum of 5 facility gallery photos.");
       return;
     }
 
@@ -274,6 +266,10 @@ export default function RegisterClinic() {
         setErrorMessage("Please provide a contact phone number.");
         return false;
       }
+      if (formData.phone.trim().length !== 11) {
+        setErrorMessage("Phone number must be exactly 11 digits (e.g. 09171234567).");
+        return false;
+      }
       return true;
     }
 
@@ -294,28 +290,12 @@ export default function RegisterClinic() {
     }
 
     if (stepNumber === 3) {
-      if (!formData.doctorName.trim()) {
-        setErrorMessage("Please enter the name of the Doctor in Charge.");
-        return false;
-      }
-      if (!formData.prcLicense.trim()) {
-        setErrorMessage("Please enter the PRC license number of the doctor.");
-        return false;
-      }
-      if (!formData.servicesOffered.trim()) {
-        setErrorMessage("Please add at least one clinical service offered.");
-        return false;
-      }
-      return true;
-    }
-
-    if (stepNumber === 4) {
       if (!businessPermit) {
-        setErrorMessage("Please upload a scanned copy of your Business Permit, DTI, or SEC registration.");
+        setErrorMessage("Please upload a scanned copy or photo of your Mayor's / Business Permit.");
         return false;
       }
-      if (!prcLicenseDoc) {
-        setErrorMessage("Please upload a scanned copy or photo of the Doctor's PRC License.");
+      if (!dtiSecDoc) {
+        setErrorMessage("Please upload your DTI Certificate (Sole Proprietor) or SEC Registration.");
         return false;
       }
       return true;
@@ -327,7 +307,7 @@ export default function RegisterClinic() {
   const handleNextStep = () => {
     if (validateStep(currentStep)) {
       setDirection(1);
-      setCurrentStep((prev) => Math.min(prev + 1, 4));
+      setCurrentStep((prev) => Math.min(prev + 1, 3));
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   };
@@ -346,7 +326,6 @@ export default function RegisterClinic() {
       setCurrentStep(targetStep);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } else if (targetStep > currentStep) {
-      // Validate all intermediate steps before jumping forward
       for (let s = currentStep; s < targetStep; s++) {
         if (!validateStep(s)) return;
       }
@@ -356,21 +335,15 @@ export default function RegisterClinic() {
     }
   };
 
-  // Upload helper: uploads to Supabase storage or falls back to dataUrl
+  // Upload helper: uploads to Supabase storage or falls back safely
   const uploadFileToStorage = async (file: File, folder: string): Promise<string> => {
     try {
       const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const path = `${folder}/${Date.now()}_${cleanName}`;
 
-      const uploadPromise = supabase.storage
+      const { data: uploadData, error } = await supabase.storage
         .from("clinic-photos")
         .upload(path, file, { upsert: true });
-
-      const timeoutPromise = new Promise<{ data: null; error: Error }>((resolve) =>
-        setTimeout(() => resolve({ data: null, error: new Error("Storage timeout") }), 2500)
-      );
-
-      const { data: uploadData, error } = await Promise.race([uploadPromise, timeoutPromise]);
 
       if (!error && uploadData) {
         const { data: pubUrl } = supabase.storage
@@ -379,20 +352,24 @@ export default function RegisterClinic() {
         if (pubUrl?.publicUrl) return pubUrl.publicUrl;
       }
     } catch (err) {
-      console.warn(`Storage upload for ${folder} fallback to DataURL:`, err);
+      console.warn(`Storage upload for ${folder}:`, err);
     }
 
-    // Fallback to base64 DataURL
-    return new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.readAsDataURL(file);
-    });
+    // Fallback: only if small (< 250KB) use dataURL, otherwise use placeholder to prevent payload limits
+    if (file.size < 250 * 1024) {
+      return new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+    }
+
+    return `doc://${folder}/${Date.now()}_${file.name}`;
   };
 
   const handleRegister = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!validateStep(4)) return;
+    if (!validateStep(3)) return;
 
     setErrorMessage(null);
     setIsSubmitting(true);
@@ -408,12 +385,19 @@ export default function RegisterClinic() {
       const feeNum = parseFloat(formData.consultationFee);
 
       // Parallelize file uploads for ultra-fast instant submission
-      setSubmitStatus("Uploading verification documents & gallery...");
+      setSubmitStatus("Uploading legal verification documents & gallery...");
 
-      const [uploadedLogoUrl, uploadedPermitUrl, uploadedPrcUrl, ...uploadedPhotos] = await Promise.all([
+      const [
+        uploadedLogoUrl,
+        uploadedPermitUrl,
+        uploadedDtiSecUrl,
+        uploadedBirUrl,
+        ...uploadedPhotos
+      ] = await Promise.all([
         logoFile ? uploadFileToStorage(logoFile, "logos") : Promise.resolve(null),
         businessPermit ? uploadFileToStorage(businessPermit.file, "permits") : Promise.resolve(null),
-        prcLicenseDoc ? uploadFileToStorage(prcLicenseDoc.file, "prc_licenses") : Promise.resolve(null),
+        dtiSecDoc ? uploadFileToStorage(dtiSecDoc.file, "dti_sec") : Promise.resolve(null),
+        birDoc ? uploadFileToStorage(birDoc.file, "bir_2303") : Promise.resolve(null),
         ...clinicPhotos.map((p) => uploadFileToStorage(p.file, "gallery")),
       ]);
 
@@ -445,7 +429,6 @@ export default function RegisterClinic() {
         p_address: formData.address.trim(),
         p_email: formData.email.trim(),
         p_phone: formData.phone.trim(),
-        p_doctor_name: formData.doctorName.trim(),
         p_specialization: formData.specialization || "General Dermatology",
         p_services: servicesList,
         p_consultation_fee: isNaN(feeNum) ? 500 : feeNum,
@@ -453,58 +436,18 @@ export default function RegisterClinic() {
         p_operating_days: formData.operatingDays || "Monday - Saturday",
         p_open_time: formData.openTime || "08:00",
         p_close_time: formData.closeTime || "17:00",
-        p_prc_license: formData.prcLicense.trim() || "PRC-PENDING",
         p_logo_url: uploadedLogoUrl || logoPreview || null,
         p_business_permit_url: uploadedPermitUrl || businessPermit?.dataUrl || null,
         p_business_permit_name: businessPermit?.name || null,
-        p_prc_license_file_url: uploadedPrcUrl || prcLicenseDoc?.dataUrl || null,
-        p_prc_license_file_name: prcLicenseDoc?.name || null,
+        p_dti_sec_url: uploadedDtiSecUrl || dtiSecDoc?.dataUrl || null,
+        p_dti_sec_name: dtiSecDoc?.name || null,
+        p_bir_url: uploadedBirUrl || birDoc?.dataUrl || null,
+        p_bir_name: birDoc?.name || null,
         p_photos: uploadedPhotoUrls,
         p_owner_user_id: effectiveOwnerId,
         p_latitude: formData.latitude ?? null,
         p_longitude: formData.longitude ?? null,
       });
-
-      // Legacy fallback retry
-      if (rpcErr) {
-        try {
-          const legacyRpc = await supabase.rpc("register_new_clinic", {
-            p_name: formData.name.trim(),
-            p_address: formData.address.trim(),
-            p_email: formData.email.trim(),
-            p_phone: formData.phone.trim(),
-            p_doctor_name: formData.doctorName.trim(),
-            p_specialization: formData.specialization || "General Dermatology",
-            p_services: servicesList,
-            p_consultation_fee: isNaN(feeNum) ? 500 : feeNum,
-            p_description: formData.description.trim() || null,
-            p_operating_days: formData.operatingDays || "Monday - Saturday",
-            p_open_time: formData.openTime || "08:00",
-            p_close_time: formData.closeTime || "17:00",
-            p_prc_license: formData.prcLicense.trim() || "PRC-PENDING",
-            p_logo_url: uploadedLogoUrl || logoPreview || null,
-            p_business_permit_url: uploadedPermitUrl || businessPermit?.dataUrl || null,
-            p_business_permit_name: businessPermit?.name || null,
-            p_prc_license_file_url: uploadedPrcUrl || prcLicenseDoc?.dataUrl || null,
-            p_prc_license_file_name: prcLicenseDoc?.name || null,
-            p_photos: uploadedPhotoUrls,
-            p_owner_user_id: effectiveOwnerId,
-          });
-          if (!legacyRpc.error && legacyRpc.data) {
-            rpcClinicId = legacyRpc.data;
-            rpcErr = null;
-            if (formData.latitude != null || formData.longitude != null) {
-              await supabase
-                .from("clinic")
-                .update({
-                  latitude: formData.latitude ?? null,
-                  longitude: formData.longitude ?? null,
-                })
-                .eq("clinic_id", legacyRpc.data);
-            }
-          }
-        } catch {}
-      }
 
       if (!rpcErr && rpcClinicId) {
         createdClinicId = rpcClinicId;
@@ -522,8 +465,10 @@ export default function RegisterClinic() {
           logo_url: uploadedLogoUrl || logoPreview || null,
           business_permit_url: uploadedPermitUrl || businessPermit?.dataUrl || null,
           business_permit_name: businessPermit?.name || null,
-          prc_license_file_url: uploadedPrcUrl || prcLicenseDoc?.dataUrl || null,
-          prc_license_file_name: prcLicenseDoc?.name || null,
+          dti_sec_url: uploadedDtiSecUrl || dtiSecDoc?.dataUrl || null,
+          dti_sec_name: dtiSecDoc?.name || null,
+          bir_url: uploadedBirUrl || birDoc?.dataUrl || null,
+          bir_name: birDoc?.name || null,
           latitude: formData.latitude ?? null,
           longitude: formData.longitude ?? null,
           status: "pending",
@@ -538,41 +483,62 @@ export default function RegisterClinic() {
           .select("clinic_id")
           .maybeSingle();
 
-        if (clinicErr && insertPayload.owner_user_id) {
-          delete insertPayload.owner_user_id;
-          const retryRes = await supabase
+        if (clinicErr) {
+          console.warn("Direct clinic insert initial error:", clinicErr.message);
+          // 1. Try removing owner_user_id
+          const payloadNoOwner = { ...insertPayload };
+          delete payloadNoOwner.owner_user_id;
+          let retryRes = await supabase
             .from("clinic")
-            .insert(insertPayload)
+            .insert(payloadNoOwner)
             .select("clinic_id")
             .maybeSingle();
+
+          // 2. Try with core standard columns only (in case new columns are not migrated yet)
+          if (retryRes.error) {
+            console.warn("Retrying with core columns only:", retryRes.error.message);
+            const corePayload: Record<string, any> = {
+              name: insertPayload.name,
+              address: insertPayload.address,
+              district: insertPayload.district,
+              specialization: insertPayload.specialization,
+              email: insertPayload.email,
+              phone: insertPayload.phone,
+              consultation_fee: insertPayload.consultation_fee,
+              description: insertPayload.description,
+              logo_url: insertPayload.logo_url,
+              business_permit_url: insertPayload.business_permit_url,
+              business_permit_name: insertPayload.business_permit_name,
+              status: "pending",
+            };
+            retryRes = await supabase
+              .from("clinic")
+              .insert(corePayload)
+              .select("clinic_id")
+              .maybeSingle();
+          }
+
+          // 3. Fallback to bare minimal legacy columns
+          if (retryRes.error) {
+            console.warn("Retrying with bare minimal columns:", retryRes.error.message);
+            const minimalPayload: Record<string, any> = {
+              name: formData.name.trim(),
+              district: formData.address.trim(),
+              specialization: formData.specialization || "General Dermatology",
+              email: formData.email.trim(),
+              phone: formData.phone.trim(),
+              address: formData.address.trim(),
+              status: "pending",
+            };
+            retryRes = await supabase
+              .from("clinic")
+              .insert(minimalPayload)
+              .select("clinic_id")
+              .maybeSingle();
+          }
+
           newClinic = retryRes.data;
           clinicErr = retryRes.error;
-        }
-
-        if (clinicErr) {
-          const corePayload: Record<string, any> = {
-            name: formData.name.trim(),
-            address: formData.address.trim(),
-            district: formData.address.trim(),
-            specialization: formData.specialization || "General Dermatology",
-            email: formData.email.trim(),
-            phone: formData.phone.trim(),
-            consultation_fee: isNaN(feeNum) ? 500 : feeNum,
-            description: formData.description.trim() || null,
-            logo_url: uploadedLogoUrl || logoPreview || null,
-            latitude: formData.latitude ?? null,
-            longitude: formData.longitude ?? null,
-            status: "pending",
-          };
-          const coreRes = await supabase
-            .from("clinic")
-            .insert(corePayload)
-            .select("clinic_id")
-            .maybeSingle();
-          if (coreRes.data?.clinic_id) {
-            newClinic = coreRes.data;
-            clinicErr = null;
-          }
         }
 
         if (newClinic?.clinic_id) {
@@ -585,18 +551,6 @@ export default function RegisterClinic() {
                 service_name: s,
               }))
             );
-          }
-
-          if (formData.doctorName.trim()) {
-            await supabase.from("clinic_doctor").insert({
-              clinic_id: newClinic.clinic_id,
-              doctor_name: formData.doctorName.trim(),
-              email: formData.email.trim(),
-              contact_number: formData.phone.trim(),
-              prc_license: formData.prcLicense.trim() || "PRC-PENDING",
-              photo_url: uploadedPrcUrl || null,
-              status: "Active",
-            });
           }
 
           if (formData.openTime && formData.closeTime) {
@@ -636,16 +590,16 @@ export default function RegisterClinic() {
           operatingDays: formData.operatingDays,
           openTime: formData.openTime,
           closeTime: formData.closeTime,
-          doctor: formData.doctorName.trim(),
           specialization: formData.specialization,
           servicesOffered: formData.servicesOffered.trim(),
           description: formData.description.trim(),
-          prcLicense: formData.prcLicense.trim(),
           logo: uploadedLogoUrl || logoPreview || "",
           businessPermitUrl: uploadedPermitUrl || businessPermit?.dataUrl || "",
           businessPermitName: businessPermit?.name || "",
-          prcLicenseFileUrl: uploadedPrcUrl || prcLicenseDoc?.dataUrl || "",
-          prcLicenseFileName: prcLicenseDoc?.name || "",
+          dtiSecUrl: uploadedDtiSecUrl || dtiSecDoc?.dataUrl || "",
+          dtiSecName: dtiSecDoc?.name || "",
+          birUrl: uploadedBirUrl || birDoc?.dataUrl || "",
+          birName: birDoc?.name || "",
           clinicPhotos: uploadedPhotoUrls.length > 0 ? uploadedPhotoUrls : clinicPhotos.map((p) => p.dataUrl),
           latitude: formData.latitude,
           longitude: formData.longitude,
@@ -708,7 +662,7 @@ export default function RegisterClinic() {
             Application Received!
           </h1>
           <p className="text-sm text-slate-600 mb-8 leading-relaxed">
-            Thank you for submitting <strong>{formData.name}</strong> for verification on DermAI. Our medical accreditation team will inspect your submitted credentials and regulatory documents.
+            Thank you for submitting <strong>{formData.name}</strong> for accreditation on DermAI. Our administration team will review your Mayor's Permit and DTI/SEC credentials.
           </p>
 
           <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5 mb-8 text-left space-y-3">
@@ -716,15 +670,15 @@ export default function RegisterClinic() {
               <Clock className="w-5 h-5 text-magenta-500 shrink-0 mt-0.5" />
               <div>
                 <p className="text-xs font-semibold text-slate-800">Processing Timeframe</p>
-                <p className="text-xs text-slate-500">Official review takes approximately <strong>2 to 3 business days</strong>.</p>
+                <p className="text-xs text-slate-500">Official business verification takes approximately <strong>1 to 2 business days</strong>.</p>
               </div>
             </div>
             <div className="flex items-start gap-3">
               <Mail className="w-5 h-5 text-magenta-500 shrink-0 mt-0.5" />
               <div>
-                <p className="text-xs font-semibold text-slate-800">Status Updates</p>
+                <p className="text-xs font-semibold text-slate-800">Status Updates & Next Step</p>
                 <p className="text-xs text-slate-500">
-                  Confirmation and verification badge updates will be emailed to <strong>{formData.email}</strong>.
+                  Approval notifications will be emailed to <strong>{formData.email}</strong>. Once approved, you can log in and add your medical doctors to your roster!
                 </p>
               </div>
             </div>
@@ -767,9 +721,7 @@ export default function RegisterClinic() {
 
   return (
     <div className="min-h-screen bg-white text-slate-900 flex flex-col justify-between selection:bg-magenta-500 selection:text-white relative">
-      {/* ========================================================================= */}
       {/* MINIMAL PROCESSING MODAL OVERLAY */}
-      {/* ========================================================================= */}
       <AnimatePresence>
         {isSubmitting && (
           <motion.div
@@ -817,7 +769,7 @@ export default function RegisterClinic() {
 
               {/* Minimal Status Text */}
               <h3 className="text-base font-display font-bold text-slate-900 mb-1">
-                Processing Verification
+                Processing Legal Verification
               </h3>
               <p className="text-xs text-slate-500 font-medium mb-6 min-h-[1.25rem] transition-all">
                 {submitStatus || "Securing and uploading documents..."}
@@ -840,7 +792,7 @@ export default function RegisterClinic() {
               </div>
 
               <span className="text-[11px] text-slate-400 mt-4">
-                Please keep this tab open
+                Please keep this window open
               </span>
             </motion.div>
           </motion.div>
@@ -855,15 +807,13 @@ export default function RegisterClinic() {
             Clinic Verification Form
           </h1>
           <p className="text-slate-500 text-sm">
-            Complete the steps below to register your clinic, submit credentials, and get verified
+            Register your clinic facility, upload legal business permits, and get verified on DermAI
           </p>
         </div>
 
-        {/* ========================================================================= */}
-        {/* MINIMAL HORIZONTAL STEPPER */}
-        {/* ========================================================================= */}
+        {/* 3-STEP HORIZONTAL STEPPER */}
         <div className="w-full mb-12 px-2 sm:px-6">
-          <div className="grid grid-cols-4 relative">
+          <div className="grid grid-cols-3 relative">
             {STEPS.map((step, idx) => {
               const isCompleted = currentStep > step.id;
               const isCurrent = currentStep === step.id;
@@ -961,14 +911,12 @@ export default function RegisterClinic() {
           </motion.div>
         )}
 
-        {/* ========================================================================= */}
         {/* MULTI-STEP CARD CONTAINER */}
-        {/* ========================================================================= */}
         <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm overflow-hidden">
           <form onSubmit={handleRegister} className="p-6 sm:p-8">
             <AnimatePresence mode="wait" custom={direction}>
               {/* =================================================================== */}
-              {/* STEP 1: CLINIC PROFILE */}
+              {/* STEP 1: CLINIC IDENTITY & CONTACT */}
               {/* =================================================================== */}
               {currentStep === 1 && (
                 <motion.div
@@ -985,7 +933,7 @@ export default function RegisterClinic() {
                     <div className="flex items-center gap-2.5 text-magenta-600 mb-1">
                       <Building2 className="w-5 h-5 text-magenta-500" />
                       <h2 className="text-lg sm:text-xl font-display font-bold text-slate-900">
-                        Clinic Profile & Information
+                        Clinic Profile & Identity
                       </h2>
                     </div>
                     <p className="text-xs text-slate-500">
@@ -1061,7 +1009,7 @@ export default function RegisterClinic() {
                   {/* Clinic Name */}
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Clinic Name <span className="text-rose-500">*</span>
+                      Clinic Business Name <span className="text-rose-500">*</span>
                     </label>
                     <input
                       type="text"
@@ -1094,40 +1042,72 @@ export default function RegisterClinic() {
 
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Phone / Contact Number <span className="text-rose-500">*</span>
+                        Phone / Contact Number (11 digits) <span className="text-rose-500">*</span>
                       </label>
                       <div className="relative">
                         <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
                         <input
                           type="tel"
                           required
+                          maxLength={11}
                           value={formData.phone}
-                          onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                          placeholder="(032) 234-5678 or 0917-123-4567"
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              phone: e.target.value.replace(/\D/g, "").slice(0, 11),
+                            })
+                          }
+                          placeholder="09171234567"
                           className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all"
                         />
                       </div>
                     </div>
                   </div>
 
-                  {/* Clinic Description */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      About the Clinic / Mission
-                    </label>
-                    <textarea
-                      value={formData.description}
-                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                      placeholder="Briefly describe your clinical philosophy, equipment, or specialties offered to patients."
-                      rows={3}
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all resize-none"
-                    />
+                  {/* Specialization & Consultation Fee (2-col) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        Primary Specialization <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        required
+                        value={formData.specialization}
+                        onChange={(e) => setFormData({ ...formData, specialization: e.target.value })}
+                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 outline-none focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 transition-all cursor-pointer"
+                      >
+                        {specializations.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        Standard Consultation Fee (₱)
+                      </label>
+                      <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden bg-white focus-within:border-magenta-500 focus-within:ring-4 focus-within:ring-magenta-500/10 transition-all">
+                        <span className="px-3.5 py-3 text-sm text-slate-700 bg-slate-50 border-r border-slate-200 font-bold select-none">
+                          ₱
+                        </span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={formData.consultationFee}
+                          onChange={(e) => setFormData({ ...formData, consultationFee: e.target.value })}
+                          placeholder="500"
+                          className="w-full px-3 py-3 text-sm text-slate-900 placeholder:text-slate-400 bg-transparent outline-none"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </motion.div>
               )}
 
               {/* =================================================================== */}
-              {/* STEP 2: LOCATION & OPERATING HOURS */}
+              {/* STEP 2: LOCATION, HOURS & SERVICES */}
               {/* =================================================================== */}
               {currentStep === 2 && (
                 <motion.div
@@ -1148,7 +1128,7 @@ export default function RegisterClinic() {
                       </h2>
                     </div>
                     <p className="text-xs text-slate-500">
-                      Set your clinic address and schedule so patients in Cebu can find and book appointments easily.
+                      Set your clinic address, map pinpoint, and operating hours for patient discovery.
                     </p>
                   </div>
 
@@ -1197,23 +1177,21 @@ export default function RegisterClinic() {
                     />
                   </div>
 
-                  {/* Operating Days */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Operating Days <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={formData.operatingDays}
-                      onChange={(e) => setFormData({ ...formData, operatingDays: e.target.value })}
-                      placeholder="e.g., Monday - Saturday"
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all"
-                    />
-                  </div>
-
-                  {/* Operating Hours (Open/Close) + Consultation Fee */}
+                  {/* Operating Days & Hours */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        Operating Days <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.operatingDays}
+                        onChange={(e) => setFormData({ ...formData, operatingDays: e.target.value })}
+                        placeholder="Monday - Saturday"
+                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all"
+                      />
+                    </div>
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                         Opening Time <span className="text-rose-500">*</span>
@@ -1238,120 +1216,17 @@ export default function RegisterClinic() {
                         className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all"
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Consultation Fee (₱)
-                      </label>
-                      <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden bg-white focus-within:border-magenta-500 focus-within:ring-4 focus-within:ring-magenta-500/10 transition-all">
-                        <span className="px-3.5 py-3 text-sm text-slate-700 bg-slate-50 border-r border-slate-200 font-bold select-none">
-                          ₱
-                        </span>
-                        <input
-                          type="number"
-                          min={0}
-                          value={formData.consultationFee}
-                          onChange={(e) => setFormData({ ...formData, consultationFee: e.target.value })}
-                          placeholder="500"
-                          className="w-full px-3 py-3 text-sm text-slate-900 placeholder:text-slate-400 bg-transparent outline-none"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-
-              {/* =================================================================== */}
-              {/* STEP 3: MEDICAL STAFF & SERVICES */}
-              {/* =================================================================== */}
-              {currentStep === 3 && (
-                <motion.div
-                  key="step-3"
-                  custom={direction}
-                  variants={slideVariants}
-                  initial="enter"
-                  animate="center"
-                  exit="exit"
-                  transition={{ duration: 0.25 }}
-                  className="space-y-6"
-                >
-                  <div className="border-b border-slate-100 pb-4">
-                    <div className="flex items-center gap-2.5 text-magenta-600 mb-1">
-                      <Stethoscope className="w-5 h-5 text-magenta-500" />
-                      <h2 className="text-lg sm:text-xl font-display font-bold text-slate-900">
-                        Medical Staff & Practice Services
-                      </h2>
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      Specify the primary physician credentials, specialization field, and treatments offered.
-                    </p>
-                  </div>
-
-                  {/* Doctor Full Name */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Doctor in Charge (Full Name & Titles) <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
-                      <input
-                        type="text"
-                        required
-                        value={formData.doctorName}
-                        onChange={(e) => setFormData({ ...formData, doctorName: e.target.value })}
-                        placeholder="e.g., Dr. Maria Santos, MD, FPDS"
-                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Specialization & PRC License (2-col) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Specialization <span className="text-rose-500">*</span>
-                      </label>
-                      <select
-                        required
-                        value={formData.specialization}
-                        onChange={(e) => setFormData({ ...formData, specialization: e.target.value })}
-                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 outline-none focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 transition-all cursor-pointer"
-                      >
-                        {specializations.map((s) => (
-                          <option key={s} value={s}>
-                            {s}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        PRC License Number <span className="text-rose-500">*</span>
-                      </label>
-                      <div className="relative">
-                        <ShieldCheck className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
-                        <input
-                          type="text"
-                          required
-                          value={formData.prcLicense}
-                          onChange={(e) => setFormData({ ...formData, prcLicense: e.target.value })}
-                          placeholder="e.g., 0123456"
-                          className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all"
-                        />
-                      </div>
-                    </div>
                   </div>
 
                   {/* Services Offered */}
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Services & Treatments Offered <span className="text-rose-500">*</span>
+                      Clinical Services & Treatments Offered
                     </label>
                     <p className="text-[11px] text-slate-400 mb-2">
-                      Click tags to quickly add or type your custom services separated by commas:
+                      Click tags to quickly add or type custom services separated by commas:
                     </p>
 
-                    {/* Quick Suggestion Pills */}
                     <div className="flex flex-wrap gap-1.5 mb-3">
                       {popularServices.map((srv) => {
                         const isSelected = formData.servicesOffered
@@ -1377,10 +1252,23 @@ export default function RegisterClinic() {
                     </div>
 
                     <textarea
-                      required
                       value={formData.servicesOffered}
                       onChange={(e) => setFormData({ ...formData, servicesOffered: e.target.value })}
                       placeholder="e.g., Acne Treatment, Laser Therapy, Chemical Peel, Mole Removal"
+                      rows={2}
+                      className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all resize-none"
+                    />
+                  </div>
+
+                  {/* Description */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      About the Clinic (Optional)
+                    </label>
+                    <textarea
+                      value={formData.description}
+                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                      placeholder="Briefly describe your clinical facility, cutting-edge equipment, or patient care philosophy."
                       rows={2}
                       className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all resize-none"
                     />
@@ -1389,11 +1277,11 @@ export default function RegisterClinic() {
               )}
 
               {/* =================================================================== */}
-              {/* STEP 4: VERIFICATION DOCUMENTS & SUMMARY */}
+              {/* STEP 3: LEGAL BUSINESS DOCUMENTS & GALLERY */}
               {/* =================================================================== */}
-              {currentStep === 4 && (
+              {currentStep === 3 && (
                 <motion.div
-                  key="step-4"
+                  key="step-3"
                   custom={direction}
                   variants={slideVariants}
                   initial="enter"
@@ -1406,19 +1294,19 @@ export default function RegisterClinic() {
                     <div className="flex items-center gap-2.5 text-magenta-600 mb-1">
                       <FileBadge className="w-5 h-5 text-magenta-500" />
                       <h2 className="text-lg sm:text-xl font-display font-bold text-slate-900">
-                        Verification Documents & Gallery
+                        Legal Business Documents & Review
                       </h2>
                     </div>
                     <p className="text-xs text-slate-500">
-                      Upload your official business permit and medical license scans to complete identity verification.
+                      Upload your official business permits (PDF or photo) to verify your clinic legitimacy.
                     </p>
                   </div>
 
-                  {/* 1. Business Permit Upload */}
+                  {/* 1. Mayor's / Business Permit (Required) */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-xs font-semibold text-slate-700">
-                        1. Business Permit / DTI / SEC Registration <span className="text-rose-500">*</span>
+                        1. Mayor's / Business Permit <span className="text-rose-500">*</span>
                       </label>
                       {businessPermit && (
                         <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1">
@@ -1478,13 +1366,13 @@ export default function RegisterClinic() {
                         onDrop={(e: DragEvent) => {
                           e.preventDefault();
                           const f = e.dataTransfer.files?.[0];
-                          if (f) processPermitFile(f);
+                          if (f) processDocumentFile(f, setBusinessPermit);
                         }}
-                        className="border-2 border-dashed border-slate-200 bg-slate-50/50 hover:border-magenta-400 hover:bg-magenta-50/30 rounded-2xl p-5 text-center cursor-pointer transition-all group"
+                        className="border-2 border-dashed border-slate-200 bg-slate-50/50 hover:border-magenta-400 hover:bg-magenta-50/30 rounded-2xl p-4 text-center cursor-pointer transition-all group"
                       >
                         <Upload className="w-6 h-6 text-slate-400 mx-auto mb-1.5 group-hover:text-magenta-600 transition-colors" />
                         <p className="text-xs font-semibold text-slate-900 group-hover:text-magenta-600">
-                          Click or drag & drop Business Permit
+                          Click or drag & drop Mayor's / Business Permit
                         </p>
                         <p className="text-[11px] text-slate-400 mt-0.5">
                           PDF, PNG, JPG, WEBP up to 10 MB
@@ -1493,13 +1381,13 @@ export default function RegisterClinic() {
                     )}
                   </div>
 
-                  {/* 2. PRC License Document Upload */}
+                  {/* 2. DTI Certificate or SEC Registration (Required) */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-xs font-semibold text-slate-700">
-                        2. PRC License Card / Scanned Document <span className="text-rose-500">*</span>
+                        2. DTI Certificate (Sole Proprietor) or SEC Registration (Corporation) <span className="text-rose-500">*</span>
                       </label>
-                      {prcLicenseDoc && (
+                      {dtiSecDoc && (
                         <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1">
                           <CheckCircle2 className="w-3.5 h-3.5" /> File attached
                         </span>
@@ -1507,18 +1395,18 @@ export default function RegisterClinic() {
                     </div>
 
                     <input
-                      ref={prcInputRef}
+                      ref={dtiSecInputRef}
                       type="file"
                       accept=".pdf,image/png,image/jpeg,image/webp,image/jpg"
                       className="hidden"
-                      onChange={handlePrcChange}
+                      onChange={handleDtiSecChange}
                     />
 
-                    {prcLicenseDoc ? (
+                    {dtiSecDoc ? (
                       <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
                         <div className="flex items-center gap-3 overflow-hidden">
                           <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center border border-slate-200 shrink-0">
-                            {prcLicenseDoc.isPdf ? (
+                            {dtiSecDoc.isPdf ? (
                               <FileText className="w-5 h-5 text-rose-500" />
                             ) : (
                               <ShieldCheck className="w-5 h-5 text-magenta-600" />
@@ -1526,24 +1414,24 @@ export default function RegisterClinic() {
                           </div>
                           <div className="truncate">
                             <p className="text-xs font-semibold text-slate-900 truncate">
-                              {prcLicenseDoc.name}
+                              {dtiSecDoc.name}
                             </p>
                             <p className="text-[11px] text-slate-400">
-                              {formatFileSize(prcLicenseDoc.size)} • {prcLicenseDoc.isPdf ? "PDF Document" : "Image File"}
+                              {formatFileSize(dtiSecDoc.size)} • {dtiSecDoc.isPdf ? "PDF Document" : "Image File"}
                             </p>
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0 ml-2">
                           <button
                             type="button"
-                            onClick={() => prcInputRef.current?.click()}
+                            onClick={() => dtiSecInputRef.current?.click()}
                             className="text-xs font-semibold text-magenta-600 hover:text-magenta-700 px-2.5 py-1 rounded-lg hover:bg-magenta-50 transition-colors cursor-pointer"
                           >
                             Replace
                           </button>
                           <button
                             type="button"
-                            onClick={clearPrc}
+                            onClick={clearDtiSec}
                             className="p-1.5 rounded-lg border border-slate-200 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-colors cursor-pointer"
                           >
                             <X className="w-3.5 h-3.5" />
@@ -1552,18 +1440,18 @@ export default function RegisterClinic() {
                       </div>
                     ) : (
                       <div
-                        onClick={() => prcInputRef.current?.click()}
+                        onClick={() => dtiSecInputRef.current?.click()}
                         onDragOver={(e: DragEvent) => e.preventDefault()}
                         onDrop={(e: DragEvent) => {
                           e.preventDefault();
                           const f = e.dataTransfer.files?.[0];
-                          if (f) processPrcFile(f);
+                          if (f) processDocumentFile(f, setDtiSecDoc);
                         }}
-                        className="border-2 border-dashed border-slate-200 bg-slate-50/50 hover:border-magenta-400 hover:bg-magenta-50/30 rounded-2xl p-5 text-center cursor-pointer transition-all group"
+                        className="border-2 border-dashed border-slate-200 bg-slate-50/50 hover:border-magenta-400 hover:bg-magenta-50/30 rounded-2xl p-4 text-center cursor-pointer transition-all group"
                       >
                         <Upload className="w-6 h-6 text-slate-400 mx-auto mb-1.5 group-hover:text-magenta-600 transition-colors" />
                         <p className="text-xs font-semibold text-slate-900 group-hover:text-magenta-600">
-                          Click or drag & drop PRC License Copy
+                          Click or drag & drop DTI Certificate or SEC Registration
                         </p>
                         <p className="text-[11px] text-slate-400 mt-0.5">
                           PDF, PNG, JPG, WEBP up to 10 MB
@@ -1572,11 +1460,90 @@ export default function RegisterClinic() {
                     )}
                   </div>
 
-                  {/* 3. Clinic Photos Gallery */}
+                  {/* 3. BIR Form 2303 Certificate (Optional / Recommended) */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-xs font-semibold text-slate-700">
-                        3. Clinic Photos Gallery ({clinicPhotos.length}/5)
+                        3. BIR Certificate of Registration (Form 2303) <span className="text-slate-400 font-normal">(Optional)</span>
+                      </label>
+                      {birDoc && (
+                        <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> File attached
+                        </span>
+                      )}
+                    </div>
+
+                    <input
+                      ref={birInputRef}
+                      type="file"
+                      accept=".pdf,image/png,image/jpeg,image/webp,image/jpg"
+                      className="hidden"
+                      onChange={handleBirChange}
+                    />
+
+                    {birDoc ? (
+                      <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center border border-slate-200 shrink-0">
+                            {birDoc.isPdf ? (
+                              <FileText className="w-5 h-5 text-rose-500" />
+                            ) : (
+                              <FileCheck className="w-5 h-5 text-emerald-600" />
+                            )}
+                          </div>
+                          <div className="truncate">
+                            <p className="text-xs font-semibold text-slate-900 truncate">
+                              {birDoc.name}
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              {formatFileSize(birDoc.size)} • {birDoc.isPdf ? "PDF Document" : "Image File"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 ml-2">
+                          <button
+                            type="button"
+                            onClick={() => birInputRef.current?.click()}
+                            className="text-xs font-semibold text-magenta-600 hover:text-magenta-700 px-2.5 py-1 rounded-lg hover:bg-magenta-50 transition-colors cursor-pointer"
+                          >
+                            Replace
+                          </button>
+                          <button
+                            type="button"
+                            onClick={clearBir}
+                            className="p-1.5 rounded-lg border border-slate-200 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-colors cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        onClick={() => birInputRef.current?.click()}
+                        onDragOver={(e: DragEvent) => e.preventDefault()}
+                        onDrop={(e: DragEvent) => {
+                          e.preventDefault();
+                          const f = e.dataTransfer.files?.[0];
+                          if (f) processDocumentFile(f, setBirDoc);
+                        }}
+                        className="border-2 border-dashed border-slate-200 bg-slate-50/50 hover:border-magenta-400 hover:bg-magenta-50/30 rounded-2xl p-4 text-center cursor-pointer transition-all group"
+                      >
+                        <Upload className="w-6 h-6 text-slate-400 mx-auto mb-1.5 group-hover:text-magenta-600 transition-colors" />
+                        <p className="text-xs font-semibold text-slate-900 group-hover:text-magenta-600">
+                          Click or drag & drop BIR 2303 Certificate
+                        </p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          PDF, PNG, JPG, WEBP up to 10 MB
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 4. Clinic Facility Photos Gallery */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        4. Facility & Clinic Gallery Photos ({clinicPhotos.length}/5)
                       </label>
                       <span className="text-[11px] text-slate-400">
                         Optional (PNG, JPG up to 5)
@@ -1638,23 +1605,23 @@ export default function RegisterClinic() {
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2.5 text-xs">
                       <div>
-                        <span className="text-slate-400 block text-[11px]">Clinic:</span>
+                        <span className="text-slate-400 block text-[11px]">Clinic Business Name:</span>
                         <span className="font-semibold text-slate-900">{formData.name || "—"}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 block text-[11px]">Doctor in Charge:</span>
-                        <span className="font-semibold text-slate-900">{formData.doctorName || "—"}</span>
                       </div>
                       <div>
                         <span className="text-slate-400 block text-[11px]">Specialization:</span>
                         <span className="font-semibold text-slate-900">{formData.specialization}</span>
                       </div>
                       <div>
-                        <span className="text-slate-400 block text-[11px]">Contact & Email:</span>
+                        <span className="text-slate-400 block text-[11px]">Official Email & Phone:</span>
                         <span className="font-semibold text-slate-900">{formData.phone} • {formData.email}</span>
                       </div>
+                      <div>
+                        <span className="text-slate-400 block text-[11px]">Operating Hours:</span>
+                        <span className="font-semibold text-slate-900">{formData.operatingDays} ({formData.openTime} - {formData.closeTime})</span>
+                      </div>
                       <div className="sm:col-span-2">
-                        <span className="text-slate-400 block text-[11px]">Address:</span>
+                        <span className="text-slate-400 block text-[11px]">Complete Address:</span>
                         <span className="font-semibold text-slate-900">{formData.address || "—"}</span>
                       </div>
                     </div>
@@ -1664,16 +1631,14 @@ export default function RegisterClinic() {
                   <div className="rounded-xl bg-magenta-50/70 border border-magenta-100 p-3.5 flex items-start gap-2.5 text-xs text-slate-700">
                     <Clock className="w-4 h-4 text-magenta-500 shrink-0 mt-0.5" />
                     <p>
-                      By submitting this form, you confirm that all entered details and documents are authentic. Verification is completed by DermAI administrators within <strong>2-3 business days</strong>.
+                      By submitting this registration, you confirm that all entered details and business documents are authentic. Once approved, you can log in to add your medical doctors and manage patient bookings.
                     </p>
                   </div>
                 </motion.div>
               )}
             </AnimatePresence>
 
-            {/* =================================================================== */}
             {/* ACTION FOOTER CONTROLS */}
-            {/* =================================================================== */}
             <div className="pt-8 mt-8 border-t border-slate-100 flex items-center justify-between gap-3">
               {currentStep > 1 ? (
                 <button
@@ -1689,7 +1654,7 @@ export default function RegisterClinic() {
                 <div />
               )}
 
-              {currentStep < 4 ? (
+              {currentStep < 3 ? (
                 <button
                   type="button"
                   onClick={handleNextStep}

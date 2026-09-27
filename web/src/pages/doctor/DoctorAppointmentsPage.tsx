@@ -37,6 +37,32 @@ const DECLINE_REASONS = [
   "Doctor on scheduled medical / academic leave",
 ];
 
+function formatScheduleDateTime(dateStr?: string, timeStr?: string): string {
+  if (!dateStr) return "Schedule pending";
+  try {
+    const dt = new Date(dateStr.includes("T") ? dateStr : `${dateStr}T${timeStr || "09:00"}:00`);
+    if (isNaN(dt.getTime())) return dateStr;
+    const dateFormatted = dt.toLocaleDateString("en-PH", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+    const timeFormatted = timeStr && !timeStr.includes("—")
+      ? formatTimeSlot(timeStr)
+      : dt.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true });
+    return `${dateFormatted} at ${timeFormatted}`;
+  } catch {
+    return dateStr;
+  }
+}
+
+function formatTimeSlot(timeStr: string): string {
+  try {
+    const [h, m] = timeStr.split(":").map(Number);
+    const ampm = h >= 12 ? "PM" : "AM";
+    const hour = h % 12 || 12;
+    return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+  } catch {
+    return timeStr;
+  }
+}
+
 function getConditionDetail(conditionId?: string) {
   return skinConditions.find((c) => c.id === conditionId);
 }
@@ -142,7 +168,7 @@ export default function DoctorAppointmentsPage() {
       <div>
         <h1 className="text-2xl font-display font-bold text-gray-900">Pre-Consultation Patient Review</h1>
         <p className="text-sm text-gray-500 mt-1 max-w-3xl leading-relaxed">
-          Review incoming patient cases assigned to you by the clinic. When you approve, your clinic will finalize the date and time. If you decline, your clinic will be notified internally to re-assign the patient to another doctor.
+          Review incoming patient cases assigned to you by the clinic. When you accept, the consultation schedule is finalized immediately and added to your upcoming calendar. If you decline, your clinic will be notified to re-assign another doctor.
         </p>
       </div>
 
@@ -229,14 +255,9 @@ export default function DoctorAppointmentsPage() {
                             <CheckCircle2 className="w-3 h-3 text-emerald-700" /> Consultation Completed
                           </span>
                         )}
-                        {isApproved && !isScheduled && (
+                        {isApproved && (
                           <span className="text-[10px] px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Approved by You — Awaiting Clinic Schedule
-                          </span>
-                        )}
-                        {isApproved && isScheduled && (
-                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-bold flex items-center gap-1">
-                            <Calendar className="w-3 h-3 text-blue-600" /> Confirmed Schedule: {appt.date} {appt.time}
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Confirmed &amp; Finalized
                           </span>
                         )}
                         {isRejected && (
@@ -260,6 +281,15 @@ export default function DoctorAppointmentsPage() {
                           year: "numeric",
                         })}
                       </span>
+                    </div>
+
+                    {/* Patient Requested Schedule */}
+                    <div className="mt-2.5 p-2.5 rounded-xl bg-blue-50/70 border border-blue-100 flex items-center gap-2 text-xs">
+                      <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
+                      <div className="min-w-0">
+                        <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">Patient's Preferred Schedule</span>
+                        <span className="font-bold text-blue-950 truncate">{formatScheduleDateTime(appt.date, appt.time)}</span>
+                      </div>
                     </div>
 
                     {appt.notes && (
@@ -435,6 +465,24 @@ export default function DoctorAppointmentsPage() {
 
                 {/* Modal Body */}
                 <div className="overflow-y-auto flex-1 p-6 space-y-5">
+                  {/* Patient's Selected Schedule Banner */}
+                  <div className="rounded-2xl border border-blue-200 bg-linear-to-r from-blue-50/90 to-indigo-50/90 p-4 flex items-center justify-between gap-3 shadow-2xs">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                        <Calendar className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Patient's Preferred Schedule</p>
+                        <p className="text-sm font-bold text-blue-950 truncate">
+                          {formatScheduleDateTime(reviewModal.appointment.date, reviewModal.appointment.time)}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="shrink-0 text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                      Selected Slot
+                    </span>
+                  </div>
+
                   {/* Patient Info */}
                   <div className="grid grid-cols-[130px_1fr] gap-3">
                     {[
@@ -453,6 +501,12 @@ export default function DoctorAppointmentsPage() {
                       { label: "Email", value: reviewModal.appointment.patientEmail },
                       { label: "Address", value: reviewModal.appointment.patientAddress },
                       { label: "Contact", value: reviewModal.appointment.patientContact },
+                      {
+                        label: "Emergency",
+                        value: reviewModal.appointment.emergencyContactName
+                          ? `${reviewModal.appointment.emergencyContactName} ${reviewModal.appointment.emergencyRelationship ? `(${reviewModal.appointment.emergencyRelationship})` : ""} · ${reviewModal.appointment.emergencyContactPhone || ""}`
+                          : undefined,
+                      },
                     ].map(({ label, value }) => (
                       <div key={label} className="contents">
                         <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide self-center">
@@ -652,7 +706,7 @@ export default function DoctorAppointmentsPage() {
                   {/* Decision Section */}
                   <div className="pt-2 border-t border-gray-100">
                     <p className="text-sm font-bold text-gray-900 mb-2">
-                      Do you accept this patient referral? <span className="text-red-500">*</span>
+                      Review &amp; Decision for this Schedule <span className="text-red-500">*</span>
                     </p>
                     <div className="grid grid-cols-2 gap-3">
                       <button
@@ -664,7 +718,7 @@ export default function DoctorAppointmentsPage() {
                             : "border-gray-200 bg-white text-gray-600 hover:border-green-300"
                         }`}
                       >
-                        <CheckCircle2 className="w-4 h-4 text-green-600" /> Accept Patient
+                        <CheckCircle2 className="w-4 h-4 text-green-600" /> Accept &amp; Finalize Schedule
                       </button>
                       <button
                         type="button"
@@ -675,7 +729,7 @@ export default function DoctorAppointmentsPage() {
                             : "border-gray-200 bg-white text-gray-600 hover:border-red-300"
                         }`}
                       >
-                        <XCircle className="w-4 h-4 text-red-600" /> Decline / Cannot Take
+                        <XCircle className="w-4 h-4 text-red-600" /> Decline (Reassign)
                       </button>
                     </div>
 
@@ -684,7 +738,7 @@ export default function DoctorAppointmentsPage() {
                       <div className="mt-3 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-start gap-2">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                         <p className="leading-relaxed">
-                          <strong>Accept Patient:</strong> Confirming acceptance will notify your clinic scheduler to finalize and lock the consultation date &amp; time with the patient.
+                          <strong>Accept &amp; Finalize Schedule:</strong> Confirming acceptance will <strong>immediately finalize and lock</strong> this consultation schedule. It will appear on your upcoming appointments calendar and clinic records.
                         </p>
                       </div>
                     )}
@@ -693,7 +747,7 @@ export default function DoctorAppointmentsPage() {
                       <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
                         <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                         <p className="leading-relaxed">
-                          <strong>Decline Referral:</strong> Declining will alert your clinic triage team to <strong>re-assign another doctor</strong> from your clinic. (The patient will not see this decline).
+                          <strong>Decline Referral:</strong> Declining will notify your clinic triage team to <strong>re-assign another doctor</strong> from your clinic roster.
                         </p>
                       </div>
                     )}
@@ -800,11 +854,11 @@ export default function DoctorAppointmentsPage() {
                       </>
                     ) : reviewModal.decision === "rejected" ? (
                       <>
-                        <XCircle className="w-4 h-4" /> Decline &amp; Notify Clinic
+                        <XCircle className="w-4 h-4" /> Decline &amp; Send for Reassignment
                       </>
                     ) : (
                       <>
-                        <CheckCircle2 className="w-4 h-4" /> Accept Patient &amp; Send to Clinic
+                        <CheckCircle2 className="w-4 h-4" /> Accept &amp; Finalize Schedule
                       </>
                     )}
                   </button>

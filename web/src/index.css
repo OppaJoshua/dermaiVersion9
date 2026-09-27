@@ -15,3 +15,40 @@
   --font-display: "Poppins", sans-serif;
   --font-mono-accent: "JetBrains Mono", monospace;
 }
+
+/* Minimal Flat Overrides - No Shadows */
+.leaflet-popup-content-wrapper {
+  box-shadow: none !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 1rem !important;
+  padding: 0 !important;
+  background: #ffffff !important;
+  overflow: hidden !important;
+}
+
+.leaflet-popup-tip-container {
+  display: none !important;
+}
+
+.leaflet-bar {
+  box-shadow: none !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 0.75rem !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+.leaflet-bar a {
+  background-color: #ffffff !important;
+  color: #374151 !important;
+  border-bottom: 1px solid #f3f4f6 !important;
+}
+
+.leaflet-bar a:hover {
+  background-color: #f9fafb !important;
+  color: #111827 !important;
+}
+
+.leaflet-bar a:last-child {
+  border-bottom: none !important;
+}

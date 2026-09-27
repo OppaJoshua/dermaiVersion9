@@ -332,7 +332,7 @@ export default function ScanSkinPage() {
   useEffect(() => {
     try {
       sessionStorage.setItem("dermai_scan_answers", JSON.stringify(answers));
-    } catch {}
+    } catch { }
   }, [answers]);
 
   const currentQuestion = QUESTIONS[qIndex];
@@ -1031,8 +1031,8 @@ const handleAnalyze = async () => {
                   {!canScan
                     ? "Out of Free Scans"
                     : !allPhotosUploaded
-                    ? `Add ${2 - uploadedCount} more photo${2 - uploadedCount !== 1 ? "s" : ""} to continue`
-                    : "Analyze Skin Condition"}
+                      ? `Add ${2 - uploadedCount} more photo${2 - uploadedCount !== 1 ? "s" : ""} to continue`
+                      : "Analyze Skin Condition"}
                 </button>
               )}
             </motion.div>
