@@ -63,6 +63,10 @@ alter table if exists clinic add column if not exists consultation_fee decimal(1
 alter table if exists clinic add column if not exists logo_url text;
 alter table if exists clinic add column if not exists business_permit_url text;
 alter table if exists clinic add column if not exists business_permit_name text;
+alter table if exists clinic add column if not exists dti_sec_url text;
+alter table if exists clinic add column if not exists dti_sec_name text;
+alter table if exists clinic add column if not exists bir_url text;
+alter table if exists clinic add column if not exists bir_name text;
 alter table if exists clinic add column if not exists prc_license_file_url text;
 alter table if exists clinic add column if not exists prc_license_file_name text;
 alter table if exists clinic add column if not exists latitude decimal(10,7);
@@ -90,6 +94,7 @@ end $$;
 alter table if exists clinic_doctor add column if not exists email varchar(100);
 alter table if exists clinic_doctor add column if not exists contact_number varchar(30);
 alter table if exists clinic_doctor add column if not exists photo_url text;
+alter table if exists clinic_doctor add column if not exists duty_schedule jsonb;
 alter table if exists clinic_doctor add column if not exists status varchar(20) not null default 'Active';
 alter table if exists clinic_doctor add column if not exists user_id uuid references "user"(user_id) on delete set null;
 alter table if exists clinic_doctor add column if not exists created_at timestamptz not null default now();
@@ -102,6 +107,9 @@ alter table if exists patient_appointment add column if not exists patient_gende
 alter table if exists patient_appointment add column if not exists patient_birthdate date;
 alter table if exists patient_appointment add column if not exists patient_contact varchar(30);
 alter table if exists patient_appointment add column if not exists patient_address text;
+alter table if exists patient_appointment add column if not exists emergency_contact_name varchar(100);
+alter table if exists patient_appointment add column if not exists emergency_contact_phone varchar(30);
+alter table if exists patient_appointment add column if not exists emergency_contact_relationship varchar(50);
 alter table if exists patient_appointment add column if not exists notes text;
 alter table if exists patient_appointment add column if not exists clinic_note text;
 alter table if exists patient_appointment add column if not exists skin_photo_url text;
@@ -290,6 +298,10 @@ create table if not exists clinic (
   logo_url              text,
   business_permit_url   text,
   business_permit_name  text,
+  dti_sec_url           text,
+  dti_sec_name          text,
+  bir_url               text,
+  bir_name              text,
   prc_license_file_url  text,
   prc_license_file_name text,
   owner_user_id         uuid references "user"(user_id) on delete set null
@@ -320,6 +332,10 @@ create table if not exists clinic_doctor (
   contact_number  varchar(30),
   prc_license     varchar(50) not null,
   photo_url       text,
+  duty_days       text[] default array['Monday','Tuesday','Wednesday','Thursday','Friday'],
+  duty_start_time varchar(10) default '09:00',
+  duty_end_time   varchar(10) default '17:00',
+  duty_schedule   jsonb,
   status          varchar(20) not null default 'Active'
                   check (status in ('Active','Inactive')),
   created_at      timestamptz not null default now(),
@@ -1019,14 +1035,16 @@ as $$
 declare
   matched_doctor_id uuid;
   matched_clinic_id uuid;
-  assigned_role varchar(20);
+  assigned_role varchar(20) := 'patient';
+  user_full_name text;
 begin
-  if lower(trim(new.email)) = 'dermaisupport@gmail.com' then
+  -- 1. Determine assigned role based on email
+  if lower(trim(coalesce(new.email, ''))) = 'dermaisupport@gmail.com' then
     assigned_role := 'admin';
   else
     select clinic_id into matched_clinic_id
     from clinic
-    where lower(trim(email)) = lower(trim(new.email))
+    where lower(trim(email)) = lower(trim(coalesce(new.email, '')))
     limit 1;
 
     if matched_clinic_id is not null then
@@ -1034,8 +1052,7 @@ begin
     else
       select doctor_id into matched_doctor_id
       from clinic_doctor
-      where lower(trim(email)) = lower(trim(new.email))
-        and user_id is null
+      where lower(trim(email)) = lower(trim(coalesce(new.email, '')))
       limit 1;
 
       if matched_doctor_id is not null then
@@ -1046,36 +1063,57 @@ begin
     end if;
   end if;
 
-  insert into "user" (user_id, full_name, email, role, google_id)
+  -- 2. Extract full name safely
+  user_full_name := coalesce(
+    new.raw_user_meta_data->>'full_name',
+    new.raw_user_meta_data->>'name',
+    split_part(coalesce(new.email, 'User'), '@', 1),
+    'User'
+  );
+
+  -- 3. If an old orphaned user record exists with this email from an earlier deleted session, delete it cleanly
+  delete from "user"
+  where lower(trim(email)) = lower(trim(coalesce(new.email, '')))
+    and user_id <> new.id;
+
+  -- 4. Upsert user record
+  insert into "user" (user_id, full_name, email, role, google_id, account_status)
   values (
     new.id,
-    coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1)),
-    new.email,
+    user_full_name,
+    coalesce(new.email, ''),
     assigned_role,
-    new.raw_app_meta_data->>'provider_id'
+    new.raw_app_meta_data->>'provider_id',
+    'active'
   )
   on conflict (user_id) do update
     set 
+      email = excluded.email,
       role = case 
-        when lower(trim(new.email)) = 'dermaisupport@gmail.com' then 'admin' 
+        when lower(trim(coalesce(new.email, ''))) = 'dermaisupport@gmail.com' then 'admin' 
         when matched_clinic_id is not null then 'clinic'
         when matched_doctor_id is not null then 'doctor'
         else "user".role 
       end,
-      full_name = coalesce(new.raw_user_meta_data->>'full_name', "user".full_name);
+      full_name = coalesce(user_full_name, "user".full_name);
 
+  -- 5. Link clinic ownership
   if matched_clinic_id is not null then
     update clinic
     set owner_user_id = new.id
-    where clinic_id = matched_clinic_id and (owner_user_id is null or owner_user_id = new.id);
+    where clinic_id = matched_clinic_id;
   end if;
 
+  -- 6. Link doctor
   if matched_doctor_id is not null and assigned_role = 'doctor' then
     update clinic_doctor
     set user_id = new.id
-    where doctor_id = matched_doctor_id and user_id is null;
+    where doctor_id = matched_doctor_id;
   end if;
 
+  return new;
+exception when others then
+  -- Fail-safe: NEVER abort Supabase GoTrue Auth user creation
   return new;
 end;
 $$;
@@ -1085,6 +1123,26 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function handle_new_user();
 
+-- Auto-delete public.user row when user is deleted from auth.users (prevents orphaned records)
+create or replace function handle_user_delete()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  delete from public."user" where user_id = old.id;
+  return old;
+exception when others then
+  return old;
+end;
+$$;
+
+drop trigger if exists on_auth_user_deleted on auth.users;
+create trigger on_auth_user_deleted
+  after delete on auth.users
+  for each row execute function handle_user_delete();
+
 -- Prevent unauthorized role escalation & status changes on "user"
 create or replace function enforce_user_role_protection()
 returns trigger
@@ -1093,8 +1151,8 @@ security definer
 set search_path = public
 as $$
 begin
-  if auth.uid() is not null and not is_admin() then
-    if new.role is distinct from old.role then
+  if current_user not in ('postgres', 'service_role') and auth.uid() is not null and not is_admin() then
+    if old.role is not null and new.role is distinct from old.role then
       if new.role = 'clinic' and exists (
         select 1 from clinic where (owner_user_id = auth.uid() or lower(trim(email)) = lower(trim(new.email)))
       ) then
@@ -1103,7 +1161,7 @@ begin
         raise exception 'Only administrators can modify user roles';
       end if;
     end if;
-    if new.account_status is distinct from old.account_status then
+    if old.account_status is not null and new.account_status is distinct from old.account_status then
       raise exception 'Only administrators can modify account status';
     end if;
   end if;
@@ -1122,7 +1180,6 @@ create or replace function register_new_clinic(
   p_address text,
   p_email text,
   p_phone text,
-  p_doctor_name text,
   p_specialization text default 'General Dermatology',
   p_services text[] default array[]::text[],
   p_consultation_fee decimal default 500,
@@ -1130,12 +1187,13 @@ create or replace function register_new_clinic(
   p_operating_days text default 'Monday - Saturday',
   p_open_time time default '08:00'::time,
   p_close_time time default '17:00'::time,
-  p_prc_license text default 'PRC-PENDING',
   p_logo_url text default null,
   p_business_permit_url text default null,
   p_business_permit_name text default null,
-  p_prc_license_file_url text default null,
-  p_prc_license_file_name text default null,
+  p_dti_sec_url text default null,
+  p_dti_sec_name text default null,
+  p_bir_url text default null,
+  p_bir_name text default null,
   p_photos text[] default array[]::text[],
   p_owner_user_id uuid default null,
   p_latitude decimal default null,
@@ -1148,7 +1206,6 @@ set search_path = public
 as $$
 declare
   v_clinic_id uuid;
-  v_doctor_id uuid;
   v_svc text;
   v_photo text;
   v_idx int := 1;
@@ -1175,8 +1232,10 @@ begin
     logo_url,
     business_permit_url,
     business_permit_name,
-    prc_license_file_url,
-    prc_license_file_name,
+    dti_sec_url,
+    dti_sec_name,
+    bir_url,
+    bir_name,
     latitude,
     longitude,
     status,
@@ -1193,8 +1252,10 @@ begin
     p_logo_url,
     p_business_permit_url,
     p_business_permit_name,
-    p_prc_license_file_url,
-    p_prc_license_file_name,
+    p_dti_sec_url,
+    p_dti_sec_name,
+    p_bir_url,
+    p_bir_name,
     p_latitude,
     p_longitude,
     'pending',
@@ -1202,30 +1263,7 @@ begin
   )
   returning clinic_id into v_clinic_id;
 
-  if p_doctor_name is not null and trim(p_doctor_name) <> '' then
-    insert into clinic_doctor (
-      clinic_id,
-      user_id,
-      doctor_name,
-      email,
-      contact_number,
-      prc_license,
-      photo_url,
-      status
-    ) values (
-      v_clinic_id,
-      v_effective_owner_id,
-      p_doctor_name,
-      coalesce(p_email, 'clinic@dermai.com'),
-      p_phone,
-      coalesce(p_prc_license, 'PRC-PENDING'),
-      p_prc_license_file_url,
-      'Active'
-    )
-    returning doctor_id into v_doctor_id;
-  end if;
-
-  if p_services is not null then
+  if p_services is not null and array_length(p_services, 1) > 0 then
     foreach v_svc in array p_services loop
       if trim(v_svc) <> '' then
         insert into clinic_service_offered (clinic_id, service_name)
@@ -1242,7 +1280,7 @@ begin
     coalesce(p_close_time, '17:00'::time)
   );
 
-  if p_photos is not null then
+  if p_photos is not null and array_length(p_photos, 1) > 0 then
     foreach v_photo in array p_photos loop
       if trim(v_photo) <> '' then
         insert into clinic_photo (clinic_id, photo_url, sort_order)
