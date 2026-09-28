@@ -102,3 +102,21 @@ def validate_config():
         raise ValueError(f"Expected 5 classes, got {len(CLASS_NAMES)}")
     
     return True
+
+
+# ============================================
+# HUMAN-SKIN VALIDATOR CONFIGURATION
+# ============================================
+
+# Path to the trained skin validator model
+SKIN_VALIDATOR_PATH = BASE_DIR / "models" / "skin_validator_final.h5"
+
+# Threshold for accepting an image as human skin.
+# Tested on the test set: 99.70% accuracy, 0% FNR, 0.67% FPR.
+# 0.5 is the natural midpoint of the sigmoid output.
+SKIN_VALIDATOR_THRESHOLD = float(os.getenv("SKIN_VALIDATOR_THRESHOLD", "0.5"))
+
+# Fallback classifier confidence threshold (secondary check, kept as safety net)
+CLASSIFIER_CONFIDENCE_FALLBACK = float(
+    os.getenv("CLASSIFIER_CONFIDENCE_FALLBACK", "65.0")
+)

@@ -33,7 +33,13 @@ async def lifespan(app: FastAPI):
     print(f"   Model: {MODEL_PATH}")
     print(f"   Classes: {CLASS_NAMES}")
     
-    # Load model
+    # Load skin validator first (it's the pre-check)
+    from app.services.skin_validator import skin_validator
+    print("\n📁 Loading human-skin validator...")
+    skin_validator.load()
+
+    # Load the skin-condition classifier
+    print("\n📁 Loading skin-condition classifier...")
     model_loader.load()
     
     print("=" * 70)

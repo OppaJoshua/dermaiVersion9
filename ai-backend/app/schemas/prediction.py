@@ -16,6 +16,12 @@ class PredictionResponse(BaseModel):
     confidence_level: str = Field(..., description="high | medium | low")
     probabilities: Dict[str, float] = Field(..., description="All class probabilities")
     inference_time_ms: int = Field(..., description="Time taken for inference")
+    skin_score: float = Field(
+        1.0,
+        ge=0,
+        le=1,
+        description="Human-skin validator confidence (0=invalid, 1=valid)",
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -33,6 +39,7 @@ class PredictionResponse(BaseModel):
                     "Vitiligo": 2.02,
                 },
                 "inference_time_ms": 187,
+                "skin_score": 0.9987,
             }
         }
     }
