@@ -209,6 +209,15 @@ export default function DoctorScheduledAppointmentsPage() {
                     {appt.patientName || "Patient"}
                   </p>
                   <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                    {appt.isAssignedToMe ? (
+                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                        Assigned to You
+                      </span>
+                    ) : appt.assignedDoctorName && !appt.assignedDoctorName.toLowerCase().includes("unassigned") ? (
+                      <span className="text-[10px] font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded">
+                        {appt.assignedDoctorName}
+                      </span>
+                    ) : null}
                     {appt.patientGender && (
                       <span className="text-[10px] font-semibold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
                         {appt.patientGender}

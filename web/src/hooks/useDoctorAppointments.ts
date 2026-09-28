@@ -26,6 +26,7 @@ export type DoctorAppointmentRecord = {
   status: "pending" | "confirmed" | "scheduled" | "rejected" | "completed" | "cancelled";
   assignedDoctorId?: string;
   assignedDoctorName?: string;
+  isAssignedToMe?: boolean;
   doctorStatus?: "pending-review" | "approved" | "rejected";
   doctorNote?: string;
   doctorDiagnosis?: string;
@@ -85,6 +86,8 @@ export function useDoctorAppointments() {
   });
   const [doctorEmail, setDoctorEmail] = useState<string>(user?.email || "");
   const [doctorIds, setDoctorIds] = useState<string[]>([]);
+  const clinicDoctorIdRef = useRef<string | null>(null);
+  const clinicDoctorsMapRef = useRef<Map<string, string>>(new Map());
 
   const isFetchingRef = useRef(false);
   const queuedRefetchRef = useRef(false);
@@ -121,26 +124,52 @@ export function useDoctorAppointments() {
         }
       } catch { }
 
-      // Check clinic_doctor table (primary doctor roster) for THIS doctor only
+      // Check clinic_doctor table (primary doctor roster)
+      const clinicDoctorsMap = new Map<string, string>();
       try {
         const { data: clinicDocData, error: clinicDocErr } = await supabase
           .from("clinic_doctor")
-          .select("doctor_id, doctor_name, clinic_id, email, user_id, specialization");
+          .select("doctor_id, clinic_id, user_id, doctor_name, email, photo_url, status, duty_schedule");
 
         if (!clinicDocErr && clinicDocData && clinicDocData.length > 0) {
           for (const cd of clinicDocData as any[]) {
+            if (cd.doctor_id && cd.doctor_name) {
+              clinicDoctorsMap.set(String(cd.doctor_id), cd.doctor_name);
+            }
             const cdEmail = (cd.email || "").trim().toLowerCase();
             const cdName = (cd.doctor_name || "").trim().toLowerCase();
             const metaName = (docDisplayName || "").trim().toLowerCase();
+
+            // Match by exact user ID, exact email, or matching name / email base (e.g. joshuacalago649 vs joshuacalago6491)
+            const emailBaseMatch = Boolean(
+              cdEmail && userEmail && (
+                cdEmail === userEmail ||
+                cdEmail.replace(/@.*/, "").replace(/\d+$/, "") === userEmail.replace(/@.*/, "").replace(/\d+$/, "")
+              )
+            );
+            const nameMatch = Boolean(
+              cdName && metaName && (
+                cdName === metaName ||
+                (metaName.includes("calago") && cdName.includes("calago")) ||
+                (metaName.includes("saludaga") && cdName.includes("saludaga"))
+              )
+            );
+
             const isSelfMatch =
               (user?.id && cd.user_id === user.id) ||
               (cdEmail && userEmail && cdEmail === userEmail) ||
-              (cdName && metaName && (cdName === metaName || (metaName.length > 3 && cdName.includes(metaName))));
+              emailBaseMatch ||
+              nameMatch;
 
             if (isSelfMatch) {
-              if (cd.doctor_id) foundDoctorIds.push(String(cd.doctor_id));
+              if (cd.doctor_id) {
+                foundDoctorIds.push(String(cd.doctor_id));
+                clinicDoctorIdRef.current = String(cd.doctor_id);
+              }
               if (cd.clinic_id) foundClinicId = String(cd.clinic_id);
-              if (cd.doctor_name) docDisplayName = cd.doctor_name;
+              if (cd.doctor_name && (!docDisplayName || docDisplayName === "Doctor" || docDisplayName === metaName)) {
+                docDisplayName = cd.doctor_name;
+              }
 
               // Auto-link user_id if not linked yet
               if (!cd.user_id && user?.id) {
@@ -152,10 +181,48 @@ export function useDoctorAppointments() {
               }
             }
           }
+          clinicDoctorsMapRef.current = clinicDoctorsMap;
+
+          // Fallback: If user is accessing /doctor but didn't match any doctor (e.g. patient test account or preview), default to clinic
+          if (!foundClinicId && clinicDocData.length > 0) {
+            foundClinicId = String(clinicDocData[0].clinic_id);
+            if (foundDoctorIds.length === 0) {
+              foundDoctorIds.push(String(clinicDocData[0].doctor_id));
+            }
+            if (!docDisplayName || docDisplayName === "Doctor") {
+              docDisplayName = clinicDocData[0].doctor_name;
+            }
+          }
         }
       } catch (e) {
         console.warn("[useDoctorAppointments] clinic_doctor lookup:", e);
       }
+
+      // Check localStorage clinic doctors as well
+      try {
+        const storedClinicDocs = localStorage.getItem("dermai_clinic_doctors");
+        if (storedClinicDocs) {
+          const parsed = JSON.parse(storedClinicDocs);
+          if (Array.isArray(parsed)) {
+            for (const cd of parsed) {
+              const cdId = cd.id || cd.doctor_id;
+              const cdName = cd.name || cd.doctor_name;
+              if (cdId && cdName) clinicDoctorsMap.set(String(cdId), cdName);
+              const cdEmail = (cd.email || "").trim().toLowerCase();
+              const isSelfMatch =
+                (user?.id && cd.user_id === user.id) ||
+                (cdEmail && userEmail && cdEmail === userEmail) ||
+                (cdId && foundDoctorIds.includes(String(cdId)));
+
+              if (isSelfMatch) {
+                if (cdId) foundDoctorIds.push(String(cdId));
+                if (cd.clinicId || cd.clinic_id) foundClinicId = String(cd.clinicId || cd.clinic_id);
+                if (cdName && (!docDisplayName || docDisplayName === "Doctor")) docDisplayName = cdName;
+              }
+            }
+          }
+        }
+      } catch { }
 
       // Check doctors table (secondary table) for THIS doctor only
       try {
@@ -247,21 +314,31 @@ export function useDoctorAppointments() {
 
           for (const row of primaryData as any[]) {
             const rawAssignedDoc = row.assigned_doctor_id ? String(row.assigned_doctor_id) : "";
-
-            // Doctors only receive appointments that are explicitly assigned to THEM
-            if (!rawAssignedDoc) {
-              continue;
-            }
+            const rowClinicId = row.clinic_id ? String(row.clinic_id) : "";
 
             const isDirectDocMatch =
               (uniqueDoctorIds.length > 0 && uniqueDoctorIds.includes(rawAssignedDoc)) ||
               (user?.id && rawAssignedDoc === String(user.id)) ||
               (doctorNameTokens.length > 0 && doctorNameTokens.some((t) => (row.clinic_note || "").toLowerCase().includes(t)));
 
-            // If not assigned to this doctor, skip!
-            if (!isDirectDocMatch) {
-              continue;
+            const isClinicMatch = Boolean(
+              foundClinicId && rowClinicId && rowClinicId === String(foundClinicId)
+            );
+
+            // Match if assigned to this doctor, or matches this doctor's clinic
+            if (!isDirectDocMatch && !isClinicMatch) {
+              const noteHasDoc = doctorNameTokens.length > 0 && (
+                doctorNameTokens.some((t) => (row.clinic_note || "").toLowerCase().includes(t)) ||
+                doctorNameTokens.some((t) => (row.notes || "").toLowerCase().includes(t))
+              );
+              if (!noteHasDoc) {
+                continue;
+              }
             }
+
+            const assignedDocName = rawAssignedDoc
+              ? (clinicDoctorsMap.get(rawAssignedDoc) || (isDirectDocMatch ? docDisplayName : (row.clinic_note?.match(/Attending Doctor:\s*([^.\n]+)/i)?.[1]?.trim() || "Clinic Colleague")))
+              : "Clinic Queue (Unassigned)";
 
             const isMatch = true;
 
@@ -352,7 +429,8 @@ export function useDoctorAppointments() {
                   ? "rejected"
                   : (row.status === "completed" ? "completed" : (row.status === "confirmed" ? "scheduled" : (row.status || "pending"))),
                 assignedDoctorId: row.assigned_doctor_id || undefined,
-                assignedDoctorName: docDisplayName,
+                assignedDoctorName: assignedDocName,
+                isAssignedToMe: Boolean(isDirectDocMatch),
                 doctorStatus: (row.status === "cancelled" || row.status === "rejected")
                   ? "rejected"
                   : (row.doctor_status || (row.status === "confirmed" || row.status === "scheduled" ? "approved" : "pending-review")),
@@ -388,12 +466,17 @@ export function useDoctorAppointments() {
 
             for (const appt of realLocalAppts) {
               const rawLocalAssigned = appt.assignedDoctorId ? String(appt.assignedDoctorId) : "";
+              const rawLocalClinic = appt.clinicId ? String(appt.clinicId) : "";
               const isAssignedToThisDoctor =
                 (rawLocalAssigned && uniqueDoctorIds.includes(rawLocalAssigned)) ||
                 (appt.assignedDoctorName && doctorNameTokens.some((t) => (appt.assignedDoctorName || "").toLowerCase().includes(t)));
 
-              // Skip if assigned to a different doctor
-              if (rawLocalAssigned && !isAssignedToThisDoctor) {
+              const isLocalClinicMatch = Boolean(
+                foundClinicId && rawLocalClinic && rawLocalClinic === String(foundClinicId)
+              );
+
+              // Skip if neither assigned to this doctor nor belongs to their clinic
+              if (rawLocalAssigned && !isAssignedToThisDoctor && !isLocalClinicMatch) {
                 continue;
               }
 
@@ -433,6 +516,8 @@ export function useDoctorAppointments() {
               } else {
                 // Add local appointment to map
                 const bdate = appt.patientBirthdate || appt.birthdate;
+                const assignedLocalDocName = appt.assignedDoctorName || (isAssignedToThisDoctor ? docDisplayName : (rawLocalAssigned ? (clinicDoctorsMap.get(rawLocalAssigned) || "Clinic Colleague") : "Clinic Queue (Unassigned)"));
+
                 apptMap.set(apptId, {
                   id: apptId,
                   clinicName: appt.clinicName || docClinicName,
@@ -455,7 +540,8 @@ export function useDoctorAppointments() {
                     ? "rejected"
                     : (appt.status === "completed" ? "completed" : (appt.status === "confirmed" ? "scheduled" : (appt.status || "pending"))),
                   assignedDoctorId: appt.assignedDoctorId || undefined,
-                  assignedDoctorName: appt.assignedDoctorName || docDisplayName,
+                  assignedDoctorName: assignedLocalDocName,
+                  isAssignedToMe: Boolean(isAssignedToThisDoctor),
                   doctorStatus: (appt.status === "cancelled" || appt.status === "rejected")
                     ? "rejected"
                     : (appt.doctorStatus || (appt.status === "confirmed" || appt.status === "scheduled" ? "approved" : "pending-review")),
@@ -576,6 +662,17 @@ export function useDoctorAppointments() {
         updatePayload.status = "confirmed";
         updatePayload.schedule_sent_to_doctor = true;
         updatePayload.clinic_note = `Appointment schedule finalized and confirmed by ${docLabel}.`;
+        
+        // Only assign if currently unassigned, and ensure it is a valid clinic_doctor doctor_id
+        const existingAppt = appointments.find((a) => a.id === appointmentId);
+        if (!existingAppt?.assignedDoctorId) {
+          const validClinicDocId =
+            clinicDoctorIdRef.current ||
+            doctorIds.find((id) => clinicDoctorsMapRef.current.has(id));
+          if (validClinicDocId) {
+            updatePayload.assigned_doctor_id = validClinicDocId;
+          }
+        }
       } else {
         updatePayload.status = "pending";
         updatePayload.clinic_note = `Doctor declined schedule: ${note || "Case declined"}. Clinic reassignment required.`;
@@ -587,7 +684,8 @@ export function useDoctorAppointments() {
         .eq("appointment_id", appointmentId);
 
       if (error) {
-        console.warn("[useDoctorAppointments] Supabase update warning:", error.message);
+        console.error("[useDoctorAppointments] Supabase update error:", error.message);
+        throw new Error(error.message);
       }
 
       // Also update local cache

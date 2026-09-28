@@ -19,7 +19,6 @@ import {
   AlertCircle,
   Camera,
   User,
-  Users,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
@@ -58,14 +57,178 @@ export function normalizeDayName(d: string): string {
   return d;
 }
 
+export function parseDoctorDutyDays(rawDays: any, rawSchedule?: any): string[] {
+  let days: string[] = [];
+
+  if (Array.isArray(rawDays)) {
+    days = rawDays.map(String).map((d) => d.replace(/["'{}]/g, "").trim()).filter(Boolean);
+  } else if (typeof rawDays === "string" && rawDays.trim()) {
+    const trimmed = rawDays.trim();
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          days = parsed.map(String).map((d) => d.replace(/["'{}]/g, "").trim()).filter(Boolean);
+        }
+      } catch {}
+    } else {
+      days = trimmed
+        .replace(/^\{|\}$/g, "")
+        .split(",")
+        .map((s) => s.replace(/["'\\]/g, "").trim())
+        .filter(Boolean);
+    }
+  }
+
+  if (rawSchedule) {
+    let schedObj = rawSchedule;
+    if (typeof rawSchedule === "string" && rawSchedule.trim().startsWith("{")) {
+      try {
+        schedObj = JSON.parse(rawSchedule);
+      } catch {}
+    }
+    if (schedObj && typeof schedObj === "object" && !Array.isArray(schedObj)) {
+      const schedKeys = Object.keys(schedObj).filter(Boolean);
+      if (schedKeys.length > 0 && days.length === 0) {
+        days = schedKeys;
+      }
+    }
+  }
+
+  const normalized = days.map(normalizeDayName).filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+export function parseDoctorDutySchedule(rawSched: any): Record<string, { startTime: string; endTime: string }> | undefined {
+  if (!rawSched) return undefined;
+  let obj = rawSched;
+  if (typeof rawSched === "string") {
+    try {
+      obj = JSON.parse(rawSched);
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+    const result: Record<string, { startTime: string; endTime: string }> = {};
+    for (const [day, shift] of Object.entries(obj)) {
+      if (shift && typeof shift === "object") {
+        const s = shift as any;
+        const normDay = normalizeDayName(day);
+        result[normDay] = {
+          startTime: s.startTime || s.start_time || s.start || "09:00",
+          endTime: s.endTime || s.end_time || s.end || "17:00",
+        };
+      }
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  } else if (Array.isArray(obj)) {
+    const result: Record<string, { startTime: string; endTime: string }> = {};
+    obj.forEach((it: any) => {
+      if (it?.day) {
+        const normDay = normalizeDayName(it.day);
+        result[normDay] = {
+          startTime: it.startTime || it.start_time || it.start || "09:00",
+          endTime: it.endTime || it.end_time || it.end || "17:00",
+        };
+      }
+    });
+    return Object.keys(result).length > 0 ? result : undefined;
+  }
+  return undefined;
+}
+
 export function isDoctorOnDutyOnDay(doc: ClinicDoctorItem, dayOfWeek: string): boolean {
   if (!doc) return false;
   if (doc.status === "Inactive") return false;
   const target = normalizeDayName(dayOfWeek);
-  if (!doc.dutyDays || doc.dutyDays.length === 0) {
-    return !["Saturday", "Sunday"].includes(target);
+
+  if (doc.dutySchedule && typeof doc.dutySchedule === "object") {
+    const scheduleDays = Object.keys(doc.dutySchedule).map(normalizeDayName);
+    if (scheduleDays.length > 0) {
+      return scheduleDays.includes(target);
+    }
   }
-  return doc.dutyDays.some((d) => normalizeDayName(d) === target);
+
+  if (Array.isArray(doc.dutyDays) && doc.dutyDays.length > 0) {
+    return doc.dutyDays.some((d) => normalizeDayName(d) === target);
+  }
+
+  return !["Saturday", "Sunday"].includes(target);
+}
+
+function cleanDocName(name?: string): string {
+  if (!name) return "";
+  return name
+    .toLowerCase()
+    .replace(/^(dr|doctor)\.?\s+/i, "")
+    .replace(/[.,\-_]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function isDoctorMatch(d1: any, d2: any): boolean {
+  if (!d1 || !d2) return false;
+  const id1 = String(d1.id || d1.doctor_id || "");
+  const id2 = String(d2.id || d2.doctor_id || "");
+  if (id1 && id2 && id1 === id2) return true;
+
+  const em1 = String(d1.email || "").toLowerCase().trim();
+  const em2 = String(d2.email || "").toLowerCase().trim();
+  if (em1 && em2 && em1 === em2) return true;
+
+  const n1 = cleanDocName(d1.name || d1.doctor_name || d1.fullName);
+  const n2 = cleanDocName(d2.name || d2.doctor_name || d2.fullName);
+  if (n1 && n2) {
+    if (n1 === n2) return true;
+    if (n1.length >= 3 && n2.length >= 3) {
+      if (n1.includes(n2) || n2.includes(n1)) return true;
+    }
+  }
+
+  return false;
+}
+
+export function getDoctorPhoto(doc?: { id?: string; doctor_id?: string; name?: string; email?: string; photo?: string; photo_url?: string } | null): string {
+  if (!doc) return "";
+  if (doc.photo && typeof doc.photo === "string" && doc.photo.trim().length > 0) {
+    return doc.photo;
+  }
+  if (doc.photo_url && typeof doc.photo_url === "string" && doc.photo_url.trim().length > 0) {
+    return doc.photo_url;
+  }
+
+  // Cross-reference with doctor accounts added in ClinicDoctorsPage
+  try {
+    const cached = localStorage.getItem("dermai_clinic_doctors");
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed)) {
+        const match = parsed.find((c: any) => isDoctorMatch(c, doc) && (c.photo || c.photo_url));
+        if (match && (match.photo || match.photo_url)) {
+          return match.photo || match.photo_url;
+        }
+      }
+    }
+  } catch {}
+
+  // Cross-reference with logged in doctor profile
+  try {
+    const stored = localStorage.getItem("dermai_doctor_profile");
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed.photo) {
+        const cleanTarget = (doc.name || "").toLowerCase().replace(/^(dr|doctor)\.?\s+/i, "").trim();
+        const profName = (parsed.fullName || parsed.name || "").toLowerCase().replace(/^(dr|doctor)\.?\s+/i, "").trim();
+        if (cleanTarget && profName && (cleanTarget === profName || cleanTarget.includes(profName) || profName.includes(cleanTarget))) {
+          return parsed.photo;
+        }
+      }
+    }
+  } catch {}
+
+  return "";
 }
 
 type ClinicData = {
@@ -126,8 +289,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return `${tmrw.getFullYear()}-${String(tmrw.getMonth() + 1).padStart(2, "0")}-${String(tmrw.getDate()).padStart(2, "0")}`;
   });
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>("");
-  const [selectedDoctorFilter, setSelectedDoctorFilter] = useState<string>("all");
-  const [selectedTime, setSelectedTime] = useState("10:00");
+  const [selectedTime, setSelectedTime] = useState("09:00");
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -181,10 +343,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const dayOfWeek = d.toLocaleDateString("en-US", { weekday: "long" });
       const onDutyDocs = doctors.filter((doc) => isDoctorOnDutyOnDay(doc, dayOfWeek));
       const hasDoctorsOnDuty = onDutyDocs.length > 0;
-      
-      const isFilteredDoctorOnDuty = selectedDoctorFilter === "all"
-        ? hasDoctorsOnDuty
-        : onDutyDocs.some((doc) => doc.id === selectedDoctorFilter);
 
       return {
         dateStr,
@@ -196,10 +354,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         isToday,
         onDutyDocs,
         hasDoctorsOnDuty,
-        isFilteredDoctorOnDuty,
       };
     });
-  }, [calendarMonth, selectedClinic?.doctors, selectedDoctorFilter]);
+  }, [calendarMonth, selectedClinic?.doctors]);
 
   // Determine day of week for selectedDate (e.g. "Monday", "Wednesday")
   const dayOfWeekForSelectedDate = useMemo(() => {
@@ -216,7 +373,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   // Filter doctors who are on duty on this day of week
   const onDutyDoctorsForDate = useMemo(() => {
     if (!selectedClinic?.doctors || selectedClinic.doctors.length === 0) return [];
-    if (!dayOfWeekForSelectedDate) return selectedClinic.doctors;
+    if (!dayOfWeekForSelectedDate) return [];
 
     const matched = selectedClinic.doctors.filter((doc) =>
       isDoctorOnDutyOnDay(doc, dayOfWeekForSelectedDate)
@@ -228,11 +385,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   // Active chosen doctor on duty
   const activeDutyDoctor = useMemo<ClinicDoctorItem | null>(() => {
     if (onDutyDoctorsForDate.length === 0) {
-      return selectedClinic?.doctors?.[0] || null;
+      return null;
     }
     const found = onDutyDoctorsForDate.find((d) => d.id === selectedDoctorId);
     return found || onDutyDoctorsForDate[0];
-  }, [onDutyDoctorsForDate, selectedDoctorId, selectedClinic?.doctors]);
+  }, [onDutyDoctorsForDate, selectedDoctorId]);
 
   // Sync selectedDoctorId when onDutyDoctorsForDate updates
   useEffect(() => {
@@ -243,109 +400,56 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     }
   }, [onDutyDoctorsForDate, selectedDoctorId]);
 
-  // Auto-jump to next available on-duty date when doctor filter is selected
-  const handleSelectDoctorFilter = (docId: string) => {
-    setSelectedDoctorFilter(docId);
-    if (docId !== "all") {
-      setSelectedDoctorId(docId);
-      const targetDoc = selectedClinic?.doctors.find((d) => d.id === docId);
-      if (targetDoc) {
-        const [y, m, d] = selectedDate.split("-").map(Number);
-        const curr = new Date(y, m - 1, d);
-        const currDayName = curr.toLocaleDateString("en-US", { weekday: "long" });
-        if (!isDoctorOnDutyOnDay(targetDoc, currDayName)) {
-          // Find next day this doctor works starting from tomorrow
-          const check = new Date();
-          for (let i = 1; i <= 30; i++) {
-            check.setDate(check.getDate() + 1);
-            const cDayName = check.toLocaleDateString("en-US", { weekday: "long" });
-            if (isDoctorOnDutyOnDay(targetDoc, cDayName)) {
-              const nextDateStr = `${check.getFullYear()}-${String(check.getMonth() + 1).padStart(2, "0")}-${String(check.getDate()).padStart(2, "0")}`;
-              setSelectedDate(nextDateStr);
-              setCalendarMonth(new Date(check.getFullYear(), check.getMonth(), 1));
-              break;
-            }
-          }
-        }
-      }
+  // Doctor consultation schedule hours for selected date
+  const activeDoctorHours = useMemo(() => {
+    if (!activeDutyDoctor) {
+      return "General Consultation (Clinic Queue)";
     }
-  };
-
-  // Dynamically generate time slots based on activeDutyDoctor's duty hours for the selected day of week
-  const dynamicTimeSlots = useMemo(() => {
-    let startStr = activeDutyDoctor?.dutyStartTime || "09:00";
-    let endStr = activeDutyDoctor?.dutyEndTime || "17:00";
-
-    if (
-      activeDutyDoctor?.dutySchedule &&
+    const shift =
+      activeDutyDoctor.dutySchedule &&
       dayOfWeekForSelectedDate &&
       activeDutyDoctor.dutySchedule[dayOfWeekForSelectedDate]
-    ) {
-      const customShift = activeDutyDoctor.dutySchedule[dayOfWeekForSelectedDate];
-      if (customShift.startTime && customShift.endTime) {
-        startStr = customShift.startTime;
-        endStr = customShift.endTime;
-      }
-    }
-
-    const [startH, startM] = startStr.split(":").map(Number);
-    const [endH, endM] = endStr.split(":").map(Number);
-
-    const startTotal = (isNaN(startH) ? 9 : startH) * 60 + (isNaN(startM) ? 0 : startM);
-    const endTotal = (isNaN(endH) ? 17 : endH) * 60 + (isNaN(endM) ? 0 : endM);
-
-    const morning: Array<{ value: string; label: string }> = [];
-    const afternoon: Array<{ value: string; label: string }> = [];
-
-    for (let mins = startTotal; mins <= endTotal - 30; mins += 30) {
-      const h = Math.floor(mins / 60);
-      const m = mins % 60;
-      const value = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-      const ampm = h >= 12 ? "PM" : "AM";
-      const displayHour = h % 12 || 12;
-      const label = `${String(displayHour).padStart(2, "0")}:${String(m).padStart(2, "0")} ${ampm}`;
-
-      if (h < 12) {
-        morning.push({ value, label });
-      } else {
-        afternoon.push({ value, label });
-      }
-    }
-
-    if (morning.length === 0 && afternoon.length === 0) {
-      return {
-        morning: [
-          { value: "09:00", label: "09:00 AM" },
-          { value: "09:30", label: "09:30 AM" },
-          { value: "10:00", label: "10:00 AM" },
-          { value: "10:30", label: "10:30 AM" },
-          { value: "11:00", label: "11:00 AM" },
-          { value: "11:30", label: "11:30 AM" },
-        ],
-        afternoon: [
-          { value: "13:00", label: "01:00 PM" },
-          { value: "13:30", label: "01:30 PM" },
-          { value: "14:00", label: "02:00 PM" },
-          { value: "14:30", label: "02:30 PM" },
-          { value: "15:00", label: "03:00 PM" },
-          { value: "15:30", label: "03:30 PM" },
-          { value: "16:00", label: "04:00 PM" },
-          { value: "16:30", label: "04:30 PM" },
-          { value: "17:00", label: "05:00 PM" },
-        ],
-      };
-    }
-
-    return { morning, afternoon };
+        ? activeDutyDoctor.dutySchedule[dayOfWeekForSelectedDate]
+        : { startTime: activeDutyDoctor.dutyStartTime || "09:00", endTime: activeDutyDoctor.dutyEndTime || "17:00" };
+    return `${formatTime12h(shift.startTime)} – ${formatTime12h(shift.endTime)}`;
   }, [activeDutyDoctor, dayOfWeekForSelectedDate]);
 
-  // Keep selectedTime synchronized to available dynamic slots
-  useEffect(() => {
-    const allSlots = [...dynamicTimeSlots.morning, ...dynamicTimeSlots.afternoon];
-    if (allSlots.length > 0 && !allSlots.some((s) => s.value === selectedTime)) {
-      setSelectedTime(allSlots[0].value);
+  // Dynamically compute available appointment slots within the attending doctor's duty shift
+  const availableTimeSlots = useMemo(() => {
+    let startH = 9;
+    let endH = 17;
+
+    if (activeDutyDoctor) {
+      const shift =
+        activeDutyDoctor.dutySchedule &&
+        dayOfWeekForSelectedDate &&
+        activeDutyDoctor.dutySchedule[dayOfWeekForSelectedDate]
+          ? activeDutyDoctor.dutySchedule[dayOfWeekForSelectedDate]
+          : { startTime: activeDutyDoctor.dutyStartTime || "09:00", endTime: activeDutyDoctor.dutyEndTime || "17:00" };
+
+      startH = parseInt(shift.startTime.split(":")[0], 10) || 9;
+      endH = parseInt(shift.endTime.split(":")[0], 10) || 17;
     }
-  }, [dynamicTimeSlots, selectedTime]);
+
+    const slots: string[] = [];
+    for (let h = startH; h < endH; h++) {
+      slots.push(`${String(h).padStart(2, "0")}:00`);
+      if (endH - startH <= 6) {
+        slots.push(`${String(h).padStart(2, "0")}:30`);
+      }
+    }
+    if (slots.length === 0) {
+      slots.push("09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00");
+    }
+    return slots;
+  }, [activeDutyDoctor, dayOfWeekForSelectedDate]);
+
+  // Keep selectedTime synchronized to first available slot if current slot is outside shift
+  useEffect(() => {
+    if (availableTimeSlots.length > 0 && !availableTimeSlots.includes(selectedTime)) {
+      setSelectedTime(availableTimeSlots[0]);
+    }
+  }, [availableTimeSlots, selectedTime]);
 
   const formattedPreviewDate = useMemo(() => {
     if (!selectedDate) return "Select date";
@@ -359,16 +463,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   }, [selectedDate]);
 
   const formattedPreviewTime = useMemo(() => {
-    if (!selectedTime) return "Select time";
-    try {
-      const [h, m] = selectedTime.split(":").map(Number);
-      const ampm = h >= 12 ? "PM" : "AM";
-      const hour = h % 12 || 12;
-      return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
-    } catch {
-      return selectedTime;
-    }
-  }, [selectedTime]);
+    return selectedTime ? formatTime12h(selectedTime) : activeDoctorHours;
+  }, [selectedTime, activeDoctorHours]);
 
   // Prefill AI condition and questionnaire from URL params or local scan storage
   useEffect(() => {
@@ -495,26 +591,41 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           .map((d: any) => {
             const docName = d.doctor_name || d.name || "Attending Dermatologist";
 
-            let pDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-            if (Array.isArray(d.dutyDays) && d.dutyDays.length > 0) pDays = d.dutyDays;
-            else if (Array.isArray(d.duty_days) && d.duty_days.length > 0) pDays = d.duty_days;
-            else if (typeof d.dutyDays === "string" && d.dutyDays.trim()) pDays = d.dutyDays.split(",").map((s: string) => s.trim());
-            else if (typeof d.duty_days === "string" && d.duty_days.trim()) pDays = d.duty_days.split(",").map((s: string) => s.trim());
+            let pDays = parseDoctorDutyDays(d.duty_days || d.dutyDays, d.duty_schedule || d.dutySchedule);
+            let parsedSched = parseDoctorDutySchedule(d.duty_schedule || d.dutySchedule);
+            let startT = d.duty_start_time || d.dutyStartTime || "09:00";
+            let endT = d.duty_end_time || d.dutyEndTime || "17:00";
 
-            let parsedSched: Record<string, { startTime: string; endTime: string }> | undefined = undefined;
-            const rawSched = d.dutySchedule || d.duty_schedule;
-            if (rawSched && typeof rawSched === "object" && !Array.isArray(rawSched)) {
-              parsedSched = rawSched;
-            } else if (Array.isArray(rawSched)) {
-              parsedSched = {};
-              rawSched.forEach((it: any) => {
-                if (it?.day) {
-                  parsedSched![it.day] = {
-                    startTime: it.startTime || it.start_time || it.start || "09:00",
-                    endTime: it.endTime || it.end_time || it.end || "17:00",
-                  };
+            // Live synchronization with clinic roster settings
+            try {
+              const rawDocs = localStorage.getItem("dermai_clinic_doctors");
+              if (rawDocs) {
+                const parsed = JSON.parse(rawDocs);
+                if (Array.isArray(parsed)) {
+                  const match = parsed.find((cd: any) => isDoctorMatch(cd, d));
+                  if (match) {
+                    const localDays = parseDoctorDutyDays(match.dutyDays || match.duty_days, match.dutySchedule || match.duty_schedule);
+                    if (localDays.length > 0) {
+                      pDays = localDays;
+                    }
+                    const localSched = parseDoctorDutySchedule(match.dutySchedule || match.duty_schedule);
+                    if (localSched) {
+                      parsedSched = { ...(parsedSched || {}), ...localSched };
+                    }
+                    if (match.dutyStartTime) startT = match.dutyStartTime;
+                    if (match.dutyEndTime) endT = match.dutyEndTime;
+                  }
                 }
-              });
+              }
+            } catch {}
+
+            // If duty days are unconfigured, inherit from custom schedule days or weekdays
+            if (pDays.length === 0) {
+              if (parsedSched && Object.keys(parsedSched).length > 0) {
+                pDays = Object.keys(parsedSched);
+              } else {
+                pDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+              }
             }
 
             let specStr = "General Dermatology";
@@ -524,14 +635,19 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               specStr = d.specializations.map((s: any) => s.name || s).filter(Boolean).join(", ");
             }
 
+            let resolvedPhoto = d.photo_url || d.photo || d.photoUrl || d.user?.avatar_url || d.avatar_url;
+            if (!resolvedPhoto) {
+              resolvedPhoto = getDoctorPhoto({ id: d.doctor_id || d.id, name: docName, email: d.email });
+            }
+
             return {
               id: String(d.doctor_id || d.id || `doc-${docName}`),
               name: docName,
               specialization: specStr,
-              photo: d.photo_url || d.photo || d.photoUrl || undefined,
+              photo: resolvedPhoto || undefined,
               dutyDays: pDays,
-              dutyStartTime: d.duty_start_time || d.dutyStartTime || "09:00",
-              dutyEndTime: d.duty_end_time || d.dutyEndTime || "17:00",
+              dutyStartTime: startT,
+              dutyEndTime: endT,
               dutySchedule: parsedSched,
               status: d.status || "Active",
             };
@@ -841,10 +957,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         setSubmitError("Please select an appointment date on the calendar.");
         return false;
       }
-      if (!selectedTime) {
-        setSubmitError("Please choose a consultation time slot.");
-        return false;
-      }
       return true;
     }
 
@@ -926,9 +1038,24 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const conditionLabel = aiConditionName.trim() || "General Dermatology Consultation";
       const scheduledDateTimeIso = `${selectedDate}T${selectedTime}:00`;
 
-      const assignedDocId = activeDutyDoctor?.id && !activeDutyDoctor.id.startsWith("doc-")
+      let assignedDocId = activeDutyDoctor?.id && !activeDutyDoctor.id.startsWith("doc-")
         ? activeDutyDoctor.id
         : undefined;
+
+      // If activeDutyDoctor.id is temporary (e.g. doc-local-123), attempt to resolve real Supabase UUID
+      if (!assignedDocId && activeDutyDoctor?.name) {
+        try {
+          const cleanName = activeDutyDoctor.name.replace(/^Dr\.?\s*/i, "").trim();
+          const { data: dbDoc } = await supabase
+            .from("clinic_doctor")
+            .select("doctor_id")
+            .ilike("doctor_name", `%${cleanName}%`)
+            .maybeSingle();
+          if (dbDoc?.doctor_id) {
+            assignedDocId = dbDoc.doctor_id;
+          }
+        } catch {}
+      }
 
       const apptPayload: Record<string, any> = {
         user_id: activeUserId,
@@ -946,10 +1073,13 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         emergency_contact_relationship: emergencyRelationship.trim() || null,
         questionnaire_answers: questionnaireData.length > 0 ? questionnaireData : null,
         notes: notes.trim() || null,
+        clinic_note: activeDutyDoctor?.name ? `Attending Doctor: ${activeDutyDoctor.name}` : null,
         skin_photo_url: photoPath,
         ai_condition_name: conditionLabel,
         ai_confidence: confNum,
         assigned_doctor_id: assignedDocId || null,
+        doctor_status: "pending-review",
+        schedule_sent_to_doctor: true,
       };
 
       // 3. Insert appointment request
@@ -958,6 +1088,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       if (insertError) {
         console.warn("Retrying appointment insert without assigned_doctor_id...", insertError.message);
         delete apptPayload.assigned_doctor_id;
+        delete apptPayload.doctor_status;
+        delete apptPayload.schedule_sent_to_doctor;
         const retry1 = await supabase.from("patient_appointment").insert(apptPayload);
         insertError = retry1.error;
       }
@@ -1006,9 +1138,12 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           skinPhotoUrl: photoPath,
           aiConditionName: conditionLabel,
           aiConfidence: confNum,
+          assignedDoctorId: activeDutyDoctor?.id,
           assignedDoctorName: activeDutyDoctor?.name || undefined,
-          assignedDoctorPhoto: activeDutyDoctor?.photo || undefined,
+          assignedDoctorPhoto: getDoctorPhoto(activeDutyDoctor) || undefined,
           assignedDoctorSpecialization: activeDutyDoctor?.specialization || undefined,
+          doctorStatus: "pending-review",
+          scheduleSentToDoctor: true,
           createdAt: new Date().toISOString(),
         };
         const existing = localStorage.getItem("dermai_clinic_appointments");
@@ -1137,7 +1272,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
   return (
     <div className="min-h-screen bg-slate-50/50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-3xl mx-auto space-y-4">
+      <div className={`mx-auto space-y-4 transition-all duration-300 ${currentStep === 2 ? "max-w-6xl xl:max-w-7xl" : "max-w-3xl"}`}>
         {/* Back navigation */}
         <div className="flex items-center justify-between">
           <button
@@ -1520,441 +1655,418 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               </div>
 
               <div className="space-y-4 text-left">
-                {/* 1. Quick Doctor Roster Filter Bar */}
-                {selectedClinic.doctors && selectedClinic.doctors.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
-                        <Stethoscope className="w-3.5 h-3.5 text-magenta-600" />
-                        Attending Dermatologists ({selectedClinic.doctors.length})
-                      </label>
-                      <span className="text-[10px] text-gray-400 font-medium">
-                        Click a doctor to see their duty days on the calendar
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2 overflow-x-auto pb-1.5 no-scrollbar">
-                      <button
-                        type="button"
-                        onClick={() => handleSelectDoctorFilter("all")}
-                        className={`px-3 py-2 rounded-xl text-xs font-semibold shrink-0 transition-all cursor-pointer flex items-center gap-2 border ${
-                          selectedDoctorFilter === "all"
-                            ? "bg-magenta-600 text-white border-magenta-600 shadow-xs"
-                            : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
-                        }`}
-                      >
-                        <Users className="w-3.5 h-3.5" />
-                        <span>All Clinic Doctors</span>
-                        <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                          selectedDoctorFilter === "all" ? "bg-white/20 text-white" : "bg-gray-100 text-gray-600"
-                        }`}>
-                          {selectedClinic.doctors.length}
-                        </span>
-                      </button>
-
-                      {selectedClinic.doctors.map((doc) => {
-                        const isSelected = selectedDoctorFilter === doc.id;
-                        const dutyDaysSummary = Array.isArray(doc.dutyDays) && doc.dutyDays.length > 0
-                          ? doc.dutyDays.map((d) => d.slice(0, 3)).join(", ")
-                          : "Mon - Fri";
-
-                        return (
-                          <button
-                            key={doc.id}
-                            type="button"
-                            onClick={() => handleSelectDoctorFilter(doc.id)}
-                            className={`px-3 py-2 rounded-xl text-xs font-semibold shrink-0 transition-all cursor-pointer flex items-center gap-2.5 border ${
-                              isSelected
-                                ? "bg-magenta-50 border-magenta-400 text-magenta-900 ring-2 ring-magenta-500/20 shadow-xs"
-                                : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
-                            }`}
-                          >
-                            {doc.photo ? (
-                              <img
-                                src={doc.photo}
-                                alt={doc.name}
-                                className="w-5 h-5 rounded-full object-cover border border-magenta-200 shrink-0"
-                              />
-                            ) : (
-                              <div className="w-5 h-5 rounded-full bg-magenta-100 text-magenta-700 font-bold flex items-center justify-center text-[10px] shrink-0">
-                                {doc.name.replace("Dr.", "").trim().charAt(0) || "D"}
-                              </div>
-                            )}
-                            <div className="text-left">
-                              <p className="text-xs font-bold leading-none">{doc.name}</p>
-                              <p className="text-[10px] text-magenta-600 font-medium mt-0.5 leading-none">
-                                {dutyDaysSummary}
-                              </p>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* 2. Interactive Roster Calendar Grid */}
-                <div className="bg-slate-50/70 rounded-2xl border border-gray-200 p-3.5 sm:p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="text-xs sm:text-sm font-bold text-gray-900 flex items-center gap-1.5">
-                        <Calendar className="w-4 h-4 text-magenta-600" />
-                        {calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-                      </h4>
-                      <p className="text-[10px] text-gray-500 mt-0.5">
-                        Selected: <strong className="text-magenta-700 font-bold">{formattedPreviewDate} ({dayOfWeekForSelectedDate})</strong>
-                        {selectedDoctorFilter !== "all" && (
-                          <span className="text-gray-400 ml-1">
-                            • Showing roster for <strong className="text-gray-700">{selectedClinic.doctors.find((d) => d.id === selectedDoctorFilter)?.name}</strong>
-                          </span>
-                        )}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const prev = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1);
-                          const now = new Date();
-                          if (prev.getFullYear() > now.getFullYear() || (prev.getFullYear() === now.getFullYear() && prev.getMonth() >= now.getMonth())) {
-                            setCalendarMonth(prev);
-                          }
-                        }}
-                        className="p-1 rounded-lg border border-gray-200 bg-white hover:bg-gray-100 text-gray-600 transition-colors cursor-pointer"
-                        title="Previous month"
-                      >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const next = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1);
-                          setCalendarMonth(next);
-                        }}
-                        className="p-1 rounded-lg border border-gray-200 bg-white hover:bg-gray-100 text-gray-600 transition-colors cursor-pointer"
-                        title="Next month"
-                      >
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-7 text-center mb-1">
-                    {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d) => (
-                      <span key={d} className="text-[10px] font-bold text-gray-400 py-0.5">{d}</span>
-                    ))}
-                  </div>
-
-                  <div className="grid grid-cols-7 gap-1">
-                    {calendarDays.map((cell, idx) => {
-                      const isSelected = selectedDate === cell.dateStr;
-                      const isToday = cell.isToday;
-                      const isDisabled = cell.isDisabled || !cell.inCurrentMonth;
-                      const isOnDuty = cell.isFilteredDoctorOnDuty && !cell.isPast && cell.inCurrentMonth;
-
-                      return (
-                        <button
-                          key={idx}
-                          type="button"
-                          disabled={isDisabled}
-                          onClick={() => {
-                            if (!isDisabled) setSelectedDate(cell.dateStr);
-                          }}
-                          title={
-                            cell.inCurrentMonth && !cell.isPast
-                              ? `${cell.dayOfWeek}, ${cell.dateStr}: ${
-                                  cell.onDutyDocs.length > 0
-                                    ? `${cell.onDutyDocs.length} doctor(s) on duty (${cell.onDutyDocs.map((d) => d.name).join(", ")})`
-                                    : "No doctors rostered (General clinic queue)"
-                                }`
-                              : undefined
-                          }
-                          className={`h-11 w-full rounded-xl text-xs font-semibold flex flex-col items-center justify-center transition-all cursor-pointer relative ${
-                            isSelected
-                              ? "bg-magenta-600 text-white shadow-sm font-bold scale-102 ring-2 ring-magenta-400/40"
-                              : isDisabled
-                              ? "text-gray-300 cursor-not-allowed bg-transparent"
-                              : isToday
-                              ? "bg-pink-100/90 text-magenta-800 font-bold border border-magenta-200 hover:bg-pink-200"
-                              : isOnDuty
-                              ? "text-gray-800 bg-white hover:bg-magenta-50/50 border border-gray-200/90 hover:border-magenta-300"
-                              : "text-gray-400 bg-slate-100/40 border border-dashed border-gray-200 hover:bg-gray-100"
-                          }`}
-                        >
-                          <span className="leading-none">{cell.dayNum}</span>
-                          
-                          {/* On-Duty Indicator Dot / Badge */}
-                          {cell.inCurrentMonth && !cell.isPast && (
-                            <div className="mt-1 flex items-center justify-center">
-                              {isSelected ? (
-                                <span className="w-1.5 h-1.5 rounded-full bg-white block" />
-                              ) : isOnDuty ? (
-                                <span
-                                  className="w-1.5 h-1.5 rounded-full bg-emerald-500 block shadow-xs"
-                                  title="Doctor available on duty"
-                                />
-                              ) : (
-                                <span className="text-[9px] text-gray-300 font-bold leading-none block">–</span>
-                              )}
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Calendar Legend */}
-                  <div className="flex items-center justify-between pt-1 border-t border-gray-200/60 text-[10px] text-gray-500">
-                    <div className="flex items-center gap-3">
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> On-Duty Doctors Available
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-gray-300 inline-block" /> Off-Duty / Queue Only
-                      </span>
-                    </div>
-                    <span className="flex items-center gap-1 font-medium text-magenta-700">
-                      <span className="w-2 h-2 rounded-full bg-magenta-600 inline-block" /> Selected Date
-                    </span>
-                  </div>
-                </div>
-
-                {/* 3. On-Duty Doctors Selection on Chosen Date */}
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
-                      <Stethoscope className="w-3.5 h-3.5 text-magenta-600" />
-                      Doctors on Duty ({dayOfWeekForSelectedDate})
-                    </label>
-                    <span className="text-[11px] text-gray-400 font-medium">
-                      Fee: ₱{Number(selectedClinic.consultationFee || 500).toLocaleString()}
-                    </span>
-                  </div>
-
-                  {/* Warning if filtered doctor is off duty on selected date */}
-                  {selectedDoctorFilter !== "all" &&
-                    !onDutyDoctorsForDate.some((d) => d.id === selectedDoctorFilter) && (
-                      <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-start gap-2.5">
-                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                {/* Modern Landscape Two-Column Layout */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                  {/* ════════ LEFT COLUMN: Minimal Landscape Calendar (7 cols on lg, 8 cols on xl) ════════ */}
+                  <div className="lg:col-span-7 xl:col-span-8 space-y-3">
+                    <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3.5">
+                      {/* Month Title & Prev/Next Navigation */}
+                      <div className="flex items-center justify-between gap-3 pb-3 border-b border-gray-100">
                         <div>
-                          <p className="font-bold">
-                            {selectedClinic.doctors.find((d) => d.id === selectedDoctorFilter)?.name} is not on duty on {dayOfWeekForSelectedDate}s.
-                          </p>
-                          <p className="text-[11px] text-amber-700 mt-0.5">
-                            You can choose another on-duty doctor below for this date, or select an on-duty day for Dr. {selectedClinic.doctors.find((d) => d.id === selectedDoctorFilter)?.name?.replace("Dr.", "").trim()} on the calendar.
+                          <h3 className="text-base sm:text-lg font-bold text-gray-900 flex items-center gap-2">
+                            <Calendar className="w-4 h-4 text-magenta-600" />
+                            <span>{calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
+                          </h3>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            Selected: <strong className="text-magenta-700 font-bold">{formattedPreviewDate} ({dayOfWeekForSelectedDate})</strong>
                           </p>
                         </div>
-                      </div>
-                    )}
 
-                  {onDutyDoctorsForDate.length === 0 ? (
-                    <div className="p-4 rounded-2xl bg-gradient-to-r from-magenta-50/90 to-pink-50/60 border border-magenta-200/90 flex items-start gap-3.5 shadow-xs">
-                      <div className="w-10 h-10 rounded-xl bg-magenta-100 flex items-center justify-center text-magenta-700 shrink-0 mt-0.5">
-                        <Stethoscope className="w-5 h-5" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs font-bold text-gray-900">General Dermatological Consultation</p>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-magenta-100 text-magenta-700 shrink-0">
-                            Clinic Queue
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">
-                          Your consultation will be booked directly with <strong>{selectedClinic.name}</strong>. An on-duty dermatologist will be assigned by the clinic staff upon schedule review.
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      {onDutyDoctorsForDate.map((doc) => {
-                        const isSelected = activeDutyDoctor?.id === doc.id;
-                        return (
+                        <div className="flex items-center gap-1.5">
                           <button
-                            key={doc.id}
                             type="button"
-                            onClick={() => setSelectedDoctorId(doc.id)}
-                            className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex items-center gap-3 ${
-                              isSelected
-                                ? "bg-magenta-50/70 border-magenta-300 ring-2 ring-magenta-500/20 shadow-xs"
-                                : "bg-white border-gray-200 hover:border-gray-300 hover:bg-slate-50/60"
-                            }`}
+                            onClick={() => {
+                              const prev = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1);
+                              const now = new Date();
+                              if (prev.getFullYear() > now.getFullYear() || (prev.getFullYear() === now.getFullYear() && prev.getMonth() >= now.getMonth())) {
+                                setCalendarMonth(prev);
+                              }
+                            }}
+                            className="px-2.5 py-1.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                            title="Previous month"
                           >
-                            {doc.photo ? (
-                              <img
-                                src={doc.photo}
-                                alt={doc.name}
-                                className="w-12 h-12 rounded-xl object-cover border border-magenta-200 shrink-0"
-                              />
-                            ) : (
-                              <div className="w-12 h-12 rounded-xl bg-magenta-100/70 text-magenta-700 font-bold flex items-center justify-center text-sm shrink-0">
-                                {doc.name.replace("Dr.", "").trim().charAt(0) || "D"}
-                              </div>
-                            )}
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                            <span>Prev</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1);
+                              setCalendarMonth(next);
+                            }}
+                            className="px-2.5 py-1.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                            title="Next month"
+                          >
+                            <span>Next</span>
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
 
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center justify-between gap-1">
-                                <h4 className="text-xs font-bold text-gray-900 truncate">
-                                  {doc.name}
-                                </h4>
-                                {isSelected && (
-                                  <span className="w-4 h-4 rounded-full bg-magenta-600 text-white flex items-center justify-center shrink-0">
-                                    <Check className="w-2.5 h-2.5" />
+                      {/* Weekday Headers */}
+                      <div className="grid grid-cols-7 text-center">
+                        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
+                          <span
+                            key={d}
+                            className="text-[11px] font-bold py-1 uppercase tracking-wider text-gray-400"
+                          >
+                            {d}
+                          </span>
+                        ))}
+                      </div>
+
+                      {/* Minimal Landscape Calendar Grid */}
+                      <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+                        {calendarDays.map((cell, idx) => {
+                          const isSelected = selectedDate === cell.dateStr;
+                          const isToday = cell.isToday;
+                          const isDisabled = cell.isDisabled || !cell.inCurrentMonth;
+                          const hasDoctors = cell.onDutyDocs.length > 0 && cell.inCurrentMonth && !cell.isPast;
+
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              disabled={isDisabled}
+                              onClick={() => {
+                                if (!isDisabled) {
+                                  setSelectedDate(cell.dateStr);
+                                  if (cell.onDutyDocs.length > 0) {
+                                    setSelectedDoctorId(cell.onDutyDocs[0].id);
+                                  }
+                                }
+                              }}
+                              className={`min-h-[66px] sm:min-h-[74px] p-2 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${
+                                isSelected
+                                  ? "border-2 border-magenta-600 bg-magenta-50/70 ring-2 ring-magenta-500/20 shadow-xs"
+                                  : isDisabled
+                                  ? "border-gray-100 bg-slate-50/40 text-gray-300 cursor-not-allowed"
+                                  : isToday
+                                  ? "border-magenta-300 bg-pink-50/20 hover:border-magenta-400 hover:shadow-2xs cursor-pointer"
+                                  : "border-gray-200/80 bg-white hover:border-magenta-300 hover:bg-slate-50/40 hover:shadow-2xs cursor-pointer"
+                              }`}
+                            >
+                              {/* Top row: Date Number & Today / Selected indicator */}
+                              <div className="flex items-center justify-between w-full">
+                                <span
+                                  className={`text-xs sm:text-sm font-bold leading-none ${
+                                    isSelected
+                                      ? "text-magenta-800"
+                                      : isToday
+                                      ? "text-magenta-600"
+                                      : !cell.inCurrentMonth || cell.isPast
+                                      ? "text-gray-300"
+                                      : "text-gray-800"
+                                  }`}
+                                >
+                                  {cell.dayNum}
+                                </span>
+
+                                {isToday && (
+                                  <span className="text-[8px] font-bold px-1.5 py-0.2 rounded-full bg-magenta-100 text-magenta-700 leading-none">
+                                    Today
                                   </span>
                                 )}
+
+                                {isSelected && !isToday && (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-magenta-600" />
+                                )}
                               </div>
-                              <p className="text-[11px] text-magenta-700 font-semibold truncate mt-0.5">
-                                {doc.specialization || "General Dermatology"}
-                              </p>
-                              {(() => {
-                                const dayShift =
-                                  doc.dutySchedule && doc.dutySchedule[dayOfWeekForSelectedDate]
-                                    ? doc.dutySchedule[dayOfWeekForSelectedDate]
-                                    : { startTime: doc.dutyStartTime || "09:00", endTime: doc.dutyEndTime || "17:00" };
-                                return (
-                                  <p className="text-[10px] text-gray-500 flex items-center gap-1 mt-1 font-medium">
-                                    <Clock className="w-3 h-3 text-magenta-500 shrink-0" />
-                                    <span>{dayOfWeekForSelectedDate}: {formatTime12h(dayShift.startTime)} – {formatTime12h(dayShift.endTime)}</span>
+
+                              {/* Bottom: Doctor Shift Chip or Queue Indicator */}
+                              <div className="w-full mt-1.5">
+                                {hasDoctors ? (
+                                  <div className={`px-1.5 py-1 rounded-xl border flex items-center justify-between gap-1 transition-all ${
+                                    isSelected
+                                      ? "bg-magenta-100/90 border-magenta-300 text-magenta-900 shadow-2xs"
+                                      : "bg-magenta-50/70 border-magenta-100/80 text-gray-700 hover:border-magenta-200"
+                                  }`}>
+                                    <div className="flex -space-x-1.5 overflow-hidden shrink-0">
+                                      {cell.onDutyDocs.slice(0, 2).map((doc) => {
+                                        const p = getDoctorPhoto(doc);
+                                        return p ? (
+                                          <img
+                                            key={doc.id}
+                                            src={p}
+                                            alt={doc.name}
+                                            className="w-4 h-4 rounded-full object-cover border border-white shrink-0"
+                                          />
+                                        ) : (
+                                          <div
+                                            key={doc.id}
+                                            className="w-4 h-4 rounded-full bg-magenta-200 text-magenta-800 font-bold flex items-center justify-center text-[8px] border border-white shrink-0"
+                                          >
+                                            {doc.name.replace(/^Dr\.?\s*/i, "").charAt(0) || "D"}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                    <span className="text-[10px] font-bold truncate leading-none">
+                                      {cell.onDutyDocs.length === 1 ? "1 Doctor" : `${cell.onDutyDocs.length} Doctors`}
+                                    </span>
+                                  </div>
+                                ) : cell.inCurrentMonth && !cell.isPast ? (
+                                  <div className="w-full py-1 text-center">
+                                    <span className="text-[9px] text-gray-400 font-medium">Clinic Queue</span>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Minimal Calendar Legend */}
+                      <div className="flex items-center justify-between pt-2 border-t border-gray-100 text-[10px] text-gray-500">
+                        <div className="flex items-center gap-3">
+                          <span className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-magenta-500 inline-block" /> Doctor on Duty
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-gray-300 inline-block" /> Clinic Queue
+                          </span>
+                        </div>
+                        <span className="flex items-center gap-1 font-semibold text-magenta-700">
+                          <span className="w-2 h-2 rounded-full bg-magenta-600 inline-block ring-1 ring-magenta-200" /> Selected Date
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ════════ RIGHT COLUMN: Attending Doctor Selection, Summary & Booking (5 cols on lg, 4 cols on xl) ════════ */}
+                  <div className="lg:col-span-5 xl:col-span-4 space-y-3.5 lg:sticky lg:top-6">
+                    {/* 1. Attending Doctor Selection Card */}
+                    <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3">
+                      <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
+                        <div>
+                          <h4 className="text-xs sm:text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                            <Stethoscope className="w-3.5 h-3.5 text-magenta-600" />
+                            <span>Attending Dermatologist</span>
+                          </h4>
+                          <p className="text-[10px] text-gray-400 mt-0.5">
+                            {onDutyDoctorsForDate.length > 1
+                              ? `${onDutyDoctorsForDate.length} Doctors on duty on ${formattedPreviewDate}`
+                              : `Scheduled for ${formattedPreviewDate}`}
+                          </p>
+                        </div>
+                        {onDutyDoctorsForDate.length > 1 && (
+                          <span className="text-[10px] font-bold text-magenta-700 bg-magenta-50 px-2 py-0.5 rounded-full border border-magenta-200/60">
+                            Select Doctor
+                          </span>
+                        )}
+                      </div>
+
+                      {onDutyDoctorsForDate.length === 0 ? (
+                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-dashed border-gray-200 text-center space-y-1">
+                          <p className="text-xs font-bold text-gray-700">General Clinic Queue</p>
+                          <p className="text-[11px] text-gray-400">
+                            No specific doctor is scheduled for this date. Your consultation will be attended on a first-come queue basis.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5 max-h-60 overflow-y-auto pr-0.5 no-scrollbar">
+                          {onDutyDoctorsForDate.map((doc) => {
+                            const isDocSelected = activeDutyDoctor?.id === doc.id;
+                            const shift =
+                              doc.dutySchedule && doc.dutySchedule[dayOfWeekForSelectedDate]
+                                ? doc.dutySchedule[dayOfWeekForSelectedDate]
+                                : { startTime: doc.dutyStartTime || "09:00", endTime: doc.dutyEndTime || "17:00" };
+                            const docPhoto = getDoctorPhoto(doc);
+
+                            return (
+                              <button
+                                key={doc.id}
+                                type="button"
+                                onClick={() => setSelectedDoctorId(doc.id)}
+                                className={`w-full p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-center gap-3 relative group ${
+                                  isDocSelected
+                                    ? "bg-magenta-50/90 border-magenta-500 ring-2 ring-magenta-500/20 shadow-xs"
+                                    : "bg-white border-gray-200 hover:border-magenta-300 hover:bg-slate-50/50"
+                                }`}
+                              >
+                                {docPhoto ? (
+                                  <img
+                                    src={docPhoto}
+                                    alt={doc.name}
+                                    className="w-12 h-12 rounded-2xl object-cover border border-magenta-200 shrink-0 shadow-2xs"
+                                  />
+                                ) : (
+                                  <div className="w-12 h-12 rounded-2xl bg-magenta-100 text-magenta-700 font-bold flex items-center justify-center text-sm shrink-0 border border-magenta-200/60 shadow-2xs">
+                                    {doc.name.replace(/^Dr\.?\s*/i, "").charAt(0) || "D"}
+                                  </div>
+                                )}
+
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center justify-between gap-1">
+                                    <h5 className="text-xs sm:text-sm font-bold text-gray-900 truncate group-hover:text-magenta-700 transition-colors">
+                                      {doc.name}
+                                    </h5>
+                                    {isDocSelected ? (
+                                      <span className="w-4 h-4 rounded-full bg-magenta-600 text-white flex items-center justify-center shrink-0">
+                                        <Check className="w-2.5 h-2.5" />
+                                      </span>
+                                    ) : (
+                                      <span className="w-4 h-4 rounded-full border border-gray-300 shrink-0" />
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] text-magenta-700 font-medium truncate mt-0.5">
+                                    {doc.specialization || "General Dermatology"}
                                   </p>
-                                );
-                              })()}
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <span className="text-[10px] text-gray-500 flex items-center gap-1 font-medium">
+                                      <Clock className="w-3 h-3 text-magenta-500 shrink-0" />
+                                      <span>{formatTime12h(shift.startTime)} – {formatTime12h(shift.endTime)}</span>
+                                    </span>
+                                    <span className="text-[9px] px-1.5 py-0.2 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                      Available
+                                    </span>
+                                  </div>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 2. Interactive Time Slot Selection Card (Linked to Doctor Shift) */}
+                    <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3">
+                      <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+                        <div>
+                          <h4 className="text-xs sm:text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-magenta-600" />
+                            <span>Select Consultation Time</span>
+                          </h4>
+                          <p className="text-[10px] text-gray-400 mt-0.5">
+                            Shift: <span className="font-bold text-magenta-700">{activeDoctorHours}</span>
+                          </p>
+                        </div>
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                          {formatTime12h(selectedTime)} Selected
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 max-h-44 overflow-y-auto pr-0.5 no-scrollbar">
+                        {availableTimeSlots.map((slot) => {
+                          const isSlotSelected = selectedTime === slot;
+                          return (
+                            <button
+                              key={slot}
+                              type="button"
+                              onClick={() => setSelectedTime(slot)}
+                              className={`py-2 px-1.5 rounded-xl border text-center transition-all cursor-pointer text-xs font-semibold ${
+                                isSlotSelected
+                                  ? "bg-magenta-600 border-magenta-600 text-white shadow-xs font-bold ring-2 ring-magenta-500/20"
+                                  : "bg-slate-50 border-gray-200 text-gray-700 hover:border-magenta-300 hover:bg-magenta-50/40"
+                              }`}
+                            >
+                              {formatTime12h(slot)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* 3. Compact Consultation Summary Card */}
+                    <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3">
+                      <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+                        <h4 className="text-xs sm:text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-magenta-600" />
+                          <span>Appointment Summary</span>
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => setCurrentStep(1)}
+                          className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700 hover:underline cursor-pointer"
+                        >
+                          Edit Info
+                        </button>
+                      </div>
+
+                      <div className="space-y-2 text-xs">
+                        {/* Consultation Date & Duty Shift */}
+                        <div className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 flex items-center justify-between gap-2">
+                          <div>
+                            <span className="text-[9px] font-bold text-gray-400 block uppercase tracking-wider">Date &amp; Time</span>
+                            <span className="font-bold text-gray-900 text-xs">{formattedPreviewDate}</span>
+                            <span className="text-xs font-bold text-magenta-700 ml-1.5">@ {formatTime12h(selectedTime)}</span>
+                            <span className="text-[10px] text-gray-500 ml-1">({dayOfWeekForSelectedDate})</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[9px] font-bold text-gray-400 block uppercase tracking-wider">Doctor Shift</span>
+                            <span className="font-bold text-gray-700 text-xs">{activeDoctorHours}</span>
+                          </div>
+                        </div>
+
+                        {/* Attending Doctor */}
+                        <div className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 flex items-center gap-2.5">
+                          {getDoctorPhoto(activeDutyDoctor) ? (
+                            <img
+                              src={getDoctorPhoto(activeDutyDoctor)}
+                              alt={activeDutyDoctor?.name || "Attending Doctor"}
+                              className="w-10 h-10 rounded-xl object-cover border border-magenta-200 shrink-0 shadow-2xs"
+                            />
+                          ) : (
+                            <div className="w-10 h-10 rounded-xl bg-magenta-100 text-magenta-700 font-bold flex items-center justify-center text-xs shrink-0">
+                              {activeDutyDoctor?.name?.replace(/^Dr\.?\s*/i, "").trim().charAt(0) || "D"}
                             </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <span className="text-[9px] font-bold text-gray-400 block uppercase tracking-wider">Attending</span>
+                            <p className="font-bold text-gray-900 text-xs truncate">
+                              {activeDutyDoctor?.name || "General Clinic Queue"}
+                            </p>
+                          </div>
+                        </div>
 
-                {/* 4. Time Slots */}
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-2">
-                    Available Time Slots {activeDutyDoctor ? `for ${activeDutyDoctor.name}` : "for Consultation"} <span className="text-red-500">*</span>
-                  </label>
-
-                  <div className="space-y-2.5">
-                    {dynamicTimeSlots.morning.length > 0 && (
-                      <div>
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-amber-500" /> Morning Consultation Slots
-                        </p>
-                        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-                          {dynamicTimeSlots.morning.map((slot) => {
-                            const isSelected = selectedTime === slot.value;
-                            return (
-                              <button
-                                key={slot.value}
-                                type="button"
-                                onClick={() => setSelectedTime(slot.value)}
-                                className={`py-1.5 px-1 rounded-xl text-xs font-semibold text-center transition-all cursor-pointer ${
-                                  isSelected
-                                    ? "bg-magenta-600 text-white shadow-xs font-bold ring-2 ring-magenta-400/30 scale-102"
-                                    : "bg-white border border-gray-200 text-gray-700 hover:bg-gray-50"
-                                }`}
-                              >
-                                {slot.label}
-                              </button>
-                            );
-                          })}
+                        {/* Patient & Consultation Fee */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="p-2.5 rounded-xl bg-slate-50 border border-gray-100">
+                            <span className="text-[9px] font-bold text-gray-400 block uppercase tracking-wider">Patient</span>
+                            <p className="font-bold text-gray-900 text-xs truncate">{patientName || "Patient"}</p>
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 text-right">
+                            <span className="text-[9px] font-bold text-gray-400 block uppercase tracking-wider">Fee</span>
+                            <p className="font-bold text-emerald-600 text-xs">
+                              ₱{Number(selectedClinic.consultationFee || 500).toLocaleString()}
+                            </p>
+                            <span className="text-[9px] text-gray-400">Payable at clinic</span>
+                          </div>
                         </div>
                       </div>
-                    )}
 
-                    {dynamicTimeSlots.afternoon.length > 0 && (
-                      <div>
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-blue-500" /> Afternoon Consultation Slots
-                        </p>
-                        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-                          {dynamicTimeSlots.afternoon.map((slot) => {
-                            const isSelected = selectedTime === slot.value;
-                            return (
-                              <button
-                                key={slot.value}
-                                type="button"
-                                onClick={() => setSelectedTime(slot.value)}
-                                className={`py-1.5 px-1 rounded-xl text-xs font-semibold text-center transition-all cursor-pointer ${
-                                  isSelected
-                                    ? "bg-magenta-600 text-white shadow-xs font-bold ring-2 ring-magenta-400/30 scale-102"
-                                    : "bg-white border border-gray-200 text-gray-700 hover:bg-gray-50"
-                                }`}
-                              >
-                                {slot.label}
-                              </button>
-                            );
-                          })}
-                        </div>
+                      {/* Action Buttons */}
+                      <div className="space-y-2 pt-2 border-t border-gray-100">
+                        <button
+                          type="button"
+                          onClick={() => handleSubmitAppointment()}
+                          disabled={submitting}
+                          className="w-full py-3 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-semibold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
+                        >
+                          {submitting ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Submitting Appointment...</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>Confirm &amp; Book Appointment</span>
+                              <Check className="w-3.5 h-3.5" />
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handlePrevStep}
+                          disabled={submitting}
+                          className="w-full py-2.5 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50 font-semibold text-xs transition-colors cursor-pointer text-center"
+                        >
+                          ← Back to Patient Details
+                        </button>
                       </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* 5. Summary Overview Card */}
-                <div className="p-4 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                      Appointment Summary
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setCurrentStep(1)}
-                      className="text-[10px] font-bold text-magenta-600 hover:underline cursor-pointer"
-                    >
-                      Edit Patient Info
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                    <div className="bg-white p-2.5 rounded-xl border border-gray-100">
-                      <span className="text-[10px] text-gray-400 font-medium block">Schedule</span>
-                      <p className="font-bold text-magenta-700 flex items-center gap-1 mt-0.5 truncate">
-                        <Calendar className="w-3 h-3 text-magenta-500 shrink-0" />
-                        {formattedPreviewDate} ({formattedPreviewTime})
-                      </p>
-                    </div>
-
-                    <div className="bg-white p-2.5 rounded-xl border border-gray-100">
-                      <span className="text-[10px] text-gray-400 font-medium block">Attending Doctor</span>
-                      <p className="font-bold text-gray-900 truncate mt-0.5">
-                        {activeDutyDoctor?.name || "On Duty Doctor"}
-                      </p>
-                    </div>
-
-                    <div className="bg-white p-2.5 rounded-xl border border-gray-100">
-                      <span className="text-[10px] text-gray-400 font-medium block">Patient Name</span>
-                      <p className="font-bold text-gray-900 truncate mt-0.5">{patientName || "Patient"}</p>
                     </div>
                   </div>
                 </div>
-              </div>
-
-              {/* Step 2 Action Buttons */}
-              <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
-                <button
-                  type="button"
-                  onClick={handlePrevStep}
-                  disabled={submitting}
-                  className="px-5 py-3 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50 font-semibold text-xs transition-colors cursor-pointer"
-                >
-                  ← Back to Step 1
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSubmitAppointment()}
-                  disabled={submitting}
-                  className="flex-1 py-3 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-semibold text-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 active:scale-[0.98]"
-                >
-                  {submitting ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Submitting Appointment Request...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Confirm &amp; Book Appointment</span>
-                      <Check className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
               </div>
             </motion.div>
           )}

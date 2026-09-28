@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   CheckCircle2,
   XCircle,
@@ -14,6 +15,7 @@ import {
   ClipboardList,
   Sparkles,
   Info,
+  Stethoscope,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
@@ -68,11 +70,19 @@ function getConditionDetail(conditionId?: string) {
 }
 
 export default function DoctorAppointmentsPage() {
+  const navigate = useNavigate();
   const { doctorName: _doctorName, appointments: allAppointments, loading, submitDoctorReview } = useDoctorAppointments();
   const [tab, setTab] = useState<"pending" | "reviewed">("pending");
   const [reviewModal, setReviewModal] = useState<ReviewModal | null>(null);
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [successInfo, setSuccessInfo] = useState<{
+    patientName: string;
+    decision: "approved" | "rejected";
+    date: string;
+    time: string;
+    diagnosis?: string;
+  } | null>(null);
 
   const pendingReview = useMemo(
     () =>
@@ -135,15 +145,25 @@ export default function DoctorAppointmentsPage() {
 
     setSubmitting(true);
     setSubmitError("");
+    const appt = reviewModal.appointment;
+    const dec = reviewModal.decision;
+    const diagnosisText = reviewModal.diagnosis.trim() || appt.aiConditionName || appt.conditionName || "";
+
     try {
-      const diagnosisText = reviewModal.diagnosis.trim() || reviewModal.appointment.aiConditionName || reviewModal.appointment.conditionName || "";
       await submitDoctorReview(
-        reviewModal.appointment.id,
-        reviewModal.decision,
-        reviewModal.decision === "approved" ? diagnosisText : "",
+        appt.id,
+        dec,
+        dec === "approved" ? diagnosisText : "",
         reviewModal.note.trim()
       );
       setReviewModal(null);
+      setSuccessInfo({
+        patientName: appt.patientName || "Patient",
+        decision: dec,
+        date: appt.date,
+        time: appt.time,
+        diagnosis: diagnosisText,
+      });
     } catch (e: any) {
       setSubmitError(e?.message || "Failed to submit review. Please try again.");
     } finally {
@@ -245,9 +265,22 @@ export default function DoctorAppointmentsPage() {
                         </p>
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
+                        {appt.isAssignedToMe ? (
+                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Assigned to You
+                          </span>
+                        ) : appt.assignedDoctorName && !appt.assignedDoctorName.toLowerCase().includes("unassigned") ? (
+                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-medium flex items-center gap-1">
+                            <Stethoscope className="w-3 h-3 text-indigo-500" /> {appt.assignedDoctorName}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-medium flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-blue-500" /> Clinic Queue
+                          </span>
+                        )}
                         {appt.doctorStatus === "pending-review" && (
                           <span className="text-[10px] px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 font-bold flex items-center gap-1">
-                            <Clock className="w-3 h-3 text-amber-600" /> Awaiting Your Review
+                            <Clock className="w-3 h-3 text-amber-600" /> Awaiting Review
                           </span>
                         )}
                         {isCompleted && (
@@ -867,6 +900,109 @@ export default function DoctorAppointmentsPage() {
             </div>
           );
         })()}
+      </AnimatePresence>
+
+      {/* Review Submission Feedback Modal */}
+      <AnimatePresence>
+        {successInfo && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 sm:p-7 text-center space-y-4"
+            >
+              <div className={`w-14 h-14 rounded-2xl mx-auto flex items-center justify-center shadow-xs ${
+                successInfo.decision === "approved"
+                  ? "bg-emerald-100 text-emerald-600"
+                  : "bg-red-100 text-red-600"
+              }`}>
+                {successInfo.decision === "approved" ? (
+                  <CheckCircle2 className="w-8 h-8" />
+                ) : (
+                  <XCircle className="w-8 h-8" />
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-xl font-display font-bold text-gray-900">
+                  {successInfo.decision === "approved"
+                    ? "Consultation Accepted & Finalized!"
+                    : "Patient Referral Declined"}
+                </h3>
+                <p className="text-xs text-gray-500 mt-1.5 leading-relaxed">
+                  {successInfo.decision === "approved"
+                    ? `${successInfo.patientName}'s appointment schedule has been locked and confirmed. The patient has been notified.`
+                    : `${successInfo.patientName}'s referral was declined. Your clinic triage team has been alerted to re-assign another doctor.`}
+                </p>
+              </div>
+
+              {/* Consultation Details Card */}
+              {successInfo.decision === "approved" && (
+                <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-100 text-left space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Patient</span>
+                    <span className="font-bold text-gray-900">{successInfo.patientName}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Confirmed Schedule</span>
+                    <span className="font-semibold text-blue-950">
+                      {formatScheduleDateTime(successInfo.date, successInfo.time)}
+                    </span>
+                  </div>
+                  {successInfo.diagnosis && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Assessment</span>
+                      <span className="font-medium text-gray-700 truncate max-w-[200px]">{successInfo.diagnosis}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between pt-1 border-t border-blue-100/70">
+                    <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Next Step</span>
+                    <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                      Assigned to Your Calendar
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex flex-col sm:flex-row gap-2.5">
+                {successInfo.decision === "approved" ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSuccessInfo(null);
+                        navigate("/doctor/scheduled");
+                      }}
+                      className="flex-1 py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Calendar className="w-4 h-4" /> Go to Assigned Appointments
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSuccessInfo(null);
+                        setTab("reviewed");
+                      }}
+                      className="py-3 px-4 rounded-xl border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-all cursor-pointer"
+                    >
+                      View All Reviewed
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setSuccessInfo(null)}
+                    className="w-full py-2.5 rounded-xl bg-gray-900 hover:bg-gray-800 text-white text-xs font-bold transition-all cursor-pointer"
+                  >
+                    Close
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
       </AnimatePresence>
     </div>
   );

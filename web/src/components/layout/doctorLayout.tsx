@@ -66,9 +66,10 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
       const docIds: string[] = [user.id];
 
       // 1. Check clinic_doctor record
+      let foundClinicId: string | null = null;
       const { data: docData } = await supabase
         .from("clinic_doctor")
-        .select("doctor_id, doctor_name, email, user_id");
+        .select("doctor_id, doctor_name, clinic_id, email, user_id");
 
       (docData || []).forEach((d) => {
         const cdEmail = (d.email || "").trim().toLowerCase();
@@ -77,6 +78,7 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
           (cdEmail && userEmail && cdEmail === userEmail)
         ) {
           if (d.doctor_id) docIds.push(d.doctor_id);
+          if (d.clinic_id) foundClinicId = d.clinic_id;
         }
       });
 
@@ -92,6 +94,7 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
                 (d.id && docIds.includes(d.id))
             );
             if (matched?.id) docIds.push(matched.id);
+            if (matched?.clinicId || matched?.clinic_id) foundClinicId = matched.clinicId || matched.clinic_id;
           }
         }
       } catch { }
@@ -103,22 +106,29 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
       try {
         let appQuery = supabase
           .from("patient_appointment")
-          .select("appointment_id, patient_name, date, time, status, created_at")
+          .select("appointment_id, patient_name, clinic_id, assigned_doctor_id, date, time, status, created_at")
           .order("created_at", { ascending: false })
           .limit(10);
 
-        if (validDocIds.length > 0) {
+        if (validDocIds.length > 0 && foundClinicId && isUuid(foundClinicId)) {
+          appQuery = appQuery.or(`assigned_doctor_id.in.(${validDocIds.join(",")}),clinic_id.eq.${foundClinicId}`);
+        } else if (validDocIds.length > 0) {
           appQuery = appQuery.in("assigned_doctor_id", validDocIds);
+        } else if (foundClinicId && isUuid(foundClinicId)) {
+          appQuery = appQuery.eq("clinic_id", foundClinicId);
         }
 
         const { data: apps } = await appQuery;
 
         if (apps && apps.length > 0) {
           apps.forEach((a: any) => {
+            const isAssigned = validDocIds.includes(String(a.assigned_doctor_id));
             list.push({
               id: `doc-app-${a.appointment_id}`,
-              title: "Assigned Consultation",
-              message: `${a.patient_name || "A patient"} was assigned to you for clinical review.`,
+              title: isAssigned ? "Assigned Consultation" : "Clinic Consultation",
+              message: isAssigned
+                ? `${a.patient_name || "A patient"} was assigned to you for clinical review.`
+                : `${a.patient_name || "A patient"} booked a consultation at your clinic.`,
               time: a.created_at || new Date().toISOString(),
               type: "assigned",
             });

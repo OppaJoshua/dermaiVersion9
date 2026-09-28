@@ -62,6 +62,7 @@ type DoctorAccount = {
   email: string;
   specialization: string;
   clinicName: string;
+  photo?: string;
 };
 
 type ClinicSettings = {
@@ -150,6 +151,7 @@ export default function ClinicAppointmentsPage() {
           id: d.doctor_id,
           name: d.doctor_name,
           email: d.email || "",
+          photo: d.photo_url || undefined,
           specialization: "Dermatology",
           clinicName: clinicName || "Clinic",
         })));
@@ -166,6 +168,7 @@ export default function ClinicAppointmentsPage() {
               id: d.id,
               name: d.name,
               email: d.email || "",
+              photo: d.photo || d.photo_url || undefined,
               specialization: d.specialization || "Dermatology",
               clinicName: clinicName || d.clinicName || "Clinic",
             })));
@@ -2038,13 +2041,26 @@ export default function ClinicAppointmentsPage() {
                     key={doc.id}
                     type="button"
                     onClick={() => setSelectedDoctorId(doc.id)}
-                    className={`w-full text-left px-3.5 py-3 rounded-2xl border text-xs transition-colors cursor-pointer ${selectedDoctorId === doc.id
-                      ? "border-magenta-500 bg-magenta-50/40 text-magenta-900 ring-1 ring-magenta-500"
+                    className={`w-full text-left px-3.5 py-2.5 rounded-2xl border text-xs transition-colors cursor-pointer flex items-center gap-3 ${selectedDoctorId === doc.id
+                      ? "border-magenta-500 bg-magenta-50/50 text-magenta-900 ring-2 ring-magenta-500/20 shadow-xs"
                       : "border-gray-200 hover:border-gray-300 bg-white"
                       }`}
                   >
-                    <p className="font-bold text-gray-900">{doc.name}</p>
-                    <p className="text-[11px] text-gray-500 mt-0.5">{doc.specialization}</p>
+                    {doc.photo ? (
+                      <img
+                        src={doc.photo}
+                        alt={doc.name}
+                        className="w-9 h-9 rounded-xl object-cover border border-magenta-200 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-9 h-9 rounded-xl bg-magenta-100 text-magenta-700 font-bold flex items-center justify-center text-xs shrink-0">
+                        {doc.name.replace(/^(?:dr\.?|doctor)\s*/i, "").trim().charAt(0) || "D"}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-gray-900 truncate">{doc.name}</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 truncate">{doc.specialization}</p>
+                    </div>
                   </button>
                 ))
               )}

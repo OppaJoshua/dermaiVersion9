@@ -307,7 +307,46 @@ export default function ClinicDoctorsPage() {
     return conflicts;
   }, [allDoctors, editingDoctor, editForm.dutyDays, editForm.dutyStartTime, editForm.dutyEndTime, editForm.isCustomSchedule, editForm.dutySchedule]);
 
-  // Helper to upload photo to Supabase storage or DataURL fallback
+  // Helper to compress an uploaded photo into a compact, high-quality DataURL (max 512px, ~30-50KB)
+  // This guarantees it fits safely in localStorage and database text columns without quota errors
+  const compressImageToDataUrl = (file: File, maxDim = 512, quality = 0.85): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          if (width > height) {
+            if (width > maxDim) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            }
+          } else {
+            if (height > maxDim) {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL("image/jpeg", quality));
+          } else {
+            resolve((e.target?.result as string) || "");
+          }
+        };
+        img.onerror = () => resolve((e.target?.result as string) || "");
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => resolve("");
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Helper to upload photo to Supabase storage or compressed DataURL fallback
   const uploadDoctorPhoto = async (file: File): Promise<string> => {
     try {
       const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -325,11 +364,8 @@ export default function ClinicDoctorsPage() {
     } catch (err) {
       console.warn("Storage upload fallback to DataURL:", err);
     }
-    return new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve((reader.result as string) || "");
-      reader.readAsDataURL(file);
-    });
+    // Return compressed DataURL fallback so it fits safely anywhere
+    return compressImageToDataUrl(file);
   };
 
   // 1. Fetch specializations dynamically from database if available
@@ -387,6 +423,32 @@ export default function ClinicDoctorsPage() {
       const { data, error } = await query;
 
       if (!error && data) {
+        // Build map of existing cached photos to never lose them if DB returns null
+        const localPhotoMap = new Map<string, string>();
+        try {
+          const cached = localStorage.getItem("dermai_clinic_doctors");
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((d: any) => {
+                const p = d.photo || d.photo_url;
+                if (p) {
+                  if (d.id) localPhotoMap.set(String(d.id), p);
+                  if (d.email) localPhotoMap.set(String(d.email).toLowerCase().trim(), p);
+                  if (d.name) {
+                    const clean = String(d.name).toLowerCase().replace(/^(dr|doctor)\.?\s+/i, "").trim();
+                    localPhotoMap.set(clean, p);
+                  }
+                  if (d.doctor_name) {
+                    const clean = String(d.doctor_name).toLowerCase().replace(/^(dr|doctor)\.?\s+/i, "").trim();
+                    localPhotoMap.set(clean, p);
+                  }
+                }
+              });
+            }
+          }
+        } catch {}
+
         const mapped: DoctorAccount[] = data.map((doc: any) => {
           const docSpecs: SpecializationOption[] = (doc.doctor_specializations || [])
             .map((ds: any) => ds.specializations)
@@ -414,13 +476,21 @@ export default function ClinicDoctorsPage() {
             });
           }
 
+          const cleanDocName = String(doc.doctor_name || "").toLowerCase().replace(/^(dr|doctor)\.?\s+/i, "").trim();
+          const preservedPhoto =
+            doc.photo_url ||
+            localPhotoMap.get(String(doc.doctor_id)) ||
+            (doc.email ? localPhotoMap.get(String(doc.email).toLowerCase().trim()) : undefined) ||
+            localPhotoMap.get(cleanDocName) ||
+            undefined;
+
           return {
             id: doc.doctor_id,
             name: doc.doctor_name,
             email: doc.email,
             contactNumber: doc.contact_number || "",
             prcLicense: doc.prc_license || "",
-            photo: doc.photo_url || undefined,
+            photo: preservedPhoto,
             dutyDays: parsedDutyDays,
             dutyStartTime: doc.duty_start_time || "09:00",
             dutyEndTime: doc.duty_end_time || "17:00",
@@ -508,21 +578,34 @@ export default function ClinicDoctorsPage() {
     setFormError("");
   };
 
-  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>, isEdit = false) => {
+  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>, isEdit = false) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 1024 * 1024 * 5) {
-      if (isEdit) setEditError("Doctor photo should be less than 5MB.");
-      else setFormError("Doctor photo should be less than 5MB.");
+    if (file.size > 1024 * 1024 * 10) {
+      if (isEdit) setEditError("Doctor photo should be less than 10MB.");
+      else setFormError("Doctor photo should be less than 10MB.");
       return;
     }
 
-    const previewUrl = URL.createObjectURL(file);
-    if (isEdit) {
-      setEditForm((p) => ({ ...p, photoFile: file, photoPreview: previewUrl }));
-    } else {
-      setForm((p) => ({ ...p, photoFile: file, photoPreview: previewUrl }));
+    try {
+      const compressedDataUrl = await compressImageToDataUrl(file);
+      if (isEdit) {
+        setEditForm((p) => ({ ...p, photoFile: file, photoPreview: compressedDataUrl }));
+      } else {
+        setForm((p) => ({ ...p, photoFile: file, photoPreview: compressedDataUrl }));
+      }
+    } catch {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = (reader.result as string) || "";
+        if (isEdit) {
+          setEditForm((p) => ({ ...p, photoFile: file, photoPreview: dataUrl }));
+        } else {
+          setForm((p) => ({ ...p, photoFile: file, photoPreview: dataUrl }));
+        }
+      };
+      reader.readAsDataURL(file);
     }
   };
 
