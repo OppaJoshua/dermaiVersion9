@@ -21,6 +21,8 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
+import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
+import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -546,16 +548,22 @@ export default function DoctorPatientHistoryPage() {
                         Uploaded Skin Photo
                       </p>
                       <button
-                        onClick={() => setLightboxPhoto(viewingAppt.skinPhotoUrl!)}
+                        onClick={async () => {
+                          const url = await getSignedSkinPhotoUrl(viewingAppt.skinPhotoUrl);
+                          if (url) setLightboxPhoto(url);
+                        }}
                         className="text-[11px] text-blue-600 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
                       >
                         <Maximize2 className="w-3 h-3" /> Enlarge
                       </button>
                     </div>
-                    <img
-                      src={viewingAppt.skinPhotoUrl}
+                    <LazySkinPhoto
+                      pathOrUrl={viewingAppt.skinPhotoUrl}
                       alt="Patient Skin"
-                      onClick={() => setLightboxPhoto(viewingAppt.skinPhotoUrl!)}
+                      onClick={async () => {
+                        const url = await getSignedSkinPhotoUrl(viewingAppt.skinPhotoUrl);
+                        if (url) setLightboxPhoto(url);
+                      }}
                       className="w-full max-h-48 object-contain rounded-xl border border-gray-200 bg-gray-50 cursor-pointer hover:opacity-95 transition-opacity"
                     />
                   </div>

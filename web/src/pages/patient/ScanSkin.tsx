@@ -385,12 +385,20 @@ export default function ScanSkinPage() {
           (sub as any)?.started_at ||
           new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
 
-        // Count scans within the current billing cycle only
+        // Count completed scans within the current billing cycle only
         const { count: used } = await supabase
           .from("ai_scan_result")
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id)
+          .eq("status", "completed")
           .gte("scanned_at", cycleStart);
+
+        console.log("SCAN LIMIT DEBUG:", {
+          userId: user.id,
+          used,
+          scanLimit: planScanLimit,
+          isPro,
+        });
 
         setSubData({
           scansUsed: used ?? 0,
@@ -463,7 +471,7 @@ export default function ScanSkinPage() {
     }
   };
 
-const handleAnalyze = async () => {
+  const handleAnalyze = async () => {
     if (!isPro && !canScan) {
       navigate("/dashboard/upgrade");
       return;

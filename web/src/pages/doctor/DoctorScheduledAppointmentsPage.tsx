@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Calendar, Stethoscope, X, CheckCircle2, Loader2, ClipboardList, FileCheck } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
+import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -360,8 +361,8 @@ export default function DoctorScheduledAppointmentsPage() {
                       Uploaded Skin Photo
                     </p>
                     {viewingAppt.skinPhotoUrl ? (
-                      <img
-                        src={viewingAppt.skinPhotoUrl}
+                      <LazySkinPhoto
+                        pathOrUrl={viewingAppt.skinPhotoUrl}
                         alt="Skin photo"
                         className="w-full max-h-40 object-contain rounded-xl border border-gray-200 bg-gray-50"
                       />

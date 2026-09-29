@@ -19,6 +19,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
+import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
+import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 
 export type ClinicPatient = {
   id: string;
@@ -683,18 +685,27 @@ export default function ClinicPatientsPage() {
                       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center justify-between">
                         <span>Uploaded Skin Photo</span>
                         {selectedPatient.skinPhotoUrl && (
-                          <span className="text-[10px] text-magenta-600 font-semibold cursor-pointer hover:underline" onClick={() => setLightboxPhoto(selectedPatient.skinPhotoUrl!)}>
+                          <span
+                            className="text-[10px] text-magenta-600 font-semibold cursor-pointer hover:underline"
+                            onClick={async () => {
+                              const url = await getSignedSkinPhotoUrl(selectedPatient.skinPhotoUrl);
+                              if (url) setLightboxPhoto(url);
+                            }}
+                          >
                             Click to enlarge
                           </span>
                         )}
                       </p>
                       {selectedPatient.skinPhotoUrl ? (
                         <div
-                          onClick={() => setLightboxPhoto(selectedPatient.skinPhotoUrl!)}
+                          onClick={async () => {
+                            const url = await getSignedSkinPhotoUrl(selectedPatient.skinPhotoUrl);
+                            if (url) setLightboxPhoto(url);
+                          }}
                           className="relative group rounded-2xl border border-gray-200 overflow-hidden bg-gray-50 cursor-pointer aspect-video flex items-center justify-center hover:border-magenta-400 transition-all"
                         >
-                          <img
-                            src={selectedPatient.skinPhotoUrl}
+                          <LazySkinPhoto
+                            pathOrUrl={selectedPatient.skinPhotoUrl}
                             alt="Patient skin condition"
                             className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-200"
                           />

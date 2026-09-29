@@ -345,15 +345,8 @@ export function useDoctorAppointments() {
             if (isMatch) {
               const userProf = row.user_id ? userProfileMap.get(row.user_id) : null;
 
-              let photoUrl = row.skin_photo_url || undefined;
-              if (photoUrl && !photoUrl.startsWith("http") && !photoUrl.startsWith("data:")) {
-                try {
-                  const { data: signed } = await supabase.storage
-                    .from("scan-uploads")
-                    .createSignedUrl(photoUrl, 3600);
-                  if (signed?.signedUrl) photoUrl = signed.signedUrl;
-                } catch {}
-              }
+              // Keep original storage path; signed URLs are generated on-demand when viewed
+              const photoUrl = row.skin_photo_url || undefined;
 
               const rawDate = row.date;
               let dateStr = "";
@@ -444,7 +437,7 @@ export function useDoctorAppointments() {
                 doctorDone: row.status === "completed",
                 createdAt: row.created_at || new Date().toISOString(),
                 skinPhotoUrl: photoUrl,
-                conditionImage: photoUrl,
+                conditionImage: undefined,
                 conditionName: docDiagnosis || row.ai_condition_name || "General Consultation",
                 aiConditionName: (row.ai_condition_name && !row.ai_condition_name.toLowerCase().includes("consultation")) ? row.ai_condition_name : undefined,
                 aiConfidence: row.ai_confidence ? Number(row.ai_confidence) : undefined,
@@ -623,10 +616,10 @@ export function useDoctorAppointments() {
     window.addEventListener("focus", handleFocus);
     window.addEventListener("storage", handleStorage);
 
-    // 3. Periodic polling fallback (every 5 seconds)
+    // 3. Periodic polling fallback (relaxed to 60s; Supabase Realtime + focus + storage handle live updates)
     const pollInterval = setInterval(() => {
       fetchAppointments();
-    }, 5000);
+    }, 60000);
 
     return () => {
       supabase.removeChannel(channel);

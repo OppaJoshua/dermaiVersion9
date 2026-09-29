@@ -209,16 +209,10 @@ export default function DoctorDashboardPage() {
                     })}
                   </p>
                 </div>
-                {appt.skinPhotoUrl ? (
+                {appt.conditionId ? (
                   <img
-                    src={appt.skinPhotoUrl}
-                    alt="Skin preview"
-                    className="w-12 h-12 rounded-lg object-cover border border-gray-100 shrink-0 hidden sm:block"
-                  />
-                ) : appt.conditionImage ? (
-                  <img
-                    src={appt.conditionImage || fallbackImage}
-                    alt={appt.conditionName}
+                    src={skinConditions.find((c) => c.id === appt.conditionId)?.image || fallbackImage}
+                    alt={appt.conditionName || "Condition"}
                     className="w-12 h-12 rounded-lg object-cover border border-gray-100 shrink-0 hidden sm:block"
                   />
                 ) : null}

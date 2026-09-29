@@ -20,6 +20,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
+import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -615,8 +616,8 @@ export default function DoctorAppointmentsPage() {
                       Uploaded Skin Photo
                     </p>
                     {reviewModal.appointment.skinPhotoUrl ? (
-                      <img
-                        src={reviewModal.appointment.skinPhotoUrl}
+                      <LazySkinPhoto
+                        pathOrUrl={reviewModal.appointment.skinPhotoUrl}
                         alt="Patient skin photo"
                         className="w-full max-h-56 object-contain rounded-xl border border-gray-200 bg-gray-50 shadow-inner"
                       />

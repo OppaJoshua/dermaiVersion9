@@ -18,6 +18,7 @@ import { motion } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
+import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 
 type AppointmentRecord = {
   id: string;
@@ -214,22 +215,9 @@ export default function ClinicAppointmentsPage() {
       }
     }
 
-    // Map database records
-    const mapped: AppointmentRecord[] = await Promise.all(
-      dbAppts.map(async (a: any) => {
-        let photoUrl = a.skin_photo_url || undefined;
-        if (photoUrl && !photoUrl.startsWith("http") && !photoUrl.startsWith("data:")) {
-          try {
-            const { data: signed } = await supabase.storage
-              .from("scan-uploads")
-              .createSignedUrl(photoUrl, 3600);
-            if (signed?.signedUrl) {
-              photoUrl = signed.signedUrl;
-            }
-          } catch {
-            /* ignore */
-          }
-        }
+    // Map database records (do not generate signed URLs during list load)
+    const mapped: AppointmentRecord[] = dbAppts.map((a: any) => {
+      const photoUrl = a.skin_photo_url || undefined;
 
         const apptDate = a.date ? new Date(a.date) : null;
         const isValidDate = apptDate && !isNaN(apptDate.getTime());
@@ -314,8 +302,7 @@ export default function ClinicAppointmentsPage() {
           aiConditionName: a.ai_condition_name || undefined,
           aiConfidence: a.ai_confidence ? Number(a.ai_confidence) : undefined,
         };
-      })
-    );
+      });
 
     // Merge with local storage appointments
     try {
@@ -1038,8 +1025,13 @@ export default function ClinicAppointmentsPage() {
                 >
                   <div className="flex items-start gap-3">
                     <img
-                      src={appointment.patientAvatar || appointment.skinPhotoUrl || appointment.conditionImage || fallbackConditionImage}
-                      alt={appointment.conditionName || "Condition"}
+                      src={
+                        appointment.patientAvatar ||
+                        (appointment.patientName
+                          ? `https://ui-avatars.com/api/?name=${encodeURIComponent(appointment.patientName)}&background=fdf2f8&color=be185d`
+                          : fallbackConditionImage)
+                      }
+                      alt={appointment.patientName || "Patient"}
                       className="w-12 h-12 rounded-lg object-cover border border-gray-200"
                     />
                     <div className="flex-1 min-w-0">
@@ -1712,8 +1704,8 @@ export default function ClinicAppointmentsPage() {
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Uploaded Skin Photo</p>
                 {viewingPatient.skinPhotoUrl ? (
                   <div className="rounded-2xl border border-gray-100 bg-gray-50 overflow-hidden">
-                    <img
-                      src={viewingPatient.skinPhotoUrl}
+                    <LazySkinPhoto
+                      pathOrUrl={viewingPatient.skinPhotoUrl}
                       alt="Patient skin photo"
                       className="w-full max-h-48 object-contain"
                     />
