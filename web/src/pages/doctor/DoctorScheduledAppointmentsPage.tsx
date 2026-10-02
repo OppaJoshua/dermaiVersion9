@@ -13,6 +13,7 @@ function formatDate(dateStr?: string): string {
     const parsed = new Date(isIso ? dateStr : dateStr + "T00:00:00");
     if (isNaN(parsed.getTime())) return dateStr;
     return parsed.toLocaleDateString("en-PH", {
+      timeZone: "Asia/Manila",
       weekday: "short",
       year: "numeric",
       month: "short",
@@ -38,14 +39,14 @@ function formatTime(timeStr?: string, dateStr?: string): string {
   if (dateStr && dateStr.includes("T")) {
     const parsed = new Date(dateStr);
     if (!isNaN(parsed.getTime())) {
-      return parsed.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true });
+      return parsed.toLocaleTimeString("en-PH", { timeZone: "Asia/Manila", hour: "numeric", minute: "2-digit", hour12: true });
     }
   }
   return "—";
 }
 
 export default function DoctorScheduledAppointmentsPage() {
-  const { doctorName: _doctorName, appointments, loading, markAppointmentDone } = useDoctorAppointments();
+  const { doctorName: _doctorName, appointments, loading, markAppointmentDone, callPatientToConsultation: _callPatientToConsultation } = useDoctorAppointments();
   const [tab, setTab] = useState<"upcoming" | "completed">("upcoming");
   const [viewingAppt, setViewingAppt] = useState<AppointmentRecord | null>(null);
   const [clinicalDiagnosis, setClinicalDiagnosis] = useState("");
@@ -55,7 +56,16 @@ export default function DoctorScheduledAppointmentsPage() {
 
   const openApptModal = (appt: AppointmentRecord) => {
     setViewingAppt(appt);
-    setClinicalDiagnosis(appt.doctorDiagnosis || appt.aiConditionName || (appt.conditionName !== "General Consultation" ? appt.conditionName || "" : ""));
+    const isGeneric = (str?: string) =>
+      !str ||
+      str.toLowerCase().includes("general dermatol") ||
+      str.toLowerCase().includes("general consult");
+
+    const existingDiag = appt.doctorDiagnosis && !isGeneric(appt.doctorDiagnosis)
+      ? appt.doctorDiagnosis
+      : "";
+
+    setClinicalDiagnosis(existingDiag);
     setConsultationNotes(appt.doctorNote || "");
     setSaveError("");
   };
@@ -206,6 +216,30 @@ export default function DoctorScheduledAppointmentsPage() {
                   className="w-12 h-12 rounded-full object-cover border border-gray-200 shrink-0"
                 />
                 <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <span className="px-2.5 py-0.5 rounded-full bg-magenta-600 text-white font-bold text-xs shadow-2xs">
+                      Queue #{appt.queueNumber || 1}
+                    </span>
+                    {appt.batchTime && (
+                      <span className="px-2 py-0.5 rounded-md bg-magenta-50 text-magenta-800 border border-magenta-200 text-[11px] font-bold">
+                        {appt.batchTime} Batch
+                      </span>
+                    )}
+                    {appt.checkInStatus === "arrived" || appt.checkInStatus === "in-consultation" ? (
+                      <span className="px-2 py-0.5 rounded-md bg-sky-100 text-sky-800 text-[10px] font-bold flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-sky-500 inline-block" /> Arrived in Lobby
+                      </span>
+                    ) : appt.checkInStatus === "no-show" ? (
+                      <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 text-[10px] font-bold">
+                        Absent / No-Show
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-gray-600 text-[10px] font-medium">
+                        Expected Arrival
+                      </span>
+                    )}
+                  </div>
+
                   <p className="text-sm font-bold text-gray-900 truncate">
                     {appt.patientName || "Patient"}
                   </p>
@@ -243,7 +277,9 @@ export default function DoctorScheduledAppointmentsPage() {
                 </div>
                 <div className="shrink-0 text-right hidden sm:block">
                   <p className="text-xs font-bold text-gray-900">{formatDate(appt.date)}</p>
-                  <p className="text-xs font-semibold text-blue-600">{formatTime(appt.time, appt.date)}</p>
+                  <p className="text-xs font-semibold text-magenta-700">
+                    {appt.batchTime ? `${appt.batchTime} Batch` : formatTime(appt.time, appt.date)}
+                  </p>
                 </div>
                 {appt.status === "completed" || appt.doctorDone ? (
                   <button
@@ -252,13 +288,19 @@ export default function DoctorScheduledAppointmentsPage() {
                   >
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Completed (View)
                   </button>
+                ) : appt.checkInStatus === "no-show" ? (
+                  <span className="shrink-0 px-3 py-1.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+                    Patient Absent
+                  </span>
                 ) : (
-                  <button
-                    onClick={() => openApptModal(appt)}
-                    className="shrink-0 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors cursor-pointer"
-                  >
-                    Conduct Consultation
-                  </button>
+                  <div className="shrink-0 flex items-center gap-2">
+                    <button
+                      onClick={() => openApptModal(appt)}
+                      className="px-4 py-2 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
+                    >
+                      Conduct Visit
+                    </button>
+                  </div>
                 )}
               </div>
             </motion.div>

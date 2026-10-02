@@ -195,7 +195,7 @@ export default function UserLayout({
       meta.name ||
       user.email?.split("@")[0] ||
       "Patient";
-    const picture =
+    let picture =
       customProfile?.profilePictureUrl ||
       localProfile?.profilePicture ||
       meta.avatar_url ||
@@ -207,16 +207,19 @@ export default function UserLayout({
       localProfile?.address ||
       undefined;
 
-    // 1. Fetch user name from DB "user" table
+    // 1. Fetch user name and avatar from DB "user" table
     try {
       const { data: userData } = await supabase
         .from("user")
-        .select("full_name")
+        .select("full_name, avatar_url")
         .eq("user_id", user.id)
         .maybeSingle();
 
       if (userData?.full_name) {
         name = userData.full_name;
+      }
+      if (userData?.avatar_url) {
+        picture = userData.avatar_url;
       }
     } catch {
       /* ignore */

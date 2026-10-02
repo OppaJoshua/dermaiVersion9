@@ -41,6 +41,7 @@ export async function getSubscriptionPlansAsync(includeInactive = false): Promis
     .select(`
       plan_id,
       name,
+      description,
       price,
       billing_type,
       scan_limit,
@@ -65,7 +66,7 @@ export async function getSubscriptionPlansAsync(includeInactive = false): Promis
     name: p.name,
     price: Number(p.price) || 0,
     billingType: p.billing_type === "yearly" ? "yearly" : "monthly",
-    description: p.scan_limit === -1 ? "Unlimited skin scans" : `${p.scan_limit} free skin scan${p.scan_limit !== 1 ? "s" : ""}`,
+    description: p.description || (p.scan_limit === -1 ? "Unlimited skin scans" : `${p.scan_limit} free skin scan${p.scan_limit !== 1 ? "s" : ""}`),
     features: (p.plan_feature || []).map((f: any) => f.feature_text),
     scanLimit: p.scan_limit === -1 ? null : p.scan_limit,
     status: (p.status as "active" | "inactive"),

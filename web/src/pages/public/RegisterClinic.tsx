@@ -70,6 +70,56 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
+function formatTime12h(timeStr?: string): string {
+  if (!timeStr) return "";
+  const parts = timeStr.split(":");
+  const h = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  if (isNaN(h)) return timeStr;
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 || 12;
+  const minute = isNaN(m) ? "00" : String(m).padStart(2, "0");
+  return `${hour}:${minute} ${ampm}`;
+}
+
+const TIME_SLOT_OPTIONS = [
+  { value: "06:00", label: "6:00 AM" },
+  { value: "06:30", label: "6:30 AM" },
+  { value: "07:00", label: "7:00 AM" },
+  { value: "07:30", label: "7:30 AM" },
+  { value: "08:00", label: "8:00 AM" },
+  { value: "08:30", label: "8:30 AM" },
+  { value: "09:00", label: "9:00 AM" },
+  { value: "09:30", label: "9:30 AM" },
+  { value: "10:00", label: "10:00 AM" },
+  { value: "10:30", label: "10:30 AM" },
+  { value: "11:00", label: "11:00 AM" },
+  { value: "11:30", label: "11:30 AM" },
+  { value: "12:00", label: "12:00 PM (Noon)" },
+  { value: "12:30", label: "12:30 PM" },
+  { value: "13:00", label: "1:00 PM" },
+  { value: "13:30", label: "1:30 PM" },
+  { value: "14:00", label: "2:00 PM" },
+  { value: "14:30", label: "2:30 PM" },
+  { value: "15:00", label: "3:00 PM" },
+  { value: "15:30", label: "3:30 PM" },
+  { value: "16:00", label: "4:00 PM" },
+  { value: "16:30", label: "4:30 PM" },
+  { value: "17:00", label: "5:00 PM" },
+  { value: "17:30", label: "5:30 PM" },
+  { value: "18:00", label: "6:00 PM" },
+  { value: "18:30", label: "6:30 PM" },
+  { value: "19:00", label: "7:00 PM" },
+  { value: "19:30", label: "7:30 PM" },
+  { value: "20:00", label: "8:00 PM" },
+  { value: "20:30", label: "8:30 PM" },
+  { value: "21:00", label: "9:00 PM" },
+  { value: "21:30", label: "9:30 PM" },
+  { value: "22:00", label: "10:00 PM" },
+  { value: "22:30", label: "10:30 PM" },
+  { value: "23:00", label: "11:00 PM" },
+];
+
 const STEPS = [
   { id: 1, title: "Clinic Identity", subtitle: "Brand & Contact", icon: Building2 },
   { id: 2, title: "Location & Schedule", subtitle: "Address & Hours", icon: MapPin },
@@ -95,7 +145,7 @@ export default function RegisterClinic() {
     description: "",
     operatingDays: "Monday - Saturday",
     openTime: "08:00",
-    closeTime: "17:00",
+    closeTime: "20:00",
     latitude: null as number | null,
     longitude: null as number | null,
   });
@@ -1196,25 +1246,41 @@ export default function RegisterClinic() {
                       <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                         Opening Time <span className="text-rose-500">*</span>
                       </label>
-                      <input
-                        type="time"
-                        required
-                        value={formData.openTime}
-                        onChange={(e) => setFormData({ ...formData, openTime: e.target.value })}
-                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all"
-                      />
+                      <div className="relative">
+                        <Clock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
+                        <select
+                          required
+                          value={formData.openTime}
+                          onChange={(e) => setFormData({ ...formData, openTime: e.target.value })}
+                          className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-900 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all cursor-pointer"
+                        >
+                          {TIME_SLOT_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                         Closing Time <span className="text-rose-500">*</span>
                       </label>
-                      <input
-                        type="time"
-                        required
-                        value={formData.closeTime}
-                        onChange={(e) => setFormData({ ...formData, closeTime: e.target.value })}
-                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all"
-                      />
+                      <div className="relative">
+                        <Clock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
+                        <select
+                          required
+                          value={formData.closeTime}
+                          onChange={(e) => setFormData({ ...formData, closeTime: e.target.value })}
+                          className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-900 focus:border-magenta-500 focus:ring-4 focus:ring-magenta-500/10 outline-none transition-all cursor-pointer"
+                        >
+                          {TIME_SLOT_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                   </div>
 
@@ -1618,7 +1684,9 @@ export default function RegisterClinic() {
                       </div>
                       <div>
                         <span className="text-slate-400 block text-[11px]">Operating Hours:</span>
-                        <span className="font-semibold text-slate-900">{formData.operatingDays} ({formData.openTime} - {formData.closeTime})</span>
+                        <span className="font-semibold text-slate-900">
+                          {formData.operatingDays} ({formatTime12h(formData.openTime)} – {formatTime12h(formData.closeTime)})
+                        </span>
                       </div>
                       <div className="sm:col-span-2">
                         <span className="text-slate-400 block text-[11px]">Complete Address:</span>

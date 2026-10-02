@@ -37,6 +37,10 @@ export type DoctorAppointmentRecord = {
   skinPhotoUrl?: string;
   aiConditionName?: string;
   aiConfidence?: number;
+  queueNumber?: number;
+  batchTime?: string;
+  checkInStatus?: "scheduled" | "arrived" | "in-consultation" | "completed" | "no-show";
+  isWalkIn?: boolean;
   questionnaireAnswers?: Array<{
     id?: string;
     question: string;
@@ -325,15 +329,12 @@ export function useDoctorAppointments() {
               foundClinicId && rowClinicId && rowClinicId === String(foundClinicId)
             );
 
-            // Match if assigned to this doctor, or matches this doctor's clinic
-            if (!isDirectDocMatch && !isClinicMatch) {
-              const noteHasDoc = doctorNameTokens.length > 0 && (
-                doctorNameTokens.some((t) => (row.clinic_note || "").toLowerCase().includes(t)) ||
-                doctorNameTokens.some((t) => (row.notes || "").toLowerCase().includes(t))
-              );
-              if (!noteHasDoc) {
-                continue;
-              }
+            // Doctors only see appointments explicitly assigned to THEM (or unassigned clinic queue requests)
+            if (rawAssignedDoc && !isDirectDocMatch) {
+              continue;
+            }
+            if (!rawAssignedDoc && !isClinicMatch) {
+              continue;
             }
 
             const assignedDocName = rawAssignedDoc
@@ -354,8 +355,20 @@ export function useDoctorAppointments() {
               if (rawDate) {
                 const d = new Date(rawDate);
                 if (!isNaN(d.getTime())) {
-                  dateStr = d.toISOString().split("T")[0];
-                  timeStr = d.toTimeString().slice(0, 5);
+                  const dFormatter = new Intl.DateTimeFormat("en-CA", {
+                    timeZone: "Asia/Manila",
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                  });
+                  dateStr = dFormatter.format(d);
+                  const tFormatter = new Intl.DateTimeFormat("en-GB", {
+                    timeZone: "Asia/Manila",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                  });
+                  timeStr = tFormatter.format(d);
                 } else if (typeof rawDate === "string") {
                   if (rawDate.includes("T")) {
                     const parts = rawDate.split("T");
@@ -441,6 +454,10 @@ export function useDoctorAppointments() {
                 conditionName: docDiagnosis || row.ai_condition_name || "General Consultation",
                 aiConditionName: (row.ai_condition_name && !row.ai_condition_name.toLowerCase().includes("consultation")) ? row.ai_condition_name : undefined,
                 aiConfidence: row.ai_confidence ? Number(row.ai_confidence) : undefined,
+                queueNumber: row.queue_number || 1,
+                batchTime: row.batch_time || undefined,
+                checkInStatus: row.check_in_status || "scheduled",
+                isWalkIn: Boolean(row.is_walk_in),
               });
             }
           }
@@ -468,8 +485,11 @@ export function useDoctorAppointments() {
                 foundClinicId && rawLocalClinic && rawLocalClinic === String(foundClinicId)
               );
 
-              // Skip if neither assigned to this doctor nor belongs to their clinic
-              if (rawLocalAssigned && !isAssignedToThisDoctor && !isLocalClinicMatch) {
+              // Skip if assigned to another doctor
+              if (rawLocalAssigned && !isAssignedToThisDoctor) {
+                continue;
+              }
+              if (!rawLocalAssigned && !isLocalClinicMatch) {
                 continue;
               }
 
@@ -774,6 +794,36 @@ export function useDoctorAppointments() {
     }
   };
 
+  const callPatientToConsultation = useCallback(async (appointmentId: string) => {
+    try {
+      await supabase
+        .from("patient_appointment")
+        .update({ check_in_status: "in-consultation" })
+        .eq("appointment_id", appointmentId);
+
+      setAppointments((prev) =>
+        prev.map((a) => (a.id === appointmentId ? { ...a, checkInStatus: "in-consultation" } : a))
+      );
+
+      try {
+        const raw = localStorage.getItem("dermai_clinic_appointments");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            const next = parsed.map((a: any) =>
+              a.id === appointmentId ? { ...a, checkInStatus: "in-consultation" } : a
+            );
+            localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
+            window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+            window.dispatchEvent(new Event("storage"));
+          }
+        }
+      } catch {}
+    } catch (err: any) {
+      console.error("[useDoctorAppointments] callPatientToConsultation error:", err?.message);
+    }
+  }, []);
+
   return {
     loading,
     doctorName,
@@ -784,5 +834,6 @@ export function useDoctorAppointments() {
     refresh: fetchAppointments,
     submitDoctorReview,
     markAppointmentDone,
+    callPatientToConsultation,
   };
 }

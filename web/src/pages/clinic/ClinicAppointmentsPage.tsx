@@ -55,6 +55,10 @@ type AppointmentRecord = {
   skinPhotoUrl?: string;
   aiConditionName?: string;
   aiConfidence?: number;
+  queueNumber?: number;
+  batchTime?: string;
+  checkInStatus?: "scheduled" | "arrived" | "in-consultation" | "completed" | "no-show";
+  isWalkIn?: boolean;
 };
 
 type DoctorAccount = {
@@ -221,13 +225,30 @@ export default function ClinicAppointmentsPage() {
 
         const apptDate = a.date ? new Date(a.date) : null;
         const isValidDate = apptDate && !isNaN(apptDate.getTime());
-        const dateStr = isValidDate ? `${apptDate.getFullYear()}-${String(apptDate.getMonth() + 1).padStart(2, "0")}-${String(apptDate.getDate()).padStart(2, "0")}` : "";
-        const timeStr = isValidDate ? `${String(apptDate.getHours()).padStart(2, "0")}:${String(apptDate.getMinutes()).padStart(2, "0")}` : "";
+        let dateStr = "";
+        let timeStr = "";
+        if (isValidDate) {
+          const dFormatter = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Asia/Manila",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          });
+          dateStr = dFormatter.format(apptDate);
+          const tFormatter = new Intl.DateTimeFormat("en-GB", {
+            timeZone: "Asia/Manila",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          });
+          timeStr = tFormatter.format(apptDate);
+        }
 
         let displayStatus: AppointmentRecord["status"] = "pending";
         if (a.status === "confirmed" || a.status === "scheduled") displayStatus = "scheduled";
         else if (a.status === "completed") displayStatus = "completed";
-        else if (a.status === "cancelled" || a.status === "rejected") displayStatus = "rejected";
+        else if (a.status === "cancelled") displayStatus = "cancelled";
+        else if (a.status === "rejected") displayStatus = "rejected";
         else if (a.status === "accepted") displayStatus = "accepted";
 
         // Robust doctor name resolution
@@ -301,6 +322,10 @@ export default function ClinicAppointmentsPage() {
           skinPhotoUrl: photoUrl,
           aiConditionName: a.ai_condition_name || undefined,
           aiConfidence: a.ai_confidence ? Number(a.ai_confidence) : undefined,
+          queueNumber: a.queue_number || 1,
+          batchTime: a.batch_time || undefined,
+          checkInStatus: a.check_in_status || "scheduled",
+          isWalkIn: Boolean(a.is_walk_in),
         };
       });
 
@@ -504,7 +529,7 @@ export default function ClinicAppointmentsPage() {
 
   const appointmentsByDate = useMemo(() => {
     return appointments.reduce<Record<string, AppointmentRecord[]>>((acc, item) => {
-      if (!item.date || item.status === "rejected") return acc;
+      if (!item.date || item.status === "rejected" || item.status === "cancelled") return acc;
       if (!acc[item.date]) acc[item.date] = [];
       acc[item.date].push(item);
       return acc;
@@ -514,7 +539,7 @@ export default function ClinicAppointmentsPage() {
   // Queues categorized by review lifecycle
   const incomingQueue = useMemo(() => {
     return appointments
-      .filter((a) => a.status === "pending" || a.doctorStatus === "pending-review" || a.doctorStatus === "rejected")
+      .filter((a) => a.status !== "cancelled" && a.status !== "rejected" && (a.status === "pending" || a.doctorStatus === "pending-review" || a.doctorStatus === "rejected"))
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [appointments]);
 
@@ -531,7 +556,7 @@ export default function ClinicAppointmentsPage() {
     [incomingQueue]
   );
   const approvedQueue = useMemo(
-    () => appointments.filter((a) => a.status === "scheduled" || a.status === "confirmed" || a.status === "accepted" || a.doctorStatus === "approved"),
+    () => appointments.filter((a) => a.status !== "cancelled" && a.status !== "rejected" && (a.status === "scheduled" || a.status === "confirmed" || a.status === "accepted" || a.doctorStatus === "approved")),
     [appointments]
   );
 
@@ -591,6 +616,53 @@ export default function ClinicAppointmentsPage() {
       return next;
     });
   };
+
+  const handleMarkArrived = async (id: string) => {
+    try {
+      await supabase
+        .from("patient_appointment")
+        .update({ check_in_status: "arrived" })
+        .eq("appointment_id", id);
+    } catch (err: any) {
+      console.error("Failed to update check_in_status in Supabase:", err.message);
+    }
+
+    setAppointments((prev) => {
+      const next = prev.map((appt) =>
+        appt.id === id ? { ...appt, checkInStatus: "arrived" as const } : appt
+      );
+      try {
+        localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
+        window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+        window.dispatchEvent(new Event("storage"));
+      } catch {}
+      return next;
+    });
+  };
+
+  const handleMarkNoShow = async (id: string) => {
+    try {
+      await supabase
+        .from("patient_appointment")
+        .update({ check_in_status: "no-show", clinic_note: "Patient was absent / no-show during their consultation batch." })
+        .eq("appointment_id", id);
+    } catch (err: any) {
+      console.error("Failed to update check_in_status in Supabase:", err.message);
+    }
+
+    setAppointments((prev) => {
+      const next = prev.map((appt) =>
+        appt.id === id ? { ...appt, checkInStatus: "no-show" as const, clinicNote: "Patient was absent / no-show." } : appt
+      );
+      try {
+        localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
+        window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+        window.dispatchEvent(new Event("storage"));
+      } catch {}
+      return next;
+    });
+  };
+
 
   const handleConfirmRejection = () => {
     if (!rejectModal) return;
@@ -788,7 +860,7 @@ export default function ClinicAppointmentsPage() {
         .from("patient_appointment")
         .update({
           status: "confirmed",
-          date: `${finalizeScheduleModal.date}T${finalizeScheduleModal.time}:00`,
+          date: `${finalizeScheduleModal.date}T${finalizeScheduleModal.time}:00+08:00`,
           schedule_sent_to_doctor: true,
           clinic_note: `Consultation schedule confirmed for ${finalizeScheduleModal.date} at ${finalizeScheduleModal.time} with Dr. ${doctorDisplayName.replace(/^dr\.\s*/i, "")}.`,
         })
@@ -887,15 +959,17 @@ export default function ClinicAppointmentsPage() {
             Select a patient, set date and time in a modal, then confirm.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={loadData}
-          disabled={loadingData}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors shadow-xs cursor-pointer"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loadingData ? "animate-spin text-magenta-600" : "text-gray-500"}`} />
-          <span>{loadingData ? "Syncing..." : "Refresh Queue"}</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={loadData}
+            disabled={loadingData}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors shadow-xs cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loadingData ? "animate-spin text-magenta-600" : "text-gray-500"}`} />
+            <span>{loadingData ? "Syncing..." : "Refresh Queue"}</span>
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -1229,15 +1303,48 @@ export default function ClinicAppointmentsPage() {
                     </div>
                   </div>
 
-                  {/* Patient Requested Schedule Banner */}
-                  <div className="mb-2.5 p-2 rounded-xl bg-magenta-50/70 border border-magenta-100 flex items-center justify-between text-xs">
+                  {/* Patient Requested Schedule Banner with Queue Badge */}
+                  <div className="mb-2.5 p-2 rounded-xl bg-magenta-50/70 border border-magenta-100 flex items-center justify-between text-xs flex-wrap gap-1.5">
                     <div className="flex items-center gap-1.5 font-bold text-magenta-950">
                       <Calendar className="w-3.5 h-3.5 text-magenta-600" />
-                      <span>Requested: {appointment.date || "Date pending"} {appointment.time ? `· ${appointment.time}` : ""}</span>
+                      <span>{appointment.date || "Date pending"} {appointment.batchTime ? `· ${appointment.batchTime} Batch` : appointment.time ? `· ${appointment.time}` : ""}</span>
                     </div>
-                    <span className="text-[10px] font-semibold text-magenta-700 bg-white px-2 py-0.5 rounded-full border border-magenta-200">
-                      Patient Choice
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="px-2 py-0.5 rounded-full bg-magenta-600 text-white font-bold text-[10px] shadow-2xs">
+                        Queue #{appointment.queueNumber || 1}
+                      </span>
+                      {appointment.checkInStatus === "arrived" ? (
+                        <span className="px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-800 font-bold text-[9px] flex items-center gap-0.5">
+                          <span className="w-1 h-1 rounded-full bg-sky-500 inline-block" /> In Lobby
+                        </span>
+                      ) : appointment.checkInStatus === "in-consultation" ? (
+                        <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[9px] flex items-center gap-0.5 animate-pulse">
+                          <span className="w-1 h-1 rounded-full bg-emerald-500 inline-block" /> In Room
+                        </span>
+                      ) : appointment.checkInStatus === "no-show" ? (
+                        <span className="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[9px]">
+                          Absent / No-Show
+                        </span>
+                      ) : isApproved ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleMarkArrived(appointment.id)}
+                            className="px-2 py-0.5 rounded-full bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-[10px] border border-emerald-200 transition-colors cursor-pointer"
+                          >
+                            ✓ Mark Arrived
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleMarkNoShow(appointment.id)}
+                            className="px-1.5 py-0.5 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] border border-rose-200 transition-colors cursor-pointer"
+                            title="Mark patient as absent / no-show"
+                          >
+                            No-Show
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
 
                   {/* Stage Workflow Banners */}
@@ -2192,6 +2299,7 @@ export default function ClinicAppointmentsPage() {
           </motion.div>
         </div>
       )}
+
     </div>
   );
 }

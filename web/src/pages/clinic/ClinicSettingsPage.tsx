@@ -106,6 +106,56 @@ const DEFAULT_SETTINGS: ClinicSettings = {
   status: "pending",
 };
 
+const TIME_SLOT_OPTIONS = [
+  { value: "06:00", label: "6:00 AM" },
+  { value: "06:30", label: "6:30 AM" },
+  { value: "07:00", label: "7:00 AM" },
+  { value: "07:30", label: "7:30 AM" },
+  { value: "08:00", label: "8:00 AM" },
+  { value: "08:30", label: "8:30 AM" },
+  { value: "09:00", label: "9:00 AM" },
+  { value: "09:30", label: "9:30 AM" },
+  { value: "10:00", label: "10:00 AM" },
+  { value: "10:30", label: "10:30 AM" },
+  { value: "11:00", label: "11:00 AM" },
+  { value: "11:30", label: "11:30 AM" },
+  { value: "12:00", label: "12:00 PM (Noon)" },
+  { value: "12:30", label: "12:30 PM" },
+  { value: "13:00", label: "1:00 PM" },
+  { value: "13:30", label: "1:30 PM" },
+  { value: "14:00", label: "2:00 PM" },
+  { value: "14:30", label: "2:30 PM" },
+  { value: "15:00", label: "3:00 PM" },
+  { value: "15:30", label: "3:30 PM" },
+  { value: "16:00", label: "4:00 PM" },
+  { value: "16:30", label: "4:30 PM" },
+  { value: "17:00", label: "5:00 PM" },
+  { value: "17:30", label: "5:30 PM" },
+  { value: "18:00", label: "6:00 PM" },
+  { value: "18:30", label: "6:30 PM" },
+  { value: "19:00", label: "7:00 PM" },
+  { value: "19:30", label: "7:30 PM" },
+  { value: "20:00", label: "8:00 PM" },
+  { value: "20:30", label: "8:30 PM" },
+  { value: "21:00", label: "9:00 PM" },
+  { value: "21:30", label: "9:30 PM" },
+  { value: "22:00", label: "10:00 PM" },
+  { value: "22:30", label: "10:30 PM" },
+  { value: "23:00", label: "11:00 PM" },
+];
+
+function formatTime12h(timeStr?: string): string {
+  if (!timeStr) return "";
+  const parts = timeStr.split(":");
+  const h = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  if (isNaN(h)) return timeStr;
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 || 12;
+  const minute = isNaN(m) ? "00" : String(m).padStart(2, "0");
+  return `${hour}:${minute} ${ampm}`;
+}
+
 function getInitialSettings(): ClinicSettings {
   try {
     const savedRaw = localStorage.getItem("dermai_clinic_settings");
@@ -269,7 +319,7 @@ export default function ClinicSettingsPage() {
       id: targetClinicId || undefined,
       consultationFee: settings.consultationFee || "",
       servicesOffered: JSON.stringify(selectedServices),
-      hours: `${settings.operatingDays || "Monday - Saturday"}: ${settings.openTime || "08:00"} - ${settings.closeTime || "17:00"}`,
+      hours: `${settings.operatingDays || "Monday - Saturday"}: ${formatTime12h(settings.openTime || "08:00")} – ${formatTime12h(settings.closeTime || "17:00")}`,
     };
     localStorage.setItem("dermai_clinic_settings", JSON.stringify(settingsToSave));
 
@@ -297,7 +347,7 @@ export default function ClinicSettingsPage() {
                 operatingDays: settings.operatingDays,
                 openTime: settings.openTime,
                 closeTime: settings.closeTime,
-                hours: `${settings.operatingDays || "Monday - Saturday"}: ${settings.openTime || "08:00"} - ${settings.closeTime || "17:00"}`,
+                hours: `${settings.operatingDays || "Monday - Saturday"}: ${formatTime12h(settings.openTime || "08:00")} – ${formatTime12h(settings.closeTime || "17:00")}`,
                 services: selectedServices,
                 servicesOffered: JSON.stringify(selectedServices),
                 latitude: settings.latitude,
@@ -778,23 +828,33 @@ export default function ClinicSettingsPage() {
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 mb-1">Open Time</label>
-              <input
-                type="time"
+              <select
                 disabled={isPending}
                 value={settings.openTime}
                 onChange={(e) => setSettings((prev) => ({ ...prev, openTime: e.target.value }))}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500"
-              />
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm font-semibold text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500 cursor-pointer"
+              >
+                {TIME_SLOT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 mb-1">Close Time</label>
-              <input
-                type="time"
+              <select
                 disabled={isPending}
                 value={settings.closeTime}
                 onChange={(e) => setSettings((prev) => ({ ...prev, closeTime: e.target.value }))}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500"
-              />
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm font-semibold text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500 cursor-pointer"
+              >
+                {TIME_SLOT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </div>

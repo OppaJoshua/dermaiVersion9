@@ -119,9 +119,17 @@ export default function DoctorAppointmentsPage() {
     return isGeneric && !hasScore;
   };
 
+  const isGenericPlaceholder = (str?: string) =>
+    !str ||
+    str.toLowerCase().includes("general dermatol") ||
+    str.toLowerCase().includes("general consult");
+
   const openReview = (appt: AppointmentRecord) => {
     const isDirect = isDirectBooking(appt);
-    const initialDiagnosis = appt.doctorDiagnosis || (!isDirect ? (appt.aiConditionName || "") : "");
+    const initialDiagnosis = appt.doctorDiagnosis && !isGenericPlaceholder(appt.doctorDiagnosis)
+      ? appt.doctorDiagnosis
+      : (!isDirect && appt.aiConditionName && !isGenericPlaceholder(appt.aiConditionName) ? appt.aiConditionName : "");
+
     setReviewModal({
       appointment: appt,
       decision: null,
@@ -148,7 +156,8 @@ export default function DoctorAppointmentsPage() {
     setSubmitError("");
     const appt = reviewModal.appointment;
     const dec = reviewModal.decision;
-    const diagnosisText = reviewModal.diagnosis.trim() || appt.aiConditionName || appt.conditionName || "";
+    const rawDiag = reviewModal.diagnosis.trim();
+    const diagnosisText = !isGenericPlaceholder(rawDiag) ? rawDiag : "";
 
     try {
       await submitDoctorReview(

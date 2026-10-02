@@ -209,10 +209,10 @@ export default function ClinicDashboardPage() {
       const mapped: AppointmentRecord[] = dbList.map((a: any) => {
         const userObj = Array.isArray(a.user) ? a.user[0] : a.user;
         const pName = a.patient_name || userObj?.full_name || "Patient";
-        
+
         // Use user's real avatar_url or undefined (NEVER use skin_photo_url as profile avatar)
-        const userAvatar = (userObj?.avatar_url && !userObj.avatar_url.includes("scan-uploads")) 
-          ? userObj.avatar_url 
+        const userAvatar = (userObj?.avatar_url && !userObj.avatar_url.includes("scan-uploads"))
+          ? userObj.avatar_url
           : undefined;
 
         const parsedDate = parseDateStringSafe(a.date);
@@ -555,11 +555,10 @@ export default function ClinicDashboardPage() {
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.07 }}
-                  className={`rounded-2xl p-4 flex flex-col justify-between min-h-[110px] relative overflow-hidden shadow-sm ${
-                    s.highlight
+                  className={`rounded-2xl p-4 flex flex-col justify-between min-h-[110px] relative overflow-hidden shadow-sm ${s.highlight
                       ? "bg-[#c0166a] text-white"
                       : "bg-white border border-magenta-100 text-gray-900"
-                  }`}
+                    }`}
                 >
                   {s.highlight && (
                     <>
@@ -572,11 +571,10 @@ export default function ClinicDashboardPage() {
                       {s.label}
                     </p>
                     <button
-                      className={`w-6 h-6 rounded-full flex items-center justify-center border ${
-                        s.highlight
+                      className={`w-6 h-6 rounded-full flex items-center justify-center border ${s.highlight
                           ? "border-white/40 text-white"
                           : "border-gray-200 text-gray-400"
-                      }`}
+                        }`}
                     >
                       <ArrowUpRight className="w-3 h-3" />
                     </button>
@@ -822,20 +820,18 @@ export default function ClinicDashboardPage() {
                       <button
                         key={d.toISOString()}
                         onClick={() => setSelectedDate(d)}
-                        className={`w-7 h-7 mx-auto rounded-full text-[11px] font-semibold flex flex-col items-center justify-center relative transition-all cursor-pointer ${
-                          isSelected
+                        className={`w-7 h-7 mx-auto rounded-full text-[11px] font-semibold flex flex-col items-center justify-center relative transition-all cursor-pointer ${isSelected
                             ? "bg-[#c0166a] text-white shadow-md font-bold"
                             : isToday
-                            ? "text-[#c0166a] border border-[#c0166a]/40 bg-pink-50/60 hover:bg-pink-100"
-                            : "text-gray-600 hover:bg-pink-50"
-                        }`}
+                              ? "text-[#c0166a] border border-[#c0166a]/40 bg-pink-50/60 hover:bg-pink-100"
+                              : "text-gray-600 hover:bg-pink-50"
+                          }`}
                       >
                         <span>{d.getDate()}</span>
                         {hasAppt && (
                           <span
-                            className={`absolute bottom-0.5 w-1 h-1 rounded-full ${
-                              isSelected ? "bg-white" : "bg-[#c0166a]"
-                            }`}
+                            className={`absolute bottom-0.5 w-1 h-1 rounded-full ${isSelected ? "bg-white" : "bg-[#c0166a]"
+                              }`}
                           />
                         )}
                       </button>

@@ -414,10 +414,70 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return `${formatTime12h(shift.startTime)} – ${formatTime12h(shift.endTime)}`;
   }, [activeDutyDoctor, dayOfWeekForSelectedDate]);
 
-  // Dynamically compute available appointment slots within the attending doctor's duty shift
-  const availableTimeSlots = useMemo(() => {
-    let startH = 9;
-    let endH = 17;
+  // Consultation Batches and Real-time Slot Availability (NowServing model)
+  const BATCH_CAPACITY = 3;
+
+  type ConsultationBatch = {
+    batchTime: string; // e.g. "09:00"
+    label: string; // e.g. "09:00 AM Batch"
+    timeRange: string; // e.g. "09:00 AM – 10:00 AM"
+    totalSlots: number;
+    bookedCount: number;
+    availableSlots: number;
+    isFull: boolean;
+    nextQueueNumber: number;
+    estimatedWindow: string;
+  };
+
+  const [existingBookings, setExistingBookings] = useState<any[]>([]);
+  const [_loadingBookings, setLoadingBookings] = useState(false);
+
+  // Fetch real-time active bookings for the chosen date and doctor
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchBookings() {
+      if (!selectedDate) return;
+      setLoadingBookings(true);
+      try {
+        const docId = activeDutyDoctor?.id;
+        const clinicId = selectedClinic?.id;
+
+        let query = supabase
+          .from("patient_appointment")
+          .select("appointment_id, date, batch_time, queue_number, status, doctor_status")
+          .neq("status", "cancelled")
+          .neq("status", "rejected");
+
+        if (docId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(docId)) {
+          query = query.eq("assigned_doctor_id", docId);
+        } else if (clinicId) {
+          query = query.eq("clinic_id", clinicId);
+        }
+
+        const { data, error } = await query;
+        if (!cancelled && data && !error) {
+          const matched = data.filter((row: any) => {
+            if (!row.date) return false;
+            return String(row.date).startsWith(selectedDate);
+          });
+          setExistingBookings(matched);
+        }
+      } catch (e) {
+        console.warn("Could not query existing doctor bookings:", e);
+      } finally {
+        if (!cancelled) setLoadingBookings(false);
+      }
+    }
+    fetchBookings();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDate, activeDutyDoctor?.id, selectedClinic?.id]);
+
+  // Dynamically compute 1-hour consultation batches within the attending doctor's duty shift
+  const consultationBatches = useMemo<ConsultationBatch[]>(() => {
+    let startH = 8;
+    let endH = 20;
 
     if (activeDutyDoctor) {
       const shift =
@@ -429,27 +489,95 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
       startH = parseInt(shift.startTime.split(":")[0], 10) || 9;
       endH = parseInt(shift.endTime.split(":")[0], 10) || 17;
-    }
+    } else if (selectedClinic?.hours) {
+      // Parse clinic operating hours (e.g. "8:00 AM – 8:00 PM")
+      const match = selectedClinic.hours.match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*[-–—]\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+      if (match) {
+        let opH = parseInt(match[1], 10);
+        const opAmpm = match[3].toUpperCase();
+        if (opAmpm === "PM" && opH < 12) opH += 12;
+        if (opAmpm === "AM" && opH === 12) opH = 0;
 
-    const slots: string[] = [];
-    for (let h = startH; h < endH; h++) {
-      slots.push(`${String(h).padStart(2, "0")}:00`);
-      if (endH - startH <= 6) {
-        slots.push(`${String(h).padStart(2, "0")}:30`);
+        let clH = parseInt(match[4], 10);
+        const clAmpm = match[6].toUpperCase();
+        if (clAmpm === "PM" && clH < 12) clH += 12;
+        if (clAmpm === "AM" && clH === 12) clH = 0;
+
+        if (clH > opH) {
+          startH = opH;
+          endH = clH;
+        }
       }
     }
-    if (slots.length === 0) {
-      slots.push("09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00");
-    }
-    return slots;
-  }, [activeDutyDoctor, dayOfWeekForSelectedDate]);
 
-  // Keep selectedTime synchronized to first available slot if current slot is outside shift
-  useEffect(() => {
-    if (availableTimeSlots.length > 0 && !availableTimeSlots.includes(selectedTime)) {
-      setSelectedTime(availableTimeSlots[0]);
+    if (endH <= startH) endH = startH + 8;
+
+    const batches: ConsultationBatch[] = [];
+    for (let h = startH; h < endH; h++) {
+      const batchTime = `${String(h).padStart(2, "0")}:00`;
+      const nextH = h + 1;
+      const timeRange = `${formatTime12h(batchTime)} – ${formatTime12h(`${String(nextH).padStart(2, "0")}:00`)}`;
+
+      // Count active bookings in this batch
+      const bookedInBatch = existingBookings.filter((b) => {
+        if (b.batch_time) {
+          return b.batch_time === batchTime || b.batch_time.startsWith(`${String(h).padStart(2, "0")}:`);
+        }
+        if (b.date) {
+          const dObj = new Date(b.date);
+          return !isNaN(dObj.getTime()) && dObj.getHours() === h;
+        }
+        return false;
+      });
+
+      const bookedCount = bookedInBatch.length;
+      const availableSlots = Math.max(0, BATCH_CAPACITY - bookedCount);
+      const isFull = availableSlots === 0;
+      const nextQueueNumber = isFull ? BATCH_CAPACITY : bookedCount + 1;
+
+      // Estimated window for the next queue (e.g. #1: 00-20, #2: 20-40, #3: 40-60)
+      const slotIndex = isFull ? BATCH_CAPACITY - 1 : bookedCount;
+      const estStartM = slotIndex * 20;
+      const estEndM = (slotIndex + 1) * 20;
+      const estStartStr = formatTime12h(`${String(h).padStart(2, "0")}:${String(estStartM).padStart(2, "0")}`);
+      const estEndStr = formatTime12h(
+        estEndM === 60 ? `${String(nextH).padStart(2, "0")}:00` : `${String(h).padStart(2, "0")}:${String(estEndM).padStart(2, "0")}`
+      );
+
+      batches.push({
+        batchTime,
+        label: `${formatTime12h(batchTime)} Batch`,
+        timeRange,
+        totalSlots: BATCH_CAPACITY,
+        bookedCount,
+        availableSlots,
+        isFull,
+        nextQueueNumber,
+        estimatedWindow: `${estStartStr} – ${estEndStr}`,
+      });
     }
-  }, [availableTimeSlots, selectedTime]);
+
+    return batches;
+  }, [activeDutyDoctor, dayOfWeekForSelectedDate, existingBookings]);
+
+
+  // Keep selectedTime synchronized to first available batch
+  useEffect(() => {
+    if (consultationBatches.length > 0) {
+      const match = consultationBatches.find((b) => b.batchTime === selectedTime);
+      if (!match || match.isFull) {
+        const firstAvail = consultationBatches.find((b) => !b.isFull) || consultationBatches[0];
+        if (firstAvail && firstAvail.batchTime !== selectedTime) {
+          setSelectedTime(firstAvail.batchTime);
+        }
+      }
+    }
+  }, [consultationBatches, selectedTime]);
+
+  const selectedBatch = useMemo<ConsultationBatch | null>(() => {
+    if (consultationBatches.length === 0) return null;
+    return consultationBatches.find((b) => b.batchTime === selectedTime) || consultationBatches[0];
+  }, [consultationBatches, selectedTime]);
 
   const formattedPreviewDate = useMemo(() => {
     if (!selectedDate) return "Select date";
@@ -463,8 +591,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   }, [selectedDate]);
 
   const formattedPreviewTime = useMemo(() => {
-    return selectedTime ? formatTime12h(selectedTime) : activeDoctorHours;
-  }, [selectedTime, activeDoctorHours]);
+    return selectedBatch ? selectedBatch.label : selectedTime ? formatTime12h(selectedTime) : activeDoctorHours;
+  }, [selectedBatch, selectedTime, activeDoctorHours]);
 
   // Prefill AI condition and questionnaire from URL params or local scan storage
   useEffect(() => {
@@ -1035,8 +1163,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       }
 
       const confNum = aiConfidence !== "" && !isNaN(Number(aiConfidence)) ? Number(aiConfidence) : null;
-      const conditionLabel = aiConditionName.trim() || "General Dermatology Consultation";
-      const scheduledDateTimeIso = `${selectedDate}T${selectedTime}:00`;
+      const conditionLabel = aiConditionName.trim() || null;
+      const scheduledDateTimeIso = `${selectedDate}T${selectedTime}:00+08:00`;
 
       let assignedDocId = activeDutyDoctor?.id && !activeDutyDoctor.id.startsWith("doc-")
         ? activeDutyDoctor.id
@@ -1056,6 +1184,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           }
         } catch {}
       }
+
+      const assignedQueueNum = selectedBatch?.nextQueueNumber || 1;
 
       const apptPayload: Record<string, any> = {
         user_id: activeUserId,
@@ -1080,18 +1210,38 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         assigned_doctor_id: assignedDocId || null,
         doctor_status: "pending-review",
         schedule_sent_to_doctor: true,
+        queue_number: assignedQueueNum,
+        batch_time: selectedTime,
+        check_in_status: "scheduled",
+        is_walk_in: false,
       };
 
       // 3. Insert appointment request
-      let { error: insertError } = await supabase.from("patient_appointment").insert(apptPayload);
+      let insertedApptId: string | null = null;
+      let { data: insertedData, error: insertError } = await supabase
+        .from("patient_appointment")
+        .insert(apptPayload)
+        .select("appointment_id")
+        .maybeSingle();
+
+      if (insertedData?.appointment_id) {
+        insertedApptId = String(insertedData.appointment_id);
+      }
 
       if (insertError) {
         console.warn("Retrying appointment insert without assigned_doctor_id...", insertError.message);
         delete apptPayload.assigned_doctor_id;
         delete apptPayload.doctor_status;
         delete apptPayload.schedule_sent_to_doctor;
-        const retry1 = await supabase.from("patient_appointment").insert(apptPayload);
+        const retry1 = await supabase
+          .from("patient_appointment")
+          .insert(apptPayload)
+          .select("appointment_id")
+          .maybeSingle();
         insertError = retry1.error;
+        if (retry1.data?.appointment_id) {
+          insertedApptId = String(retry1.data.appointment_id);
+        }
       }
 
       if (insertError) {
@@ -1105,8 +1255,15 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           skin_photo_url: photoPath,
           notes: notes.trim() || null,
         };
-        const retry2 = await supabase.from("patient_appointment").insert(corePayload);
+        const retry2 = await supabase
+          .from("patient_appointment")
+          .insert(corePayload)
+          .select("appointment_id")
+          .maybeSingle();
         insertError = retry2.error;
+        if (retry2.data?.appointment_id) {
+          insertedApptId = String(retry2.data.appointment_id);
+        }
       }
 
       if (insertError) {
@@ -1119,7 +1276,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       // 4. Save to local cache & notify listeners
       try {
         const newLocalAppt = {
-          id: `appt-${Date.now()}`,
+          id: insertedApptId || `appt-${Date.now()}`,
           clinicId: targetClinicId,
           clinicName: selectedClinic.name || "Skin Clinic",
           patientName: patientName.trim() || user?.user_metadata?.full_name || "Patient",
@@ -1244,17 +1401,19 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
             <button
               type="button"
-              onClick={() => navigate("/dashboard")}
-              className="flex-1 py-3 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-semibold text-xs transition-all shadow-sm cursor-pointer"
+              onClick={() => navigate("/dashboard/appointment-status")}
+              className="flex-1 py-3 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-bold text-xs uppercase tracking-wider transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
             >
-              Go to Patient Dashboard
+              <span>View Appointment Status</span>
+              <ChevronRight className="w-3.5 h-3.5" />
             </button>
-            <Link
-              to={user ? "/dashboard/clinics" : "/find-clinics"}
-              className="px-4 py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-full font-semibold text-xs transition-all text-center"
+            <button
+              type="button"
+              onClick={() => navigate("/dashboard")}
+              className="px-5 py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-full font-semibold text-xs transition-all text-center cursor-pointer"
             >
-              Explore Other Clinics
-            </Link>
+              Dashboard
+            </button>
           </div>
         </motion.div>
       </div>
@@ -1668,7 +1827,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                             <span>{calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
                           </h3>
                           <p className="text-xs text-gray-500 mt-0.5">
-                            Selected: <strong className="text-magenta-700 font-bold">{formattedPreviewDate} ({dayOfWeekForSelectedDate})</strong>
+                            Selected: <strong className="text-magenta-700 font-bold">{formattedPreviewDate}</strong>
                           </p>
                         </div>
 
@@ -1736,7 +1895,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                   }
                                 }
                               }}
-                              className={`min-h-[66px] sm:min-h-[74px] p-2 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${
+                              className={`min-h-[58px] sm:min-h-[64px] p-2 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${
                                 isSelected
                                   ? "border-2 border-magenta-600 bg-magenta-50/70 ring-2 ring-magenta-500/20 shadow-xs"
                                   : isDisabled
@@ -1763,7 +1922,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                 </span>
 
                                 {isToday && (
-                                  <span className="text-[8px] font-bold px-1.5 py-0.2 rounded-full bg-magenta-100 text-magenta-700 leading-none">
+                                  <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-magenta-100 text-magenta-700 leading-none">
                                     Today
                                   </span>
                                 )}
@@ -1773,41 +1932,20 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                 )}
                               </div>
 
-                              {/* Bottom: Doctor Shift Chip or Queue Indicator */}
-                              <div className="w-full mt-1.5">
+                              {/* Doctor indicator - only shown when a doctor is actually on duty */}
+                              <div className="w-full mt-1">
                                 {hasDoctors ? (
-                                  <div className={`px-1.5 py-1 rounded-xl border flex items-center justify-between gap-1 transition-all ${
+                                  <div className={`px-1.5 py-0.5 rounded-lg flex items-center justify-center gap-1 transition-all ${
                                     isSelected
-                                      ? "bg-magenta-100/90 border-magenta-300 text-magenta-900 shadow-2xs"
-                                      : "bg-magenta-50/70 border-magenta-100/80 text-gray-700 hover:border-magenta-200"
+                                      ? "bg-magenta-600 text-white font-semibold"
+                                      : "bg-magenta-50 text-magenta-700 font-semibold border border-magenta-100/80"
                                   }`}>
-                                    <div className="flex -space-x-1.5 overflow-hidden shrink-0">
-                                      {cell.onDutyDocs.slice(0, 2).map((doc) => {
-                                        const p = getDoctorPhoto(doc);
-                                        return p ? (
-                                          <img
-                                            key={doc.id}
-                                            src={p}
-                                            alt={doc.name}
-                                            className="w-4 h-4 rounded-full object-cover border border-white shrink-0"
-                                          />
-                                        ) : (
-                                          <div
-                                            key={doc.id}
-                                            className="w-4 h-4 rounded-full bg-magenta-200 text-magenta-800 font-bold flex items-center justify-center text-[8px] border border-white shrink-0"
-                                          >
-                                            {doc.name.replace(/^Dr\.?\s*/i, "").charAt(0) || "D"}
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                    <span className="text-[10px] font-bold truncate leading-none">
-                                      {cell.onDutyDocs.length === 1 ? "1 Doctor" : `${cell.onDutyDocs.length} Doctors`}
+                                    <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
+                                    <span className="text-[9px] font-bold leading-none truncate">
+                                      {cell.onDutyDocs.length === 1
+                                        ? cell.onDutyDocs[0].name.replace(/^Dr\.?\s*/i, "").split(" ")[0] || "Doctor"
+                                        : `${cell.onDutyDocs.length} Docs`}
                                     </span>
-                                  </div>
-                                ) : cell.inCurrentMonth && !cell.isPast ? (
-                                  <div className="w-full py-1 text-center">
-                                    <span className="text-[9px] text-gray-400 font-medium">Clinic Queue</span>
                                   </div>
                                 ) : null}
                               </div>
@@ -1819,14 +1957,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       {/* Minimal Calendar Legend */}
                       <div className="flex items-center justify-between pt-2 border-t border-gray-100 text-[10px] text-gray-500">
                         <div className="flex items-center gap-3">
-                          <span className="flex items-center gap-1">
-                            <span className="w-2 h-2 rounded-full bg-magenta-500 inline-block" /> Doctor on Duty
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <span className="w-2 h-2 rounded-full bg-gray-300 inline-block" /> Clinic Queue
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-magenta-500 inline-block" /> Doctor Available
                           </span>
                         </div>
-                        <span className="flex items-center gap-1 font-semibold text-magenta-700">
+                        <span className="flex items-center gap-1.5 font-semibold text-magenta-700">
                           <span className="w-2 h-2 rounded-full bg-magenta-600 inline-block ring-1 ring-magenta-200" /> Selected Date
                         </span>
                       </div>
@@ -1929,7 +2064,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       )}
                     </div>
 
-                    {/* 2. Interactive Time Slot Selection Card (Linked to Doctor Shift) */}
+                    {/* 2. NowServing-Style Consultation Batches (Linked to Doctor Shift) */}
                     <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3">
                       <div className="flex items-center justify-between border-b border-gray-100 pb-2">
                         <div>
@@ -1938,100 +2073,163 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                             <span>Select Consultation Time</span>
                           </h4>
                           <p className="text-[10px] text-gray-400 mt-0.5">
-                            Shift: <span className="font-bold text-magenta-700">{activeDoctorHours}</span>
+                            {activeDutyDoctor ? (
+                              <>Shift: <span className="font-bold text-magenta-700">{activeDoctorHours}</span> • 3 slots per batch</>
+                            ) : (
+                              <>General Clinic Hours • 3 slots per 1-hour batch</>
+                            )}
                           </p>
                         </div>
-                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                          {formatTime12h(selectedTime)} Selected
-                        </span>
                       </div>
 
-                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 max-h-44 overflow-y-auto pr-0.5 no-scrollbar">
-                        {availableTimeSlots.map((slot) => {
-                          const isSlotSelected = selectedTime === slot;
-                          return (
-                            <button
-                              key={slot}
-                              type="button"
-                              onClick={() => setSelectedTime(slot)}
-                              className={`py-2 px-1.5 rounded-xl border text-center transition-all cursor-pointer text-xs font-semibold ${
-                                isSlotSelected
-                                  ? "bg-magenta-600 border-magenta-600 text-white shadow-xs font-bold ring-2 ring-magenta-500/20"
-                                  : "bg-slate-50 border-gray-200 text-gray-700 hover:border-magenta-300 hover:bg-magenta-50/40"
-                              }`}
-                            >
-                              {formatTime12h(slot)}
-                            </button>
-                          );
-                        })}
-                      </div>
+                      {consultationBatches.length === 0 ? (
+                        <div className="p-3 text-center text-xs text-gray-400">
+                          No consultation batches available for this doctor's shift.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-0.5 no-scrollbar">
+                          {consultationBatches.map((batch) => {
+                            const isBatchSelected = selectedTime === batch.batchTime;
+                            const isFull = batch.isFull;
+
+                            return (
+                              <button
+                                key={batch.batchTime}
+                                type="button"
+                                disabled={isFull}
+                                onClick={() => {
+                                  if (!isFull) {
+                                    setSelectedTime(batch.batchTime);
+                                  }
+                                }}
+                                className={`p-3 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${
+                                  isFull
+                                    ? "bg-slate-50/70 border-gray-200 text-gray-400 cursor-not-allowed opacity-60"
+                                    : isBatchSelected
+                                    ? "bg-magenta-50/90 border-2 border-magenta-600 text-gray-900 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer"
+                                    : "bg-white border-gray-200/90 text-gray-800 hover:border-magenta-300 hover:bg-slate-50/60 cursor-pointer"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1 w-full">
+                                  <span className="text-xs font-bold leading-tight text-gray-900">
+                                    {batch.timeRange}
+                                  </span>
+                                  {isFull ? (
+                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200 uppercase tracking-wide">
+                                      Full
+                                    </span>
+                                  ) : isBatchSelected ? (
+                                    <span className="w-4 h-4 rounded-full bg-magenta-600 text-white flex items-center justify-center text-[10px] shrink-0 font-bold">
+                                      ✓
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                <div className="mt-2.5 pt-1.5 border-t border-gray-100/80 flex items-center justify-between text-[10px]">
+                                  {isFull ? (
+                                    <span className="text-rose-600 font-semibold">Booked out</span>
+                                  ) : (
+                                    <>
+                                      <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                                        {batch.availableSlots} of {batch.totalSlots} left
+                                      </span>
+                                      <span className="text-magenta-700 font-bold">
+                                        Queue #{batch.nextQueueNumber}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
 
-                    {/* 3. Compact Consultation Summary Card */}
-                    <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3">
+                    {/* 3. NowServing-Style Consultation Summary Card */}
+                    <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3.5">
                       <div className="flex items-center justify-between border-b border-gray-100 pb-2">
                         <h4 className="text-xs sm:text-sm font-bold text-gray-900 flex items-center gap-1.5">
                           <Calendar className="w-3.5 h-3.5 text-magenta-600" />
-                          <span>Appointment Summary</span>
+                          <span>Consultation Summary</span>
                         </h4>
                         <button
                           type="button"
                           onClick={() => setCurrentStep(1)}
                           className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700 hover:underline cursor-pointer"
                         >
-                          Edit Info
+                          Edit Profile
                         </button>
                       </div>
 
-                      <div className="space-y-2 text-xs">
-                        {/* Consultation Date & Duty Shift */}
-                        <div className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 flex items-center justify-between gap-2">
-                          <div>
-                            <span className="text-[9px] font-bold text-gray-400 block uppercase tracking-wider">Date &amp; Time</span>
-                            <span className="font-bold text-gray-900 text-xs">{formattedPreviewDate}</span>
-                            <span className="text-xs font-bold text-magenta-700 ml-1.5">@ {formatTime12h(selectedTime)}</span>
-                            <span className="text-[10px] text-gray-500 ml-1">({dayOfWeekForSelectedDate})</span>
+                      {/* Prominent NowServing Queue Card */}
+                      {selectedBatch && (
+                        <div className="p-3.5 rounded-2xl bg-magenta-50/80 border border-magenta-200/80 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-magenta-800">
+                              Your Assigned Queue
+                            </span>
+                            <span className="px-2.5 py-0.5 rounded-full bg-magenta-600 text-white font-bold text-xs shadow-2xs">
+                              Queue #{selectedBatch.nextQueueNumber}
+                            </span>
                           </div>
-                          <div className="text-right">
-                            <span className="text-[9px] font-bold text-gray-400 block uppercase tracking-wider">Doctor Shift</span>
-                            <span className="font-bold text-gray-700 text-xs">{activeDoctorHours}</span>
-                          </div>
+                          <p className="text-xs font-bold text-gray-900">
+                            {activeDutyDoctor?.name || "Attending Dermatologist"}
+                          </p>
+                          <p className="text-[11px] text-gray-700">
+                            Batch: <strong className="text-magenta-900 font-semibold">{selectedBatch.label}</strong> ({selectedBatch.timeRange})
+                          </p>
+                          <p className="text-[10px] text-gray-500 italic">
+                            Estimated call window: ~{selectedBatch.estimatedWindow}
+                          </p>
                         </div>
+                      )}
 
-                        {/* Attending Doctor */}
-                        <div className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 flex items-center gap-2.5">
-                          {getDoctorPhoto(activeDutyDoctor) ? (
+                      {/* Clean Minimal NowServing Schedule Details */}
+                      <div className="p-3.5 rounded-2xl bg-slate-50 border border-gray-100 space-y-2 text-xs">
+                        <div className="flex items-start gap-3">
+                          {selectedClinic.logo ? (
                             <img
-                              src={getDoctorPhoto(activeDutyDoctor)}
-                              alt={activeDutyDoctor?.name || "Attending Doctor"}
-                              className="w-10 h-10 rounded-xl object-cover border border-magenta-200 shrink-0 shadow-2xs"
+                              src={selectedClinic.logo}
+                              alt={selectedClinic.name}
+                              className="w-11 h-11 rounded-xl object-cover border border-gray-200 shrink-0"
                             />
                           ) : (
-                            <div className="w-10 h-10 rounded-xl bg-magenta-100 text-magenta-700 font-bold flex items-center justify-center text-xs shrink-0">
-                              {activeDutyDoctor?.name?.replace(/^Dr\.?\s*/i, "").trim().charAt(0) || "D"}
+                            <div className="w-11 h-11 rounded-xl bg-magenta-100 text-magenta-700 font-bold flex items-center justify-center text-xs shrink-0">
+                              {selectedClinic.name.charAt(0) || "C"}
                             </div>
                           )}
                           <div className="min-w-0 flex-1">
-                            <span className="text-[9px] font-bold text-gray-400 block uppercase tracking-wider">Attending</span>
-                            <p className="font-bold text-gray-900 text-xs truncate">
-                              {activeDutyDoctor?.name || "General Clinic Queue"}
+                            <h5 className="font-bold text-gray-900 text-xs truncate">
+                              {selectedClinic.name}
+                            </h5>
+                            <p className="text-[11px] text-gray-500 truncate mt-0.5">
+                              {selectedClinic.address || (selectedClinic as any).district || "Dermatology Clinic"}
                             </p>
                           </div>
                         </div>
 
-                        {/* Patient & Consultation Fee */}
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="p-2.5 rounded-xl bg-slate-50 border border-gray-100">
-                            <span className="text-[9px] font-bold text-gray-400 block uppercase tracking-wider">Patient</span>
-                            <p className="font-bold text-gray-900 text-xs truncate">{patientName || "Patient"}</p>
-                          </div>
-                          <div className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 text-right">
-                            <span className="text-[9px] font-bold text-gray-400 block uppercase tracking-wider">Fee</span>
-                            <p className="font-bold text-emerald-600 text-xs">
+                        <div className="pt-2 border-t border-gray-200/70 space-y-0.5">
+                          <p className="font-bold text-gray-900 text-xs">
+                            {formattedPreviewDate}
+                          </p>
+                          <p className="text-gray-600 text-[11px]">
+                            {activeDoctorHours}
+                          </p>
+                          <p className="text-[10px] text-gray-400 italic">
+                            (By Appointment Only)
+                          </p>
+                        </div>
+
+                        <div className="pt-2 border-t border-gray-200/70 flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] font-bold text-gray-400 block uppercase tracking-wider">Fee</span>
+                            <span className="font-bold text-gray-900 text-sm">
                               ₱{Number(selectedClinic.consultationFee || 500).toLocaleString()}
-                            </p>
-                            <span className="text-[9px] text-gray-400">Payable at clinic</span>
+                            </span>
                           </div>
+                          <span className="text-[10px] text-gray-400">Payable at clinic</span>
                         </div>
                       </div>
 
@@ -2040,8 +2238,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         <button
                           type="button"
                           onClick={() => handleSubmitAppointment()}
-                          disabled={submitting}
-                          className="w-full py-3 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-semibold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
+                          disabled={submitting || (selectedBatch?.isFull ?? false)}
+                          className="w-full py-3 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-bold text-xs uppercase tracking-wider shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
                         >
                           {submitting ? (
                             <>
@@ -2050,7 +2248,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                             </>
                           ) : (
                             <>
-                              <span>Confirm &amp; Book Appointment</span>
+                              <span>Book Here</span>
                               <Check className="w-3.5 h-3.5" />
                             </>
                           )}

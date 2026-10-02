@@ -71,6 +71,18 @@ function getInitialApplications(): ClinicApplication[] {
   return [];
 }
 
+function formatTime12h(timeStr?: string): string {
+  if (!timeStr) return "";
+  const parts = timeStr.split(":");
+  const h = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  if (isNaN(h)) return timeStr;
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 || 12;
+  const minute = isNaN(m) ? "00" : String(m).padStart(2, "0");
+  return `${hour}:${minute} ${ampm}`;
+}
+
 export default function AdminClinicManagement() {
   const [applications, setApplications] = useState<ClinicApplication[]>(getInitialApplications);
   const [loading, setLoading] = useState(() => getInitialApplications().length === 0);
@@ -702,7 +714,7 @@ export default function AdminClinicManagement() {
                   </div>
                   <div className="p-3 bg-gray-50 rounded-xl">
                     <span className="text-gray-400 block mb-0.5">Operating Hours</span>
-                    <p className="font-semibold text-gray-900">{modalClinic.operatingDays || "Mon - Sat"} ({modalClinic.openTime || "08:00"} - {modalClinic.closeTime || "17:00"})</p>
+                    <p className="font-semibold text-gray-900">{modalClinic.operatingDays || "Mon - Sat"} ({formatTime12h(modalClinic.openTime || "08:00")} – {formatTime12h(modalClinic.closeTime || "17:00")})</p>
                   </div>
                 </div>
 

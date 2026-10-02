@@ -44,6 +44,7 @@ const EMPTY_PROFILE: UserProfile = {
 export default function PatientPersonalInformation() {
   const { session, user: _authUser } = useAuth();
   const [profile, setProfile] = useState<UserProfile>(EMPTY_PROFILE);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -65,7 +66,7 @@ export default function PatientPersonalInformation() {
       try {
         const { data: dbUser, error: _error } = await supabase
           .from("user")
-          .select("full_name, email, phone, gender, birthdate, district, address")
+          .select("full_name, email, phone, gender, birthdate, district, address, avatar_url")
           .eq("user_id", session.user.id)
           .maybeSingle();
 
@@ -83,7 +84,7 @@ export default function PatientPersonalInformation() {
           birthdate: dbUser?.birthdate || meta.birthdate || meta.birthday || parsed.birthdate || "",
           district: dbUser?.district || meta.district || parsed.district || "",
           address: dbUser?.address || meta.address || parsed.address || "",
-          profilePicture: meta.avatar_url || parsed.profilePicture || fallbackPicture,
+          profilePicture: dbUser?.avatar_url || parsed.profilePicture || meta.avatar_url || fallbackPicture,
         });
       } catch (err) {
         console.error("Error loading profile:", err);
@@ -120,11 +121,12 @@ export default function PatientPersonalInformation() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 1024 * 1024 * 2) {
-      setMessage({ type: "error", text: "Image size should be less than 2MB" });
+    if (file.size > 1024 * 1024 * 5) {
+      setMessage({ type: "error", text: "Image size should be less than 5MB" });
       return;
     }
 
+    setSelectedFile(file);
     const reader = new FileReader();
     reader.onloadend = () => {
       setProfile((prev) => ({ ...prev, profilePicture: reader.result as string }));
@@ -143,7 +145,34 @@ export default function PatientPersonalInformation() {
 
     try {
       if (session?.user) {
-        // 1. Update user in Supabase public.user
+        let finalAvatarUrl: string | null = profile.profilePicture || null;
+
+        // 1. If user uploaded a new image file, upload to Supabase Storage "avatars" bucket
+        if (selectedFile) {
+          try {
+            const ext = selectedFile.name.split(".").pop() || "png";
+            const filePath = `${session.user.id}/${Date.now()}.${ext}`;
+            const { error: uploadError } = await supabase.storage
+              .from("avatars")
+              .upload(filePath, selectedFile, { upsert: true });
+
+            if (!uploadError) {
+              const { data: publicData } = supabase.storage
+                .from("avatars")
+                .getPublicUrl(filePath);
+              if (publicData?.publicUrl) {
+                finalAvatarUrl = publicData.publicUrl;
+                setProfile((prev) => ({ ...prev, profilePicture: finalAvatarUrl || undefined }));
+              }
+            } else {
+              console.warn("Avatar storage upload failed:", uploadError.message);
+            }
+          } catch (uploadErr) {
+            console.warn("Avatar upload error:", uploadErr);
+          }
+        }
+
+        // 2. Update user in Supabase public.user
         const { error: dbError } = await supabase
           .from("user")
           .update({
@@ -153,6 +182,7 @@ export default function PatientPersonalInformation() {
             birthdate: profile.birthdate || null,
             district: profile.district || null,
             address: profile.address || null,
+            avatar_url: finalAvatarUrl,
           })
           .eq("user_id", session.user.id);
 
@@ -160,7 +190,7 @@ export default function PatientPersonalInformation() {
           console.warn("Could not update public.user:", dbError);
         }
 
-        // 2. Persist extended profile details locally for this user
+        // 3. Persist extended profile details locally for this user
         localStorage.setItem(
           `derm_profile_${session.user.id}`,
           JSON.stringify({
@@ -170,11 +200,11 @@ export default function PatientPersonalInformation() {
             birthdate: profile.birthdate,
             district: profile.district,
             address: profile.address,
-            profilePicture: profile.profilePicture,
+            profilePicture: finalAvatarUrl,
           })
         );
 
-        // 3. Sync metadata to Supabase auth user
+        // 4. Sync metadata to Supabase auth user
         try {
           await supabase.auth.updateUser({
             data: {
@@ -185,14 +215,14 @@ export default function PatientPersonalInformation() {
               phone: profile.contactNumber,
               district: profile.district,
               address: profile.address,
-              avatar_url: profile.profilePicture,
+              avatar_url: finalAvatarUrl,
             },
           });
         } catch {
           // ignore
         }
 
-        // 4. Notify layout and any listeners immediately
+        // 5. Notify layout and any listeners immediately
         window.dispatchEvent(new Event("derm_profile_updated"));
         window.dispatchEvent(new Event("storage"));
       }

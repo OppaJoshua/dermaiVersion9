@@ -14,7 +14,8 @@ import {
   Camera,
   Sparkles,
   AlertTriangle,
-  Users,
+  Check,
+  ChevronDown,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
@@ -72,11 +73,36 @@ const ALL_DAYS_OF_WEEK = [
   "Sunday",
 ];
 
-const SHIFT_PRESETS = [
-  { label: "Morning (9 AM - 1 PM)", start: "09:00", end: "13:00" },
-  { label: "Afternoon (1 PM - 5 PM)", start: "13:00", end: "17:00" },
-  { label: "Full Day (9 AM - 5 PM)", start: "09:00", end: "17:00" },
-  { label: "Evening (2 PM - 7 PM)", start: "14:00", end: "19:00" },
+const TIME_SLOT_OPTIONS = [
+  { value: "07:00", label: "7:00 AM (Early Open)" },
+  { value: "07:30", label: "7:30 AM" },
+  { value: "08:00", label: "8:00 AM (Clinic Opens)" },
+  { value: "08:30", label: "8:30 AM" },
+  { value: "09:00", label: "9:00 AM" },
+  { value: "09:30", label: "9:30 AM" },
+  { value: "10:00", label: "10:00 AM" },
+  { value: "10:30", label: "10:30 AM" },
+  { value: "11:00", label: "11:00 AM" },
+  { value: "11:30", label: "11:30 AM" },
+  { value: "12:00", label: "12:00 PM (Noon)" },
+  { value: "12:30", label: "12:30 PM" },
+  { value: "13:00", label: "1:00 PM" },
+  { value: "13:30", label: "1:30 PM" },
+  { value: "14:00", label: "2:00 PM" },
+  { value: "14:30", label: "2:30 PM" },
+  { value: "15:00", label: "3:00 PM" },
+  { value: "15:30", label: "3:30 PM" },
+  { value: "16:00", label: "4:00 PM" },
+  { value: "16:30", label: "4:30 PM" },
+  { value: "17:00", label: "5:00 PM" },
+  { value: "17:30", label: "5:30 PM" },
+  { value: "18:00", label: "6:00 PM" },
+  { value: "18:30", label: "6:30 PM" },
+  { value: "19:00", label: "7:00 PM" },
+  { value: "19:30", label: "7:30 PM" },
+  { value: "20:00", label: "8:00 PM (Clinic Closes)" },
+  { value: "20:30", label: "8:30 PM" },
+  { value: "21:00", label: "9:00 PM (Late Close)" },
 ];
 
 interface ScheduleConflict {
@@ -101,6 +127,14 @@ function formatTime12h(timeStr: string): string {
   return `${hour}:${String(m || 0).padStart(2, "0")} ${ampm}`;
 }
 
+function getShiftDurationHours(startStr: string, endStr: string): number {
+  if (!startStr || !endStr) return 0;
+  const startMin = timeToMinutes(startStr);
+  const endMin = timeToMinutes(endStr);
+  if (endMin <= startMin) return 0;
+  return Math.round(((endMin - startMin) / 60) * 10) / 10;
+}
+
 function getDoctorShiftForDay(
   doc: { dutyStartTime?: string; dutyEndTime?: string; dutySchedule?: Record<string, DayShift> },
   day: string
@@ -112,6 +146,97 @@ function getDoctorShiftForDay(
     startTime: doc.dutyStartTime || "09:00",
     endTime: doc.dutyEndTime || "17:00",
   };
+}
+
+function ModernTimeSelect({
+  value,
+  onChange,
+  label,
+  placeholder = "Select time",
+  disabled = false,
+}: {
+  value: string;
+  onChange: (val: string) => void;
+  label?: string;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const selectedOpt = TIME_SLOT_OPTIONS.find((o) => o.value === value);
+
+  return (
+    <div ref={containerRef} className="relative w-full">
+      {label && (
+        <label className="block text-[11px] font-bold text-gray-700 mb-1">
+          {label}
+        </label>
+      )}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((prev) => !prev)}
+        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl border bg-white text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+          open
+            ? "border-[#c0166a] ring-2 ring-magenta-500/10 shadow-xs"
+            : "border-gray-200 hover:border-gray-300 hover:bg-gray-50/60"
+        }`}
+      >
+        <div className="flex items-center gap-2 text-gray-900 truncate">
+          <Clock className="w-3.5 h-3.5 text-[#c0166a] shrink-0" />
+          <span className="font-bold">{selectedOpt ? selectedOpt.label : (value ? formatTime12h(value) : placeholder)}</span>
+        </div>
+        <ChevronDown
+          className={`w-3.5 h-3.5 text-gray-400 shrink-0 transition-transform ${open ? "rotate-180 text-[#c0166a]" : ""}`}
+        />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.12 }}
+            className="absolute left-0 right-0 top-full mt-1.5 max-h-52 overflow-y-auto rounded-xl border border-gray-100 bg-white shadow-xl z-50 p-1 divide-y divide-gray-50/80"
+          >
+            {TIME_SLOT_OPTIONS.map((opt) => {
+              const isSelected = opt.value === value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                    isSelected
+                      ? "bg-[#c0166a] text-white font-bold"
+                      : "text-gray-700 hover:bg-magenta-50 hover:text-magenta-900"
+                  }`}
+                >
+                  <span>{opt.label}</span>
+                  {isSelected && <Check className="w-3.5 h-3.5 text-white shrink-0" />}
+                </button>
+              );
+            })}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
 }
 
 export default function ClinicDoctorsPage() {
@@ -136,17 +261,17 @@ export default function ClinicDoctorsPage() {
     photoFile: null as File | null,
     photoPreview: "",
     dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] as string[],
-    dutyStartTime: "09:00",
+    dutyStartTime: "08:00",
     dutyEndTime: "17:00",
     isCustomSchedule: false,
     dutySchedule: {
-      Monday: { startTime: "09:00", endTime: "17:00" },
-      Tuesday: { startTime: "09:00", endTime: "17:00" },
-      Wednesday: { startTime: "09:00", endTime: "17:00" },
-      Thursday: { startTime: "09:00", endTime: "17:00" },
-      Friday: { startTime: "09:00", endTime: "17:00" },
-      Saturday: { startTime: "09:00", endTime: "17:00" },
-      Sunday: { startTime: "09:00", endTime: "17:00" },
+      Monday: { startTime: "08:00", endTime: "17:00" },
+      Tuesday: { startTime: "08:00", endTime: "17:00" },
+      Wednesday: { startTime: "08:00", endTime: "17:00" },
+      Thursday: { startTime: "08:00", endTime: "17:00" },
+      Friday: { startTime: "08:00", endTime: "17:00" },
+      Saturday: { startTime: "08:00", endTime: "17:00" },
+      Sunday: { startTime: "08:00", endTime: "17:00" },
     } as Record<string, DayShift>,
   });
   const [formError, setFormError] = useState("");
@@ -169,7 +294,7 @@ export default function ClinicDoctorsPage() {
     photoFile: null as File | null,
     photoPreview: "",
     dutyDays: [] as string[],
-    dutyStartTime: "09:00",
+    dutyStartTime: "08:00",
     dutyEndTime: "17:00",
     isCustomSchedule: false,
     dutySchedule: {} as Record<string, DayShift>,
@@ -1219,278 +1344,187 @@ export default function ClinicDoctorsPage() {
           </div>
 
           {/* Duty Schedule Setup Section */}
-          <div className="sm:col-span-2 pt-3 border-t border-gray-100 space-y-3">
-            {/* 1. Mini Weekly Roster Matrix Overview */}
-            <div className="p-3.5 rounded-xl bg-gray-50/70 border border-gray-100">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
-                  <Users className="w-3.5 h-3.5 text-[#c0166a]" />
-                  Current Weekly Roster Coverage
-                </span>
-                <span className="text-[10px] font-semibold text-gray-400">
-                  {allDoctors.filter((d) => d.status === "Active").length} active doctor(s)
-                </span>
-              </div>
-              <p className="text-[11px] text-gray-500 mb-2.5">
-                Existing doctor coverage across the week to balance shifts and avoid overlaps.
-              </p>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-1.5">
-                {ALL_DAYS_OF_WEEK.map((day) => {
-                  const doctorsOnDay = weeklyRosterMatrix[day] || [];
-                  const isSelectedInForm = form.dutyDays.includes(day);
-
-                  return (
-                    <div
-                      key={day}
-                      onClick={() => toggleDaySelection(day, false)}
-                      className={`p-2 rounded-xl border transition-all cursor-pointer text-center ${
-                        isSelectedInForm
-                          ? "bg-magenta-50 border-magenta-300 ring-1 ring-magenta-400/40"
-                          : "bg-white border-gray-200 hover:border-gray-300"
-                      }`}
-                    >
-                      <p className={`text-[11px] font-bold ${isSelectedInForm ? "text-magenta-900" : "text-gray-700"}`}>
-                        {day.slice(0, 3)}
-                      </p>
-                      {doctorsOnDay.length === 0 ? (
-                        <span className="inline-block mt-0.5 px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 text-[9px] font-semibold">
-                          Open
-                        </span>
-                      ) : (
-                        <div className="mt-0.5">
-                          <span className="inline-block px-1.5 py-0.2 rounded bg-magenta-100 text-magenta-800 text-[9px] font-bold">
-                            {doctorsOnDay.length} Dr{doctorsOnDay.length > 1 ? "s" : ""}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Days Toggle */}
+          <div className="sm:col-span-2 pt-4 border-t border-gray-100 space-y-4">
+            {/* 1. Unified Duty Days Selector */}
             <div>
-              <label className="block text-xs font-bold text-gray-800 mb-1.5 flex items-center gap-1">
-                <Calendar className="w-3.5 h-3.5 text-[#c0166a]" />
-                Select Duty Days for this Doctor *
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-[#c0166a]" />
+                  Select Weekly Duty Days *
+                </label>
+                <div className="flex items-center gap-2 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setForm((p) => ({ ...p, dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] }))}
+                    className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
+                  >
+                    Mon–Fri
+                  </button>
+                  <span className="text-gray-300">•</span>
+                  <button
+                    type="button"
+                    onClick={() => setForm((p) => ({ ...p, dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] }))}
+                    className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
+                  >
+                    Mon–Sat
+                  </button>
+                  <span className="text-gray-300">•</span>
+                  <button
+                    type="button"
+                    onClick={() => setForm((p) => ({ ...p, dutyDays: [...ALL_DAYS_OF_WEEK] }))}
+                    className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
+                  >
+                    All Week
+                  </button>
+                </div>
+              </div>
 
-              <div className="flex flex-wrap gap-1.5">
+              {/* 7 Clean Day Cards */}
+              <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
                 {ALL_DAYS_OF_WEEK.map((day) => {
                   const isSelected = form.dutyDays.includes(day);
+                  const doctorsOnDay = weeklyRosterMatrix[day] || [];
+
                   return (
                     <button
                       key={day}
                       type="button"
                       onClick={() => toggleDaySelection(day, false)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      className={`p-2.5 rounded-xl border transition-all text-center flex flex-col items-center justify-center cursor-pointer ${
                         isSelected
-                          ? "bg-[#c0166a] text-white shadow-2xs"
-                          : "bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200"
+                          ? "bg-magenta-50/80 border-magenta-300 ring-2 ring-magenta-500/20 shadow-xs"
+                          : "bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/50"
                       }`}
                     >
-                      {day.slice(0, 3)}
+                      <span className={`text-xs font-bold ${isSelected ? "text-magenta-900" : "text-gray-700"}`}>
+                        {day.slice(0, 3)}
+                      </span>
+                      <span className={`text-[9px] mt-1 font-semibold truncate ${
+                        isSelected
+                          ? "text-magenta-700"
+                          : doctorsOnDay.length > 0 ? "text-gray-400" : "text-emerald-600"
+                      }`}>
+                        {doctorsOnDay.length > 0 ? `${doctorsOnDay.length} Dr` : "Open"}
+                      </span>
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            {/* Duty Hours Mode Switcher */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-gray-50 border border-gray-200/70">
-              <div>
-                <span className="text-xs font-bold text-gray-900 flex items-center gap-1">
-                  <Clock className="w-3.5 h-3.5 text-[#c0166a]" />
-                  Consultation Shift Mode
-                </span>
-                <p className="text-[11px] text-gray-500">
-                  {form.isCustomSchedule
-                    ? "Set unique consultation hours for each selected day"
-                    : "Apply uniform shift hours across all selected duty days"}
-                </p>
-              </div>
+            {/* 2. Consultation Shift Hours (Direct Time Selection, No Presets) */}
+            <div className="p-4 rounded-2xl bg-gray-50/70 border border-gray-200/80 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-[#c0166a]" />
+                    Duty Consultation Hours
+                  </label>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {form.isCustomSchedule
+                      ? "Custom hours configured per duty day"
+                      : "Clinic Operating Hours: 8:00 AM – 8:00 PM"}
+                  </p>
+                </div>
 
-              <div className="inline-flex bg-gray-200/80 p-0.5 rounded-xl border border-gray-300/60 shrink-0 self-start sm:self-auto text-xs">
                 <button
                   type="button"
-                  onClick={() => setForm((p) => ({ ...p, isCustomSchedule: false }))}
-                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
-                    !form.isCustomSchedule
-                      ? "bg-white text-gray-900 shadow-2xs"
-                      : "text-gray-600 hover:text-gray-900"
-                  }`}
-                >
-                  Same for All Days
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setForm((p) => {
-                      const nextSched = { ...p.dutySchedule };
-                      p.dutyDays.forEach((d) => {
+                  onClick={() => {
+                    if (!form.isCustomSchedule) {
+                      const nextSched = { ...form.dutySchedule };
+                      form.dutyDays.forEach((d) => {
                         if (!nextSched[d]) {
                           nextSched[d] = {
-                            startTime: p.dutyStartTime || "09:00",
-                            endTime: p.dutyEndTime || "17:00",
+                            startTime: form.dutyStartTime || "08:00",
+                            endTime: form.dutyEndTime || "17:00",
                           };
                         }
                       });
-                      return { ...p, isCustomSchedule: true, dutySchedule: nextSched };
-                    })
-                  }
-                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
-                    form.isCustomSchedule
-                      ? "bg-[#c0166a] text-white shadow-2xs"
-                      : "text-gray-600 hover:text-gray-900"
-                  }`}
+                      setForm((p) => ({ ...p, isCustomSchedule: true, dutySchedule: nextSched }));
+                    } else {
+                      setForm((p) => ({ ...p, isCustomSchedule: false }));
+                    }
+                  }}
+                  className="text-xs font-semibold text-magenta-700 hover:text-magenta-800 px-3 py-1 rounded-lg border border-magenta-200 bg-white hover:bg-magenta-50 transition-colors cursor-pointer"
                 >
-                  Customize Per Day ✨
+                  {form.isCustomSchedule ? "← Uniform Shift (Same for all days)" : "+ Customize hours per day"}
                 </button>
               </div>
-            </div>
 
-            {/* Mode 1: Uniform shift preset & time pickers */}
-            {!form.isCustomSchedule ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-gray-50/70 p-3.5 rounded-xl border border-gray-200/70">
-                <div className="sm:col-span-2">
-                  <label className="block text-[11px] font-bold text-gray-600 mb-1.5">
-                    Quick Shift Presets
-                  </label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {SHIFT_PRESETS.map((preset) => (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        onClick={() =>
-                          setForm((p) => ({
-                            ...p,
-                            dutyStartTime: preset.start,
-                            dutyEndTime: preset.end,
-                          }))
-                        }
-                        className={`text-[11px] px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
-                          form.dutyStartTime === preset.start && form.dutyEndTime === preset.end
-                            ? "bg-magenta-100 text-magenta-900 border border-magenta-300 font-bold"
-                            : "bg-white text-gray-700 border border-gray-200 hover:bg-gray-100"
-                        }`}
-                      >
-                        {preset.label}
-                      </button>
-                    ))}
+              {!form.isCustomSchedule ? (
+                /* Direct Time Pickers (Preset-Free) */
+                <div className="p-4 rounded-2xl bg-white border border-gray-200/90 shadow-2xs space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <ModernTimeSelect
+                      label="Shift Start Time"
+                      value={form.dutyStartTime}
+                      onChange={(val) => setForm((p) => ({ ...p, dutyStartTime: val }))}
+                    />
+                    <ModernTimeSelect
+                      label="Shift End Time"
+                      value={form.dutyEndTime}
+                      onChange={(val) => setForm((p) => ({ ...p, dutyEndTime: val }))}
+                    />
                   </div>
-                </div>
 
-                <div>
-                  <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                    Shift Start Time
-                  </label>
-                  <input
-                    type="time"
-                    value={form.dutyStartTime}
-                    onChange={(e) => setForm((p) => ({ ...p, dutyStartTime: e.target.value }))}
-                    className="w-full px-3 py-1.5 rounded-xl border border-gray-200 text-xs bg-white text-gray-900 focus:outline-none focus:border-[#c0166a]"
-                  />
-                </div>
+                  {/* Real-time Duration & Status Calculation */}
+                  {(() => {
+                    const duration = getShiftDurationHours(form.dutyStartTime, form.dutyEndTime);
+                    const isInvalid = timeToMinutes(form.dutyEndTime) <= timeToMinutes(form.dutyStartTime);
 
-                <div>
-                  <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                    Shift End Time
-                  </label>
-                  <input
-                    type="time"
-                    value={form.dutyEndTime}
-                    onChange={(e) => setForm((p) => ({ ...p, dutyEndTime: e.target.value }))}
-                    className="w-full px-3 py-1.5 rounded-xl border border-gray-200 text-xs bg-white text-gray-900 focus:outline-none focus:border-[#c0166a]"
-                  />
-                </div>
-              </div>
-            ) : (
-              /* Mode 2: Per-day interactive shift cards */
-              <div className="space-y-2 bg-gray-50/60 p-3 rounded-xl border border-gray-200/70">
-                <div className="flex items-center justify-between px-1 mb-0.5">
-                  <span className="text-[11px] font-bold text-gray-700">
-                    Day-by-Day Shift Breakdown ({form.dutyDays.length} days selected)
-                  </span>
-                  <span className="text-[10px] text-gray-400">
-                    Use quick buttons or custom time inputs
-                  </span>
-                </div>
+                    if (isInvalid) {
+                      return (
+                        <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-1.5 font-medium">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>Shift End Time must be later than Start Time.</span>
+                        </div>
+                      );
+                    }
 
-                {form.dutyDays.map((day) => {
-                  const shift = form.dutySchedule[day] || {
-                    startTime: form.dutyStartTime || "09:00",
-                    endTime: form.dutyEndTime || "17:00",
-                  };
+                    return (
+                      <div className="pt-2 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-gray-900">
+                            {formatTime12h(form.dutyStartTime)} – {formatTime12h(form.dutyEndTime)}
+                          </span>
+                          <span className="text-gray-300">•</span>
+                          <span className="font-bold text-magenta-700 bg-magenta-50 px-2.5 py-0.5 rounded-full border border-magenta-200">
+                            {duration} Hours Active Duty
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-gray-400">
+                          Active across {form.dutyDays.length} duty day{form.dutyDays.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                    );
+                  })()}
+                </div>
+              ) : (
+                /* Custom Per-Day Shift Mode */
+                <div className="space-y-2 pt-1">
+                  {form.dutyDays.map((day) => {
+                    const shift = form.dutySchedule[day] || {
+                      startTime: form.dutyStartTime || "08:00",
+                      endTime: form.dutyEndTime || "17:00",
+                    };
+                    const duration = getShiftDurationHours(shift.startTime, shift.endTime);
 
-                  return (
-                    <div
-                      key={day}
-                      className="p-3 rounded-xl bg-white border border-gray-200 hover:border-magenta-300 transition-all text-left shadow-2xs"
-                    >
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 mb-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-[#c0166a]" />
-                          <h4 className="text-xs font-bold text-gray-900">{day}</h4>
-                          <span className="text-[10px] font-semibold text-magenta-700 bg-magenta-50 px-2 py-0.5 rounded-md border border-magenta-200">
-                            {formatTime12h(shift.startTime)} – {formatTime12h(shift.endTime)}
+                    return (
+                      <div
+                        key={day}
+                        className="p-3 rounded-xl bg-white border border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-2xs"
+                      >
+                        <div className="w-28 shrink-0">
+                          <span className="text-xs font-bold text-gray-900 block">{day}</span>
+                          <span className="text-[10px] text-magenta-700 font-semibold">
+                            {duration > 0 ? `${duration} hrs duty` : "Invalid hours"}
                           </span>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-1">
-                          {SHIFT_PRESETS.map((p) => {
-                            const isActive = shift.startTime === p.start && shift.endTime === p.end;
-                            return (
-                              <button
-                                key={p.label}
-                                type="button"
-                                onClick={() => {
-                                  setForm((prev) => ({
-                                    ...prev,
-                                    dutySchedule: {
-                                      ...prev.dutySchedule,
-                                      [day]: { startTime: p.start, endTime: p.end },
-                                    },
-                                  }));
-                                }}
-                                className={`text-[9px] px-1.5 py-0.5 rounded-md transition-all cursor-pointer ${
-                                  isActive
-                                    ? "bg-[#c0166a] text-white font-bold"
-                                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                                }`}
-                              >
-                                {p.label.split(" ")[0]}
-                              </button>
-                            );
-                          })}
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setForm((prev) => {
-                                const nextSched = { ...prev.dutySchedule };
-                                prev.dutyDays.forEach((d) => {
-                                  nextSched[d] = { startTime: shift.startTime, endTime: shift.endTime };
-                                });
-                                return { ...prev, dutySchedule: nextSched };
-                              });
-                            }}
-                            className="text-[9px] text-magenta-700 hover:text-magenta-800 bg-magenta-50 hover:bg-magenta-100 border border-magenta-200 px-1.5 py-0.5 rounded-md font-medium cursor-pointer ml-0.5"
-                          >
-                            Apply to all
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-gray-100">
-                        <div>
-                          <label className="block text-[9px] text-gray-400 font-bold mb-0.5">Start Time</label>
-                          <input
-                            type="time"
+                        <div className="flex items-center gap-2 flex-1 max-w-sm">
+                          <ModernTimeSelect
                             value={shift.startTime}
-                            onChange={(e) => {
-                              const val = e.target.value;
+                            onChange={(val) => {
                               setForm((prev) => ({
                                 ...prev,
                                 dutySchedule: {
@@ -1499,16 +1533,11 @@ export default function ClinicDoctorsPage() {
                                 },
                               }));
                             }}
-                            className="w-full px-2.5 py-1 rounded-lg border border-gray-200 text-xs bg-gray-50/50 focus:bg-white focus:outline-none focus:border-[#c0166a]"
                           />
-                        </div>
-                        <div>
-                          <label className="block text-[9px] text-gray-400 font-bold mb-0.5">End Time</label>
-                          <input
-                            type="time"
+                          <span className="text-xs text-gray-400 font-medium">to</span>
+                          <ModernTimeSelect
                             value={shift.endTime}
-                            onChange={(e) => {
-                              const val = e.target.value;
+                            onChange={(val) => {
                               setForm((prev) => ({
                                 ...prev,
                                 dutySchedule: {
@@ -1517,41 +1546,36 @@ export default function ClinicDoctorsPage() {
                                 },
                               }));
                             }}
-                            className="w-full px-2.5 py-1 rounded-lg border border-gray-200 text-xs bg-gray-50/50 focus:bg-white focus:outline-none focus:border-[#c0166a]"
                           />
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Conflict Notice Banner */}
-            <div>
-              {addFormConflicts.length > 0 ? (
-                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1">
-                  <div className="flex items-center gap-1.5 font-bold text-amber-800">
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span>
-                      Notice: {addFormConflicts.length} Concurrent Doctor Shift{addFormConflicts.length > 1 ? "s" : ""}
-                    </span>
-                  </div>
-                  <div className="space-y-0.5 pl-4 text-[11px] text-amber-800">
-                    {addFormConflicts.map((c, idx) => (
-                      <p key={idx}>
-                        • <strong>{c.day}:</strong> {c.doctorName} ({formatTime12h(c.dutyStart)} – {formatTime12h(c.dutyEnd)})
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] flex items-center gap-1.5 font-medium">
-                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Clear Schedule: No conflicting shifts on the selected days &amp; hours.</span>
+                    );
+                  })}
                 </div>
               )}
             </div>
+
+            {/* Compact Conflict / Clean Indicator */}
+            {addFormConflicts.length > 0 ? (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-amber-800">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>Notice: {addFormConflicts.length} Concurrent Doctor Shift{addFormConflicts.length > 1 ? "s" : ""}</span>
+                </div>
+                <div className="space-y-0.5 pl-4 text-[11px] text-amber-800">
+                  {addFormConflicts.map((c, idx) => (
+                    <p key={idx}>
+                      • <strong>{c.day}:</strong> {c.doctorName} ({formatTime12h(c.dutyStart)} – {formatTime12h(c.dutyEnd)})
+                    </p>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-emerald-800 text-[11px] flex items-center gap-1.5 font-medium">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>No schedule overlaps with other active doctors.</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -2079,228 +2103,6 @@ export default function ClinicDoctorsPage() {
                   />
                 </div>
 
-                {/* Duty Schedule Editing */}
-                <div className="pt-2 border-t border-gray-100 space-y-2.5">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                    <label className="block text-xs font-bold text-gray-800">
-                      Duty Consultation Days *
-                    </label>
-                    <div className="inline-flex bg-gray-100 p-0.5 rounded-lg border border-gray-200 text-[11px]">
-                      <button
-                        type="button"
-                        onClick={() => setEditForm((p) => ({ ...p, isCustomSchedule: false }))}
-                        className={`px-2.5 py-1 font-bold rounded transition-all cursor-pointer ${
-                          !editForm.isCustomSchedule
-                            ? "bg-white text-gray-900 shadow-2xs"
-                            : "text-gray-500 hover:text-gray-800"
-                        }`}
-                      >
-                        Same for All Days
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setEditForm((p) => {
-                            const nextSched = { ...p.dutySchedule };
-                            p.dutyDays.forEach((d) => {
-                              if (!nextSched[d]) {
-                                nextSched[d] = {
-                                  startTime: p.dutyStartTime || "09:00",
-                                  endTime: p.dutyEndTime || "17:00",
-                                };
-                              }
-                            });
-                            return { ...p, isCustomSchedule: true, dutySchedule: nextSched };
-                          })
-                        }
-                        className={`px-2.5 py-1 font-bold rounded transition-all cursor-pointer ${
-                          editForm.isCustomSchedule
-                            ? "bg-[#c0166a] text-white shadow-2xs"
-                            : "text-gray-500 hover:text-gray-800"
-                        }`}
-                      >
-                        Customize Per Day ✨
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Day selection pills */}
-                  <div className="flex flex-wrap gap-1.5">
-                    {ALL_DAYS_OF_WEEK.map((day) => {
-                      const isSelected = editForm.dutyDays.includes(day);
-                      return (
-                        <button
-                          key={day}
-                          type="button"
-                          onClick={() => toggleDaySelection(day, true)}
-                          className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                            isSelected
-                              ? "bg-[#c0166a] text-white shadow-2xs"
-                              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                          }`}
-                        >
-                          {day.slice(0, 3)}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {!editForm.isCustomSchedule ? (
-                    <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 space-y-2.5">
-                      <div>
-                        <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                          Presets
-                        </label>
-                        <div className="flex flex-wrap gap-1.5">
-                          {SHIFT_PRESETS.map((preset) => (
-                            <button
-                              key={preset.label}
-                              type="button"
-                              onClick={() =>
-                                setEditForm((p) => ({
-                                  ...p,
-                                  dutyStartTime: preset.start,
-                                  dutyEndTime: preset.end,
-                                }))
-                              }
-                              className={`text-[11px] px-2 py-0.5 rounded-md font-semibold transition-all cursor-pointer ${
-                                editForm.dutyStartTime === preset.start && editForm.dutyEndTime === preset.end
-                                  ? "bg-magenta-100 text-magenta-800 border border-magenta-200 font-bold"
-                                  : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-100"
-                              }`}
-                            >
-                              {preset.label.split(" ")[0]}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2.5">
-                        <div>
-                          <label className="block text-[10px] font-bold text-gray-600 mb-0.5">Start Time</label>
-                          <input
-                            type="time"
-                            value={editForm.dutyStartTime}
-                            onChange={(e) => setEditForm((p) => ({ ...p, dutyStartTime: e.target.value }))}
-                            className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs bg-white text-gray-900 focus:outline-none focus:border-[#c0166a]"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-bold text-gray-600 mb-0.5">End Time</label>
-                          <input
-                            type="time"
-                            value={editForm.dutyEndTime}
-                            onChange={(e) => setEditForm((p) => ({ ...p, dutyEndTime: e.target.value }))}
-                            className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs bg-white text-gray-900 focus:outline-none focus:border-[#c0166a]"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-1.5 max-h-52 overflow-y-auto p-2 rounded-xl bg-gray-50 border border-gray-100">
-                      {editForm.dutyDays.map((day) => {
-                        const shift = editForm.dutySchedule[day] || {
-                          startTime: editForm.dutyStartTime || "09:00",
-                          endTime: editForm.dutyEndTime || "17:00",
-                        };
-
-                        return (
-                          <div
-                            key={day}
-                            className="p-2.5 rounded-lg bg-white border border-gray-200 text-left shadow-2xs"
-                          >
-                            <div className="flex items-center justify-between gap-1 mb-1.5">
-                              <span className="text-xs font-bold text-gray-900">{day}</span>
-                              <div className="flex items-center gap-1">
-                                {SHIFT_PRESETS.map((p) => {
-                                  const isActive = shift.startTime === p.start && shift.endTime === p.end;
-                                  return (
-                                    <button
-                                      key={p.label}
-                                      type="button"
-                                      onClick={() => {
-                                        setEditForm((prev) => ({
-                                          ...prev,
-                                          dutySchedule: {
-                                            ...prev.dutySchedule,
-                                            [day]: { startTime: p.start, endTime: p.end },
-                                          },
-                                        }));
-                                      }}
-                                      className={`text-[9px] px-1.5 py-0.5 rounded transition-all cursor-pointer ${
-                                        isActive
-                                          ? "bg-[#c0166a] text-white font-bold"
-                                          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                                      }`}
-                                    >
-                                      {p.label.split(" ")[0]}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="block text-[9px] text-gray-400 font-bold mb-0.5">Start</label>
-                                <input
-                                  type="time"
-                                  value={shift.startTime}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setEditForm((prev) => ({
-                                      ...prev,
-                                      dutySchedule: {
-                                        ...prev.dutySchedule,
-                                        [day]: { ...shift, startTime: val },
-                                      },
-                                    }));
-                                  }}
-                                  className="w-full px-2 py-1 rounded-md border border-gray-200 text-xs bg-gray-50 focus:bg-white focus:outline-none focus:border-[#c0166a]"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-[9px] text-gray-400 font-bold mb-0.5">End</label>
-                                <input
-                                  type="time"
-                                  value={shift.endTime}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setEditForm((prev) => ({
-                                      ...prev,
-                                      dutySchedule: {
-                                        ...prev.dutySchedule,
-                                        [day]: { ...shift, endTime: val },
-                                      },
-                                    }));
-                                  }}
-                                  className="w-full px-2 py-1 rounded-md border border-gray-200 text-xs bg-gray-50 focus:bg-white focus:outline-none focus:border-[#c0166a]"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Overlap notice */}
-                  <div className="mt-1.5">
-                    {editFormConflicts.length > 0 ? (
-                      <div className="p-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px] space-y-0.5">
-                        <div className="flex items-center gap-1 font-bold text-amber-800">
-                          <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
-                          <span>Notice: Overlaps with {editFormConflicts.length} other shift(s)</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="p-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] flex items-center gap-1 font-medium">
-                        <Sparkles className="w-3 h-3 text-emerald-600 shrink-0" />
-                        <span>No conflicts with other active doctors.</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
                 {/* Specialization */}
                 <div>
                   <label className="block text-xs font-bold text-gray-700 mb-1">Specialization *</label>
@@ -2311,6 +2113,230 @@ export default function ClinicDoctorsPage() {
                     placeholder="Select specializations..."
                     disabled={savingEdit}
                   />
+                </div>
+
+                {/* Duty Schedule Editing */}
+                <div className="pt-3 border-t border-gray-100 space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-[#c0166a]" />
+                        Duty Consultation Days *
+                      </label>
+                      <div className="flex items-center gap-2 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => setEditForm((p) => ({ ...p, dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] }))}
+                          className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
+                        >
+                          Mon–Fri
+                        </button>
+                        <span className="text-gray-300">•</span>
+                        <button
+                          type="button"
+                          onClick={() => setEditForm((p) => ({ ...p, dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] }))}
+                          className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
+                        >
+                          Mon–Sat
+                        </button>
+                        <span className="text-gray-300">•</span>
+                        <button
+                          type="button"
+                          onClick={() => setEditForm((p) => ({ ...p, dutyDays: [...ALL_DAYS_OF_WEEK] }))}
+                          className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
+                        >
+                          All Week
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Day selection grid */}
+                    <div className="grid grid-cols-7 gap-1">
+                      {ALL_DAYS_OF_WEEK.map((day) => {
+                        const isSelected = editForm.dutyDays.includes(day);
+                        return (
+                          <button
+                            key={day}
+                            type="button"
+                            onClick={() => toggleDaySelection(day, true)}
+                            className={`py-2 px-1 rounded-xl text-xs font-bold text-center transition-all cursor-pointer ${
+                              isSelected
+                                ? "bg-[#c0166a] text-white shadow-2xs"
+                                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                            }`}
+                          >
+                            {day.slice(0, 3)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Consultation Shift Hours Card (Direct Time Selection, No Presets) */}
+                  <div className="p-3.5 rounded-xl bg-gray-50 border border-gray-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-[#c0166a]" />
+                          Duty Consultation Hours
+                        </label>
+                        <p className="text-[11px] text-gray-500">
+                          {editForm.isCustomSchedule
+                            ? "Custom hours configured per duty day"
+                            : "Clinic Operating Hours: 8:00 AM – 8:00 PM"}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!editForm.isCustomSchedule) {
+                            const nextSched = { ...editForm.dutySchedule };
+                            editForm.dutyDays.forEach((d) => {
+                              if (!nextSched[d]) {
+                                nextSched[d] = {
+                                  startTime: editForm.dutyStartTime || "08:00",
+                                  endTime: editForm.dutyEndTime || "17:00",
+                                };
+                              }
+                            });
+                            setEditForm((p) => ({ ...p, isCustomSchedule: true, dutySchedule: nextSched }));
+                          } else {
+                            setEditForm((p) => ({ ...p, isCustomSchedule: false }));
+                          }
+                        }}
+                        className="text-xs font-semibold text-magenta-700 hover:text-magenta-800 px-2.5 py-1 rounded-lg border border-magenta-200 bg-white hover:bg-magenta-50 transition-colors cursor-pointer"
+                      >
+                        {editForm.isCustomSchedule ? "← Uniform Shift (Same for all days)" : "+ Customize hours per day"}
+                      </button>
+                    </div>
+
+                    {!editForm.isCustomSchedule ? (
+                      /* Direct Time Pickers (Preset-Free) */
+                      <div className="p-3.5 rounded-xl bg-white border border-gray-200/90 shadow-2xs space-y-2.5">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <ModernTimeSelect
+                            label="Shift Start Time"
+                            value={editForm.dutyStartTime}
+                            onChange={(val) => setEditForm((p) => ({ ...p, dutyStartTime: val }))}
+                          />
+                          <ModernTimeSelect
+                            label="Shift End Time"
+                            value={editForm.dutyEndTime}
+                            onChange={(val) => setEditForm((p) => ({ ...p, dutyEndTime: val }))}
+                          />
+                        </div>
+
+                        {/* Real-time Duration & Status Calculation */}
+                        {(() => {
+                          const duration = getShiftDurationHours(editForm.dutyStartTime, editForm.dutyEndTime);
+                          const isInvalid = timeToMinutes(editForm.dutyEndTime) <= timeToMinutes(editForm.dutyStartTime);
+
+                          if (isInvalid) {
+                            return (
+                              <div className="p-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-1.5 font-medium">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                <span>Shift End Time must be later than Start Time.</span>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div className="pt-2 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-gray-900">
+                                  {formatTime12h(editForm.dutyStartTime)} – {formatTime12h(editForm.dutyEndTime)}
+                                </span>
+                                <span className="text-gray-300">•</span>
+                                <span className="font-bold text-magenta-700 bg-magenta-50 px-2 py-0.5 rounded-full border border-magenta-200 text-[11px]">
+                                  {duration} Hours Active Duty
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-gray-400">
+                                Active across {editForm.dutyDays.length} duty day{editForm.dutyDays.length === 1 ? "" : "s"}
+                              </span>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    ) : (
+                      /* Custom Per-Day Shift Mode */
+                      <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                        {editForm.dutyDays.map((day) => {
+                          const shift = editForm.dutySchedule[day] || {
+                            startTime: editForm.dutyStartTime || "08:00",
+                            endTime: editForm.dutyEndTime || "17:00",
+                          };
+                          const duration = getShiftDurationHours(shift.startTime, shift.endTime);
+
+                          return (
+                            <div
+                              key={day}
+                              className="p-2.5 rounded-lg bg-white border border-gray-200 flex items-center justify-between gap-2 shadow-2xs"
+                            >
+                              <div className="w-24 shrink-0">
+                                <span className="text-xs font-bold text-gray-900 block">{day}</span>
+                                <span className="text-[10px] text-magenta-700 font-semibold">
+                                  {duration > 0 ? `${duration} hrs` : "Invalid"}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-1 max-w-xs">
+                                <ModernTimeSelect
+                                  value={shift.startTime}
+                                  onChange={(val) => {
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      dutySchedule: {
+                                        ...prev.dutySchedule,
+                                        [day]: { ...shift, startTime: val },
+                                      },
+                                    }));
+                                  }}
+                                />
+                                <span className="text-xs text-gray-400 font-medium">to</span>
+                                <ModernTimeSelect
+                                  value={shift.endTime}
+                                  onChange={(val) => {
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      dutySchedule: {
+                                        ...prev.dutySchedule,
+                                        [day]: { ...shift, endTime: val },
+                                      },
+                                    }));
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Overlap notice */}
+                  <div>
+                    {editFormConflicts.length > 0 ? (
+                      <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1">
+                        <div className="flex items-center gap-1 font-bold text-amber-800">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>Notice: Overlaps with {editFormConflicts.length} concurrent shift(s)</span>
+                        </div>
+                        <div className="space-y-0.5 pl-4 text-[11px] text-amber-800">
+                          {editFormConflicts.map((c, idx) => (
+                            <p key={idx}>
+                              • <strong>{c.day}:</strong> {c.doctorName} ({formatTime12h(c.dutyStart)} – {formatTime12h(c.dutyEnd)})
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] flex items-center gap-1.5 font-medium">
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>No conflicts with other active doctors.</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 

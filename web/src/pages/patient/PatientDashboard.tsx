@@ -33,7 +33,7 @@ type AppointmentRecord = {
   date: string;
   time: string;
   notes: string;
-  status: "pending" | "accepted" | "scheduled" | "rejected" | "completed";
+  status: "pending" | "accepted" | "scheduled" | "rejected" | "cancelled" | "completed";
   meetingLink?: string;
   clinicNote?: string;
   createdAt: string;
@@ -127,7 +127,7 @@ export default function PatientDashboard() {
         // Fetch user profile
         const { data: userRow } = await supabase
           .from("user")
-          .select("full_name")
+          .select("full_name, avatar_url")
           .eq("user_id", userId)
           .maybeSingle();
 
@@ -138,7 +138,7 @@ export default function PatientDashboard() {
           if (raw) localProfile = JSON.parse(raw);
         } catch {}
 
-        const avatar = localProfile?.profilePicture || meta.avatar_url || meta.picture || "";
+        const avatar = userRow?.avatar_url || localProfile?.profilePicture || meta.avatar_url || meta.picture || "";
         const name = userRow?.full_name ?? localProfile?.fullName ?? meta.full_name ?? meta.name ?? "";
         setProfile({ fullName: name, profilePicture: avatar });
 
@@ -176,7 +176,9 @@ export default function PatientDashboard() {
             statusVal = "scheduled";
           } else if (a.status === "completed") {
             statusVal = "completed";
-          } else if (a.status === "cancelled" || a.status === "rejected") {
+          } else if (a.status === "cancelled") {
+            statusVal = "cancelled";
+          } else if (a.status === "rejected") {
             statusVal = "rejected";
           }
 
@@ -223,7 +225,7 @@ export default function PatientDashboard() {
                     date: isValid ? pDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : (localItem.date || "Date pending"),
                     time: localItem.time || (isValid && localItem.date?.includes("T") ? pDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : ""),
                     notes: localItem.notes || "",
-                    status: (localItem.status === "confirmed" || localItem.status === "scheduled" || localItem.doctorStatus === "approved" ? "scheduled" : localItem.status === "completed" ? "completed" : localItem.status === "rejected" || localItem.status === "cancelled" ? "rejected" : "pending") as AppointmentRecord["status"],
+                    status: (localItem.status === "cancelled" ? "cancelled" : localItem.status === "confirmed" || localItem.status === "scheduled" || localItem.doctorStatus === "approved" ? "scheduled" : localItem.status === "completed" ? "completed" : localItem.status === "rejected" ? "rejected" : "pending") as AppointmentRecord["status"],
                     createdAt: localItem.createdAt || new Date().toISOString(),
                   });
                 }
@@ -505,6 +507,8 @@ export default function PatientDashboard() {
                       className={`text-[10px] px-2.5 py-0.5 rounded-full border font-semibold ${
                         item.status === "scheduled" || item.status === "accepted"
                           ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          : item.status === "cancelled"
+                          ? "bg-gray-100 text-gray-600 border-gray-200"
                           : item.status === "rejected"
                           ? "bg-rose-50 text-rose-700 border-rose-200"
                           : item.status === "completed"
@@ -514,6 +518,8 @@ export default function PatientDashboard() {
                     >
                       {item.status === "scheduled" || item.status === "accepted"
                         ? "Scheduled"
+                        : item.status === "cancelled"
+                        ? "Cancelled"
                         : item.status === "rejected"
                         ? "Declined"
                         : item.status === "completed"

@@ -240,10 +240,15 @@ function mapRawClinicToItem(
     if (Array.isArray(rawDocs) && rawDocs.length > 0) {
         docList = rawDocs
             .filter((d: any) => d.status !== "inactive" && (d.doctor_name || d.name))
-            .map((d: any) => ({
-                name: d.doctor_name || d.name,
-                specialization: d.specialization || c.specialization || "General Dermatology",
-            }));
+            .map((d: any) => {
+                const specFromJunction = Array.isArray(d.doctor_specializations)
+                    ? d.doctor_specializations.map((ds: any) => ds.specializations?.name || ds.specialization?.name).filter(Boolean).join(", ")
+                    : "";
+                return {
+                    name: d.doctor_name || d.name,
+                    specialization: specFromJunction || d.specialization || c.specialization || "General Dermatology",
+                };
+            });
     } else if (c.doctor || c.doctor_name) {
         docList = [{
             name: c.doctor || c.doctor_name,
@@ -583,10 +588,12 @@ export default function FindClinicsPage() {
                     ),
                     clinic_doctor (
                         doctor_name,
-                        specialization,
                         prc_license,
                         photo_url,
-                        status
+                        status,
+                        doctor_specializations (
+                            specializations ( name )
+                        )
                     )
                 `)
                 .or("status.eq.approved,status.eq.verified");
