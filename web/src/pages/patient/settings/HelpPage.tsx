@@ -72,7 +72,7 @@ const guideSteps = [
     icon: CreditCard,
     title: "Upgrade to Pro",
     steps: [
-      "Free accounts are limited to 1 skin scan per account.",
+      "Free accounts are limited to 3 skin scans per account.",
       "Upgrade to Pro (₱199/month or ₱1,999/year) for unlimited scans.",
       "Go to Settings → Billing to manage your subscription and payment method.",
       "You can cancel at any time; Pro access stays active until the period ends.",
@@ -95,7 +95,7 @@ const faqs = [
   },
   {
     q: "What is the difference between the Free and Pro plan?",
-    a: "The Free plan gives you 1 skin scan per account. The Pro plan (₱199/month or ₱1,999/year) gives you unlimited scans and full access to all features.",
+    a: "The Free plan gives you 3 skin scans per account. The Pro plan (₱199/month or ₱1,999/year) gives you unlimited scans and full access to all features.",
   },
   {
     q: "How do I cancel my subscription?",
