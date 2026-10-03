@@ -83,6 +83,7 @@ export default function SubscriptionStatusPage() {
           .from("ai_scan_result")
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id)
+          .eq("status", "completed")
           .gte("scanned_at", cycleStart);
 
         if (scanError) {

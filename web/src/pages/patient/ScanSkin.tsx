@@ -502,8 +502,34 @@ export default function ScanSkinPage() {
       });
 
       // ==========================================================
-      // STEP 2: If authenticated — upload BOTH photos + insert DB row (status: pending)
+      // STEP 2: Call FastAPI /predict with the close-up image FIRST
+      // Pipeline in FastAPI:
+      //   1. Image quality validation (blur, brightness, contrast, resolution)
+      //   2. Human-skin validation (human skin detector)
+      //   3. ResNet50 skin condition classification
+      //   4. Confidence threshold check
+      //
+      // If ANY validation fails:
+      //   - FastAPI raises 400 HTTPException with user-friendly retake instructions
+      //   - We catch it, setAnalyzeError(message), and DO NOT proceed
+      //   - NO storage upload, NO database record created, NO scan quota consumed
       // ==========================================================
+      let aiResult;
+      try {
+        aiResult = await predictSkinCondition(closeUpFile);
+      } catch (err) {
+        const errMsg =
+          err instanceof AIPredictionError
+            ? err.message
+            : "AI prediction failed.";
+        throw new Error(errMsg);
+      }
+
+      // ==========================================================
+      // STEP 3: If authenticated and AI succeeded — upload photos & insert completed record
+      // ==========================================================
+      const conditionUUID = getConditionUUID(aiResult.predicted_class);
+
       if (user?.id) {
         const ts = Date.now();
         // Upload close-up
@@ -520,13 +546,14 @@ export default function ScanSkinPage() {
           .upload(widePath, wideFile, { upsert: false });
         if (!upErr2) uploadedWidePath = widePath;
 
-        // Insert scan record with status 'pending'
+        // Insert ONE completed scan record directly with full AI results and confidence
         const { data: scanInsertData, error: insertErr } = await supabase
           .from("ai_scan_result")
           .insert({
             user_id: user.id,
-            confidence_score: 0,
-            status: "pending",
+            confidence_score: aiResult.confidence,
+            status: "completed",
+            condition_id: conditionUUID,
             photo_url: uploadedCloseUpPath || null,
             photo_url_wide: uploadedWidePath || null,
             body_part: "Skin Assessment",
@@ -540,7 +567,7 @@ export default function ScanSkinPage() {
         } else if (scanInsertData?.analysis_id) {
           analysisId = scanInsertData.analysis_id;
 
-          // Also save questionnaire answers (existing behavior)
+          // Also save questionnaire answers
           try {
             const skinAnswerRows = questionnaireData.map((item, idx) => ({
               analysis_id: analysisId,
@@ -553,54 +580,12 @@ export default function ScanSkinPage() {
             /* ignore if ai_skin_answer table is missing */
           }
         }
-      }
 
-      // ==========================================================
-      // STEP 3: Mark as 'processing' (DB update) + call FastAPI
-      // ==========================================================
-      if (analysisId) {
-        await supabase
-          .from("ai_scan_result")
-          .update({ status: "processing" })
-          .eq("analysis_id", analysisId);
-      }
-
-      // Call FastAPI /predict with the close-up image
-      let aiResult;
-      try {
-        aiResult = await predictSkinCondition(closeUpFile);
-      } catch (err) {
-        const errMsg =
-          err instanceof AIPredictionError
-            ? err.message
-            : "AI prediction failed.";
-        // Mark failed in DB
-        if (analysisId) {
-          await supabase
-            .from("ai_scan_result")
-            .update({ status: "failed" })
-            .eq("analysis_id", analysisId);
-        }
-        throw new Error(errMsg);
-      }
-
-      // ==========================================================
-      // STEP 4: Save AI result to DB + mark 'completed'
-      // ==========================================================
-      const conditionUUID = getConditionUUID(aiResult.predicted_class);
-
-      if (analysisId) {
-        const { error: updateErr } = await supabase
-          .from("ai_scan_result")
-          .update({
-            status: "completed",
-            confidence_score: aiResult.confidence,
-            condition_id: conditionUUID,
-          })
-          .eq("analysis_id", analysisId);
-        if (updateErr) {
-          console.warn("Failed to update ai_scan_result:", updateErr.message);
-        }
+        // Deduct 1 scan from local allowance state so UI reflects usage immediately
+        setSubData((prev) => ({
+          ...prev,
+          scansUsed: prev.scansUsed + 1,
+        }));
       }
 
       // ==========================================================

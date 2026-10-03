@@ -247,6 +247,7 @@ export default function PatientDashboard() {
             skin_condition:condition_id ( condition_id, name )
           `)
           .eq("user_id", userId)
+          .eq("status", "completed")
           .order("scanned_at", { ascending: false })
           .limit(5);
 
@@ -269,7 +270,8 @@ export default function PatientDashboard() {
         const { count: exactScanCount } = await supabase
           .from("ai_scan_result")
           .select("*", { count: "exact", head: true })
-          .eq("user_id", userId);
+          .eq("user_id", userId)
+          .eq("status", "completed");
 
         const conditions = new Set((scanRows ?? []).map((s: any) => {
           const sc = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;

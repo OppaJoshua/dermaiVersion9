@@ -67,6 +67,7 @@ export default function PatientSkinHistory() {
           )
         `)
         .eq("user_id", userId)
+        .eq("status", "completed")
         .order("scanned_at", { ascending: false });
 
       if (cancelled) return;
