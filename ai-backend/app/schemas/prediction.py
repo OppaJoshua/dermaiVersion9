@@ -1,10 +1,9 @@
 """
 DERMAI - Pydantic Response Schemas
-Defines the JSON structure returned by the API
 """
 
 from pydantic import BaseModel, Field
-from typing import Dict
+from typing import Dict, List
 
 
 class PredictionResponse(BaseModel):
@@ -17,39 +16,28 @@ class PredictionResponse(BaseModel):
     probabilities: Dict[str, float] = Field(..., description="All class probabilities")
     inference_time_ms: int = Field(..., description="Time taken for inference")
     skin_score: float = Field(
-        1.0,
-        ge=0,
-        le=1,
+        1.0, ge=0, le=1,
         description="Human-skin validator confidence (0=invalid, 1=valid)",
     )
-
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "success": True,
-                "predicted_class": "Acne_Vulgaris",
-                "display_name": "Acne Vulgaris",
-                "confidence": 95.66,
-                "confidence_level": "high",
-                "probabilities": {
-                    "Acne_Vulgaris": 95.66,
-                    "Atopic_Dermatitis": 1.04,
-                    "Contact_Dermatitis": 0.60,
-                    "Melasma": 0.69,
-                    "Vitiligo": 2.02,
-                },
-                "inference_time_ms": 187,
-                "skin_score": 0.9987,
-            }
-        }
-    }
+    quality_metrics: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Image quality metrics (blur_score, brightness, contrast)",
+    )
 
 
 class ErrorResponse(BaseModel):
     """Error response"""
     success: bool = False
     error: str
-    error_type: str = Field(..., description="validation | inference | server")
+    error_type: str = Field(
+        ...,
+        description=(
+            "validation | not_human_skin | low_confidence | "
+            "quality_blur | quality_dark | quality_bright | "
+            "quality_contrast | quality_resolution | inference | server"
+        ),
+    )
+    all_issues: List[str] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
@@ -57,5 +45,5 @@ class HealthResponse(BaseModel):
     status: str = "healthy"
     model_loaded: bool
     model_path: str
-    classes: list[str]
+    classes: List[str]
     version: str = "1.0.0"
