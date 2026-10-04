@@ -228,7 +228,7 @@ export default function UserLayout({
     // 2. Fetch membership tier
     let tier = customProfile?.membershipTier || "Free Plan";
     try {
-      const { data: subData } = await supabase
+      const { data: subData, error: subError } = await supabase
         .from("user_plan_subscription")
         .select(`
           status,
@@ -243,7 +243,8 @@ export default function UserLayout({
         .limit(1)
         .maybeSingle();
 
-      if (subData) {
+      console.log("[patientLayout] Subscription query:", { userId: user.id, subData, subError });
+    if (subData) {
         const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
         tier = planObj?.name || "Pro Plan";
       }
@@ -642,3 +643,5 @@ export default function UserLayout({
     </div>
   );
 }
+
+

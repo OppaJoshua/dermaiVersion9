@@ -21,7 +21,7 @@ type Transaction = {
     plan: string;
     amount: number;
     date: string;
-    method: "GCash" | "Card" | "Bank Transfer";
+    method: "GCash" | "Maya" |  "Unknown";
     status: "paid";
 };
 
@@ -121,7 +121,7 @@ export default function AdminSubscriptionManagement() {
                             plan: planObj?.name || "Premium Plan",
                             amount: Number(p.amount) || 0,
                             date: new Date(p.payment_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-                            method: p.method === "gcash" ? "GCash" : p.method === "card" ? "Card" : "Bank Transfer",
+                            method: p.method === "gcash" ? "GCash" : p.method === "paymaya" ? "Maya" : "Unknown",
                             status: "paid",
                         };
                     });
