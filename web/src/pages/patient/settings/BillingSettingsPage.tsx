@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Crown, Calendar, CheckCircle2, XCircle, X, Loader2, Wallet } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
@@ -14,6 +14,9 @@ interface SubData {
   renewsAt?: string;
   price?: string;
   subscriptionId?: string;
+  description?: string;
+  features?: string[];
+  scanLimit?: number | null;
 }
 
 type PaymentMethodType = "gcash" | "maya";
@@ -37,12 +40,21 @@ function formatMobileNumber(value: string) {
 function maskMobile(value: string) {
   const clean = value.replace(/\D/g, "");
   if (clean.length < 11) return clean;
-  return `${clean.slice(0, 4)} •••• ${clean.slice(7)}`;
+  return `${clean.slice(0, 4)} Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢ ${clean.slice(7)}`;
 }
 
 export default function BillingSettingsPage() {
   const { user } = useAuth();
   const [sub, setSub] = useState<SubData>({ isPro: false });
+
+  const [freePlan, setFreePlan] = useState<SubData>({
+  isPro: false,
+  planName: "Free Plan",
+  description: "",
+  features: [],
+  scanLimit: 3,
+});
+
   const [paymentMethod, setPaymentMethod] = useState<SavedPaymentMethod | null>(null);
   const [billingHistory, setBillingHistory] = useState<BillingHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,10 +74,51 @@ export default function BillingSettingsPage() {
     }
 
     try {
-      setLoading(true);
+  setLoading(true);
 
-      // 1. Load active subscription
-      const { data: subData } = await supabase
+  // 1. Load Free Plan details
+  const { data: freePlanData, error: freePlanError } = await supabase
+    .from("plan")
+    .select(`
+      plan_id,
+      name,
+      description,
+      scan_limit,
+      plan_feature (
+        feature_id,
+        feature_text
+      )
+    `)
+    .eq("price", 0)
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+
+  console.log("[BillingSettingsPage] Free Plan query:", {
+    freePlanData,
+    freePlanError,
+  });
+
+  if (freePlanData) {
+    const features = Array.isArray(freePlanData.plan_feature)
+      ? freePlanData.plan_feature
+          .map((feature: any) => feature.feature_text)
+          .filter(Boolean)
+      : [];
+
+    setFreePlan({
+      isPro: false,
+      planName: freePlanData.name || "Free Plan",
+      description: freePlanData.description || "",
+      features,
+      scanLimit:
+        freePlanData.scan_limit === -1
+          ? null
+          : freePlanData.scan_limit,
+    });
+  }
+      // 2. Load the patient's active subscription
+      const { data: activeSubscription, error: subscriptionError } = await supabase
         .from("user_plan_subscription")
         .select(`
           subscription_id,
@@ -76,7 +129,12 @@ export default function BillingSettingsPage() {
           plan:plan_id (
             name,
             price,
-            scan_limit
+            description,
+            scan_limit,
+            plan_feature (
+              feature_id,
+              feature_text
+            )
           )
         `)
         .eq("user_id", user.id)
@@ -85,31 +143,56 @@ export default function BillingSettingsPage() {
         .limit(1)
         .maybeSingle();
 
-      if (subData) {
-        const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
-        const renewsFormatted = subData.renews_at
-          ? new Date(subData.renews_at).toLocaleDateString("en-US", {
-              month: "long",
-              day: "numeric",
-              year: "numeric",
-            })
-          : "End of billing period";
+      console.log("[BillingSettingsPage] Active subscription query:", {
+        activeSubscription,
+        subscriptionError,
+      });
 
-        const priceFormatted = planObj?.price
-          ? `₱${Number(planObj.price).toLocaleString()} / ${subData.billing_cycle}`
-          : subData.billing_cycle === "yearly"
-          ? "₱1,999 / year"
-          : "₱199 / month";
+      const plan = Array.isArray(activeSubscription?.plan)
+        ? activeSubscription.plan[0]
+        : activeSubscription?.plan;
+
+      // Only a paid active plan should be treated as Pro.
+      if (activeSubscription && plan && Number(plan.price) > 0) {
+        const features = Array.isArray(plan.plan_feature)
+          ? plan.plan_feature
+              .map((feature: any) => feature.feature_text)
+              .filter(Boolean)
+          : [];
 
         setSub({
           isPro: true,
-          subscriptionId: subData.subscription_id,
-          planName: planObj?.name || "Pro Plan",
-          billingCycle: subData.billing_cycle as "monthly" | "yearly",
-          renewsAt: renewsFormatted,
-          price: priceFormatted,
+          planName: plan.name || "Pro Plan",
+          billingCycle:
+            activeSubscription.billing_cycle === "yearly"
+              ? "yearly"
+              : "monthly",
+          renewsAt: activeSubscription.renews_at
+            ? new Date(activeSubscription.renews_at).toLocaleDateString(
+                "en-US",
+                {
+                  month: "long",
+                  day: "numeric",
+                  year: "numeric",
+                }
+              )
+            : undefined,
+          price: `₱${Number(plan.price).toLocaleString("en-PH", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })} / ${
+            activeSubscription.billing_cycle === "yearly"
+              ? "year"
+              : "month"
+          }`,
+          subscriptionId: activeSubscription.subscription_id,
+          description: plan.description || "",
+          features,
+          scanLimit:
+            plan.scan_limit === -1 ? null : plan.scan_limit,
         });
       } else {
+        // No active paid subscription = Free Plan
         setSub({ isPro: false });
       }
 
@@ -132,33 +215,24 @@ export default function BillingSettingsPage() {
         }));
         setBillingHistory(mappedHistory);
 
-        // Check localStorage first, otherwise infer from latest payment
-        const stored = localStorage.getItem(`dermai_payment_method_${user.id}`);
-        if (stored) {
-          try {
-            const parsed = JSON.parse(stored);
-            if (parsed.type === "gcash" || parsed.type === "maya") {
-              setPaymentMethod(parsed);
-            }
-          } catch {
-            // ignore JSON error
-          }
-        } else {
-          const latestMethod = payments[0]?.method?.toLowerCase();
-          if (latestMethod === "maya") {
-            setPaymentMethod({
-              type: "maya",
-              label: "Maya e-Wallet",
-              sublabel: "Connected via PayMongo",
-            });
-          } else {
-            // default to gcash
-            setPaymentMethod({
-              type: "gcash",
-              label: "GCash e-Wallet",
-              sublabel: "Connected via PayMongo",
-            });
-          }
+        // Use the latest successful database payment as the source of truth.
+        const latestSuccessfulPayment = payments.find(
+          (payment) => payment.status === "success"
+        );
+        const latestMethod = latestSuccessfulPayment?.method?.toLowerCase();
+
+        if (latestMethod === "paymaya") {
+          setPaymentMethod({
+            type: "maya",
+            label: "Maya e-Wallet",
+            sublabel: "Connected via PayMongo",
+          });
+        } else if (latestMethod === "gcash") {
+          setPaymentMethod({
+            type: "gcash",
+            label: "GCash e-Wallet",
+            sublabel: "Connected via PayMongo",
+          });
         }
       } else {
         setBillingHistory([]);
@@ -280,8 +354,18 @@ export default function BillingSettingsPage() {
                   <Crown className="w-5 h-5" />
                 </div>
                 <div>
-                  <p className="text-base font-bold text-gray-900">{sub.isPro ? (sub.planName || "Pro Plan") : "Free Plan"}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{sub.isPro ? sub.price : "3 scans per account"}</p>
+                  <p className="text-base font-bold text-gray-900">
+                  {sub.isPro
+                    ? (sub.planName || "Pro Plan")
+                    : (freePlan.planName || "Free Plan")}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                  {sub.isPro
+                    ? sub.price
+                    : freePlan.scanLimit === null
+                    ? "Unlimited scans"
+                    : `${freePlan.scanLimit ?? 0} scans per account`}
+                </p>
                 </div>
               </div>
               <span className={`text-xs px-3 py-1 rounded-full font-bold ${sub.isPro ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
@@ -311,9 +395,17 @@ export default function BillingSettingsPage() {
               </div>
             ) : (
               <div className="space-y-3">
+                {freePlan.description && (
+                  <p className="text-sm text-gray-500">
+                    {freePlan.description}
+                  </p>
+                )}
                 <div className="space-y-1.5">
-                  {["3 free AI skin scans", "Basic clinic search", "Limited scan history"].map((feat) => (
-                    <div key={feat} className="flex items-center gap-2 text-sm text-gray-500">
+                  {(freePlan.features ?? []).map((feat) => (
+                    <div
+                      key={feat}
+                      className="flex items-center gap-2 text-sm text-gray-500"
+                    >
                       <CheckCircle2 className="w-4 h-4 text-gray-300 shrink-0" />
                       {feat}
                     </div>
@@ -386,7 +478,7 @@ export default function BillingSettingsPage() {
       </div>
     </div>
 
-    {/* ── Update Payment Method Modal ──────────────────────── */}
+    {/* Ã¢â€â‚¬Ã¢â€â‚¬ Update Payment Method Modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
     {showModal && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm px-4">
         <div
@@ -464,7 +556,7 @@ export default function BillingSettingsPage() {
                   : "bg-magenta-500 text-white hover:bg-magenta-600 active:scale-[0.98]"
               }`}
             >
-              {methodSaved ? "✓ Payment Method Updated!" : "Save Payment Method"}
+              {methodSaved ? "Ã¢Å“â€œ Payment Method Updated!" : "Save Payment Method"}
             </button>
           </form>
 
@@ -477,3 +569,7 @@ export default function BillingSettingsPage() {
     </>
   );
 }
+
+
+
+
