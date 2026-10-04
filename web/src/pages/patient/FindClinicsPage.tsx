@@ -170,7 +170,7 @@ const CONDITION_SYNONYMS: Record<string, string[]> = {
     "alopecia": ["hair loss", "alopecia", "scalp", "trichology", "general dermatology"],
 };
 
-export function clinicTreatsCondition(clinic: ClinicItem, condition: string): boolean {
+function clinicTreatsCondition(clinic: ClinicItem, condition: string): boolean {
     if (!condition || condition === "Assessment Queued") return true;
     const condLower = condition.toLowerCase().trim();
     const synonyms = CONDITION_SYNONYMS[condLower] || [condLower, "general dermatology"];
@@ -416,26 +416,29 @@ export default function FindClinicsPage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const { session: _session } = useAuth();
 
-    // AI condition detection from URL params or local scan storage
+    // AI condition detection: ONLY if explicitly arriving from an AI Scan (fromScan === "1")
     const [aiCondition, setAiCondition] = useState<string>(() => {
+        const fromScan = searchParams.get("fromScan") === "1";
+        if (!fromScan) return "";
         const param = searchParams.get("condition") || searchParams.get("ai_condition");
         if (param && param !== "Assessment Queued") return param;
-        try {
-            const saved = localStorage.getItem("dermai_last_scan");
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (parsed.predictedClass && parsed.predictedClass !== "Assessment Queued") {
-                    return parsed.predictedClass;
-                }
-            }
-        } catch { }
         return "";
     });
 
+    // Clean up stale scan booking context if browsing clinics directly
+    useEffect(() => {
+        if (searchParams.get("fromScan") !== "1") {
+            try {
+                sessionStorage.removeItem("dermai_scan_booking_context");
+            } catch { }
+        }
+    }, [searchParams]);
+
     // Filters & Sorting state
     const [filterByCondition, setFilterByCondition] = useState<boolean>(() => {
+        const fromScan = searchParams.get("fromScan") === "1";
         const param = searchParams.get("condition") || searchParams.get("ai_condition");
-        return !!param;
+        return fromScan && !!param;
     });
     const [sortBy, setSortBy] = useState<"recommended" | "distance" | "fee_asc" | "fee_desc" | "name">("recommended");
     const [maxPrice, setMaxPrice] = useState<number | null>(null);
@@ -480,10 +483,16 @@ export default function FindClinicsPage() {
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [savedClinicIds, setSavedClinicIds] = useState<string[]>([]);
 
-    // Auto-select or restore clinic from URL query or sessionStorage (e.g. when navigating Back from appointment)
+    // Auto-select clinic ONLY when explicitly requested via URL query (?clinic=...)
     useEffect(() => {
-        const targetClinicId = searchParams.get("clinic") || sessionStorage.getItem("dermai_selected_clinic_id");
-        if (!targetClinicId || dbClinics.length === 0) return;
+        const targetClinicId = searchParams.get("clinic");
+        if (!targetClinicId) {
+            try {
+                sessionStorage.removeItem("dermai_selected_clinic_id");
+            } catch { }
+            return;
+        }
+        if (dbClinics.length === 0) return;
 
         if (!selectedClinic || String(selectedClinic.id) !== String(targetClinicId)) {
             const match = dbClinics.find((c) => String(c.id) === String(targetClinicId));
@@ -838,12 +847,26 @@ export default function FindClinicsPage() {
 
     const goToAppointment = (clinicId: string) => {
         sessionStorage.setItem("dermai_selected_clinic_id", String(clinicId));
-        const condParam = aiCondition ? `&condition=${encodeURIComponent(aiCondition)}` : "";
+        const fromScan = searchParams.get("fromScan") === "1";
+        const scanId = searchParams.get("scanId");
+        const confidence = searchParams.get("confidence");
+
+        const params = new URLSearchParams();
+        params.set("clinic", String(clinicId));
+
+        if (fromScan && aiCondition) {
+            params.set("fromScan", "1");
+            params.set("condition", aiCondition);
+            if (scanId) params.set("scanId", scanId);
+            if (confidence) params.set("confidence", confidence);
+        }
+
+        const targetUrl = `/dashboard/appointment?${params.toString()}`;
         if (!currentUserId) {
-            navigate("/login", { state: { from: `/dashboard/appointment?clinic=${clinicId}${condParam}` } });
+            navigate("/login", { state: { from: targetUrl } });
             return;
         }
-        navigate(`/dashboard/appointment?clinic=${clinicId}${condParam}`);
+        navigate(targetUrl);
     };
 
     const hasActiveFilters = !!aiCondition || maxPrice !== null || openTodayOnly || selectedDistrict !== "All Districts" || sortBy !== "recommended";

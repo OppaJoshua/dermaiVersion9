@@ -268,6 +268,7 @@ interface AppointmentDraft {
   selectedDoctorId?: string;
   selectedTime?: string;
   clinicId?: string;
+  fromScan?: boolean;
 }
 
 function loadAppointmentDraft(): AppointmentDraft | null {
@@ -302,7 +303,23 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
 
+  // Check if this appointment was initiated explicitly from a Scan Skin result
+  const isFromScan = searchParams.get("fromScan") === "1" || !!searchParams.get("scanId");
+  const clinicIdFromUrl = searchParams.get("clinic") || "";
+
+  // Specific scan booking context (ONLY used when isFromScan is true)
+  const scanContext = useMemo(() => {
+    if (!isFromScan) return null;
+    try {
+      const raw = sessionStorage.getItem("dermai_scan_booking_context");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return null;
+  }, [isFromScan]);
+
   const draft = useMemo(() => loadAppointmentDraft(), []);
+  // Draft is only applicable if it matches the current clinic being booked
+  const isDraftValid = draft && (!draft.clinicId || draft.clinicId === clinicIdFromUrl);
 
   // Step 1: Patient Details, Step 2: Schedule & Doctor
   const [currentStep, setCurrentStep] = useState<1 | 2>(() => {
@@ -332,41 +349,88 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   const [submitting, setSubmitting] = useState(false);
 
   // Patient info fields (initialized with persisted draft values if present)
-  const [patientName, setPatientName] = useState<string>(() => draft?.patientName || "");
-  const [patientEmail, setPatientEmail] = useState<string>(() => draft?.patientEmail || user?.email || "");
-  const [patientAddress, setPatientAddress] = useState<string>(() => draft?.patientAddress || "");
-  const [patientContact, setPatientContact] = useState<string>(() => draft?.patientContact || "");
-  const [patientGender, setPatientGender] = useState<string>(() => draft?.patientGender || "");
-  const [patientBirthdate, setPatientBirthdate] = useState<string>(() => draft?.patientBirthdate || "");
-  const [emergencyContactName, setEmergencyContactName] = useState<string>(() => draft?.emergencyContactName || "");
-  const [emergencyContactPhone, setEmergencyContactPhone] = useState<string>(() => draft?.emergencyContactPhone || "");
-  const [emergencyRelationship, setEmergencyRelationship] = useState<string>(() => draft?.emergencyRelationship || "");
-  const [notes, setNotes] = useState<string>(() => draft?.notes || "");
-  const [questionnaireData, setQuestionnaireData] = useState<any[]>(() => draft?.questionnaireData || []);
+  const [patientName, setPatientName] = useState<string>(() => (isDraftValid ? draft?.patientName : "") || "");
+  const [patientEmail, setPatientEmail] = useState<string>(() => (isDraftValid ? draft?.patientEmail : "") || user?.email || "");
+  const [patientAddress, setPatientAddress] = useState<string>(() => (isDraftValid ? draft?.patientAddress : "") || "");
+  const [patientContact, setPatientContact] = useState<string>(() => (isDraftValid ? draft?.patientContact : "") || "");
+  const [patientGender, setPatientGender] = useState<string>(() => (isDraftValid ? draft?.patientGender : "") || "");
+  const [patientBirthdate, setPatientBirthdate] = useState<string>(() => (isDraftValid ? draft?.patientBirthdate : "") || "");
+  const [emergencyContactName, setEmergencyContactName] = useState<string>(() => (isDraftValid ? draft?.emergencyContactName : "") || "");
+  const [emergencyContactPhone, setEmergencyContactPhone] = useState<string>(() => (isDraftValid ? draft?.emergencyContactPhone : "") || "");
+  const [emergencyRelationship, setEmergencyRelationship] = useState<string>(() => (isDraftValid ? draft?.emergencyRelationship : "") || "");
+  const [notes, setNotes] = useState<string>(() => (isDraftValid ? draft?.notes : "") || "");
+  const [questionnaireData, _setQuestionnaireData] = useState<any[]>(() => {
+    if (isDraftValid && Array.isArray(draft?.questionnaireData) && draft.questionnaireData.length > 0) {
+      return draft.questionnaireData;
+    }
+    if (isFromScan && Array.isArray(scanContext?.questionnaire) && scanContext.questionnaire.length > 0) {
+      return scanContext.questionnaire;
+    }
+    return [];
+  });
 
   // Skin photo upload
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [skinPhotoFile, setSkinPhotoFile] = useState<File | null>(null);
-  const [skinPhotoPreview, setSkinPhotoPreview] = useState<string>(() => draft?.skinPhotoPreview || "");
-  const [photoFileName, setPhotoFileName] = useState<string>(() => draft?.photoFileName || "");
+  const [skinPhotoPreview, setSkinPhotoPreview] = useState<string>(() => {
+    if (isDraftValid && draft?.skinPhotoPreview) {
+      return draft.skinPhotoPreview;
+    }
+    if (isFromScan && scanContext?.photoUrl) {
+      return scanContext.photoUrl;
+    }
+    return "";
+  });
+  const [photoFileName, setPhotoFileName] = useState<string>(() => {
+    if (isDraftValid && draft?.photoFileName) {
+      return draft.photoFileName;
+    }
+    if (isFromScan && scanContext?.photoUrl) {
+      return `scan_${scanContext.scanId || "photo"}.jpg`;
+    }
+    return "";
+  });
 
   // Schedule selection fields
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    if (draft?.selectedDate) return draft.selectedDate;
+    if (isDraftValid && draft?.selectedDate) return draft.selectedDate;
     const tmrw = new Date();
     tmrw.setDate(tmrw.getDate() + 1);
     return `${tmrw.getFullYear()}-${String(tmrw.getMonth() + 1).padStart(2, "0")}-${String(tmrw.getDate()).padStart(2, "0")}`;
   });
-  const [selectedDoctorId, setSelectedDoctorId] = useState<string>(() => draft?.selectedDoctorId || "");
-  const [selectedTime, setSelectedTime] = useState<string>(() => draft?.selectedTime || "09:00");
+  const [selectedDoctorId, setSelectedDoctorId] = useState<string>(() => (isDraftValid ? draft?.selectedDoctorId : "") || "");
+  const [selectedTime, setSelectedTime] = useState<string>(() => (isDraftValid ? draft?.selectedTime : "") || "09:00");
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
 
-  // AI analysis result (patient-supplied)
-  const [aiConditionName, setAiConditionName] = useState<string>(() => draft?.aiConditionName || "");
-  const [aiConfidence, setAiConfidence] = useState<string>(() => draft?.aiConfidence || "");
+  // AI analysis result:
+  // - Direct search clinic: strictly starts BLANK ("")
+  // - From Scan Skin: prefilled strictly from THAT specific scan result
+  // - Preserves user manual entries when navigating back/forward
+  const [aiConditionName, setAiConditionName] = useState<string>(() => {
+    if (isDraftValid && draft?.aiConditionName !== undefined && draft.aiConditionName !== "") {
+      return draft.aiConditionName;
+    }
+    if (isFromScan) {
+      const condParam = searchParams.get("condition") || searchParams.get("ai_condition");
+      if (condParam && condParam !== "Assessment Queued") return condParam;
+      if (scanContext?.condition) return scanContext.condition;
+    }
+    return "";
+  });
+  const [aiConfidence, setAiConfidence] = useState<string>(() => {
+    if (isDraftValid && draft?.aiConfidence !== undefined && draft.aiConfidence !== "") {
+      return draft.aiConfidence;
+    }
+    if (isFromScan) {
+      const confParam = searchParams.get("confidence") || searchParams.get("score");
+      if (confParam && Number(confParam) > 0) return confParam;
+      if (scanContext?.confidence && Number(scanContext.confidence) > 0) return String(scanContext.confidence);
+    }
+    return "";
+  });
   const [submitted, setSubmitted] = useState(false);
 
   // Continuously persist entered appointment/patient details so going back/forward never resets data
@@ -392,6 +456,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         selectedDoctorId,
         selectedTime,
         clinicId: selectedClinic?.id || searchParams.get("clinic") || "",
+        fromScan: isFromScan,
       };
       sessionStorage.setItem("dermai_appointment_draft", JSON.stringify(dataToSave));
     } catch {
@@ -415,6 +480,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           selectedDoctorId,
           selectedTime,
           clinicId: selectedClinic?.id || searchParams.get("clinic") || "",
+          fromScan: isFromScan,
         };
         sessionStorage.setItem("dermai_appointment_draft", JSON.stringify(fallbackData));
       } catch {}
@@ -736,30 +802,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return selectedBatch ? selectedBatch.label : selectedTime ? formatTime12h(selectedTime) : activeDoctorHours;
   }, [selectedBatch, selectedTime, activeDoctorHours]);
 
-  // Prefill AI condition and questionnaire from URL params or local scan storage
-  useEffect(() => {
-    const condParam = searchParams.get("condition") || searchParams.get("ai_condition");
-    const confParam = searchParams.get("confidence") || searchParams.get("score");
-    if (condParam && condParam !== "Assessment Queued") setAiConditionName(condParam);
-    if (confParam && Number(confParam) > 0) setAiConfidence(confParam);
-
-    try {
-      const savedScan = localStorage.getItem("dermai_last_scan");
-      if (savedScan) {
-        const parsed = JSON.parse(savedScan);
-        if (!condParam && parsed.predictedClass && parsed.predictedClass !== "Assessment Queued") {
-          setAiConditionName((prev) => prev || parsed.predictedClass);
-        }
-        if (!confParam && parsed.confidence && Number(parsed.confidence) > 0) {
-          const num = Number(parsed.confidence);
-          setAiConfidence((prev) => prev || String(Math.round(num <= 1 ? num * 100 : num)));
-        }
-        if (Array.isArray(parsed.questionnaire) && parsed.questionnaire.length > 0) {
-          setQuestionnaireData(parsed.questionnaire);
-        }
-      }
-    } catch { }
-  }, [searchParams]);
+  // Note: AI condition, confidence, questionnaire, and photo are cleanly initialized
+  // in useState from draft / scanContext, avoiding harmful overwrites on step navigation.
 
   // Fetch approved clinic strictly from database with rich details
   useEffect(() => {
@@ -1923,7 +1967,14 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       <input
                         type="text"
                         value={aiConditionName}
-                        onChange={(e) => setAiConditionName(e.target.value)}
+                        onChange={(e) => {
+                          const newVal = e.target.value;
+                          setAiConditionName(newVal);
+                          const origScanCond = isFromScan ? (searchParams.get("condition") || scanContext?.condition || "") : "";
+                          if (origScanCond && newVal.trim().toLowerCase() !== origScanCond.trim().toLowerCase()) {
+                            setAiConfidence("");
+                          }
+                        }}
                         placeholder="e.g. Atopic Dermatitis or Acne"
                         className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs bg-white text-gray-900 focus:outline-none focus:border-magenta-500"
                       />

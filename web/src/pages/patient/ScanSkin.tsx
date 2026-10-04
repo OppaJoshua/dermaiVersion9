@@ -656,6 +656,41 @@ export default function ScanSkinPage() {
     }
   };
 
+  const handleScanBookingContext = () => {
+    if (scanResult) {
+      try {
+        const questionnairePayload = QUESTIONS.map((q) => {
+          const chosenIndex = answers[q.id];
+          const chosenOption = chosenIndex !== undefined ? q.options[chosenIndex] : null;
+          return {
+            id: q.id,
+            question: q.text,
+            answer: chosenOption?.label || "Not specified",
+            severity: chosenOption?.severity ?? null,
+          };
+        });
+
+        sessionStorage.setItem(
+          "dermai_scan_booking_context",
+          JSON.stringify({
+            scanId: scanResult.id,
+            condition: scanResult.condition,
+            confidence: Math.round(scanResult.confidence || 0),
+            photoUrl: scanResult.imageUrl || "",
+            questionnaire: questionnairePayload,
+            timestamp: Date.now(),
+          })
+        );
+      } catch {
+        /* ignore storage errors */
+      }
+    }
+  };
+
+  const scanClinicsUrl = scanResult
+    ? `/dashboard/clinics?fromScan=1&scanId=${encodeURIComponent(scanResult.id)}&condition=${encodeURIComponent(scanResult.condition)}&confidence=${encodeURIComponent(String(Math.round(scanResult.confidence || 0)))}`
+    : "/dashboard/clinics";
+
   return (
     <div className="min-h-screen bg-white text-slate-900 pt-8 pb-16">
       <div className="max-w-3xl mx-auto px-4 sm:px-6">
@@ -1181,7 +1216,8 @@ export default function ScanSkinPage() {
                         </p>
                       </div>
                       <Link
-                        to="/dashboard/clinics"
+                        to={scanClinicsUrl}
+                        onClick={handleScanBookingContext}
                         className="px-4 py-2 rounded-full bg-magenta-500 text-white text-xs font-semibold hover:bg-magenta-600 transition-colors"
                       >
                         View
@@ -1193,7 +1229,8 @@ export default function ScanSkinPage() {
                   )}
                 </div>
                 <Link
-                  to="/dashboard/clinics"
+                  to={scanClinicsUrl}
+                  onClick={handleScanBookingContext}
                   className="flex items-center justify-center gap-1 mt-4 text-sm text-magenta-500 font-semibold hover:text-magenta-600"
                 >
                   View all clinics <ArrowRight className="w-4 h-4" />
@@ -1216,7 +1253,8 @@ export default function ScanSkinPage() {
                   Scan Again
                 </button>
                 <Link
-                  to="/dashboard/clinics"
+                  to={scanClinicsUrl}
+                  onClick={handleScanBookingContext}
                   className="flex-1 py-3.5 rounded-full font-semibold text-sm bg-magenta-500 text-white text-center hover:bg-magenta-600 transition-colors shadow-lg shadow-magenta-500/20 active:scale-[0.96]"
                 >
                   Find a Clinic
