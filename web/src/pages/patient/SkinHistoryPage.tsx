@@ -280,8 +280,6 @@ export default function PatientSkinHistory() {
             No History Found
           </h2>
 
-          <h2 className="text-xl font-bold text-gray-900 mb-2">No History Found</h2>
-
           <p className="text-gray-500 max-w-sm mb-8">
             You haven't performed any skin analysis yet. Start your first scan
             today!
