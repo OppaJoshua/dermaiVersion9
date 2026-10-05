@@ -1,8 +1,8 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { Calendar, CalendarDays, Crown, AlertCircle } from "lucide-react";
+import { Calendar, CalendarDays, AlertCircle } from "lucide-react";
 import { getSubscriptionPlansAsync, type SubscriptionPlan } from "@/lib/store";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
@@ -71,11 +71,6 @@ const currentPlanId = selectedPlan?.id;
           "dermai_pending_payment_intent_client_key"
         );
 
-      console.log("[upgrade] Return from PayMongo:", {
-        intentId,
-        hasClientKey: !!clientKey,
-      });
-
       // If this is a normal visit to the upgrade page,
       // there is no payment to verify.
       if (!intentId || !clientKey) {
@@ -87,11 +82,6 @@ const currentPlanId = selectedPlan?.id;
         setIsSubscribing(true);
         setError(null);
 
-        console.log(
-          "[upgrade] Verifying PayMongo Payment Intent:",
-          intentId
-        );
-
         const { data, error: verifyError } =
           await supabase.functions.invoke("paymongo-payment", {
             body: {
@@ -100,8 +90,6 @@ const currentPlanId = selectedPlan?.id;
               clientKey,
             },
           });
-
-        console.log("[upgrade] Verification response:", data);
 
         if (verifyError) {
           console.error(
@@ -118,25 +106,7 @@ const currentPlanId = selectedPlan?.id;
         const paymentStatus =
           data?.attributes?.status || data?.status;
 
-        console.log(
-          "[upgrade] PayMongo payment status:",
-          paymentStatus
-        );
-
         if (paymentStatus === "succeeded") {
-          const savedCycle =
-            (sessionStorage.getItem(
-              "dermai_pending_billing_cycle"
-            ) || billingCycle) as "monthly" | "yearly";
-
-          console.log(
-            "[upgrade] PayMongo payment succeeded. Waiting for webhook to activate subscription.",
-            {
-              billingCycle: savedCycle,
-              paymentMethod,
-            }
-          );
-
           sessionStorage.removeItem(
             "dermai_pending_billing_cycle"
           );
@@ -193,21 +163,55 @@ const currentPlanId = selectedPlan?.id;
 
   
     try {
-console.log("[upgrade] Payment amount:", {
-  basePrice,
-  total,
-  billingCycle,
-  currentPlanId,
-});
-    // TEMP DEBUG: Check the Supabase session before calling the Edge Function
-    const { data: sessionData } = await supabase.auth.getSession();
 
-    console.log("[upgrade] Supabase session check:", {
-      hasSession: !!sessionData.session,
-      sessionUserId: sessionData.session?.user?.id ?? null,
-      contextUserId: user.id,
-      hasAccessToken: !!sessionData.session?.access_token,
-    });
+    // Frontend guard: do not start a new payment while an existing
+    // paid Pro subscription is still within its current billing period.
+    const { data: existingSubscription, error: subscriptionError } =
+      await supabase
+        .from("user_plan_subscription")
+        .select(`
+          status,
+          current_period_end,
+          cancel_at_period_end,
+          plan:plan_id (
+            price
+          )
+        `)
+        .eq("user_id", user.id)
+        .eq("status", "active")
+        .order("current_period_end", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+    if (subscriptionError) {
+      throw new Error("Unable to check your current subscription. Please try again.");
+    }
+
+    const existingPeriodEnd = existingSubscription?.current_period_end
+      ? new Date(existingSubscription.current_period_end)
+      : null;
+
+    const existingPlan = Array.isArray(existingSubscription?.plan)
+      ? existingSubscription.plan[0]
+      : existingSubscription?.plan;
+
+    const hasActivePaidPeriod =
+      existingSubscription?.status === "active" &&
+      Number(existingPlan?.price ?? 0) > 0 &&
+      existingPeriodEnd !== null &&
+      existingPeriodEnd.getTime() > Date.now();
+
+    if (hasActivePaidPeriod) {
+      if (existingSubscription.cancel_at_period_end) {
+        throw new Error(
+          "Your Pro subscription is still active until the end of your current billing period. Resume your subscription from Billing Settings instead of purchasing again."
+        );
+      }
+
+      throw new Error(
+        "You already have an active Pro subscription. You cannot purchase another Pro subscription until the current billing period ends."
+      );
+    }
 
     // 1. Create Payment Intent through the Supabase Edge Function
 const { data: intentJson, error: intentError } =
@@ -217,6 +221,10 @@ const { data: intentJson, error: intentError } =
       userId: user.id,
       planId: currentPlanId,
       billingCycle: billingCycle,
+      fullName,
+      email,
+      address,
+      mobileNumber,
     },
   });
 
@@ -279,11 +287,6 @@ const { paymentIntentId, clientKey } = intentJson;
           },
         });
 
-      console.log("[upgrade] PayMongo attach response:", {
-        intentData,
-        attachError,
-      });
-
       if (attachError) {
         console.error("[upgrade] PayMongo attach error:", attachError);
         throw new Error(
@@ -304,13 +307,6 @@ const { paymentIntentId, clientKey } = intentJson;
         if (!redirectUrl) throw new Error("3DS redirect URL not found");
         window.location.href = redirectUrl;
       } else if (status === "succeeded") {
-      console.log(
-        "[upgrade] PayMongo payment succeeded immediately. Waiting for webhook to activate subscription.",
-        {
-          billingCycle,
-          paymentMethod,
-        }
-      );
 
       sessionStorage.removeItem(
         "dermai_pending_billing_cycle"
@@ -357,7 +353,7 @@ const { paymentIntentId, clientKey } = intentJson;
             >
               <Calendar className="w-3.5 h-3.5 text-magenta-500" />
              <span>
-                Monthly ₱{plans.find((p) => p.billingType === "monthly" && p.status === "active" && p.price > 0)?.price.toLocaleString() ?? "â€”"}
+                Monthly ₱{plans.find((p) => p.billingType === "monthly" && p.status === "active" && p.price > 0)?.price.toLocaleString() ?? "—"}
              </span>
             </button>
             <button
@@ -387,9 +383,6 @@ const { paymentIntentId, clientKey } = intentJson;
           >
             <div className="bg-white rounded-3xl border border-gray-100 p-6 sm:p-7 shadow-xs">
               <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
-                <div className="w-12 h-12 rounded-2xl bg-magenta-50 text-magenta-600 flex items-center justify-center shrink-0">
-                  <Crown className="w-6 h-6" />
-                </div>
                 <div>
                  <h2 className="text-lg font-bold text-gray-900">
                      {selectedPlan?.name ?? "Subscription Plan"}
@@ -604,6 +597,10 @@ const { paymentIntentId, clientKey } = intentJson;
     </div>
   );
 }
+
+
+
+
 
 
 

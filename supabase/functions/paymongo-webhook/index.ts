@@ -1,4 +1,4 @@
-﻿import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendReceiptEmail } from "./emailReceipt.ts";
 
@@ -594,6 +594,11 @@ const { error: subscriptionUpsertError } =
           periodStart.toISOString(),
         current_period_end:
           periodEnd.toISOString(),
+        payment_method: metadata.payment_method,
+        payment_full_name: metadata.payment_full_name,
+        payment_email: metadata.payment_email,
+        billing_address: metadata.billing_address,
+        payment_mobile_number: metadata.payment_mobile_number,
         updated_at: new Date().toISOString(),
       },
       {

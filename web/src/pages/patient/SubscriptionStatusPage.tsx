@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { CheckCircle2, Crown, Zap, AlertCircle } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
@@ -254,7 +254,7 @@ export default function SubscriptionStatusPage() {
           });
         } else {
           // ----------------------------------------------------------
-          // 8. No active subscription → use Admin Free Plan
+          // 8. No active subscription â†’ use Admin Free Plan
           // ----------------------------------------------------------
           const freePlan = freePlanData as PlanDetails | null;
 
@@ -382,20 +382,7 @@ export default function SubscriptionStatusPage() {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-xs flex flex-col items-center text-center"
           >
-            <div
-              className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-4 ${
-                isPro
-                  ? "bg-amber-50 text-amber-600"
-                  : "bg-magenta-50 text-magenta-600"
-              }`}
-            >
-              {isPro ? (
-                <Crown className="w-7 h-7" />
-              ) : (
-                <Zap className="w-7 h-7" />
-              )}
-            </div>
-
+          
             <h2 className="text-xl font-bold text-gray-900 mb-1">
               {planName}
             </h2>
@@ -486,7 +473,6 @@ export default function SubscriptionStatusPage() {
                 scansRemaining <= 0 &&
                 !loading && (
                   <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex gap-3 text-xs">
-                    <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
 
                     <p className="text-amber-800 leading-relaxed">
                       You've reached your limit for free AI scans.
@@ -558,3 +544,4 @@ export default function SubscriptionStatusPage() {
     </div>
   );
 }
+

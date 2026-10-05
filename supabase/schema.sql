@@ -185,7 +185,7 @@ create table if not exists "user" (
   account_status varchar(20) not null default 'active'
                  check (account_status in ('active','suspended','inactive')),
   created_at     timestamptz not null default now(),
-  updated_at     timestamptz not null default now()
+  free_scans_used int not null default 0
 );
 
 -- ----------------------------------------------------------------------------
@@ -515,6 +515,7 @@ create table if not exists ai_skin_answer (
   answer_value   text not null,
   sort_order     int not null default 0,
   created_at     timestamptz not null default now(),
+  free_scans_used int not null default 0
   analysis_id    uuid not null references ai_scan_result(analysis_id) on delete cascade
 );
 
@@ -1551,3 +1552,4 @@ create policy "Allow Update Storage Objects" on storage.objects
 update "user" 
 set role = 'admin', account_status = 'active' 
 where lower(trim(email)) = 'dermaisupport@gmail.com';
+

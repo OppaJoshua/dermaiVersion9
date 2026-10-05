@@ -73,8 +73,6 @@ if (userError || !user) {
   );
 }
 
-console.log("Authenticated user:", user.id);
-
     const authHeaders = {
       Accept: "application/json",
       "Content-Type": "application/json",
@@ -89,10 +87,14 @@ console.log("Authenticated user:", user.id);
         description,
         paymentMethod,
         planId,
-    billingCycle,
-  } = body;
+        billingCycle,
+        fullName,
+        email,
+        address,
+        mobileNumber,
+      } = body;
 
-  const userId = user.id;
+      const userId = user.id;
       if (!paymentMethod) {
         throw new Error("Payment method is required");
       }
@@ -113,38 +115,83 @@ console.log("Authenticated user:", user.id);
       if (!billingCycle) {
         throw new Error("Billing cycle is required");
       }
+      
+      // Prevent creating a second Pro subscription while the current paid period is active.
+      // Free-plan rows do not block a new Pro purchase.
+      const { data: existingSubscription, error: subscriptionError } = await supabase
+        .from("user_plan_subscription")
+        .select(`
+          subscription_id,
+          status,
+          current_period_end,
+          cancel_at_period_end,
+          plan:plan_id (
+            price,
+            name
+          )
+        `)
+        .eq("user_id", userId)
+        .eq("status", "active")
+        .order("current_period_end", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-     const { data: plan, error: planError } = await supabase
-  .from("plan")
-  .select("plan_id, name, price, billing_type, status")
-  .eq("plan_id", planId)
-  .eq("status", "active")
-  .maybeSingle();
+      if (subscriptionError) {
+        console.error("Active subscription lookup error:", subscriptionError);
+        throw new Error("Failed to check existing subscription");
+      }
 
-if (planError) {
-  console.error("Plan lookup error:", planError);
-  throw new Error("Failed to look up subscription plan");
-}
+      const existingPeriodEnd = existingSubscription?.current_period_end
+        ? new Date(existingSubscription.current_period_end)
+        : null;
 
-if (!plan) {
-  throw new Error("Selected subscription plan is not available");
-}
+      const existingPlan = Array.isArray(existingSubscription?.plan)
+        ? existingSubscription.plan[0]
+        : existingSubscription?.plan;
 
-if (plan.billing_type !== billingCycle) {
-  throw new Error("Billing cycle does not match the selected plan");
-}
+      const hasActivePaidPeriod =
+        existingSubscription?.status === "active" &&
+        Number(existingPlan?.price ?? 0) > 0 &&
+        existingPeriodEnd !== null &&
+        existingPeriodEnd.getTime() > Date.now();
 
-const basePrice = Number(plan.price);
+      if (hasActivePaidPeriod) {
+        return jsonResponse(
+          {
+            error: "An active Pro subscription already exists.",
+            code: "ACTIVE_SUBSCRIPTION",
+            currentPeriodEnd: existingSubscription.current_period_end,
+            cancelAtPeriodEnd: existingSubscription.cancel_at_period_end,
+          },
+          400
+        );
+      }
+      const { data: plan, error: planError } = await supabase
+        .from("plan")
+        .select("plan_id, name, price, billing_type, status")
+        .eq("plan_id", planId)
+        .eq("status", "active")
+        .maybeSingle();
 
-const totalAmount = Math.round(basePrice * 100) / 100;
+      if (planError) {
+        console.error("Plan lookup error:", planError);
+        throw new Error("Failed to look up subscription plan");
+      }
 
-const amountInCentavos = Math.round(totalAmount * 100);
+      if (!plan) {
+        throw new Error("Selected subscription plan is not available");
+      }
 
-console.log("Payment amount calculation:", {
-  basePrice,
-  totalAmount,
-  amountInCentavos,
-});
+      if (plan.billing_type !== billingCycle) {
+        throw new Error("Billing cycle does not match the selected plan");
+      }
+
+      const basePrice = Number(plan.price);
+
+      const totalAmount = Math.round(basePrice * 100) / 100;
+
+      const amountInCentavos = Math.round(totalAmount * 100);
+
       const response = await fetch(
         `${PAYMONGO_API}/payment_intents`,
         {
@@ -163,6 +210,11 @@ console.log("Payment amount calculation:", {
                   user_id: userId,
                   plan_id: planId,
                   billing_cycle: billingCycle,
+                  payment_method: paymentMethod,
+                  payment_full_name: fullName,
+                  payment_email: email,
+                  billing_address: address,
+                  payment_mobile_number: mobileNumber,
                 },
               },
             },
@@ -337,6 +389,9 @@ console.log("Payment amount calculation:", {
     );
   }
 });
+
+
+
 
 
 

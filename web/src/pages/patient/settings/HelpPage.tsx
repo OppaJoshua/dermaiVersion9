@@ -1,5 +1,4 @@
 import {
-  HelpCircle,
   MessageSquare,
   BookOpen,
   ChevronRight,
@@ -213,9 +212,6 @@ export default function HelpPage() {
     <div className="max-w-3xl mx-auto py-10 px-4 sm:px-6 space-y-8">
       {/* Page Header */}
       <div className="flex items-center gap-3">
-        <div className="p-3 bg-magenta-100 rounded-2xl text-magenta-600 shadow-xs">
-          <HelpCircle className="w-6 h-6" />
-        </div>
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Help &amp; Support</h1>
           <p className="text-sm text-gray-500 mt-0.5">
@@ -230,7 +226,7 @@ export default function HelpPage() {
           onClick={() => setShowGuide(true)}
           className="flex items-center gap-4 bg-white border border-gray-100 rounded-2xl p-4 shadow-xs hover:border-magenta-200 hover:bg-magenta-50/20 transition-all text-left group"
         >
-          <div className="p-3 bg-magenta-100 rounded-xl text-magenta-600 group-hover:bg-magenta-200 transition-colors">
+          <div className="text-magenta-600">
             <BookOpen className="w-5 h-5" />
           </div>
           <div>
@@ -247,7 +243,7 @@ export default function HelpPage() {
           }}
           className="flex items-center gap-4 bg-white border border-gray-100 rounded-2xl p-4 shadow-xs hover:border-magenta-200 hover:bg-magenta-50/20 transition-all text-left group"
         >
-          <div className="p-3 bg-magenta-100 rounded-xl text-magenta-600 group-hover:bg-magenta-200 transition-colors">
+          <div className="text-magenta-600">
             <MessageSquare className="w-5 h-5" />
           </div>
           <div>
