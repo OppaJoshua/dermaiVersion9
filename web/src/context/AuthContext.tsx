@@ -5,6 +5,33 @@ import { supabase } from "../lib/supabaseClient";
 export type UserRole = "patient" | "doctor" | "clinic" | "admin";
 export type AccountStatus = "active" | "suspended" | "inactive";
 
+export function isPatientProfileComplete(profile: {
+  fullName?: string | null;
+  phone?: string | null;
+  contactNumber?: string | null;
+  gender?: string | null;
+  birthdate?: string | null;
+  district?: string | null;
+  address?: string | null;
+  profile_completed?: boolean;
+}): boolean {
+  if (profile.profile_completed === true) return true;
+  const name = (profile.fullName || "").trim();
+  const phone = (profile.phone || profile.contactNumber || "").replace(/\D/g, "");
+  const gender = (profile.gender || "").trim();
+  const birthdate = (profile.birthdate || "").trim();
+  const location = (profile.district || profile.address || "").trim();
+
+  // Full name, 11-digit phone number, gender, birthdate, and at least district or address
+  return (
+    name.length > 0 &&
+    phone.length === 11 &&
+    gender.length > 0 &&
+    birthdate.length > 0 &&
+    location.length > 0
+  );
+}
+
 type AuthContextType = {
   session: Session | null;
   user: User | null;
@@ -12,6 +39,8 @@ type AuthContextType = {
   roleLoading: boolean;
   accountStatus: AccountStatus;
   loading: boolean;
+  isProfileComplete: boolean;
+  setIsProfileComplete: (complete: boolean) => void;
   signInWithMagicLink: (email: string) => Promise<{ error: string | null }>;
   signInWithGoogle: () => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
@@ -25,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<UserRole | null>(null);
   const [accountStatus, setAccountStatus] = useState<AccountStatus>("active");
   const [roleLoading, setRoleLoading] = useState(true);
+  const [isProfileComplete, setIsProfileComplete] = useState<boolean>(true);
 
   useEffect(() => {
     // Check for an existing session on first load
@@ -114,7 +144,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         let dbUser: any = null;
         const { data: userById } = await supabase
           .from("user")
-          .select("role, user_id, account_status")
+          .select("role, user_id, account_status, full_name, phone, gender, birthdate, district, address, avatar_url")
           .eq("user_id", session!.user.id)
           .maybeSingle();
 
@@ -123,7 +153,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else if (currentEmail) {
           const { data: userByEmail } = await supabase
             .from("user")
-            .select("role, user_id, account_status")
+            .select("role, user_id, account_status, full_name, phone, gender, birthdate, district, address, avatar_url")
             .ilike("email", currentEmail)
             .maybeSingle();
           if (userByEmail) dbUser = userByEmail;
@@ -201,9 +231,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           finalRole = session!.user.user_metadata.role as UserRole;
         }
 
-        // 6. Ensure user row exists and preserve existing account status
+        // 6. Ensure user row exists and preserve existing account status & profile details
         const meta = session!.user.user_metadata || {};
-        const fullName = meta.full_name || meta.name || session!.user.email?.split("@")[0] || "User";
+        const fullName = dbUser?.full_name || meta.full_name || meta.name || session!.user.email?.split("@")[0] || "User";
+
+        let localProfile: any = null;
+        try {
+          const saved = localStorage.getItem(`derm_profile_${session!.user.id}`);
+          if (saved) localProfile = JSON.parse(saved);
+        } catch {}
+
+        const profileComplete =
+          finalRole !== "patient" ||
+          isPatientProfileComplete({
+            fullName: dbUser?.full_name || meta.full_name || meta.name || localProfile?.fullName || "",
+            phone: dbUser?.phone || meta.phone || localProfile?.contactNumber || localProfile?.phone || "",
+            gender: dbUser?.gender || meta.gender || localProfile?.gender || "",
+            birthdate: dbUser?.birthdate || meta.birthdate || meta.birthday || localProfile?.birthdate || "",
+            district: dbUser?.district || meta.district || localProfile?.district || "",
+            address: dbUser?.address || meta.address || localProfile?.address || "",
+            profile_completed: Boolean(
+              meta.profile_completed ||
+              localProfile?.profile_completed ||
+              (dbUser?.phone && dbUser?.gender && dbUser?.birthdate && (dbUser?.district || dbUser?.address))
+            ),
+          });
 
         await supabase.from("user").upsert({
           user_id: session!.user.id,
@@ -217,6 +269,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         setAccountStatus(currentStatus);
         setRole(finalRole);
+        setIsProfileComplete(profileComplete);
         localStorage.setItem(`derm_role_${session!.user.id}`, finalRole);
       } catch (err) {
         console.error("Failed to resolve user role:", err);
@@ -228,6 +281,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     fetchUserRole();
+
+    // Profile update event listener to reactively mark complete without re-fetch
+    const handleProfileUpdate = () => {
+      if (session?.user) {
+        let localProfile: any = null;
+        try {
+          const saved = localStorage.getItem(`derm_profile_${session.user.id}`);
+          if (saved) localProfile = JSON.parse(saved);
+        } catch {}
+        const meta = session.user.user_metadata || {};
+        if (
+          isPatientProfileComplete({
+            ...meta,
+            ...localProfile,
+            profile_completed: Boolean(localProfile?.profile_completed || meta.profile_completed),
+          })
+        ) {
+          setIsProfileComplete(true);
+        }
+      }
+    };
+
+    window.addEventListener("derm_profile_updated", handleProfileUpdate);
+    window.addEventListener("storage", handleProfileUpdate);
 
     // 7. Realtime listener for account status changes on current user
     const statusChannel = supabase
@@ -250,6 +327,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
+      window.removeEventListener("derm_profile_updated", handleProfileUpdate);
+      window.removeEventListener("storage", handleProfileUpdate);
       supabase.removeChannel(statusChannel);
     };
   }, [session]);
@@ -279,6 +358,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
     setSession(null);
     setRole(null);
+    setIsProfileComplete(true);
     setAccountStatus("active");
   };
 
@@ -291,6 +371,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         roleLoading,
         accountStatus,
         loading,
+        isProfileComplete,
+        setIsProfileComplete,
         signInWithMagicLink,
         signInWithGoogle,
         signOut,

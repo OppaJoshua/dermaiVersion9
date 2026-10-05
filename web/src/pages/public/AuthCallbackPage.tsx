@@ -14,7 +14,7 @@ const ROLE_HOME: Record<string, string> = {
 };
 
 export default function AuthCallbackPage() {
-  const { session, role, roleLoading } = useAuth();
+  const { session, role, roleLoading, isProfileComplete } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
@@ -87,13 +87,17 @@ export default function AuthCallbackPage() {
     if (!session) return;
     if (roleLoading || !role) return;
 
-    const destination = ROLE_HOME[role] ?? "/dashboard";
+    let destination = ROLE_HOME[role] ?? "/dashboard";
+    if (role === "patient" && !isProfileComplete) {
+      destination = "/dashboard/profile?first_time=1";
+    }
+
     const timer = setTimeout(() => {
       navigate(destination, { replace: true });
     }, 400);
 
     return () => clearTimeout(timer);
-  }, [session, role, roleLoading, isProcessing, error, navigate]);
+  }, [session, role, roleLoading, isProfileComplete, isProcessing, error, navigate]);
 
   return (
     <div className="min-h-screen bg-white flex items-center justify-center p-4">

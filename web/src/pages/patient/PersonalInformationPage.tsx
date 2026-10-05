@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { User, Mail, Phone, Calendar, MapPin, Save, UserCircle } from "lucide-react";
 import { motion } from "framer-motion";
-import { useAuth } from "../../context/AuthContext";
+import { useAuth, isPatientProfileComplete } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 
 interface UserProfile {
@@ -42,12 +43,26 @@ const EMPTY_PROFILE: UserProfile = {
 };
 
 export default function PatientPersonalInformation() {
-  const { session, user: _authUser } = useAuth();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { session, user: _authUser, isProfileComplete, setIsProfileComplete } = useAuth();
+  const isFirstTimeParam = searchParams.get("first_time") === "1" || searchParams.get("incomplete") === "1";
   const [profile, setProfile] = useState<UserProfile>(EMPTY_PROFILE);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const isCurrentProfileComplete = isPatientProfileComplete({
+    fullName: profile.fullName,
+    contactNumber: profile.contactNumber,
+    gender: profile.gender,
+    birthdate: profile.birthdate,
+    district: profile.district,
+    address: profile.address,
+  });
+
+  const showIncompleteBanner = isFirstTimeParam || !isProfileComplete || !isCurrentProfileComplete;
 
   useEffect(() => {
     let cancelled = false;
@@ -136,10 +151,36 @@ export default function PatientPersonalInformation() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (profile.contactNumber.trim() && profile.contactNumber.trim().length !== 11) {
+
+    if (!profile.fullName.trim()) {
+      setMessage({ type: "error", text: "Please enter your full name." });
+      return;
+    }
+    if (!profile.contactNumber.trim()) {
+      setMessage({ type: "error", text: "Please enter your contact number." });
+      return;
+    }
+    if (profile.contactNumber.trim().length !== 11) {
       setMessage({ type: "error", text: "Contact number must be exactly 11 digits (e.g. 09123456789)." });
       return;
     }
+    if (!profile.gender) {
+      setMessage({ type: "error", text: "Please select your gender." });
+      return;
+    }
+    if (!profile.birthdate) {
+      setMessage({ type: "error", text: "Please provide your birthdate." });
+      return;
+    }
+    if (!profile.district) {
+      setMessage({ type: "error", text: "Please select your district." });
+      return;
+    }
+    if (!profile.address.trim()) {
+      setMessage({ type: "error", text: "Please enter your complete address." });
+      return;
+    }
+
     setIsSaving(true);
     setMessage(null);
 
@@ -176,12 +217,12 @@ export default function PatientPersonalInformation() {
         const { error: dbError } = await supabase
           .from("user")
           .update({
-            full_name: profile.fullName,
-            phone: profile.contactNumber || null,
+            full_name: profile.fullName.trim(),
+            phone: profile.contactNumber.trim() || null,
             gender: profile.gender || null,
             birthdate: profile.birthdate || null,
             district: profile.district || null,
-            address: profile.address || null,
+            address: profile.address.trim() || null,
             avatar_url: finalAvatarUrl,
           })
           .eq("user_id", session.user.id);
@@ -194,13 +235,14 @@ export default function PatientPersonalInformation() {
         localStorage.setItem(
           `derm_profile_${session.user.id}`,
           JSON.stringify({
-            fullName: profile.fullName,
-            contactNumber: profile.contactNumber,
+            fullName: profile.fullName.trim(),
+            contactNumber: profile.contactNumber.trim(),
             gender: profile.gender,
             birthdate: profile.birthdate,
             district: profile.district,
-            address: profile.address,
+            address: profile.address.trim(),
             profilePicture: finalAvatarUrl,
+            profile_completed: true,
           })
         );
 
@@ -208,31 +250,40 @@ export default function PatientPersonalInformation() {
         try {
           await supabase.auth.updateUser({
             data: {
-              full_name: profile.fullName,
+              full_name: profile.fullName.trim(),
               gender: profile.gender,
               birthdate: profile.birthdate,
               birthday: profile.birthdate,
-              phone: profile.contactNumber,
+              phone: profile.contactNumber.trim(),
               district: profile.district,
-              address: profile.address,
+              address: profile.address.trim(),
               avatar_url: finalAvatarUrl,
+              profile_completed: true,
             },
           });
         } catch {
           // ignore
         }
 
-        // 5. Notify layout and any listeners immediately
+        // 5. Update auth state and notify layout / listeners immediately
+        setIsProfileComplete(true);
         window.dispatchEvent(new Event("derm_profile_updated"));
         window.dispatchEvent(new Event("storage"));
       }
 
-      setMessage({ type: "success", text: "Profile updated successfully!" });
+      if (showIncompleteBanner) {
+        setMessage({ type: "success", text: "Profile completed successfully! Redirecting to Dashboard..." });
+        setTimeout(() => {
+          navigate("/dashboard", { replace: true });
+        }, 800);
+      } else {
+        setMessage({ type: "success", text: "Profile updated successfully!" });
+        setTimeout(() => setMessage(null), 3000);
+      }
     } catch {
       setMessage({ type: "error", text: "Something went wrong while saving. Please try again." });
     } finally {
       setIsSaving(false);
-      setTimeout(() => setMessage(null), 3000);
     }
   };
 
@@ -246,10 +297,28 @@ export default function PatientPersonalInformation() {
 
   return (
     <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-      <div className="mb-8">
+      <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Personal Information</h1>
         <p className="text-gray-500 text-sm mt-1">Manage your profile details and contact information.</p>
       </div>
+
+      {showIncompleteBanner && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6 p-4 rounded-2xl bg-magenta-50/90 border border-magenta-200/90 flex items-start gap-3.5 shadow-xs"
+        >
+          <div className="w-9 h-9 rounded-xl bg-magenta-600 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+            <UserCircle className="w-5 h-5" />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-sm font-bold text-gray-900">Complete Your Personal Information</h2>
+            <p className="text-xs text-gray-600 leading-relaxed mt-0.5">
+              Please complete your required personal information before continuing to use DermAI.
+            </p>
+          </div>
+        </motion.div>
+      )}
 
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -314,6 +383,7 @@ export default function PatientPersonalInformation() {
                 <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
                   <User className="w-4 h-4 text-magenta-500" />
                   Full Name
+                  <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -348,6 +418,7 @@ export default function PatientPersonalInformation() {
                 <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
                   <Phone className="w-4 h-4 text-magenta-500" />
                   Contact Number
+                  <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="tel"
@@ -355,6 +426,7 @@ export default function PatientPersonalInformation() {
                   maxLength={11}
                   value={profile.contactNumber}
                   onChange={handleChange}
+                  required
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
                   placeholder="09123456789"
                 />
@@ -365,11 +437,13 @@ export default function PatientPersonalInformation() {
                 <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
                   <UserCircle className="w-4 h-4 text-magenta-500" />
                   Gender
+                  <span className="text-red-500">*</span>
                 </label>
                 <select
                   name="gender"
                   value={profile.gender}
                   onChange={handleChange}
+                  required
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all appearance-none bg-white"
                 >
                   <option value="">Select Gender</option>
@@ -385,12 +459,14 @@ export default function PatientPersonalInformation() {
                 <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-magenta-500" />
                   Birthdate
+                  <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="date"
                   name="birthdate"
                   value={profile.birthdate}
                   onChange={handleChange}
+                  required
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
                 />
               </div>
@@ -400,11 +476,13 @@ export default function PatientPersonalInformation() {
                 <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
                   <MapPin className="w-4 h-4 text-magenta-500" />
                   District
+                  <span className="text-red-500">*</span>
                 </label>
                 <select
                   name="district"
                   value={profile.district}
                   onChange={handleChange}
+                  required
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all appearance-none bg-white"
                 >
                   <option value="">Select District</option>
@@ -419,12 +497,14 @@ export default function PatientPersonalInformation() {
                 <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
                   <MapPin className="w-4 h-4 text-magenta-500" />
                   Complete Address
+                  <span className="text-red-500">*</span>
                 </label>
                 <textarea
                   name="address"
                   value={profile.address}
                   onChange={handleChange}
                   rows={3}
+                  required
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all resize-none"
                   placeholder="Street, City, Province, ZIP"
                 />

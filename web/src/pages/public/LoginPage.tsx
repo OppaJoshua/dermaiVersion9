@@ -42,18 +42,20 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const from = location.state?.from;
-  const { session, loading, role, roleLoading, signInWithMagicLink, signInWithGoogle } = useAuth();
+  const { session, loading, role, roleLoading, isProfileComplete, signInWithMagicLink, signInWithGoogle } = useAuth();
 
   useEffect(() => {
     if (loading || roleLoading) return;
     if (session && role) {
-      if (from && (role === "patient" || !ROLE_HOME[role])) {
+      if (role === "patient" && !isProfileComplete) {
+        navigate("/dashboard/profile?first_time=1", { replace: true });
+      } else if (from && (role === "patient" || !ROLE_HOME[role])) {
         navigate(from, { replace: true });
       } else {
         navigate(ROLE_HOME[role] ?? "/dashboard", { replace: true });
       }
     }
-  }, [session, loading, role, roleLoading, navigate, from]);
+  }, [session, loading, role, roleLoading, isProfileComplete, navigate, from]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();

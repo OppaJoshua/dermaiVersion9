@@ -106,7 +106,7 @@ export default function UserLayout({
   profile: customProfile,
   onLogout,
 }: UserLayoutProps) {
-  const { user, session, loading, role, roleLoading, signOut } = useAuth();
+  const { user, session, loading, role, roleLoading, isProfileComplete, signOut } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -127,9 +127,11 @@ export default function UserLayout({
         navigate("/clinic", { replace: true });
       } else if (role === "doctor") {
         navigate("/doctor", { replace: true });
+      } else if (role === "patient" && !isProfileComplete && location.pathname !== "/dashboard/profile") {
+        navigate("/dashboard/profile?incomplete=1", { replace: true });
       }
     }
-  }, [user, session, loading, role, roleLoading, location.pathname, location.search, navigate]);
+  }, [user, session, loading, role, roleLoading, isProfileComplete, location.pathname, location.search, navigate]);
 
   const getLocalProfile = (userId?: string) => {
     if (!userId) return null;
