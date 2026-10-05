@@ -45,7 +45,7 @@ const EMPTY_PROFILE: UserProfile = {
 export default function PatientPersonalInformation() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { session, user: _authUser, isProfileComplete, setIsProfileComplete } = useAuth();
+  const { session, user: _authUser, role, isProfileComplete, setIsProfileComplete } = useAuth();
   const isFirstTimeParam = searchParams.get("first_time") === "1" || searchParams.get("incomplete") === "1";
   const [profile, setProfile] = useState<UserProfile>(EMPTY_PROFILE);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -62,7 +62,8 @@ export default function PatientPersonalInformation() {
     address: profile.address,
   });
 
-  const showIncompleteBanner = isFirstTimeParam || !isProfileComplete || !isCurrentProfileComplete;
+  const isPatient = role === "patient" || !role;
+  const showIncompleteBanner = isPatient && (isFirstTimeParam || !isProfileComplete || !isCurrentProfileComplete);
 
   useEffect(() => {
     let cancelled = false;
