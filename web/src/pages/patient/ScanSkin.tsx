@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Camera,
   Image,
@@ -316,8 +316,31 @@ interface RecommendedClinic {
 
 export default function ScanSkinPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const isAuthenticated = !!user;
+
+  // Booking-origin context (when navigated from Appointment booking flow)
+  const isBookingOrigin = useMemo(() => {
+    if (searchParams.get("fromAppointment") === "1" || searchParams.get("returnTo") === "appointment") {
+      return true;
+    }
+    try {
+      return !!sessionStorage.getItem("dermai_booking_return_clinic");
+    } catch {
+      return false;
+    }
+  }, [searchParams]);
+
+  const returnClinicId = useMemo(() => {
+    const fromParam = searchParams.get("clinic");
+    if (fromParam) return fromParam;
+    try {
+      return sessionStorage.getItem("dermai_booking_return_clinic") || "";
+    } catch {
+      return "";
+    }
+  }, [searchParams]);
   const [currentStep, setCurrentStep] = useState(1);
   const [qIndex, setQIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, number>>(() => {
@@ -691,6 +714,16 @@ export default function ScanSkinPage() {
     ? `/dashboard/clinics?fromScan=1&scanId=${encodeURIComponent(scanResult.id)}&condition=${encodeURIComponent(scanResult.condition)}&confidence=${encodeURIComponent(String(Math.round(scanResult.confidence || 0)))}`
     : "/dashboard/clinics";
 
+  const returnAppointmentUrl = useMemo(() => {
+    if (!scanResult) {
+      return returnClinicId
+        ? `/dashboard/appointment?clinic=${encodeURIComponent(returnClinicId)}`
+        : "/dashboard/appointment";
+    }
+    const base = `/dashboard/appointment?fromScan=1&scanId=${encodeURIComponent(scanResult.id)}&condition=${encodeURIComponent(scanResult.condition)}&confidence=${encodeURIComponent(String(Math.round(scanResult.confidence || 0)))}`;
+    return returnClinicId ? `${base}&clinic=${encodeURIComponent(returnClinicId)}` : base;
+  }, [scanResult, returnClinicId]);
+
   return (
     <div className="min-h-screen bg-white text-slate-900 pt-8 pb-16">
       <div className="max-w-3xl mx-auto px-4 sm:px-6">
@@ -724,6 +757,20 @@ export default function ScanSkinPage() {
           className="hidden"
           onChange={handleFileChange("wide")}
         />
+
+        {isBookingOrigin && (
+          <div className="mb-6 flex items-center justify-between bg-magenta-50/80 border border-magenta-200/80 rounded-xl px-4 py-2.5 text-xs text-magenta-900">
+            <span className="font-semibold flex items-center gap-1.5">
+              <span>Appointment booking in progress</span>
+            </span>
+            <Link
+              to={returnClinicId ? `/dashboard/appointment?clinic=${encodeURIComponent(returnClinicId)}` : "/dashboard/appointment"}
+              className="text-magenta-700 font-bold hover:underline"
+            >
+              Cancel &amp; return to appointment
+            </Link>
+          </div>
+        )}
 
         <div className="text-center mb-10">
           <h1 className="text-3xl sm:text-4xl font-display font-bold text-slate-900 mb-2">
@@ -1194,6 +1241,30 @@ export default function ScanSkinPage() {
                 </div>
               </div>
 
+              {isBookingOrigin && (
+                <div className="bg-magenta-50 border-2 border-magenta-200 rounded-[20px] p-5 sm:p-6 shadow-[0_4px_20px_rgba(160,25,90,0.06)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <span className="inline-block px-2.5 py-0.5 rounded-full bg-magenta-100 text-magenta-700 text-xs font-bold uppercase tracking-wider">
+                      Appointment Booking in Progress
+                    </span>
+                    <h3 className="text-base font-bold text-magenta-900">
+                      Your new AI skin scan is ready for your appointment
+                    </h3>
+                    <p className="text-xs text-magenta-600">
+                      Return to the appointment booking page to attach this scan as your Primary AI Skin Scan.
+                    </p>
+                  </div>
+                  <Link
+                    to={returnAppointmentUrl}
+                    onClick={handleScanBookingContext}
+                    className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full bg-magenta-600 text-white font-semibold text-sm hover:bg-magenta-700 transition-colors shadow-md shadow-magenta-600/20 active:scale-95 whitespace-nowrap self-start sm:self-auto"
+                  >
+                    <span>Continue Booking</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </Link>
+                </div>
+              )}
+
               <div className="bg-white rounded-[20px] shadow-[0_4px_24px_rgba(160,25,90,0.08)] p-6 sm:p-8">
                 <h3 className="text-lg font-display font-bold text-magenta-900 mb-4">Recommended Clinics Near You</h3>
                 <div className="space-y-3">
@@ -1253,11 +1324,12 @@ export default function ScanSkinPage() {
                   Scan Again
                 </button>
                 <Link
-                  to={scanClinicsUrl}
+                  to={isBookingOrigin ? returnAppointmentUrl : scanClinicsUrl}
                   onClick={handleScanBookingContext}
-                  className="flex-1 py-3.5 rounded-full font-semibold text-sm bg-magenta-500 text-white text-center hover:bg-magenta-600 transition-colors shadow-lg shadow-magenta-500/20 active:scale-[0.96]"
+                  className="flex-1 py-3.5 rounded-full font-semibold text-sm bg-magenta-500 text-white text-center hover:bg-magenta-600 transition-colors shadow-lg shadow-magenta-500/20 active:scale-[0.96] flex items-center justify-center gap-2"
                 >
-                  Find a Clinic
+                  <span>{isBookingOrigin ? "Continue to Appointment Booking" : "Find a Clinic"}</span>
+                  <ArrowRight className="w-4 h-4" />
                 </Link>
               </div>
             </motion.div>

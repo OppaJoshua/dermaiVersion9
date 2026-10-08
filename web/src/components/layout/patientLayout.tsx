@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import Logo from "@/assets/logo2.png";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
@@ -52,23 +53,39 @@ interface UserLayoutProps {
 // STATIC NAV CONFIG
 // ---------------------------------------------------------------------------
 
-const sidebarSections = [
+export interface NavLink {
+  label: string;
+  path: string;
+}
+
+export interface NavSection {
+  id: string;
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  links: NavLink[];
+}
+
+const navSections: NavSection[] = [
   {
+    id: "skin-scan",
     title: "Skin Scan",
     icon: ScanLine,
     links: [{ label: "Scan Skin", path: "/dashboard/scan" }],
   },
   {
+    id: "profile-management",
     title: "Profile Management",
     icon: UserCircle,
     links: [{ label: "Personal Information", path: "/dashboard/profile" }],
   },
   {
+    id: "appointment-booking",
     title: "Appointment Booking",
     icon: CalendarDays,
     links: [{ label: "Search Clinic", path: "/dashboard/clinics" }],
   },
   {
+    id: "monitor",
     title: "Monitor",
     icon: ActivitySquare,
     links: [
@@ -78,11 +95,13 @@ const sidebarSections = [
     ],
   },
   {
+    id: "subscription",
     title: "Subscription",
     icon: CreditCard,
     links: [{ label: "Upgrade Plan", path: "/dashboard/upgrade" }],
   },
   {
+    id: "settings",
     title: "Settings",
     icon: Settings,
     links: [
@@ -94,8 +113,85 @@ const sidebarSections = [
 
 const allLinks = [
   { label: "Dashboard", path: "/dashboard" },
-  ...sidebarSections.flatMap((s) => s.links),
+  { label: "Upgrade Plan", path: "/dashboard/upgrade" },
+  { label: "Upgrade Plan", path: "/user/upgrade" },
+  { label: "Book Appointment", path: "/dashboard/appointment" },
+  { label: "Book Appointment", path: "/appointment" },
+  ...navSections.flatMap((s) => s.links),
 ];
+
+function isLinkActive(linkPath: string, currentPath: string): boolean {
+  if (linkPath === "/dashboard") {
+    return currentPath === "/dashboard";
+  }
+  if (linkPath === "/dashboard/scan") {
+    return (
+      currentPath === "/dashboard/scan" ||
+      currentPath === "/dashboard/scan-skin" ||
+      currentPath === "/scan"
+    );
+  }
+  if (linkPath === "/dashboard/profile") {
+    return (
+      currentPath === "/dashboard/profile" ||
+      currentPath === "/dashboard/settings/account"
+    );
+  }
+  if (linkPath === "/dashboard/clinics") {
+    return (
+      currentPath === "/dashboard/clinics" ||
+      currentPath === "/find-clinics"
+    );
+  }
+  if (linkPath === "/dashboard/upgrade") {
+    return currentPath === "/dashboard/upgrade" || currentPath === "/user/upgrade";
+  }
+  return currentPath === linkPath;
+}
+
+function isSectionActive(sectionId: string, currentPath: string): boolean {
+  if (sectionId === "skin-scan") {
+    return (
+      currentPath === "/dashboard/scan" ||
+      currentPath === "/dashboard/scan-skin" ||
+      currentPath === "/scan"
+    );
+  }
+  if (sectionId === "profile-management") {
+    return (
+      currentPath === "/dashboard/profile" ||
+      currentPath === "/dashboard/settings/account"
+    );
+  }
+  if (sectionId === "appointment-booking") {
+    return (
+      currentPath === "/dashboard/clinics" ||
+      currentPath === "/find-clinics" ||
+      currentPath === "/dashboard/appointment" ||
+      currentPath === "/appointment"
+    );
+  }
+  if (sectionId === "monitor") {
+    return (
+      currentPath === "/dashboard/history" ||
+      currentPath === "/dashboard/appointment-status" ||
+      currentPath === "/dashboard/subscription-status"
+    );
+  }
+  if (sectionId === "subscription") {
+    return (
+      currentPath === "/dashboard/upgrade" ||
+      currentPath === "/user/upgrade"
+    );
+  }
+  if (sectionId === "settings") {
+    return (
+      currentPath.startsWith("/dashboard/settings") &&
+      currentPath !== "/dashboard/settings/account"
+    );
+  }
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // COMPONENT
@@ -114,6 +210,35 @@ export default function UserLayout({
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifications, setNotifications] = useState<PatientNotif[]>([]);
   const notifRef = useRef<HTMLDivElement>(null);
+
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    for (const section of navSections) {
+      if (isSectionActive(section.id, location.pathname)) {
+        initial[section.id] = true;
+      }
+    }
+    return initial;
+  });
+
+  const toggleSection = (sectionId: string) => {
+    setOpenSections((prev) => ({
+      ...prev,
+      [sectionId]: !prev[sectionId],
+    }));
+  };
+
+  // Automatically expand parent section of active route on route change
+  useEffect(() => {
+    for (const section of navSections) {
+      if (isSectionActive(section.id, location.pathname)) {
+        setOpenSections((prev) => {
+          if (prev[section.id]) return prev;
+          return { ...prev, [section.id]: true };
+        });
+      }
+    }
+  }, [location.pathname]);
 
   useEffect(() => {
     if (!loading && !roleLoading && (location.pathname.startsWith("/dashboard") || location.pathname === "/appointment")) {
@@ -410,7 +535,7 @@ export default function UserLayout({
         </div>
 
         {/* Patient Account Info */}
-        <div className="p-6 border-b border-gray-100">
+        <div className="px-5 py-4 border-b border-gray-100 shrink-0">
           <div className="flex items-center gap-3 mb-2">
             <div className="w-12 h-12 rounded-full ring-2 ring-magenta-100 bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-lg font-bold shrink-0">
               {dynamicProfile.profilePictureUrl && !imgError ? (
@@ -435,61 +560,100 @@ export default function UserLayout({
         </div>
 
         {/* Navigation Sections */}
-        <div className="flex-1 overflow-y-auto scrollbar-hide py-4 px-3 space-y-6">
-          <div className="space-y-1">
-            <Link
-              to="/dashboard"
-              onClick={() => setSidebarOpen(false)}
-              className={cn(
-                "flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors",
-                location.pathname === "/dashboard"
-                  ? "bg-magenta-50 text-magenta-600"
-                  : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
-              )}
-            >
-              <LayoutGrid className="w-5 h-5" />
-              Dashboard
-            </Link>
-          </div>
+        <div className="flex-1 overflow-y-auto no-scrollbar py-3 px-3 space-y-1">
+          {/* 1. Dashboard */}
+          <Link
+            to="/dashboard"
+            onClick={() => setSidebarOpen(false)}
+            className={cn(
+              "flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors",
+              location.pathname === "/dashboard"
+                ? "bg-magenta-50 text-magenta-600"
+                : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+            )}
+          >
+            <LayoutGrid className="w-5 h-5 shrink-0" />
+            <span>Dashboard</span>
+          </Link>
 
-          {sidebarSections.map((section, idx) => {
+          {/* Collapsible Sections */}
+          {navSections.map((section) => {
             const SectionIcon = section.icon;
+            const isOpen = !!openSections[section.id];
+            const isChildActive = isSectionActive(section.id, location.pathname);
+
             return (
-              <div key={idx} className="space-y-1">
-                <div className="flex items-center gap-2 px-3 mb-2 text-gray-400">
-                  <SectionIcon className="w-4 h-4" />
-                  <p className="text-[11px] font-semibold uppercase tracking-wider">{section.title}</p>
-                </div>
-                <div className="space-y-0.5">
-                  {section.links.map((link) => {
-                    const isActive = location.pathname === link.path;
-                    return (
-                      <Link
-                        key={link.path}
-                        to={link.path}
-                        onClick={() => setSidebarOpen(false)}
-                        className={cn(
-                          "block px-3 py-2 rounded-xl text-sm font-medium pl-9 transition-colors",
-                          isActive
-                            ? "bg-magenta-50 text-magenta-600"
-                            : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
-                        )}
-                      >
-                        {link.label}
-                      </Link>
-                    );
-                  })}
-                </div>
+              <div key={section.id} className="space-y-0.5">
+                <button
+                  type="button"
+                  onClick={() => toggleSection(section.id)}
+                  className={cn(
+                    "w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-semibold uppercase tracking-wider transition-all select-none text-left cursor-pointer",
+                    isChildActive
+                      ? "text-magenta-700 bg-magenta-50/40 hover:bg-magenta-50/70"
+                      : "text-gray-400 hover:text-gray-700 hover:bg-gray-50"
+                  )}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <SectionIcon
+                      className={cn(
+                        "w-4 h-4 shrink-0 transition-colors",
+                        isChildActive ? "text-magenta-600" : "text-gray-400"
+                      )}
+                    />
+                    <span className="truncate">{section.title}</span>
+                  </div>
+                  <ChevronRight
+                    className={cn(
+                      "w-3.5 h-3.5 shrink-0 transition-transform duration-200 text-gray-400",
+                      isOpen ? "rotate-90 text-gray-600" : "rotate-0"
+                    )}
+                  />
+                </button>
+
+                <AnimatePresence initial={false}>
+                  {isOpen && (
+                    <motion.div
+                      key={`content-${section.id}`}
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2, ease: "easeInOut" }}
+                      className="overflow-hidden"
+                    >
+                      <div className="pt-0.5 pb-1 space-y-0.5">
+                        {section.links.map((link) => {
+                          const isActive = isLinkActive(link.path, location.pathname);
+                          return (
+                            <Link
+                              key={link.path}
+                              to={link.path}
+                              onClick={() => setSidebarOpen(false)}
+                              className={cn(
+                                "block px-3 py-2 rounded-xl text-sm font-medium pl-9 transition-colors",
+                                isActive
+                                  ? "bg-magenta-50 text-magenta-600 font-semibold"
+                                  : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                              )}
+                            >
+                              {link.label}
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             );
           })}
         </div>
 
         {/* Logout */}
-        <div className="p-4 border-t border-gray-100 bg-gray-50/50">
+        <div className="p-3.5 border-t border-gray-100 bg-gray-50/50 shrink-0">
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors bg-white border border-gray-200"
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors bg-white border border-gray-200 cursor-pointer"
           >
             <LogOut className="w-4.5 h-4.5" />
             Logout

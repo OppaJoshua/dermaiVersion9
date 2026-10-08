@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 @import "tailwindcss";
 
 @theme {
@@ -51,4 +52,78 @@
 
 .leaflet-bar a:last-child {
   border-bottom: none !important;
-}
+}
+
+/* Custom scrollbar utility for clean sidebars */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+=======
+@import "tailwindcss";
+
+@theme {
+  --color-magenta-50:  #fdf2f7;
+  --color-magenta-100: #fce7f0;
+  --color-magenta-200: #fbcfe1;
+  --color-magenta-300: #f4a3c4;
+  --color-magenta-400: #e8619a;
+  --color-magenta-500: #A0195A;
+  --color-magenta-600: #85134a;
+  --color-magenta-700: #6b0f3c;
+  --color-magenta-800: #520b2e;
+  --color-magenta-900: #3d0824;
+
+  --font-display: "Poppins", sans-serif;
+  --font-mono-accent: "JetBrains Mono", monospace;
+}
+
+/* Minimal Flat Overrides - No Shadows */
+.leaflet-popup-content-wrapper {
+  box-shadow: none !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 1rem !important;
+  padding: 0 !important;
+  background: #ffffff !important;
+  overflow: hidden !important;
+}
+
+.leaflet-popup-tip-container {
+  display: none !important;
+}
+
+.leaflet-bar {
+  box-shadow: none !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 0.75rem !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+.leaflet-bar a {
+  background-color: #ffffff !important;
+  color: #374151 !important;
+  border-bottom: 1px solid #f3f4f6 !important;
+}
+
+.leaflet-bar a:hover {
+  background-color: #f9fafb !important;
+  color: #111827 !important;
+}
+
+.leaflet-bar a:last-child {
+  border-bottom: none !important;
+}
+
+/* Custom scrollbar utility for clean sidebars */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+>>>>>>> Stashed changes

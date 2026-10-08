@@ -19,6 +19,7 @@ import {
   AlertCircle,
   Camera,
   User,
+  ZoomIn,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
@@ -264,11 +265,25 @@ interface AppointmentDraft {
   aiConfidence?: string;
   skinPhotoPreview?: string;
   photoFileName?: string;
+  primaryScanId?: string;
   selectedDate?: string;
   selectedDoctorId?: string;
   selectedTime?: string;
   clinicId?: string;
   fromScan?: boolean;
+}
+
+export interface CompletedScanItem {
+  id: string; // analysis_id
+  conditionName: string;
+  localName?: string;
+  confidence: number;
+  bodyPart?: string;
+  scannedAt: string;
+  photoUrl?: string;
+  imageUrl?: string;
+  conditionId?: string;
+  questionnaireAnswers?: any;
 }
 
 function loadAppointmentDraft(): AppointmentDraft | null {
@@ -279,22 +294,6 @@ function loadAppointmentDraft(): AppointmentDraft | null {
   return null;
 }
 
-function dataURLtoFile(dataurl: string, filename: string): File | null {
-  try {
-    const arr = dataurl.split(",");
-    const mimeMatch = arr[0].match(/:(.*?);/);
-    const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while (n--) {
-      u8arr[n] = bstr.charCodeAt(n);
-    }
-    return new File([u8arr], filename || "skin_photo.jpg", { type: mime });
-  } catch {
-    return null;
-  }
-}
 
 export default function AppointmentPage({ defaultType: _defaultType }: {
   defaultType?: ConsultationType;
@@ -369,28 +368,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return [];
   });
 
-  // Skin photo upload
-  const photoInputRef = useRef<HTMLInputElement>(null);
-  const [skinPhotoFile, setSkinPhotoFile] = useState<File | null>(null);
-  const [skinPhotoPreview, setSkinPhotoPreview] = useState<string>(() => {
-    if (isDraftValid && draft?.skinPhotoPreview) {
-      return draft.skinPhotoPreview;
-    }
-    if (isFromScan && scanContext?.photoUrl) {
-      return scanContext.photoUrl;
-    }
-    return "";
-  });
-  const [photoFileName, setPhotoFileName] = useState<string>(() => {
-    if (isDraftValid && draft?.photoFileName) {
-      return draft.photoFileName;
-    }
-    if (isFromScan && scanContext?.photoUrl) {
-      return `scan_${scanContext.scanId || "photo"}.jpg`;
-    }
-    return "";
-  });
-
   // Schedule selection fields
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     if (isDraftValid && draft?.selectedDate) return draft.selectedDate;
@@ -405,33 +382,151 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
 
-  // AI analysis result:
-  // - Direct search clinic: strictly starts BLANK ("")
-  // - From Scan Skin: prefilled strictly from THAT specific scan result
-  // - Preserves user manual entries when navigating back/forward
-  const [aiConditionName, setAiConditionName] = useState<string>(() => {
-    if (isDraftValid && draft?.aiConditionName !== undefined && draft.aiConditionName !== "") {
-      return draft.aiConditionName;
-    }
-    if (isFromScan) {
-      const condParam = searchParams.get("condition") || searchParams.get("ai_condition");
-      if (condParam && condParam !== "Assessment Queued") return condParam;
-      if (scanContext?.condition) return scanContext.condition;
-    }
-    return "";
-  });
-  const [aiConfidence, setAiConfidence] = useState<string>(() => {
-    if (isDraftValid && draft?.aiConfidence !== undefined && draft.aiConfidence !== "") {
-      return draft.aiConfidence;
-    }
-    if (isFromScan) {
-      const confParam = searchParams.get("confidence") || searchParams.get("score");
-      if (confParam && Number(confParam) > 0) return confParam;
-      if (scanContext?.confidence && Number(scanContext.confidence) > 0) return String(scanContext.confidence);
-    }
+  // Primary AI skin scans of authenticated patient
+  const [patientScans, setPatientScans] = useState<CompletedScanItem[]>([]);
+  const [loadingScans, setLoadingScans] = useState<boolean>(true);
+  const [selectedScanId, setSelectedScanId] = useState<string>(() => {
+    const urlScanId = searchParams.get("scanId");
+    if (urlScanId) return urlScanId;
+    if (isDraftValid && draft?.primaryScanId) return draft.primaryScanId;
     return "";
   });
   const [submitted, setSubmitted] = useState(false);
+
+  const selectedScan = useMemo(() => {
+    return patientScans.find((s) => s.id === selectedScanId) || null;
+  }, [patientScans, selectedScanId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPatientScans() {
+      if (!user?.id) {
+        setPatientScans([]);
+        setLoadingScans(false);
+        return;
+      }
+
+      setLoadingScans(true);
+      try {
+        const { data, error } = await supabase
+          .from("ai_scan_result")
+          .select(`
+            analysis_id,
+            confidence_score,
+            body_part,
+            scanned_at,
+            photo_url,
+            condition_id,
+            questionnaire_answers,
+            skin_condition:condition_id (
+              name,
+              local_name
+            )
+          `)
+          .eq("user_id", user.id)
+          .eq("status", "completed")
+          .order("scanned_at", { ascending: false });
+
+        if (cancelled) return;
+
+        if (error) {
+          console.error("Failed to load completed AI scans:", error.message);
+          setPatientScans([]);
+          setLoadingScans(false);
+          return;
+        }
+
+        const resolvedList: CompletedScanItem[] = await Promise.all(
+          (data || []).map(async (row: any) => {
+            const cond = Array.isArray(row.skin_condition) ? row.skin_condition[0] : row.skin_condition;
+            let displayUrl = row.photo_url || "";
+
+            if (row.photo_url && !row.photo_url.startsWith("http") && !row.photo_url.startsWith("data:")) {
+              try {
+                const { data: signedData } = await supabase.storage
+                  .from("scan-uploads")
+                  .createSignedUrl(row.photo_url, 3600);
+                if (signedData?.signedUrl) {
+                  displayUrl = signedData.signedUrl;
+                }
+              } catch {}
+            }
+
+            return {
+              id: String(row.analysis_id),
+              conditionName: cond?.name || "Skin Assessment",
+              localName: cond?.local_name || undefined,
+              confidence: Number(row.confidence_score) || 0,
+              bodyPart: row.body_part || "Skin Assessment",
+              scannedAt: row.scanned_at,
+              photoUrl: row.photo_url || "",
+              imageUrl: displayUrl,
+              conditionId: row.condition_id || undefined,
+              questionnaireAnswers: row.questionnaire_answers || null,
+            };
+          })
+        );
+
+        if (!cancelled) {
+          setPatientScans(resolvedList);
+
+          // If a scanId was passed in URL, booking context, or draft, select it ONLY IF it belongs to the verified scan list
+          const requestedScanId =
+            searchParams.get("scanId") ||
+            scanContext?.scanId ||
+            (isDraftValid ? draft?.primaryScanId : "");
+          if (requestedScanId && resolvedList.some((s) => s.id === requestedScanId)) {
+            setSelectedScanId(requestedScanId);
+          } else if (selectedScanId && !resolvedList.some((s) => s.id === selectedScanId)) {
+            setSelectedScanId("");
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching patient scans:", err);
+      } finally {
+        if (!cancelled) setLoadingScans(false);
+      }
+    }
+
+    loadPatientScans();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, scanContext?.scanId, searchParams]);
+
+  const handlePerformNewScan = () => {
+    const targetClinic = selectedClinic?.id || clinicIdFromUrl || searchParams.get("clinic") || "";
+    try {
+      const dataToSave = {
+        patientName,
+        patientEmail,
+        patientAddress,
+        patientContact,
+        patientGender,
+        patientBirthdate,
+        emergencyContactName,
+        emergencyContactPhone,
+        emergencyRelationship,
+        notes,
+        primaryScanId: selectedScanId,
+        selectedDate,
+        selectedDoctorId,
+        selectedTime,
+        clinicId: targetClinic,
+        fromScan: isFromScan,
+      };
+      sessionStorage.setItem("dermai_appointment_draft", JSON.stringify(dataToSave));
+      if (targetClinic) {
+        sessionStorage.setItem("dermai_booking_return_clinic", String(targetClinic));
+      }
+    } catch {}
+    const targetUrl = targetClinic
+      ? `/dashboard/scan?fromAppointment=1&clinic=${encodeURIComponent(targetClinic)}`
+      : `/dashboard/scan?fromAppointment=1`;
+    navigate(targetUrl);
+  };
 
   // Continuously persist entered appointment/patient details so going back/forward never resets data
   useEffect(() => {
@@ -447,11 +542,12 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         emergencyContactPhone,
         emergencyRelationship,
         notes,
-        questionnaireData,
-        aiConditionName,
-        aiConfidence,
-        skinPhotoPreview,
-        photoFileName,
+        questionnaireData: selectedScan?.questionnaireAnswers || questionnaireData,
+        aiConditionName: selectedScan?.conditionName || "",
+        aiConfidence: selectedScan?.confidence ? String(selectedScan.confidence) : "",
+        skinPhotoPreview: selectedScan?.imageUrl || "",
+        photoFileName: selectedScan?.photoUrl || "",
+        primaryScanId: selectedScanId,
         selectedDate,
         selectedDoctorId,
         selectedTime,
@@ -472,10 +568,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           emergencyContactPhone,
           emergencyRelationship,
           notes,
-          questionnaireData,
-          aiConditionName,
-          aiConfidence,
-          photoFileName,
+          primaryScanId: selectedScanId,
           selectedDate,
           selectedDoctorId,
           selectedTime,
@@ -497,14 +590,13 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     emergencyRelationship,
     notes,
     questionnaireData,
-    aiConditionName,
-    aiConfidence,
-    skinPhotoPreview,
-    photoFileName,
+    selectedScanId,
+    selectedScan,
     selectedDate,
     selectedDoctorId,
     selectedTime,
     selectedClinic?.id,
+    isFromScan,
     searchParams,
   ]);
 
@@ -1194,22 +1286,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return () => { cancelled = true; };
   }, [user]);
 
-  // Skin photo upload handler
-  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > 1024 * 1024 * 10) {
-      setSubmitError("Photo size must be less than 10MB.");
-      return;
-    }
-
-    setSkinPhotoFile(file);
-    setPhotoFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (ev) => setSkinPhotoPreview(ev.target?.result as string);
-    reader.readAsDataURL(file);
-  };
 
   // Step Validation logic
   const validateStep = (stepNumber: number): boolean => {
@@ -1259,8 +1335,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         setSubmitError("Please select your relationship with the emergency contact.");
         return false;
       }
-      if (!skinPhotoFile && !skinPhotoPreview) {
-        setSubmitError("Please upload a clear photo of your skin concern for the doctor's review.");
+      if (!selectedScanId || !selectedScan) {
+        setSubmitError("Please select a completed AI skin scan for this appointment.");
         return false;
       }
       return true;
@@ -1331,35 +1407,40 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       return;
     }
 
+    if (!selectedScanId) {
+      setSubmitError("Please select a primary AI skin scan for this appointment.");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      // 1. Upload skin photo to Supabase Storage with graceful fallback
-      let photoPath: string | null = null;
-      let fileToUpload = skinPhotoFile;
-      if (!fileToUpload && skinPhotoPreview && skinPhotoPreview.startsWith("data:")) {
-        fileToUpload = dataURLtoFile(skinPhotoPreview, photoFileName || "skin_photo.jpg");
-      }
-      if (fileToUpload) {
-        try {
-          const cleanFileName = fileToUpload.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-          const filePath = `${activeUserId}/${Date.now()}_${cleanFileName}`;
+      // 1. Strictly verify scan ownership and completion status in database
+      const { data: verifiedScan, error: verifyError } = await supabase
+        .from("ai_scan_result")
+        .select(`
+          analysis_id,
+          confidence_score,
+          body_part,
+          scanned_at,
+          photo_url,
+          condition_id,
+          questionnaire_answers,
+          user_id,
+          status,
+          skin_condition:condition_id (
+            name,
+            local_name
+          )
+        `)
+        .eq("analysis_id", selectedScanId)
+        .eq("user_id", activeUserId)
+        .eq("status", "completed")
+        .maybeSingle();
 
-          const { data: uploadData, error: uploadError } = await supabase.storage
-            .from("scan-uploads")
-            .upload(filePath, fileToUpload, { upsert: true });
-
-          if (!uploadError && uploadData) {
-            photoPath = filePath;
-          } else {
-            console.warn("Storage upload failed, using preview fallback:", uploadError?.message);
-            photoPath = skinPhotoPreview || null;
-          }
-        } catch (upEx) {
-          console.warn("Storage upload exception:", upEx);
-          photoPath = skinPhotoPreview || null;
-        }
-      } else if (skinPhotoPreview) {
-        photoPath = skinPhotoPreview;
+      if (verifyError || !verifiedScan) {
+        setSubmitError("The selected AI skin scan is invalid or does not belong to your account.");
+        setSubmitting(false);
+        return;
       }
 
       // 2. Prepare appointment payload
@@ -1368,8 +1449,14 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         targetClinicId = Number(selectedClinic.id);
       }
 
-      const confNum = aiConfidence !== "" && !isNaN(Number(aiConfidence)) ? Number(aiConfidence) : null;
-      const conditionLabel = aiConditionName.trim() || null;
+      const verifiedCondObj = Array.isArray(verifiedScan.skin_condition)
+        ? verifiedScan.skin_condition[0]
+        : verifiedScan.skin_condition;
+      const conditionLabel = verifiedCondObj?.name || selectedScan?.conditionName || null;
+      const confNum = verifiedScan.confidence_score !== undefined && verifiedScan.confidence_score !== null
+        ? Number(verifiedScan.confidence_score)
+        : null;
+      const photoPath = verifiedScan.photo_url || selectedScan?.photoUrl || null;
       const scheduledDateTimeIso = `${selectedDate}T${selectedTime}:00+08:00`;
 
       let assignedDocId = activeDutyDoctor?.id && !activeDutyDoctor.id.startsWith("doc-")
@@ -1407,12 +1494,14 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         emergency_contact_name: emergencyContactName.trim() || null,
         emergency_contact_phone: emergencyContactPhone.trim() || null,
         emergency_contact_relationship: emergencyRelationship.trim() || null,
-        questionnaire_answers: questionnaireData.length > 0 ? questionnaireData : null,
+        questionnaire_answers: verifiedScan.questionnaire_answers || selectedScan?.questionnaireAnswers || null,
         notes: notes.trim() || null,
         clinic_note: activeDutyDoctor?.name ? `Attending Doctor: ${activeDutyDoctor.name}` : null,
+        primary_scan_id: verifiedScan.analysis_id, // Authoritative relationship
         skin_photo_url: photoPath,
         ai_condition_name: conditionLabel,
         ai_confidence: confNum,
+        condition_id: verifiedScan.condition_id || null,
         assigned_doctor_id: assignedDocId || null,
         doctor_status: "pending-review",
         schedule_sent_to_doctor: true,
@@ -1422,7 +1511,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         is_walk_in: false,
       };
 
-      // 3. Insert appointment request
+      // 3. Insert appointment request with primary_scan_id
       let insertedApptId: string | null = null;
       let { data: insertedData, error: insertError } = await supabase
         .from("patient_appointment")
@@ -1434,7 +1523,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         insertedApptId = String(insertedData.appointment_id);
       }
 
-      if (insertError) {
+      if (insertError && (insertError.message.includes("assigned_doctor_id") || insertError.message.includes("doctor_status") || insertError.message.includes("schedule_sent_to_doctor"))) {
         console.warn("Retrying appointment insert without assigned_doctor_id...", insertError.message);
         delete apptPayload.assigned_doctor_id;
         delete apptPayload.doctor_status;
@@ -1450,34 +1539,16 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         }
       }
 
+      // CRITICAL REQUIREMENT:
+      // If primary_scan_id fails or insertion fails, STOP the booking operation and report error.
+      // Do NOT fall back to creating an appointment without primary_scan_id!
       if (insertError) {
-        console.warn("Retrying appointment insert with core fields...", insertError.message);
-        const corePayload: Record<string, any> = {
-          user_id: activeUserId,
-          clinic_id: targetClinicId,
-          status: "pending",
-          date: scheduledDateTimeIso,
-          patient_name: patientName.trim() || "Patient",
-          skin_photo_url: photoPath,
-          notes: notes.trim() || null,
-        };
-        const retry2 = await supabase
-          .from("patient_appointment")
-          .insert(corePayload)
-          .select("appointment_id")
-          .maybeSingle();
-        insertError = retry2.error;
-        if (retry2.data?.appointment_id) {
-          insertedApptId = String(retry2.data.appointment_id);
-        }
-      }
-
-      if (insertError) {
-        console.error("All appointment insert attempts failed:", insertError.message);
+        console.error("Appointment creation failed:", insertError.message);
         setSubmitError(`Failed to submit appointment: ${insertError.message}`);
         setSubmitting(false);
         return;
       }
+
 
       // 4. Save to local cache & notify listeners
       try {
@@ -1497,6 +1568,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           date: selectedDate,
           time: selectedTime,
           status: "pending",
+          primaryScanId: verifiedScan.analysis_id,
+          conditionId: verifiedScan.condition_id || undefined,
           notes: notes.trim() || "",
           skinPhotoUrl: photoPath,
           aiConditionName: conditionLabel,
@@ -1523,6 +1596,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       try {
         sessionStorage.removeItem("dermai_appointment_draft");
         sessionStorage.removeItem("dermai_selected_clinic_id");
+        sessionStorage.removeItem("dermai_booking_return_clinic");
+        sessionStorage.removeItem("dermai_scan_booking_context");
       } catch {}
     } catch (err: any) {
       console.error("Submission error:", err);
@@ -1895,107 +1970,159 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   </div>
                 </div>
 
-                {/* 3. Skin Photo Upload */}
-                <div className="space-y-2 pt-1">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-1.5">
-                      <Camera className="w-3.5 h-3.5 text-magenta-600" /> Skin Concern Photo <span className="text-red-500">*</span>
-                    </label>
-                    {skinPhotoPreview && (
-                      <button
-                        type="button"
-                        onClick={() => photoInputRef.current?.click()}
-                        className="text-[11px] text-magenta-600 font-semibold hover:underline cursor-pointer"
-                      >
-                        Change Photo
-                      </button>
-                    )}
-                  </div>
-
-                  <input
-                    ref={photoInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handlePhotoChange}
-                  />
-
-                  {skinPhotoPreview ? (
-                    <div className="relative rounded-2xl overflow-hidden border border-gray-200 bg-gray-50 flex items-center justify-center max-h-48 group">
-                      <img src={skinPhotoPreview} alt="Skin concern" className="w-full h-44 object-cover" />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSkinPhotoPreview("");
-                          setSkinPhotoFile(null);
-                          setPhotoFileName("");
-                          if (photoInputRef.current) photoInputRef.current.value = "";
-                        }}
-                        className="absolute top-2.5 right-2.5 w-7 h-7 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center transition-colors cursor-pointer"
-                        title="Remove image"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                      <div className="absolute bottom-2 left-2 right-2 px-3 py-1.5 rounded-xl bg-black/60 backdrop-blur-xs text-white text-[11px] truncate">
-                        {photoFileName || "Uploaded photo ready"}
-                      </div>
+                {/* 3. Primary AI Skin Scan Selection */}
+                <div className="space-y-3 pt-1">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 pb-0.5">
+                    <div>
+                      <label className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-1.5">
+                        <Camera className="w-3.5 h-3.5 text-magenta-600" /> Primary AI Skin Scan <span className="text-red-500">*</span>
+                      </label>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        Select the skin scan you want the doctor to review during this appointment.
+                      </p>
                     </div>
-                  ) : (
                     <button
                       type="button"
-                      onClick={() => photoInputRef.current?.click()}
-                      className="w-full flex flex-col items-center justify-center gap-1.5 py-6 rounded-2xl border-2 border-dashed border-gray-200 hover:border-magenta-400 bg-slate-50/50 hover:bg-magenta-50/20 transition-all text-center group cursor-pointer"
+                      onClick={handlePerformNewScan}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-magenta-600 hover:text-magenta-700 hover:underline cursor-pointer self-start sm:self-auto py-1"
                     >
-                      <div className="w-10 h-10 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-gray-400 group-hover:text-magenta-600 group-hover:border-magenta-200 transition-colors shadow-2xs">
-                        <Upload className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <span className="text-xs font-bold text-gray-800 group-hover:text-magenta-700">Click to Upload Skin Photo</span>
-                        <p className="text-[10px] text-gray-400 mt-0.5">JPG or PNG (Clear image of affected skin)</p>
-                      </div>
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>Perform New AI Skin Scan</span>
                     </button>
-                  )}
-                </div>
-
-                {/* 4. Optional AI Scan Details & Notes */}
-                <div className="space-y-2.5 pt-1">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                        Noted Skin Condition <span className="text-gray-400 font-normal">(Optional)</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={aiConditionName}
-                        onChange={(e) => {
-                          const newVal = e.target.value;
-                          setAiConditionName(newVal);
-                          const origScanCond = isFromScan ? (searchParams.get("condition") || scanContext?.condition || "") : "";
-                          if (origScanCond && newVal.trim().toLowerCase() !== origScanCond.trim().toLowerCase()) {
-                            setAiConfidence("");
-                          }
-                        }}
-                        placeholder="e.g. Atopic Dermatitis or Acne"
-                        className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs bg-white text-gray-900 focus:outline-none focus:border-magenta-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                        AI Confidence Score (%) <span className="text-gray-400 font-normal">(Optional)</span>
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={aiConfidence}
-                        onChange={(e) => setAiConfidence(e.target.value)}
-                        placeholder="e.g. 92"
-                        className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs bg-white text-gray-900 focus:outline-none focus:border-magenta-500"
-                      />
-                    </div>
                   </div>
 
-                  <div>
+                  {loadingScans ? (
+                    <div className="flex items-center justify-center py-8 rounded-2xl border border-gray-200 bg-slate-50/50">
+                      <Loader2 className="w-5 h-5 text-magenta-600 animate-spin mr-2" />
+                      <span className="text-xs text-gray-500 font-medium">Loading your scan history...</span>
+                    </div>
+                  ) : patientScans.length === 0 ? (
+                    <div className="rounded-2xl border-2 border-dashed border-gray-200 bg-slate-50/50 p-6 text-center">
+                      <div className="w-10 h-10 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center text-magenta-600 mx-auto mb-2.5">
+                        <Camera className="w-5 h-5" />
+                      </div>
+                      <h4 className="text-xs font-bold text-gray-800 mb-1">No completed AI skin scans yet.</h4>
+                      <p className="text-[11px] text-gray-500 max-w-sm mx-auto mb-3.5">
+                        An appointment must be associated with a completed AI skin scan so the doctor can review the affected area and preliminary findings.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handlePerformNewScan}
+                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white font-semibold text-xs shadow-sm transition-all cursor-pointer active:scale-95"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        <span>Perform AI Skin Scan</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-1 gap-2.5 max-h-80 overflow-y-auto pr-1">
+                        {patientScans.map((scan) => {
+                          const isSelected = selectedScanId === scan.id;
+                          const scanDateStr = scan.scannedAt
+                            ? new Date(scan.scannedAt).toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              })
+                            : "Recent";
+
+                          return (
+                            <div
+                              key={scan.id}
+                              onClick={() => setSelectedScanId(scan.id)}
+                              className={`relative rounded-2xl border p-3.5 transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                                isSelected
+                                  ? "border-magenta-500 bg-magenta-50/30 ring-2 ring-magenta-500/20 shadow-xs"
+                                  : "border-gray-200 bg-white hover:border-gray-300 hover:bg-slate-50/50"
+                              }`}
+                            >
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div
+                                  className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+                                    isSelected
+                                      ? "border-magenta-600 bg-magenta-600 text-white"
+                                      : "border-gray-300 bg-white"
+                                  }`}
+                                >
+                                  {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                </div>
+
+                                {scan.imageUrl ? (
+                                  <div
+                                    className="relative w-12 h-12 rounded-xl overflow-hidden border border-gray-200 bg-gray-100 shrink-0 group/thumb"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setLightboxPhoto(scan.imageUrl!);
+                                    }}
+                                    title="Click to view full image"
+                                  >
+                                    <img
+                                      src={scan.imageUrl}
+                                      alt={scan.conditionName}
+                                      className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform"
+                                    />
+                                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center transition-opacity">
+                                      <ZoomIn className="w-3.5 h-3.5 text-white" />
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="w-12 h-12 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 shrink-0">
+                                    <Camera className="w-5 h-5" />
+                                  </div>
+                                )}
+
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs font-bold text-gray-900 truncate">
+                                      {scan.conditionName}
+                                    </span>
+                                    {scan.localName && (
+                                      <span className="text-[10px] text-gray-500">
+                                        ({scan.localName})
+                                      </span>
+                                    )}
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200/50">
+                                      {scan.confidence.toFixed(1)}% AI confidence
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-[11px] text-gray-500 mt-0.5">
+                                    <span>Scanned {scanDateStr}</span>
+                                    {scan.bodyPart && (
+                                      <>
+                                        <span>•</span>
+                                        <span>{scan.bodyPart}</span>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {scan.imageUrl && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setLightboxPhoto(scan.imageUrl!);
+                                  }}
+                                  className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700 shrink-0 px-2 py-1 rounded-lg hover:bg-magenta-50 cursor-pointer"
+                                >
+                                  View Image
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <p className="text-[10px] text-gray-400 italic">
+                        * Preliminary AI assessment for physician review. The attending doctor will provide the official medical diagnosis.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* 4. Symptoms & Medical Notes (Optional) */}
+                  <div className="pt-1">
                     <label className="block text-[11px] font-semibold text-gray-700 mb-1">
                       Symptoms &amp; Medical Notes <span className="text-gray-400 font-normal">(Optional)</span>
                     </label>

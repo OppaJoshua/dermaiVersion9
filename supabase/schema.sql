@@ -6,6 +6,7 @@
 
 create extension if not exists "pgcrypto";
 
+
 -- ============================================================================
 -- PRE-MIGRATION & SCHEMA HARMONIZATION (Ensures existing tables have all columns)
 -- ============================================================================
@@ -124,6 +125,7 @@ alter table if exists patient_appointment add column if not exists doctor_status
 alter table if exists patient_appointment add column if not exists doctor_note text;
 alter table if exists patient_appointment add column if not exists doctor_reviewed_at timestamptz;
 alter table if exists patient_appointment add column if not exists condition_id uuid references skin_condition(condition_id) on delete set null;
+alter table if exists patient_appointment add column if not exists primary_scan_id uuid references ai_scan_result(analysis_id) on delete set null;
 
 do $$
 begin
@@ -160,6 +162,7 @@ begin
 end $$;
 
 -- 12. Drop redundant standalone doctors table if exists
+
 drop table if exists doctors cascade;
 
 -- ============================================================================
@@ -184,6 +187,7 @@ create table if not exists "user" (
   avatar_url     text,
   account_status varchar(20) not null default 'active'
                  check (account_status in ('active','suspended','inactive')),
+  free_scans_used int not null default 0,
   created_at     timestamptz not null default now(),
   free_scans_used int not null default 0
 );
@@ -236,6 +240,7 @@ create table if not exists user_support_ticket (
 create table if not exists plan (
   plan_id       uuid primary key default gen_random_uuid(),
   name          varchar(100) not null,
+  description   text not null default '',
   price         decimal(10,2) not null,
   billing_type  varchar(20) not null check (billing_type in ('monthly','yearly')),
   scan_limit    int not null,   -- -1 = unlimited
@@ -255,26 +260,37 @@ create table if not exists plan_feature (
 -- 7. USER_PLAN_SUBSCRIPTION
 -- ----------------------------------------------------------------------------
 create table if not exists user_plan_subscription (
-  subscription_id  uuid primary key default gen_random_uuid(),
-  started_at       timestamptz not null default now(),
-  renews_at        timestamptz,
-  status           varchar(20) not null check (status in ('active','expired','cancelled')),
-  billing_cycle    varchar(20) not null check (billing_cycle in ('monthly','yearly')),
-  user_id          uuid not null references "user"(user_id) on delete cascade,
-  plan_id          uuid not null references plan(plan_id)
+  subscription_id          uuid primary key default gen_random_uuid(),
+  started_at               timestamptz not null default now(),
+  renews_at                timestamptz,
+  status                   varchar(20) not null check (status in ('active','expired','cancelled')),
+  billing_cycle            varchar(20) not null check (billing_cycle in ('monthly','yearly')),
+  user_id                  uuid not null references "user"(user_id) on delete cascade,
+  plan_id                  uuid not null references plan(plan_id),
+  current_period_start     timestamptz,
+  current_period_end       timestamptz,
+  paymongo_subscription_id text,
+  paymongo_customer_id     text,
+  paymongo_plan_id         text,
+  updated_at               timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
 -- 8. USER_PAYMENT
 -- ----------------------------------------------------------------------------
 create table if not exists user_payment (
-  payment_id    uuid primary key default gen_random_uuid(),
-  amount        decimal(10,2) not null,
-  payment_date  timestamptz not null default now(),
-  method        varchar(50) not null,
-  status        varchar(20) not null check (status in ('success','failed','pending')),
-  user_id       uuid not null references "user"(user_id) on delete cascade,
-  plan_id       uuid references plan(plan_id) on delete set null
+  payment_id                 uuid primary key default gen_random_uuid(),
+  amount                     decimal(10,2) not null,
+  payment_date               timestamptz not null default now(),
+  method                     varchar(50) not null,
+  status                     varchar(20) not null check (status in ('success','failed','pending')),
+  user_id                    uuid not null references "user"(user_id) on delete cascade,
+  plan_id                    uuid references plan(plan_id) on delete set null,
+  billing_cycle              varchar(20),
+  reference_number           text,
+  paymongo_payment_id        text,
+  paymongo_payment_intent_id text,
+  created_at                 timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -284,6 +300,7 @@ create table if not exists clinic (
   clinic_id             uuid primary key default gen_random_uuid(),
   name                  varchar(200) not null,
   district              varchar(100),
+  city                  varchar(100),
   specialization        varchar(100),
   status                varchar(20) not null default 'pending'
                         check (status in ('pending','approved','rejected','suspended')),
@@ -304,7 +321,9 @@ create table if not exists clinic (
   bir_name              text,
   prc_license_file_url  text,
   prc_license_file_name text,
-  owner_user_id         uuid references "user"(user_id) on delete set null
+  owner_user_id         uuid references "user"(user_id) on delete set null,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -317,7 +336,7 @@ create table if not exists user_saved_clinic (
   saved_at   timestamptz not null default now(),
   user_id    uuid not null references "user"(user_id) on delete cascade,
   clinic_id  uuid not null references clinic(clinic_id) on delete cascade,
-  primary key (user_id, clinic_id)
+  unique (user_id, clinic_id)
 );
 
 -- ----------------------------------------------------------------------------
@@ -359,7 +378,7 @@ create table if not exists doctor_specializations (
   id                uuid primary key default gen_random_uuid(),
   doctor_id         uuid not null references clinic_doctor(doctor_id) on delete cascade,
   specialization_id uuid not null references specializations(id) on delete cascade,
-  primary key (doctor_id, specialization_id)
+  unique (doctor_id, specialization_id)
 );
 
 -- ----------------------------------------------------------------------------
@@ -387,7 +406,7 @@ create table if not exists clinic_photo (
 -- ----------------------------------------------------------------------------
 create table if not exists clinic_operating_hours (
   schedule_id    uuid primary key default gen_random_uuid(),
-  day_of_week    varchar(10) not null,
+  day_of_week    varchar(100) not null,
   open_time      time not null,
   close_time     time not null,
   clinic_id      uuid not null references clinic(clinic_id) on delete cascade,
@@ -460,32 +479,42 @@ create table if not exists clinic_patient_record (
 -- 23. PATIENT_APPOINTMENT
 -- ----------------------------------------------------------------------------
 create table if not exists patient_appointment (
-  appointment_id           uuid primary key default gen_random_uuid(),
-  "date"                   timestamptz,
-  status                   varchar(20) not null default 'pending'
-                           check (status in ('pending','confirmed','cancelled','completed')),
-  patient_name             varchar(100),
-  patient_email            varchar(100),
-  patient_contact          varchar(30),
-  patient_address          text,
-  patient_gender           varchar(30),
-  patient_birthdate        date,
-  notes                    text,
-  clinic_note              text,
-  skin_photo_url           text,
-  ai_condition_name        varchar(200),
-  ai_confidence            decimal(5,2),
-  questionnaire_answers    jsonb,
-  created_at               timestamptz not null default now(),
-  assigned_doctor_id       uuid references clinic_doctor(doctor_id) on delete set null,
-  schedule_sent_to_doctor  boolean not null default false,
-  doctor_status            varchar(30)
-                           check (doctor_status in ('pending-review','approved','rejected')),
-  doctor_note              text,
-  doctor_reviewed_at       timestamptz,
-  user_id                  uuid not null references "user"(user_id) on delete cascade,
-  clinic_id                uuid not null references clinic(clinic_id) on delete cascade,
-  condition_id             uuid references skin_condition(condition_id) on delete set null
+  appointment_id                 uuid primary key default gen_random_uuid(),
+  "date"                         timestamptz,
+  "time"                         varchar(20),
+  status                         varchar(20) not null default 'pending'
+                                 check (status in ('pending','confirmed','cancelled','completed')),
+  patient_name                   varchar(100),
+  patient_email                  varchar(100),
+  patient_contact                varchar(30),
+  patient_address                text,
+  patient_gender                 varchar(30),
+  patient_birthdate              date,
+  emergency_contact_name         varchar(100),
+  emergency_contact_phone        varchar(30),
+  emergency_contact_relationship varchar(50),
+  notes                          text,
+  clinic_note                    text,
+  skin_photo_url                 text,
+  ai_condition_name              varchar(200),
+  ai_confidence                  decimal(5,2),
+  questionnaire_answers          jsonb,
+  meeting_link                   text,
+  created_at                     timestamptz not null default now(),
+  assigned_doctor_id             uuid references clinic_doctor(doctor_id) on delete set null,
+  schedule_sent_to_doctor        boolean not null default false,
+  doctor_status                  varchar(30)
+                                 check (doctor_status in ('pending-review','approved','rejected')),
+  doctor_note                    text,
+  doctor_reviewed_at             timestamptz,
+  user_id                        uuid not null references "user"(user_id) on delete cascade,
+  clinic_id                      uuid not null references clinic(clinic_id) on delete cascade,
+  condition_id                   uuid references skin_condition(condition_id) on delete set null,
+  queue_number                   integer default 1,
+  batch_time                     varchar(20),
+  check_in_status                varchar(30) default 'scheduled'
+                                 check (check_in_status in ('scheduled','arrived','in-consultation','completed')),
+  is_walk_in                     boolean not null default false
 );
 
 -- ----------------------------------------------------------------------------
@@ -585,6 +614,173 @@ create index if not exists idx_paymongo_webhook_status_received
   on paymongo_webhook_event (status, received_at desc);
 
 -- ============================================================================
+-- SCHEMA HARMONIZATION & MIGRATIONS
+-- Ensures existing or partially-created databases have all required columns
+-- before indexes, triggers, views, and RLS policies are applied.
+-- ============================================================================
+
+-- 1. "user" table updates
+alter table if exists "user" add column if not exists phone varchar(30);
+alter table if exists "user" add column if not exists gender varchar(30);
+alter table if exists "user" add column if not exists birthdate date;
+alter table if exists "user" add column if not exists district varchar(100);
+alter table if exists "user" add column if not exists address text;
+alter table if exists "user" add column if not exists avatar_url text;
+alter table if exists "user" add column if not exists google_id varchar(100);
+alter table if exists "user" add column if not exists account_status varchar(20) not null default 'active';
+alter table if exists "user" add column if not exists created_at timestamptz not null default now();
+alter table if exists "user" add column if not exists updated_at timestamptz not null default now();
+
+-- 2. user_notification table updates
+alter table if exists user_notification add column if not exists subtype varchar(50);
+alter table if exists user_notification add column if not exists body text;
+alter table if exists user_notification add column if not exists is_read boolean not null default false;
+alter table if exists user_notification add column if not exists created_at timestamptz not null default now();
+
+-- 3. user_support_ticket table updates
+alter table if exists user_support_ticket add column if not exists category text default 'General';
+alter table if exists user_support_ticket add column if not exists priority text default 'medium';
+alter table if exists user_support_ticket add column if not exists response text;
+alter table if exists user_support_ticket add column if not exists status varchar(20) not null default 'open';
+alter table if exists user_support_ticket add column if not exists created_at timestamptz not null default now();
+alter table if exists user_support_ticket add column if not exists updated_at timestamptz not null default now();
+
+-- 4. user_plan_subscription table updates (PayMongo columns + period dates)
+alter table if exists user_plan_subscription add column if not exists current_period_start timestamptz;
+alter table if exists user_plan_subscription add column if not exists current_period_end timestamptz;
+alter table if exists user_plan_subscription add column if not exists paymongo_subscription_id text;
+alter table if exists user_plan_subscription add column if not exists paymongo_customer_id text;
+alter table if exists user_plan_subscription add column if not exists paymongo_plan_id text;
+alter table if exists user_plan_subscription add column if not exists updated_at timestamptz not null default now();
+
+-- 4b. plan table updates
+alter table if exists public.plan add column if not exists description text not null default '';
+
+-- 5. user_payment table updates (PayMongo transaction columns)
+alter table if exists user_payment add column if not exists billing_cycle varchar(20);
+alter table if exists user_payment add column if not exists reference_number text;
+alter table if exists user_payment add column if not exists paymongo_payment_id text;
+alter table if exists user_payment add column if not exists paymongo_payment_intent_id text;
+alter table if exists user_payment add column if not exists created_at timestamptz not null default now();
+alter table if exists user_payment add column if not exists plan_id uuid references plan(plan_id) on delete set null;
+
+-- 6. clinic table updates
+alter table if exists clinic add column if not exists email varchar(100);
+alter table if exists clinic add column if not exists phone varchar(30);
+alter table if exists clinic add column if not exists address text;
+alter table if exists clinic add column if not exists district varchar(100);
+alter table if exists clinic add column if not exists city varchar(100);
+alter table if exists clinic add column if not exists specialization varchar(100);
+alter table if exists clinic add column if not exists description text;
+alter table if exists clinic add column if not exists consultation_fee decimal(10,2);
+alter table if exists clinic add column if not exists logo_url text;
+alter table if exists clinic add column if not exists business_permit_url text;
+alter table if exists clinic add column if not exists business_permit_name text;
+alter table if exists clinic add column if not exists dti_sec_url text;
+alter table if exists clinic add column if not exists dti_sec_name text;
+alter table if exists clinic add column if not exists bir_url text;
+alter table if exists clinic add column if not exists bir_name text;
+alter table if exists clinic add column if not exists prc_license_file_url text;
+alter table if exists clinic add column if not exists prc_license_file_name text;
+alter table if exists clinic add column if not exists latitude decimal(10,7);
+alter table if exists clinic add column if not exists longitude decimal(10,7);
+alter table if exists clinic add column if not exists verified boolean not null default false;
+alter table if exists clinic add column if not exists status varchar(20) not null default 'pending';
+alter table if exists clinic add column if not exists owner_user_id uuid references "user"(user_id) on delete set null;
+alter table if exists clinic add column if not exists created_at timestamptz not null default now();
+alter table if exists clinic add column if not exists updated_at timestamptz not null default now();
+alter table if exists clinic drop column if exists slots_per_day;
+alter table if exists clinic_operating_hours drop column if exists slots_per_day;
+alter table if exists clinic_operating_hours alter column day_of_week type varchar(100);
+
+-- 7. clinic_doctor table updates
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name = 'clinic_doctor' and column_name = 'invite_email'
+  ) and not exists (
+    select 1 from information_schema.columns
+    where table_name = 'clinic_doctor' and column_name = 'email'
+  ) then
+    alter table clinic_doctor rename column invite_email to email;
+  end if;
+end $$;
+
+alter table if exists clinic_doctor add column if not exists email varchar(100);
+alter table if exists clinic_doctor add column if not exists contact_number varchar(30);
+alter table if exists clinic_doctor add column if not exists photo_url text;
+alter table if exists clinic_doctor add column if not exists duty_schedule jsonb;
+alter table if exists clinic_doctor add column if not exists status varchar(20) not null default 'Active';
+alter table if exists clinic_doctor add column if not exists user_id uuid references "user"(user_id) on delete set null;
+alter table if exists clinic_doctor add column if not exists created_at timestamptz not null default now();
+alter table if exists clinic_doctor add column if not exists updated_at timestamptz not null default now();
+
+-- 8. patient_appointment table updates
+alter table if exists patient_appointment add column if not exists patient_name varchar(100);
+alter table if exists patient_appointment add column if not exists patient_email varchar(100);
+alter table if exists patient_appointment add column if not exists patient_gender varchar(30);
+alter table if exists patient_appointment add column if not exists patient_birthdate date;
+alter table if exists patient_appointment add column if not exists patient_contact varchar(30);
+alter table if exists patient_appointment add column if not exists patient_address text;
+alter table if exists patient_appointment add column if not exists emergency_contact_name varchar(100);
+alter table if exists patient_appointment add column if not exists emergency_contact_phone varchar(30);
+alter table if exists patient_appointment add column if not exists emergency_contact_relationship varchar(50);
+alter table if exists patient_appointment add column if not exists notes text;
+alter table if exists patient_appointment add column if not exists clinic_note text;
+alter table if exists patient_appointment add column if not exists skin_photo_url text;
+alter table if exists patient_appointment add column if not exists ai_condition_name varchar(200);
+alter table if exists patient_appointment add column if not exists ai_confidence decimal(5,2);
+alter table if exists patient_appointment add column if not exists questionnaire_answers jsonb;
+alter table if exists patient_appointment add column if not exists meeting_link text;
+alter table if exists patient_appointment add column if not exists "time" varchar(20);
+alter table if exists patient_appointment add column if not exists created_at timestamptz not null default now();
+alter table if exists patient_appointment add column if not exists assigned_doctor_id uuid references clinic_doctor(doctor_id) on delete set null;
+alter table if exists patient_appointment add column if not exists schedule_sent_to_doctor boolean not null default false;
+alter table if exists patient_appointment add column if not exists doctor_status varchar(30);
+alter table if exists patient_appointment add column if not exists doctor_note text;
+alter table if exists patient_appointment add column if not exists doctor_reviewed_at timestamptz;
+alter table if exists patient_appointment add column if not exists condition_id uuid references skin_condition(condition_id) on delete set null;
+alter table if exists patient_appointment add column if not exists queue_number integer default 1;
+alter table if exists patient_appointment add column if not exists batch_time varchar(20);
+alter table if exists patient_appointment add column if not exists check_in_status varchar(30) default 'scheduled';
+alter table if exists patient_appointment add column if not exists is_walk_in boolean not null default false;
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name = 'patient_appointment' and column_name = 'doctor_id'
+  ) then
+    update patient_appointment set assigned_doctor_id = doctor_id where assigned_doctor_id is null;
+    alter table patient_appointment drop column doctor_id;
+  end if;
+end $$;
+
+-- 9. clinic_patient_record table updates
+alter table if exists clinic_patient_record add column if not exists file_path text;
+alter table if exists clinic_patient_record add column if not exists uploaded_at timestamptz not null default now();
+
+-- 10. ai_scan_result table updates
+alter table if exists ai_scan_result add column if not exists photo_url text;
+alter table if exists ai_scan_result add column if not exists photo_url_wide text;
+alter table if exists ai_scan_result add column if not exists questionnaire_answers jsonb;
+alter table if exists ai_scan_result add column if not exists referral_suggested boolean not null default false;
+alter table if exists ai_scan_result drop constraint if exists ai_scan_result_status_check;
+alter table if exists ai_scan_result add constraint ai_scan_result_status_check check (status in ('completed','pending','failed','valid','flagged','invalid'));
+
+-- 11. Recreate admin_scan_review if legacy structure exists
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name = 'admin_scan_review' and column_name = 'scan_id'
+  ) then
+    drop table admin_scan_review cascade;
+  end if;
+end $$;
+
+-- ============================================================================
 -- INDEXES
 -- ============================================================================
 create index if not exists idx_user_notif_uid         on user_notification (user_id);
@@ -609,6 +805,7 @@ create index if not exists idx_clinic_pt_rec_cid      on clinic_patient_record (
 create index if not exists idx_pt_appt_uid            on patient_appointment (user_id);
 create index if not exists idx_pt_appt_cid            on patient_appointment (clinic_id);
 create index if not exists idx_pt_appt_assigned_doc   on patient_appointment (assigned_doctor_id);
+create index if not exists idx_patient_appointment_primary_scan_id on patient_appointment (primary_scan_id);
 create index if not exists idx_ai_scan_uid            on ai_scan_result (user_id);
 create index if not exists idx_ai_ans_aid             on ai_skin_answer (analysis_id);
 create index if not exists idx_adm_scan_aid           on admin_scan_review (analysis_id);
@@ -675,38 +872,6 @@ as $$
   );
 $$;
 
--- ----------------------------------------------------------------------------
--- PAYMONGO_WEBHOOK_EVENT (Idempotency & Audit Log)
--- ----------------------------------------------------------------------------
-create table if not exists paymongo_webhook_event (
-  event_id      text primary key,
-  event_type    text not null,
-  received_at   timestamptz not null default now(),
-  processed_at  timestamptz,
-  status        text not null default 'received' 
-                check (status in ('received', 'processing', 'processed', 'failed', 'ignored')),
-  error_message text,
-  payload       jsonb
-);
-
--- Index for monitoring & querying unhandled or failed events
-create index if not exists idx_paymongo_webhook_status_received 
-  on paymongo_webhook_event (status, received_at desc);
-
--- RLS: Secure so only service_role (backend/edge functions) or admin can view
-alter table paymongo_webhook_event enable row level security;
-
-create policy "Admins can view webhook logs"
-  on paymongo_webhook_event
-  for select
-  to authenticated
-  using (
-    exists (
-      select 1 from "user"
-      where "user".user_id = auth.uid()
-        and "user".role = 'admin'
-    )
-  );
 
 
 -- ============================================================================
@@ -947,37 +1112,6 @@ create policy "sub_owner_cancel"
 create policy "pay_owner_read"   on user_payment for select using (user_id = auth.uid() or is_admin());
 create policy "pay_admin_all"    on user_payment for all    using (is_admin()) with check (is_admin());
 
--- plan
-drop policy if exists "plan_public_read" on plan;
-drop policy if exists "plan_admin_all"   on plan;
-create policy "plan_public_read" on plan for select using (true);
-create policy "plan_admin_all"   on plan for all    using (is_admin()) with check (is_admin());
-
--- plan_feature
-drop policy if exists "plan_feat_public_read" on plan_feature;
-drop policy if exists "plan_feat_admin_all"   on plan_feature;
-create policy "plan_feat_public_read" on plan_feature for select using (true);
-create policy "plan_feat_admin_all"   on plan_feature for all    using (is_admin()) with check (is_admin());
-
--- user_plan_subscription
-drop policy if exists "sub_owner_read"   on user_plan_subscription;
-drop policy if exists "sub_owner_insert" on user_plan_subscription;
-drop policy if exists "sub_owner_update" on user_plan_subscription;
-drop policy if exists "sub_admin_all"    on user_plan_subscription;
-drop policy if exists "sub_owner_cancel" on user_plan_subscription;
-
-create policy "sub_owner_read"   on user_plan_subscription for select using (user_id = auth.uid() or is_admin());
-create policy "sub_owner_insert" on user_plan_subscription for insert with check (user_id = auth.uid() or is_admin());
-create policy "sub_owner_cancel" on user_plan_subscription for update using (user_id = auth.uid() or is_admin()) with check (status = 'cancelled' or is_admin());
-create policy "sub_admin_all"    on user_plan_subscription for delete using (is_admin());
-
--- user_payment
-drop policy if exists "pay_owner_read"   on user_payment;
-drop policy if exists "pay_owner_insert" on user_payment;
-drop policy if exists "pay_admin_all"    on user_payment;
-
-create policy "pay_owner_read"   on user_payment for select using (user_id = auth.uid() or is_admin());
-create policy "pay_admin_all"    on user_payment for all    using (is_admin()) with check (is_admin());
 
 -- paymongo_webhook_event
 drop policy if exists "Admins can view webhook logs" on paymongo_webhook_event;
@@ -997,32 +1131,42 @@ create policy "Admins can view webhook logs"
 -- STORAGE BUCKETS & STORAGE POLICIES
 -- ============================================================================
 insert into storage.buckets (id, name, public) values
+  ('scan-uploads',    'scan-uploads',    false),
   ('clinic-photos',   'clinic-photos',   true),
   ('doctor-photos',   'doctor-photos',   true),
+  ('avatars',         'avatars',         true),
+  ('skin-scans',      'skin-scans',      true),
   ('scan-photos',     'scan-photos',     false),
   ('patient-records', 'patient-records', false)
-on conflict (id) do nothing;
+on conflict (id) do update set public = excluded.public;
 
--- scan-uploads: private bucket for AI scan image uploads (authenticated users only)
+-- scan-uploads: private bucket for AI scan and appointment attachments
 drop policy if exists "scan_uploads_auth" on storage.objects;
 create policy "scan_uploads_auth" on storage.objects for all
-  using   (bucket_id = 'scan-uploads' and auth.role() = 'authenticated')
-  with check (bucket_id = 'scan-uploads' and auth.role() = 'authenticated');
+  using   (bucket_id in ('scan-uploads', 'scan-photos'))
+  with check (bucket_id in ('scan-uploads', 'scan-photos'));
 
 drop policy if exists "clinic_photos_public" on storage.objects;
-create policy "clinic_photos_public" on storage.objects for select using (bucket_id in ('clinic-photos', 'avatars', 'skin-scans', 'doctor-photos'));
+create policy "clinic_photos_public" on storage.objects for select
+  using (bucket_id in ('clinic-photos', 'avatars', 'skin-scans', 'doctor-photos'));
 
 drop policy if exists "clinic_photos_auth_upload" on storage.objects;
-create policy "clinic_photos_auth_upload" on storage.objects for insert with check (bucket_id in ('clinic-photos', 'avatars', 'skin-scans', 'doctor-photos') and auth.role() = 'authenticated');
+create policy "clinic_photos_auth_upload" on storage.objects for insert
+  with check (bucket_id in ('clinic-photos', 'avatars', 'skin-scans', 'doctor-photos'));
+
+drop policy if exists "clinic_photos_auth_update" on storage.objects;
+create policy "clinic_photos_auth_update" on storage.objects for update
+  using (bucket_id in ('clinic-photos', 'avatars', 'skin-scans', 'doctor-photos'));
 
 drop policy if exists "doctor_photos_public" on storage.objects;
 drop policy if exists "doctor_photos_auth_upload" on storage.objects;
 
 drop policy if exists "scan_photos_auth" on storage.objects;
-create policy "scan_photos_auth" on storage.objects for all using (bucket_id in ('scan-photos', 'scan-uploads') and auth.role() = 'authenticated') with check (bucket_id in ('scan-photos', 'scan-uploads') and auth.role() = 'authenticated');
 
 drop policy if exists "patient_records_auth" on storage.objects;
-create policy "patient_records_auth" on storage.objects for all using (bucket_id in ('patient-records') and auth.role() = 'authenticated') with check (bucket_id in ('patient-records') and auth.role() = 'authenticated');
+create policy "patient_records_auth" on storage.objects for all
+  using (bucket_id = 'patient-records')
+  with check (bucket_id = 'patient-records');
 
 -- ============================================================================
 -- DATABASE TRIGGERS & RPC FUNCTIONS
@@ -1438,18 +1582,31 @@ begin
 end;
 $$;
 
+-- Enable Realtime publication for key live tables
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    alter publication supabase_realtime add table patient_appointment, clinic, clinic_doctor, user_notification;
+  end if;
+exception when others then
+  null;
+end $$;
+
 -- ============================================================================
 -- SEED DATA (Safe defaults)
 -- ============================================================================
 
 -- Subscription plans (harmonized with frontend UI prices)
 -- Plan IDs are stable UUIDs. On conflict, update price/name/billing_type/status.
-insert into plan (plan_id, name, price, billing_type, scan_limit, status) values
-  ('00000000-0000-0000-0000-000000000001', 'Free',        0.00,  'monthly', 3,  'active'),
-  ('00000000-0000-0000-0000-000000000002', 'Basic',       149.00, 'monthly', 10, 'active'),
-  ('00000000-0000-0000-0000-000000000003', 'Pro',         299.00, 'monthly', -1, 'active'),
-  ('00000000-0000-0000-0000-000000000004', 'Pro (Annual)', 2499.00,'yearly', -1, 'active')
-on conflict (plan_id) do nothing;
+insert into plan (plan_id, name, description, price, billing_type, scan_limit, status) values
+  ('00000000-0000-0000-0000-000000000001', 'Free',        'Essential AI scans and basic clinic directory',                      0.00,  'monthly', 3,  'active'),
+  ('00000000-0000-0000-0000-000000000002', 'Basic',       'Standard scanning quota for regular skin monitoring',                149.00, 'monthly', 10, 'active'),
+  ('00000000-0000-0000-0000-000000000003', 'Pro',         'Unlimited AI scans, priority clinic booking, and full history',      299.00, 'monthly', -1, 'active'),
+  ('00000000-0000-0000-0000-000000000004', 'Pro (Annual)', 'Full Pro access billed annually with 30% savings',                  2499.00,'yearly', -1, 'active')
+on conflict (plan_id) do update set
+  description = excluded.description,
+  price = excluded.price,
+  scan_limit = excluded.scan_limit;
 
 -- Plan features
 insert into plan_feature (feature_id, feature_text, plan_id) values
@@ -1527,6 +1684,21 @@ alter table clinic_condition_treated
 
 alter table clinic_condition_treated
   add constraint uq_clinic_condition unique (clinic_id, condition_id);
+
+-- Ensure backwards-compatible columns on existing databases
+alter table "user" add column if not exists free_scans_used int not null default 0;
+
+alter table patient_appointment add column if not exists queue_number integer default 1;
+alter table patient_appointment add column if not exists batch_time varchar(20);
+alter table patient_appointment add column if not exists check_in_status varchar(30) default 'scheduled';
+alter table patient_appointment add column if not exists is_walk_in boolean not null default false;
+alter table patient_appointment add column if not exists assigned_doctor_id uuid references clinic_doctor(doctor_id) on delete set null;
+alter table patient_appointment add column if not exists schedule_sent_to_doctor boolean not null default false;
+alter table patient_appointment add column if not exists doctor_status varchar(30);
+alter table patient_appointment add column if not exists doctor_note text;
+alter table patient_appointment add column if not exists doctor_reviewed_at timestamptz;
+alter table patient_appointment add column if not exists condition_id uuid references skin_condition(condition_id) on delete set null;
+alter table patient_appointment add column if not exists meeting_link text;
 
 -- Storage buckets setup
 insert into storage.buckets (id, name, public)
