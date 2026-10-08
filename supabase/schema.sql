@@ -1065,6 +1065,17 @@ create policy "broadcast_admin_all"   on admin_broadcast for all    using (is_ad
 drop policy if exists "audit_admin_read" on system_audit_log;
 create policy "audit_admin_read" on system_audit_log for select using (is_admin());
 
+-- user_notification
+drop policy if exists "notif_user_read"   on user_notification;
+drop policy if exists "notif_user_update" on user_notification;
+drop policy if exists "notif_insert_auth" on user_notification;
+drop policy if exists "notif_user_delete" on user_notification;
+
+create policy "notif_user_read"   on user_notification for select using (user_id = auth.uid() or is_admin());
+create policy "notif_user_update" on user_notification for update using (user_id = auth.uid() or is_admin()) with check (user_id = auth.uid() or is_admin());
+create policy "notif_insert_auth" on user_notification for insert with check (true);
+create policy "notif_user_delete" on user_notification for delete using (user_id = auth.uid() or is_admin());
+
 -- user_support_ticket
 drop policy if exists "ticket_all_access"   on user_support_ticket;
 drop policy if exists "ticket_read_all"     on user_support_ticket;

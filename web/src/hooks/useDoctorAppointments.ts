@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { createPatientNotification } from "@/lib/notificationService";
 
 export type DoctorAppointmentRecord = {
   id: string;
@@ -47,6 +48,7 @@ export type DoctorAppointmentRecord = {
     answer: string;
     severity?: number | null;
   }>;
+  userId?: string;
 };
 
 function calculateAgeFromBirthdate(birthdateStr?: string | null): number | undefined {
@@ -453,6 +455,7 @@ export function useDoctorAppointments() {
                 conditionImage: undefined,
                 conditionName: docDiagnosis || row.ai_condition_name || "General Consultation",
                 aiConditionName: (row.ai_condition_name && !row.ai_condition_name.toLowerCase().includes("consultation")) ? row.ai_condition_name : undefined,
+                userId: row.user_id || undefined,
                 aiConfidence: row.ai_confidence ? Number(row.ai_confidence) : undefined,
                 queueNumber: row.queue_number || 1,
                 batchTime: row.batch_time || undefined,
@@ -728,6 +731,19 @@ export function useDoctorAppointments() {
         }
       } catch {}
 
+      const targetAppt = appointments.find((a) => a.id === appointmentId);
+      if (targetAppt?.userId) {
+        createPatientNotification({
+          userId: targetAppt.userId,
+          type: isApproved ? "appointment-scheduled" : "appointment-rejected",
+          subtype: isApproved ? "doctor-approved" : "doctor-declined",
+          title: isApproved ? "Doctor Confirmed Schedule" : "Doctor Review Update",
+          body: isApproved
+            ? `Dr. ${doctorName || "your doctor"} has approved your consultation schedule.`
+            : `Dr. ${doctorName || "your doctor"} had a schedule conflict: ${note || "Consultation will be reassigned."}`,
+        });
+      }
+
       await fetchAppointments();
     } catch (e) {
       console.error("[useDoctorAppointments] submitDoctorReview error:", e);
@@ -786,6 +802,17 @@ export function useDoctorAppointments() {
           }
         }
       } catch {}
+
+      const targetAppt = appointments.find((a) => a.id === appointmentId);
+      if (targetAppt?.userId) {
+        createPatientNotification({
+          userId: targetAppt.userId,
+          type: "appointment-completed",
+          subtype: "reviewed",
+          title: "Consultation Completed",
+          body: `Dr. ${doctorName || "your doctor"} has completed your consultation review.${finalDiagnosis ? ` Assessment: ${finalDiagnosis}.` : ""}`,
+        });
+      }
 
       await fetchAppointments();
     } catch (e) {

@@ -18,6 +18,7 @@ import { useEffect, useState } from "react";
 import { skinConditions } from "../public/SkinLibrary";
 import { supabase } from "@/lib/supabaseClient";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
+import { getCachedPatientNotifications } from "@/lib/notificationService";
 
 type AppointmentRecord = {
   id: string;
@@ -100,12 +101,42 @@ export default function PatientDashboard() {
 
   const dismissNotif = async (id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        const key = `dermai_patient_notifications_${session.user.id}`;
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const list = JSON.parse(raw);
+          if (Array.isArray(list)) {
+            const patched = list.map((item: any) =>
+              item.id === id ? { ...item, isRead: true } : item
+            );
+            localStorage.setItem(key, JSON.stringify(patched));
+          }
+        }
+      }
+    } catch {}
     await supabase.from("user_notification").update({ is_read: true }).eq("notif_id", id);
   };
 
   const clearAllNotifs = async () => {
     const ids = notifications.map((n) => n.id);
     setNotifications([]);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        const key = `dermai_patient_notifications_${session.user.id}`;
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const list = JSON.parse(raw);
+          if (Array.isArray(list)) {
+            const patched = list.map((item: any) => ({ ...item, isRead: true }));
+            localStorage.setItem(key, JSON.stringify(patched));
+          }
+        }
+      }
+    } catch {}
     if (ids.length > 0) {
       await supabase.from("user_notification").update({ is_read: true }).in("notif_id", ids);
     }
@@ -295,7 +326,7 @@ export default function PatientDashboard() {
         });
 
         // Fetch notifications ordered by created_at descending
-        const { data: notifRows } = await supabase
+        const { data: notifRows, error: notifErr } = await supabase
           .from("user_notification")
           .select("notif_id, type, subtype, title, body, is_read, created_at")
           .eq("user_id", userId)
@@ -303,22 +334,36 @@ export default function PatientDashboard() {
           .order("created_at", { ascending: false })
           .limit(10);
 
-        setNotifications((notifRows ?? []).map((n: {
-          notif_id: string;
-          type: string;
-          subtype: string | null;
-          title: string;
-          body: string | null;
-          is_read: boolean;
-          created_at: string;
-        }) => ({
-          id: n.notif_id,
-          type: (n.type === "appointment-rejected" ? "appointment-rejected" : "appointment-scheduled") as PatientNotif["type"],
-          title: n.title,
-          message: n.body || n.subtype || "",
-          timestamp: n.created_at || new Date().toISOString(),
-          read: n.is_read,
-        })));
+        if (!notifErr && notifRows && notifRows.length > 0) {
+          setNotifications(notifRows.map((n: {
+            notif_id: string;
+            type: string;
+            subtype: string | null;
+            title: string;
+            body: string | null;
+            is_read: boolean;
+            created_at: string;
+          }) => ({
+            id: n.notif_id,
+            type: (n.type === "appointment-rejected" ? "appointment-rejected" : "appointment-scheduled") as PatientNotif["type"],
+            title: n.title,
+            message: n.body || n.subtype || "",
+            timestamp: n.created_at || new Date().toISOString(),
+            read: n.is_read,
+          })));
+        } else {
+          // Fallback to local cached unread notifications
+          const cached = getCachedPatientNotifications(userId);
+          const unreadCached = (Array.isArray(cached) ? cached : []).filter((n: any) => !n.isRead);
+          setNotifications(unreadCached.map((n: any) => ({
+            id: n.id,
+            type: (n.type === "appointment-rejected" ? "appointment-rejected" : "appointment-scheduled") as PatientNotif["type"],
+            title: n.title,
+            message: n.body || n.subtype || "",
+            timestamp: n.createdAt || new Date().toISOString(),
+            read: Boolean(n.isRead),
+          })));
+        }
       } catch (err) {
         console.error("Failed to load dashboard data:", err);
       } finally {
@@ -333,10 +378,12 @@ export default function PatientDashboard() {
     };
 
     window.addEventListener("derm_profile_updated", handleProfileUpdate);
+    window.addEventListener("dermai_notifications_updated", handleProfileUpdate);
     window.addEventListener("storage", handleProfileUpdate);
 
     return () => {
       window.removeEventListener("derm_profile_updated", handleProfileUpdate);
+      window.removeEventListener("dermai_notifications_updated", handleProfileUpdate);
       window.removeEventListener("storage", handleProfileUpdate);
     };
   }, [session]);

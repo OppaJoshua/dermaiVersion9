@@ -23,6 +23,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
+import { createPatientNotification } from "@/lib/notificationService";
 
 export type ClinicDoctorItem = {
   id: string;
@@ -1599,6 +1600,15 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         if (Array.isArray(list)) {
           list.unshift(newLocalAppt);
           localStorage.setItem("dermai_clinic_appointments", JSON.stringify(list));
+        }
+        if (user?.id) {
+          createPatientNotification({
+            userId: user.id,
+            type: "appointment-scheduled",
+            subtype: "requested",
+            title: "Appointment Requested",
+            body: `Your consultation request with ${selectedClinic?.name || "the clinic"} for ${selectedDate} at ${selectedTime} has been submitted.`,
+          });
         }
         window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
         window.dispatchEvent(new Event("appointmentCreated"));

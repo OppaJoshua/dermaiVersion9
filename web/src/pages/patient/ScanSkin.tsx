@@ -21,6 +21,7 @@ import { cn } from "../../lib/utils";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 import { predictSkinCondition, getConditionUUID, AIPredictionError } from "../../lib/aiApi";
+import { createPatientNotification } from "../../lib/notificationService";
 
 const steps = [
   { label: "Answer Questions", number: 1 },
@@ -683,6 +684,15 @@ export default function ScanSkinPage() {
 
       setShowResult(true);
       setCurrentStep(3);
+
+      if (user?.id) {
+        createPatientNotification({
+          userId: user.id,
+          type: "scan-completed",
+          title: "AI Skin Scan Complete",
+          body: `Preliminary assessment: ${aiResult.display_name} (${Math.round(aiResult.confidence || 0)}% confidence). View details in your skin history.`,
+        });
+      }
     } catch (err) {
       console.error("Analysis failed:", err);
       setAnalyzeError(
