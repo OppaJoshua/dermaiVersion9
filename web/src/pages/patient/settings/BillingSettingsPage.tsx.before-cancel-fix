@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Calendar, CheckCircle2, XCircle, X, Loader2 } from "lucide-react";
+import { Crown, Calendar, CheckCircle2, XCircle, X, Loader2, Wallet } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
@@ -198,7 +198,7 @@ export default function BillingSettingsPage() {
                 }
               )
             : undefined,
-          price: `₱${Number(plan.price).toLocaleString("en-PH", {
+          price: `?${Number(plan.price).toLocaleString("en-PH", {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
           })} / ${
@@ -233,7 +233,7 @@ export default function BillingSettingsPage() {
             day: "numeric",
             year: "numeric",
           }),
-          amount: `₱${Number(p.amount).toLocaleString()}`,
+          amount: `?${Number(p.amount).toLocaleString()}`,
           status: p.status === "success" ? "Paid" : p.status,
         }));
         setBillingHistory(mappedHistory);
@@ -247,11 +247,8 @@ export default function BillingSettingsPage() {
           currentPeriodEnd !== null &&
           currentPeriodEnd.getTime() > Date.now();
 
-        const latestSuccessfulPayment = payments.find((p) => p.status === "success");
-
         const savedPaymentMethod =
-          activeSubscription?.payment_method?.toLowerCase() ||
-          latestSuccessfulPayment?.method?.toLowerCase();
+          activeSubscription?.payment_method?.toLowerCase();
 
         // Use the payment details saved with the current subscription.
         // Do not display the method after cancellation or expiration.
@@ -304,47 +301,20 @@ export default function BillingSettingsPage() {
     return () => document.removeEventListener("mousedown", handler);
   }, [showModal]);
 
-  const openModal = async () => {
-    // Show the modal right away using whatever is already loaded.
-    const meta = ((user as any)?.user_metadata || {}) as Record<string, any>;
-    const accountName = meta.full_name || meta.name || "";
-    const accountEmail = (user as any)?.email || "";
-
-    let saved = {
-      type: (paymentMethod?.type || "gcash") as PaymentMethodType,
-      fullName: paymentMethod?.fullName || "",
-      email: paymentMethod?.email || "",
-      billingAddress: paymentMethod?.billingAddress || "",
-      mobileNumber: paymentMethod?.mobileNumber || "",
-    };
-
-    // Re-read the saved checkout details so the form never opens with stale/empty state.
-    if (user) {
-      const { data } = await supabase
-        .from("user_plan_subscription")
-        .select("payment_method, payment_full_name, payment_email, billing_address, payment_mobile_number")
-        .eq("user_id", user.id)
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (data) {
-        const method = data.payment_method?.toLowerCase();
-        saved = {
-          type: method === "paymaya" || method === "maya" ? "maya" : method === "gcash" ? "gcash" : saved.type,
-          fullName: data.payment_full_name || saved.fullName,
-          email: data.payment_email || saved.email,
-          billingAddress: data.billing_address || saved.billingAddress,
-          mobileNumber: data.payment_mobile_number || saved.mobileNumber,
-        };
-      }
+  const openModal = () => {
+    if (paymentMethod) {
+      setModalMethodType(paymentMethod.type);
+      setMobileNumber(paymentMethod.mobileNumber || "");
+      setPaymentFullName(paymentMethod.fullName || "");
+      setPaymentEmail(paymentMethod.email || "");
+      setBillingAddress(paymentMethod.billingAddress || "");
+    } else {
+      setModalMethodType("gcash");
+      setMobileNumber("");
+      setPaymentFullName("");
+      setPaymentEmail("");
+      setBillingAddress("");
     }
-
-    setModalMethodType(saved.type);
-    setMobileNumber(formatMobileNumber(saved.mobileNumber));
-    setPaymentFullName(saved.fullName || accountName);
-    setPaymentEmail(saved.email || accountEmail);
-    setBillingAddress(saved.billingAddress);
 
     setMethodSaved(false);
     setShowModal(true);
@@ -395,16 +365,13 @@ export default function BillingSettingsPage() {
 
       await loadBillingData();
 
-      setShowModal(false);
+      setTimeout(() => setShowModal(false), 900);
     } catch (error) {
       console.error("Failed to update payment method:", error);
     }
   };
   const handleCancel = async () => {
-    if (!user || !sub.subscriptionId || !sub.isPro || !sub.currentPeriodEnd) return;
-    if (sub.cancelAtPeriodEnd || new Date(sub.currentPeriodEnd).getTime() <= Date.now()) return;
-
-
+    if (!sub.subscriptionId && !user) return;
     setCancelling(true);
 
     try {
@@ -413,7 +380,6 @@ export default function BillingSettingsPage() {
           .from("user_plan_subscription")
           .update({
             cancel_at_period_end: true,
-            updated_at: new Date().toISOString(),
             cancelled_at: new Date().toISOString(),
           })
           .eq("subscription_id", sub.subscriptionId)
@@ -441,8 +407,7 @@ export default function BillingSettingsPage() {
   };
 
   const handleResume = async () => {
-    if (!user || !sub.subscriptionId || !sub.isPro || !sub.currentPeriodEnd) return;
-    if (!sub.cancelAtPeriodEnd || new Date(sub.currentPeriodEnd).getTime() <= Date.now()) return;
+    if (!sub.subscriptionId && !user) return;
     setResuming(true);
 
     try {
@@ -451,7 +416,6 @@ export default function BillingSettingsPage() {
           .from("user_plan_subscription")
           .update({
             cancel_at_period_end: false,
-            updated_at: new Date().toISOString(),
             cancelled_at: null,
           })
           .eq("subscription_id", sub.subscriptionId)
@@ -483,6 +447,9 @@ export default function BillingSettingsPage() {
     <>
     <div className="max-w-2xl mx-auto py-10 px-4 sm:px-6">
       <div className="flex items-center gap-3 mb-8">
+        <div className="p-2.5 bg-magenta-100 rounded-2xl text-magenta-600">
+          <Wallet className="w-6 h-6" />
+        </div>
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Billing</h1>
           <p className="text-sm text-gray-500 mt-0.5">Manage your subscription and payment details</p>
@@ -500,6 +467,9 @@ export default function BillingSettingsPage() {
           <>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-xl ${sub.isPro ? "bg-magenta-100 text-magenta-600" : "bg-gray-100 text-gray-400"}`}>
+                  <Crown className="w-5 h-5" />
+                </div>
                 <div>
                   <p className="text-base font-bold text-gray-900">
                     {sub.isPro

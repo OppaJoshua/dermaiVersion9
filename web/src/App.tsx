@@ -31,6 +31,7 @@ import AppointmentPage from "./pages/patient/AppointmentPage";
 import AppointmentStatusPage from "./pages/patient/AppointmentStatusPage";
 import SubscriptionStatusPage from "./pages/patient/SubscriptionStatusPage";
 import SubscriptionUpgradePage from "./pages/patient/SubscriptionUpgradePage";
+import PaymentSuccessPage from "./pages/patient/PaymentSuccessPage";
 import SubscriptionChoicePage from "./pages/patient/SubscriptionChoicePage";
 import HelpPage from "./pages/patient/settings/HelpPage";
 import BillingSettingsPage from "./pages/patient/settings/BillingSettingsPage";
@@ -116,6 +117,11 @@ function App() {
         <Route path="/dashboard/appointment-status" element={<UserLayout><AppointmentStatusPage /></UserLayout>} />
         <Route path="/dashboard/subscription-status" element={<UserLayout><SubscriptionStatusPage /></UserLayout>} />
         <Route path="/dashboard/upgrade" element={<UserLayout><SubscriptionUpgradePage /></UserLayout>} />
+        {/* Standalone payment success page - no patient sidebar/header */}
+        <Route
+          path="/patient/payment/success"
+          element={<PaymentSuccessPage />}
+        />
         <Route path="/user/upgrade" element={<UserLayout><SubscriptionUpgradePage /></UserLayout>} />
         <Route path="/dashboard/settings/account" element={<Navigate to="/dashboard/profile" replace />} />
         <Route path="/dashboard/settings/help" element={<UserLayout><HelpPage /></UserLayout>} />
@@ -170,3 +176,6 @@ function App() {
 }
 
 export default App;
+
+
+

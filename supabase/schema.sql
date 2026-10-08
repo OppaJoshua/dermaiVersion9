@@ -33,7 +33,7 @@ create table if not exists "user" (
                  check (account_status in ('active','suspended','inactive')),
   free_scans_used int not null default 0,
   created_at     timestamptz not null default now(),
-  updated_at     timestamptz not null default now()
+  free_scans_used int not null default 0
 );
 
 -- ----------------------------------------------------------------------------
@@ -388,6 +388,7 @@ create table if not exists ai_skin_answer (
   answer_value   text not null,
   sort_order     int not null default 0,
   created_at     timestamptz not null default now(),
+  free_scans_used int not null default 0
   analysis_id    uuid not null references ai_scan_result(analysis_id) on delete cascade
 );
 
@@ -867,13 +868,15 @@ create policy "appt_all_access" on patient_appointment for all using (true) with
 -- ai_scan_result
 drop policy if exists "scan_owner_read"   on ai_scan_result;
 drop policy if exists "scan_owner_insert" on ai_scan_result;
+drop policy if exists "scan_owner_update" on ai_scan_result;
 drop policy if exists "scan_owner_delete" on ai_scan_result;
 drop policy if exists "scan_admin_all"    on ai_scan_result;
 drop policy if exists "scan_admin_update" on ai_scan_result;
 create policy "scan_owner_read"   on ai_scan_result for select using (user_id = auth.uid() or is_admin());
 create policy "scan_owner_insert" on ai_scan_result for insert with check (user_id = auth.uid());
-create policy "scan_owner_delete" on ai_scan_result for delete using (user_id = auth.uid() or is_admin());
+create policy "scan_owner_update" on ai_scan_result for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy "scan_admin_update" on ai_scan_result for update using (is_admin()) with check (is_admin());
+create policy "scan_owner_delete" on ai_scan_result for delete using (user_id = auth.uid() or is_admin());
 
 -- ai_skin_answer
 drop policy if exists "answer_owner_read"   on ai_skin_answer;
@@ -1564,3 +1567,4 @@ create policy "Allow Update Storage Objects" on storage.objects
 update "user" 
 set role = 'admin', account_status = 'active' 
 where lower(trim(email)) = 'dermaisupport@gmail.com';
+

@@ -25,7 +25,7 @@ export type SubscriptionPlan = {
   id: string;
   name: string;
   price: number;
-  billingType: "monthly" | "yearly" | "one-time";
+  billingType: "monthly" | "yearly";
   description: string;
   features: string[];
   scanLimit: number | null;
@@ -35,7 +35,9 @@ export type SubscriptionPlan = {
 };
 
 // GET /plan (public read — no auth required)
-export async function getSubscriptionPlansAsync(includeInactive = false): Promise<SubscriptionPlan[]> {
+export async function getSubscriptionPlansAsync(
+  includeInactive = false
+): Promise<SubscriptionPlan[]> {
   let query = supabase
     .from("plan")
     .select(`
@@ -46,12 +48,19 @@ export async function getSubscriptionPlansAsync(includeInactive = false): Promis
       billing_type,
       scan_limit,
       status,
-      plan_feature ( feature_text )
+      description,
+      plan_feature (
+        feature_id,
+        feature_text,
+        plan_id
+      )
     `)
     .order("price");
 
   if (!includeInactive) {
-    query = query.eq("status", "active");
+    query = query
+      .eq("status", "active")
+      .gt("price", 0);
   }
 
   const { data: plans, error } = await query;
@@ -66,10 +75,12 @@ export async function getSubscriptionPlansAsync(includeInactive = false): Promis
     name: p.name,
     price: Number(p.price) || 0,
     billingType: p.billing_type === "yearly" ? "yearly" : "monthly",
-    description: p.description || (p.scan_limit === -1 ? "Unlimited skin scans" : `${p.scan_limit} free skin scan${p.scan_limit !== 1 ? "s" : ""}`),
-    features: (p.plan_feature || []).map((f: any) => f.feature_text),
+    description: p.description ?? (p.scan_limit === -1 ? "Unlimited skin scans" : `${p.scan_limit} free skin scan${p.scan_limit !== 1 ? "s" : ""}`),
+    features: (p.plan_feature ?? [])
+      .map((f: any) => f.feature_text)
+      .filter(Boolean),
     scanLimit: p.scan_limit === -1 ? null : p.scan_limit,
-    status: (p.status as "active" | "inactive"),
+    status: p.status as "active" | "inactive",
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   }));
@@ -476,11 +487,11 @@ export async function updateHelpdeskTicketStatus(
     const updatedLocal = local.map((t) =>
       t.id === id
         ? {
-            ...t,
-            status,
-            response: response !== undefined ? response : t.response,
-            updatedAt: new Date().toISOString(),
-          }
+          ...t,
+          status,
+          response: response !== undefined ? response : t.response,
+          updatedAt: new Date().toISOString(),
+        }
         : t
     );
     saveLocalHelpdeskTickets(updatedLocal);
@@ -522,13 +533,16 @@ export async function deleteHelpdeskTicketAsync(id: string): Promise<void> {
 // Upsert subscription plan (admin only)
 export async function upsertSubscriptionPlan(plan: SubscriptionPlan): Promise<void> {
   const isNew = !plan.id || plan.id.startsWith("plan-");
+
   const planData: Record<string, any> = {
     name: plan.name,
     price: plan.price,
-    billing_type: plan.billingType === "one-time" ? "monthly" : plan.billingType,
+    billing_type: plan.billingType,
     scan_limit: plan.scanLimit === null ? -1 : plan.scanLimit,
     status: plan.status,
+    description: plan.description,
   };
+
   if (!isNew) {
     planData.plan_id = plan.id;
   }
@@ -540,20 +554,47 @@ export async function upsertSubscriptionPlan(plan: SubscriptionPlan): Promise<vo
     .single();
 
   if (error) {
-    console.error("[store] upsertSubscriptionPlan:", error.message);
-    return;
+    console.error("[store] upsertSubscriptionPlan - plan:", error);
+    throw new Error(`Failed to save subscription plan: ${error.message}`);
   }
 
   const savedPlanId = data?.plan_id || (isNew ? null : plan.id);
+
   if (savedPlanId && plan.features) {
-    await supabase.from("plan_feature").delete().eq("plan_id", savedPlanId);
-    if (plan.features.length > 0) {
-      await supabase.from("plan_feature").insert(
-        plan.features.map((f) => ({
-          plan_id: savedPlanId,
-          feature_text: f,
-        }))
+    const { error: deleteError } = await supabase
+      .from("plan_feature")
+      .delete()
+      .eq("plan_id", savedPlanId);
+
+    if (deleteError) {
+      console.error(
+        "[store] upsertSubscriptionPlan - delete features:",
+        deleteError
       );
+      throw new Error(
+        `Plan was saved, but existing features could not be updated: ${deleteError.message}`
+      );
+    }
+
+    if (plan.features.length > 0) {
+      const { error: insertError } = await supabase
+        .from("plan_feature")
+        .insert(
+          plan.features.map((f) => ({
+            plan_id: savedPlanId,
+            feature_text: f,
+          }))
+        );
+
+      if (insertError) {
+        console.error(
+          "[store] upsertSubscriptionPlan - insert features:",
+          insertError
+        );
+        throw new Error(
+          `Plan was saved, but features could not be updated: ${insertError.message}`
+        );
+      }
     }
   }
 }

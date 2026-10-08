@@ -248,14 +248,99 @@ type ClinicData = {
 
 type ConsultationType = "face-to-face";
 
+interface AppointmentDraft {
+  patientName?: string;
+  patientEmail?: string;
+  patientAddress?: string;
+  patientContact?: string;
+  patientGender?: string;
+  patientBirthdate?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  emergencyRelationship?: string;
+  notes?: string;
+  questionnaireData?: any[];
+  aiConditionName?: string;
+  aiConfidence?: string;
+  skinPhotoPreview?: string;
+  photoFileName?: string;
+  selectedDate?: string;
+  selectedDoctorId?: string;
+  selectedTime?: string;
+  clinicId?: string;
+  fromScan?: boolean;
+}
+
+function loadAppointmentDraft(): AppointmentDraft | null {
+  try {
+    const raw = sessionStorage.getItem("dermai_appointment_draft");
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+}
+
+function dataURLtoFile(dataurl: string, filename: string): File | null {
+  try {
+    const arr = dataurl.split(",");
+    const mimeMatch = arr[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new File([u8arr], filename || "skin_photo.jpg", { type: mime });
+  } catch {
+    return null;
+  }
+}
+
 export default function AppointmentPage({ defaultType: _defaultType }: {
   defaultType?: ConsultationType;
 }) {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
 
-  const [currentStep, setCurrentStep] = useState<1 | 2>(1);
+  // Check if this appointment was initiated explicitly from a Scan Skin result
+  const isFromScan = searchParams.get("fromScan") === "1" || !!searchParams.get("scanId");
+  const clinicIdFromUrl = searchParams.get("clinic") || "";
+
+  // Specific scan booking context (ONLY used when isFromScan is true)
+  const scanContext = useMemo(() => {
+    if (!isFromScan) return null;
+    try {
+      const raw = sessionStorage.getItem("dermai_scan_booking_context");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return null;
+  }, [isFromScan]);
+
+  const draft = useMemo(() => loadAppointmentDraft(), []);
+  // Draft is only applicable if it matches the current clinic being booked
+  const isDraftValid = draft && (!draft.clinicId || draft.clinicId === clinicIdFromUrl);
+
+  // Step 1: Patient Details, Step 2: Schedule & Doctor
+  const [currentStep, setCurrentStep] = useState<1 | 2>(() => {
+    const stepInUrl = searchParams.get("step");
+    if (stepInUrl === "2") {
+      const d = loadAppointmentDraft();
+      if (d?.patientName && d?.patientContact) return 2;
+    }
+    return 1;
+  });
+
+  // Keep currentStep synchronized with URL history (supports browser Back and Forward)
+  useEffect(() => {
+    const stepInUrl = searchParams.get("step");
+    if (stepInUrl === "2") {
+      setCurrentStep(2);
+    } else {
+      setCurrentStep(1);
+    }
+  }, [searchParams]);
+
   const [selectedClinic, setSelectedClinic] = useState<ClinicData | null>(null);
   const [loadingClinic, setLoadingClinic] = useState(true);
   const [showClinicDetailsModal, setShowClinicDetailsModal] = useState(false);
@@ -263,42 +348,165 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Patient info fields
-  const [patientName, setPatientName] = useState("");
-  const [patientEmail, setPatientEmail] = useState(() => user?.email || "");
-  const [patientAddress, setPatientAddress] = useState("");
-  const [patientContact, setPatientContact] = useState("");
-  const [patientGender, setPatientGender] = useState("");
-  const [patientBirthdate, setPatientBirthdate] = useState("");
-  const [emergencyContactName, setEmergencyContactName] = useState("");
-  const [emergencyContactPhone, setEmergencyContactPhone] = useState("");
-  const [emergencyRelationship, setEmergencyRelationship] = useState("");
-  const [notes, setNotes] = useState("");
-  const [questionnaireData, setQuestionnaireData] = useState<any[]>([]);
+  // Patient info fields (initialized with persisted draft values if present)
+  const [patientName, setPatientName] = useState<string>(() => (isDraftValid ? draft?.patientName : "") || "");
+  const [patientEmail, setPatientEmail] = useState<string>(() => (isDraftValid ? draft?.patientEmail : "") || user?.email || "");
+  const [patientAddress, setPatientAddress] = useState<string>(() => (isDraftValid ? draft?.patientAddress : "") || "");
+  const [patientContact, setPatientContact] = useState<string>(() => (isDraftValid ? draft?.patientContact : "") || "");
+  const [patientGender, setPatientGender] = useState<string>(() => (isDraftValid ? draft?.patientGender : "") || "");
+  const [patientBirthdate, setPatientBirthdate] = useState<string>(() => (isDraftValid ? draft?.patientBirthdate : "") || "");
+  const [emergencyContactName, setEmergencyContactName] = useState<string>(() => (isDraftValid ? draft?.emergencyContactName : "") || "");
+  const [emergencyContactPhone, setEmergencyContactPhone] = useState<string>(() => (isDraftValid ? draft?.emergencyContactPhone : "") || "");
+  const [emergencyRelationship, setEmergencyRelationship] = useState<string>(() => (isDraftValid ? draft?.emergencyRelationship : "") || "");
+  const [notes, setNotes] = useState<string>(() => (isDraftValid ? draft?.notes : "") || "");
+  const [questionnaireData, _setQuestionnaireData] = useState<any[]>(() => {
+    if (isDraftValid && Array.isArray(draft?.questionnaireData) && draft.questionnaireData.length > 0) {
+      return draft.questionnaireData;
+    }
+    if (isFromScan && Array.isArray(scanContext?.questionnaire) && scanContext.questionnaire.length > 0) {
+      return scanContext.questionnaire;
+    }
+    return [];
+  });
 
   // Skin photo upload
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [skinPhotoFile, setSkinPhotoFile] = useState<File | null>(null);
-  const [skinPhotoPreview, setSkinPhotoPreview] = useState<string>("");
-  const [photoFileName, setPhotoFileName] = useState<string>("");
+  const [skinPhotoPreview, setSkinPhotoPreview] = useState<string>(() => {
+    if (isDraftValid && draft?.skinPhotoPreview) {
+      return draft.skinPhotoPreview;
+    }
+    if (isFromScan && scanContext?.photoUrl) {
+      return scanContext.photoUrl;
+    }
+    return "";
+  });
+  const [photoFileName, setPhotoFileName] = useState<string>(() => {
+    if (isDraftValid && draft?.photoFileName) {
+      return draft.photoFileName;
+    }
+    if (isFromScan && scanContext?.photoUrl) {
+      return `scan_${scanContext.scanId || "photo"}.jpg`;
+    }
+    return "";
+  });
 
   // Schedule selection fields
-  const [selectedDate, setSelectedDate] = useState(() => {
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    if (isDraftValid && draft?.selectedDate) return draft.selectedDate;
     const tmrw = new Date();
     tmrw.setDate(tmrw.getDate() + 1);
     return `${tmrw.getFullYear()}-${String(tmrw.getMonth() + 1).padStart(2, "0")}-${String(tmrw.getDate()).padStart(2, "0")}`;
   });
-  const [selectedDoctorId, setSelectedDoctorId] = useState<string>("");
-  const [selectedTime, setSelectedTime] = useState("09:00");
-  const [calendarMonth, setCalendarMonth] = useState(() => {
+  const [selectedDoctorId, setSelectedDoctorId] = useState<string>(() => (isDraftValid ? draft?.selectedDoctorId : "") || "");
+  const [selectedTime, setSelectedTime] = useState<string>(() => (isDraftValid ? draft?.selectedTime : "") || "09:00");
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
 
-  // AI analysis result (patient-supplied)
-  const [aiConditionName, setAiConditionName] = useState("");
-  const [aiConfidence, setAiConfidence] = useState<string>("");
+  // AI analysis result:
+  // - Direct search clinic: strictly starts BLANK ("")
+  // - From Scan Skin: prefilled strictly from THAT specific scan result
+  // - Preserves user manual entries when navigating back/forward
+  const [aiConditionName, setAiConditionName] = useState<string>(() => {
+    if (isDraftValid && draft?.aiConditionName !== undefined && draft.aiConditionName !== "") {
+      return draft.aiConditionName;
+    }
+    if (isFromScan) {
+      const condParam = searchParams.get("condition") || searchParams.get("ai_condition");
+      if (condParam && condParam !== "Assessment Queued") return condParam;
+      if (scanContext?.condition) return scanContext.condition;
+    }
+    return "";
+  });
+  const [aiConfidence, setAiConfidence] = useState<string>(() => {
+    if (isDraftValid && draft?.aiConfidence !== undefined && draft.aiConfidence !== "") {
+      return draft.aiConfidence;
+    }
+    if (isFromScan) {
+      const confParam = searchParams.get("confidence") || searchParams.get("score");
+      if (confParam && Number(confParam) > 0) return confParam;
+      if (scanContext?.confidence && Number(scanContext.confidence) > 0) return String(scanContext.confidence);
+    }
+    return "";
+  });
   const [submitted, setSubmitted] = useState(false);
+
+  // Continuously persist entered appointment/patient details so going back/forward never resets data
+  useEffect(() => {
+    try {
+      const dataToSave = {
+        patientName,
+        patientEmail,
+        patientAddress,
+        patientContact,
+        patientGender,
+        patientBirthdate,
+        emergencyContactName,
+        emergencyContactPhone,
+        emergencyRelationship,
+        notes,
+        questionnaireData,
+        aiConditionName,
+        aiConfidence,
+        skinPhotoPreview,
+        photoFileName,
+        selectedDate,
+        selectedDoctorId,
+        selectedTime,
+        clinicId: selectedClinic?.id || searchParams.get("clinic") || "",
+        fromScan: isFromScan,
+      };
+      sessionStorage.setItem("dermai_appointment_draft", JSON.stringify(dataToSave));
+    } catch {
+      try {
+        const fallbackData = {
+          patientName,
+          patientEmail,
+          patientAddress,
+          patientContact,
+          patientGender,
+          patientBirthdate,
+          emergencyContactName,
+          emergencyContactPhone,
+          emergencyRelationship,
+          notes,
+          questionnaireData,
+          aiConditionName,
+          aiConfidence,
+          photoFileName,
+          selectedDate,
+          selectedDoctorId,
+          selectedTime,
+          clinicId: selectedClinic?.id || searchParams.get("clinic") || "",
+          fromScan: isFromScan,
+        };
+        sessionStorage.setItem("dermai_appointment_draft", JSON.stringify(fallbackData));
+      } catch {}
+    }
+  }, [
+    patientName,
+    patientEmail,
+    patientAddress,
+    patientContact,
+    patientGender,
+    patientBirthdate,
+    emergencyContactName,
+    emergencyContactPhone,
+    emergencyRelationship,
+    notes,
+    questionnaireData,
+    aiConditionName,
+    aiConfidence,
+    skinPhotoPreview,
+    photoFileName,
+    selectedDate,
+    selectedDoctorId,
+    selectedTime,
+    selectedClinic?.id,
+    searchParams,
+  ]);
 
   // Calculate patient age from birthdate
   const patientAge = useMemo(() => {
@@ -594,30 +802,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return selectedBatch ? selectedBatch.label : selectedTime ? formatTime12h(selectedTime) : activeDoctorHours;
   }, [selectedBatch, selectedTime, activeDoctorHours]);
 
-  // Prefill AI condition and questionnaire from URL params or local scan storage
-  useEffect(() => {
-    const condParam = searchParams.get("condition") || searchParams.get("ai_condition");
-    const confParam = searchParams.get("confidence") || searchParams.get("score");
-    if (condParam && condParam !== "Assessment Queued") setAiConditionName(condParam);
-    if (confParam && Number(confParam) > 0) setAiConfidence(confParam);
-
-    try {
-      const savedScan = localStorage.getItem("dermai_last_scan");
-      if (savedScan) {
-        const parsed = JSON.parse(savedScan);
-        if (!condParam && parsed.predictedClass && parsed.predictedClass !== "Assessment Queued") {
-          setAiConditionName((prev) => prev || parsed.predictedClass);
-        }
-        if (!confParam && parsed.confidence && Number(parsed.confidence) > 0) {
-          const num = Number(parsed.confidence);
-          setAiConfidence((prev) => prev || String(Math.round(num <= 1 ? num * 100 : num)));
-        }
-        if (Array.isArray(parsed.questionnaire) && parsed.questionnaire.length > 0) {
-          setQuestionnaireData(parsed.questionnaire);
-        }
-      }
-    } catch { }
-  }, [searchParams]);
+  // Note: AI condition, confidence, questionnaire, and photo are cleanly initialized
+  // in useState from draft / scanContext, avoiding harmful overwrites on step navigation.
 
   // Fetch approved clinic strictly from database with rich details
   useEffect(() => {
@@ -1094,6 +1280,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   const handleNextStep = () => {
     if (validateStep(1)) {
       setCurrentStep(2);
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("step", "2");
+        return next;
+      }, { replace: false });
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   };
@@ -1101,6 +1292,17 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   const handlePrevStep = () => {
     setSubmitError(null);
     setCurrentStep(1);
+    if (searchParams.get("step") === "2") {
+      if (window.history.length > 1) {
+        navigate(-1);
+      } else {
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("step");
+          return next;
+        }, { replace: true });
+      }
+    }
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -1133,14 +1335,18 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     try {
       // 1. Upload skin photo to Supabase Storage with graceful fallback
       let photoPath: string | null = null;
-      if (skinPhotoFile) {
+      let fileToUpload = skinPhotoFile;
+      if (!fileToUpload && skinPhotoPreview && skinPhotoPreview.startsWith("data:")) {
+        fileToUpload = dataURLtoFile(skinPhotoPreview, photoFileName || "skin_photo.jpg");
+      }
+      if (fileToUpload) {
         try {
-          const cleanFileName = skinPhotoFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const cleanFileName = fileToUpload.name.replace(/[^a-zA-Z0-9._-]/g, "_");
           const filePath = `${activeUserId}/${Date.now()}_${cleanFileName}`;
 
           const { data: uploadData, error: uploadError } = await supabase.storage
             .from("scan-uploads")
-            .upload(filePath, skinPhotoFile, { upsert: true });
+            .upload(filePath, fileToUpload, { upsert: true });
 
           if (!uploadError && uploadData) {
             photoPath = filePath;
@@ -1314,6 +1520,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       } catch { }
 
       setSubmitted(true);
+      try {
+        sessionStorage.removeItem("dermai_appointment_draft");
+        sessionStorage.removeItem("dermai_selected_clinic_id");
+      } catch {}
     } catch (err: any) {
       console.error("Submission error:", err);
       setSubmitError(err?.message || "An unexpected error occurred during submission.");
@@ -1420,13 +1630,16 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     );
   }
 
-  const handleBackToClinics = (e: React.MouseEvent) => {
-    e.preventDefault();
-    if (window.history.length > 1) {
-      navigate(-1);
-    } else {
-      navigate(user ? "/dashboard/clinics" : "/find-clinics");
+  const handleBackToClinics = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    const targetClinicId = selectedClinic?.id || searchParams.get("clinic") || "";
+    if (targetClinicId) {
+      sessionStorage.setItem("dermai_selected_clinic_id", String(targetClinicId));
     }
+    const targetUrl = user
+      ? `/dashboard/clinics${targetClinicId ? `?clinic=${targetClinicId}` : ""}`
+      : `/find-clinics${targetClinicId ? `?clinic=${targetClinicId}` : ""}`;
+    navigate(targetUrl);
   };
 
   return (
@@ -1434,17 +1647,37 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       <div className={`mx-auto space-y-4 transition-all duration-300 ${currentStep === 2 ? "max-w-6xl xl:max-w-7xl" : "max-w-3xl"}`}>
         {/* Back navigation */}
         <div className="flex items-center justify-between">
-          <button
-            type="button"
-            onClick={handleBackToClinics}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-magenta-600 transition-colors cursor-pointer"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" /> Back to Clinics
-          </button>
+          {currentStep === 2 ? (
+            <button
+              type="button"
+              onClick={handlePrevStep}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-magenta-600 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" /> Back to Patient Details
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleBackToClinics}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-magenta-600 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" /> Back to Clinics
+            </button>
+          )}
           <div className="flex items-center gap-1.5 text-[11px] font-bold text-gray-400">
-            <span className={currentStep === 1 ? "text-magenta-600 font-bold" : "text-gray-400"}>1. Patient Details</span>
+            <button
+              type="button"
+              onClick={() => {
+                if (currentStep === 2) handlePrevStep();
+              }}
+              className={currentStep === 1 ? "text-magenta-600 font-bold cursor-default" : "text-gray-500 hover:text-magenta-600 transition-colors cursor-pointer"}
+            >
+              1. Patient Details
+            </button>
             <span>→</span>
-            <span className={currentStep === 2 ? "text-magenta-600 font-bold" : "text-gray-400"}>2. Schedule &amp; Doctor</span>
+            <span className={currentStep === 2 ? "text-magenta-600 font-bold" : "text-gray-400"}>
+              2. Schedule &amp; Doctor
+            </span>
           </div>
         </div>
 
@@ -1734,7 +1967,14 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       <input
                         type="text"
                         value={aiConditionName}
-                        onChange={(e) => setAiConditionName(e.target.value)}
+                        onChange={(e) => {
+                          const newVal = e.target.value;
+                          setAiConditionName(newVal);
+                          const origScanCond = isFromScan ? (searchParams.get("condition") || scanContext?.condition || "") : "";
+                          if (origScanCond && newVal.trim().toLowerCase() !== origScanCond.trim().toLowerCase()) {
+                            setAiConfidence("");
+                          }
+                        }}
                         placeholder="e.g. Atopic Dermatitis or Acne"
                         className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs bg-white text-gray-900 focus:outline-none focus:border-magenta-500"
                       />
@@ -2156,7 +2396,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         </h4>
                         <button
                           type="button"
-                          onClick={() => setCurrentStep(1)}
+                          onClick={handlePrevStep}
                           className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700 hover:underline cursor-pointer"
                         >
                           Edit Profile

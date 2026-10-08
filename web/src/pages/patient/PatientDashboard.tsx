@@ -247,6 +247,7 @@ export default function PatientDashboard() {
             skin_condition:condition_id ( condition_id, name )
           `)
           .eq("user_id", userId)
+          .eq("status", "completed")
           .order("scanned_at", { ascending: false })
           .limit(5);
 
@@ -269,7 +270,8 @@ export default function PatientDashboard() {
         const { count: exactScanCount } = await supabase
           .from("ai_scan_result")
           .select("*", { count: "exact", head: true })
-          .eq("user_id", userId);
+          .eq("user_id", userId)
+          .eq("status", "completed");
 
         const conditions = new Set((scanRows ?? []).map((s: any) => {
           const sc = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
@@ -349,7 +351,7 @@ export default function PatientDashboard() {
         {/* Welcome */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
           <h1 className="text-2xl sm:text-3xl font-display font-bold text-gray-900">
-            Good morning, {firstName}! 👋
+            Good morning, {firstName}!
           </h1>
           <p className="text-gray-500 text-sm mt-1">
             Here's your skin health overview — stay informed, stay healthy.
@@ -408,10 +410,10 @@ export default function PatientDashboard() {
         {/* Quick Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
           {[
-            { label: "Total Scans", value: stats.totalScans, icon: Camera, color: "text-magenta-500 bg-magenta-50" },
-            { label: "Conditions Found", value: stats.conditionsFound, icon: Calendar, color: "text-blue-500 bg-blue-50" },
-            { label: "Clinics Saved", value: stats.clinicsSaved, icon: MapPin, color: "text-emerald-500 bg-emerald-50" },
-            { label: "Last Scan", value: stats.lastScan, icon: Clock, color: "text-amber-500 bg-amber-50" },
+            { label: "Total Scans", value: stats.totalScans, icon: Camera, color: "text-magenta-500" },
+            { label: "Conditions Found", value: stats.conditionsFound, icon: Calendar, color: "text-blue-500" },
+            { label: "Clinics Saved", value: stats.clinicsSaved, icon: MapPin, color: "text-emerald-500" },
+            { label: "Last Scan", value: stats.lastScan, icon: Clock, color: "text-amber-500" },
           ].map((stat, i) => (
             <motion.div
               key={stat.label}
@@ -420,8 +422,8 @@ export default function PatientDashboard() {
               transition={{ delay: i * 0.06 }}
               className="bg-white rounded-2xl p-4 border border-gray-100 hover:border-gray-200 transition-all hover:shadow-sm"
             >
-              <div className={`w-9 h-9 rounded-xl ${stat.color} flex items-center justify-center mb-3`}>
-                <stat.icon className="w-4 h-4" />
+              <div className={`${stat.color} mb-3`}>
+                <stat.icon className="w-6 h-6" />
               </div>
               <p className="text-xl font-display font-bold text-gray-900">
                 {loading ? <span className="inline-block w-6 h-4 rounded bg-gray-100 animate-pulse" /> : stat.value}
@@ -453,7 +455,7 @@ export default function PatientDashboard() {
               to="/dashboard/clinics"
               className="group flex items-center gap-5 bg-white rounded-2xl p-6 border border-gray-100 hover:border-magenta-200 hover:shadow-sm transition-all"
             >
-              <div className="w-14 h-14 rounded-2xl bg-magenta-50 flex items-center justify-center group-hover:scale-105 transition-transform shrink-0">
+              <div className="flex items-center justify-center group-hover:scale-105 transition-transform shrink-0">
                 <MapPin className="w-7 h-7 text-magenta-500" />
               </div>
               <div className="flex-1">
@@ -468,7 +470,7 @@ export default function PatientDashboard() {
               to="/dashboard/clinics"
               className="group flex items-center gap-5 bg-white rounded-2xl p-6 border border-gray-100 hover:border-magenta-200 hover:shadow-sm transition-all"
             >
-              <div className="w-14 h-14 rounded-2xl bg-amber-50 flex items-center justify-center group-hover:scale-105 transition-transform shrink-0">
+              <div className="flex items-center justify-center group-hover:scale-105 transition-transform shrink-0">
                 <Calendar className="w-7 h-7 text-amber-500" />
               </div>
               <div className="flex-1">
@@ -629,7 +631,7 @@ export default function PatientDashboard() {
           >
             {skinTips.map((tip) => (
               <div key={tip.title} className="bg-white rounded-2xl p-5 border border-gray-100 flex items-start gap-4">
-                <div className="w-10 h-10 rounded-xl bg-magenta-50 flex items-center justify-center shrink-0">
+                <div className="flex items-center justify-center shrink-0">
                   <tip.icon className="w-5 h-5 text-magenta-500" />
                 </div>
                 <div>

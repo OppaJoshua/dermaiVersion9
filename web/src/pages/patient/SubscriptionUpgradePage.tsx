@@ -1,26 +1,26 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Sparkles, ArrowLeft, Crown, CalendarDays, Calendar, AlertCircle, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Calendar, CalendarDays, AlertCircle } from "lucide-react";
 import { getSubscriptionPlansAsync, type SubscriptionPlan } from "@/lib/store";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import gcashLogo from "@/assets/gcash.png";
 import mayaLogo from "@/assets/maya.png";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+// PayMongo is handled by the Supabase Edge Function.
 const PAYMONGO_PUBLIC_KEY = import.meta.env.VITE_PAYMONGO_PUBLIC_KEY || "";
+
 
 export default function SubscriptionUpgradePage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [isSubscribing, setIsSubscribing] = useState(false);
   const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("monthly");
+  const [selectedPlanId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [backendDown, setBackendDown] = useState(false);
 
   // Controlled form state
   const [fullName, setFullName] = useState("");
@@ -38,140 +38,213 @@ export default function SubscriptionUpgradePage() {
     if (user?.user_metadata?.full_name) setFullName((prev) => prev || user.user_metadata.full_name || "");
   }, [user]);
 
-  const matchedPlan = plans.find((p) => p.billingType === billingCycle && p.status === "active");
-  const basePrice = matchedPlan ? matchedPlan.price : (billingCycle === "monthly" ? 199 : 1999);
-  const tax = Math.round(basePrice * 0.12 * 100) / 100;
-  const total = Math.round((basePrice + tax) * 100) / 100;
-  const billingLabel = billingCycle === "monthly" ? "Monthly" : "Yearly";
+  const availablePlans = plans.filter(
+  (p) =>
+    p.billingType === billingCycle &&
+    p.status === "active" &&
+    p.price > 0
+);
 
-  const activateSubscription = async (cycle: "monthly" | "yearly", paymentMethodUsed: string = "gcash") => {
-    if (!user?.id) return;
-    const now = new Date();
-    const renewDate = new Date();
-    if (cycle === "yearly") {
-      renewDate.setFullYear(now.getFullYear() + 1);
-    } else {
-      renewDate.setMonth(now.getMonth() + 1);
-    }
+const selectedPlan =
+  availablePlans.find((p) => p.id === selectedPlanId) ??
+  availablePlans[0];
 
-    // Find the matching Pro plan (monthly or yearly)
-    const matchedPlan = plans.find((p) => p.billingType === cycle && p.status === "active");
-    // Fallback plan IDs match the seeds: Pro Monthly = ...0003, Pro Annual = ...0004
-    const fallbackPlanId =
-      cycle === "yearly"
-        ? "00000000-0000-0000-0000-000000000004"
-        : "00000000-0000-0000-0000-000000000003";
-    const planId = matchedPlan?.id || fallbackPlanId;
+const basePrice = selectedPlan?.price ?? 0;
+const total = Math.round(basePrice * 100) / 100;
+const billingLabel = billingCycle === "monthly" ? "Monthly" : "Yearly";
+const currentPlanId = selectedPlan?.id;
 
-    try {
-      // Upsert subscription row (one active sub per user)
-      const { error: subErr } = await supabase.from("user_plan_subscription").upsert(
-        {
-          user_id: user.id,
-          plan_id: planId,
-          status: "active",
-          billing_cycle: cycle,
-          started_at: now.toISOString(),
-          renews_at: renewDate.toISOString(),
-          current_period_start: now.toISOString(),
-          current_period_end: renewDate.toISOString(),
-        },
-        { onConflict: "user_id" }
-      );
-      if (subErr) console.error("[upgrade] subscription upsert error:", subErr.message);
 
-      // Insert payment receipt
-      const { error: payErr } = await supabase.from("user_payment").insert({
-        user_id: user.id,
-        plan_id: planId,
-        amount: total,
-        payment_date: now.toISOString(),
-        method: paymentMethodUsed,
-        status: "success",
-      });
-      if (payErr) console.error("[upgrade] payment insert error:", payErr.message);
-    } catch (dbErr) {
-      console.error("[upgrade] DB write failed:", dbErr);
-    }
-
-    sessionStorage.removeItem("dermai_pending_billing_cycle");
-    navigate("/dashboard", { replace: true });
-  };
-
-  // On return from PayMongo 3DS redirect, check payment status
+    // On return from PayMongo 3DS redirect, check payment status
   useEffect(() => {
-    const intentId = searchParams.get("payment_intent");
-    const clientKey = searchParams.get("payment_intent_client_key");
-    if (!intentId || !clientKey) return;
+    const runPaymentVerification = async () => {
+      // Read directly from the browser URL.
+      const params = new URLSearchParams(window.location.search);
 
-    let isMounted = true;
-    (async () => {
+      const intentId =
+        params.get("payment_intent") ||
+        params.get("payment_intent_id");
+
+      const clientKey =
+        params.get("payment_intent_client_key") ||
+        sessionStorage.getItem(
+          "dermai_pending_payment_intent_client_key"
+        );
+
+      // If this is a normal visit to the upgrade page,
+      // there is no payment to verify.
+      if (!intentId || !clientKey) {
+        setIsSubscribing(false);
+        return;
+      }
+
       try {
         setIsSubscribing(true);
         setError(null);
-        const res = await fetch(
-          `${BACKEND_URL}/api/payments/intent/${intentId}?client_key=${encodeURIComponent(clientKey)}`
-        );
-        const data = await res.json();
-        if (!isMounted) return;
-        if (data?.attributes?.status === "succeeded") {
-          const savedCycle = (sessionStorage.getItem("dermai_pending_billing_cycle") || billingCycle) as "monthly" | "yearly";
-          await activateSubscription(savedCycle, paymentMethod);
-        } else {
-          setError("Payment was not completed. Please try again.");
-          setIsSubscribing(false);
+
+        const { data, error: verifyError } =
+          await supabase.functions.invoke("paymongo-payment", {
+            body: {
+              action: "verify_payment_intent",
+              paymentIntentId: intentId,
+              clientKey,
+            },
+          });
+
+        if (verifyError) {
+          console.error(
+            "[upgrade] Payment verification error:",
+            verifyError
+          );
+          
+          throw new Error(
+            verifyError.message ||
+              "Failed to verify payment"
+          );
         }
-      } catch {
-        if (!isMounted) return;
-        setError("Failed to verify payment. Please contact support.");
+
+        const paymentStatus =
+          data?.attributes?.status || data?.status;
+
+        if (paymentStatus === "succeeded") {
+          sessionStorage.removeItem(
+            "dermai_pending_billing_cycle"
+          );
+
+          sessionStorage.removeItem(
+            "dermai_pending_payment_intent_client_key"
+          );
+
+          setIsSubscribing(false);
+          return;
+        }
+
+        setError(
+          `Payment was not completed. PayMongo status: ${paymentStatus || "unknown"}`
+        );
+        setIsSubscribing(false);
+      } catch (err: unknown) {
+        console.error(
+          "[upgrade] Payment verification failed:",
+          err
+        );
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to verify payment. Please try again."
+        );
+
         setIsSubscribing(false);
       }
-    })();
-
-    return () => {
-      isMounted = false;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+
+    runPaymentVerification();
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function formatMobileNumber(value: string) {
     return value.replace(/\D/g, "").slice(0, 11);
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubscribing(true);
-    setError(null);
-    setBackendDown(false);
+  e.preventDefault();
 
+  if (!user?.id) {
+    setError("You must be logged in to subscribe.");
+    setIsSubscribing(false);
+    return;
+  }
+
+  setIsSubscribing(true);
+
+  setError(null);
+
+  
     try {
-      // 1. Create Payment Intent via our backend
-      let intentRes: Response;
-      try {
-        intentRes = await fetch(`${BACKEND_URL}/api/payments/create-intent`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            amount: total,
-            description: `DermAI Premium ${billingLabel} Subscription`,
-            paymentMethod: paymentMethod,
-            mobileNumber: mobileNumber,
-          }),
-        });
-      } catch (networkErr) {
-        // Backend is unreachable — offer sandbox activation
-        console.warn("[upgrade] Backend unreachable:", networkErr);
-        setBackendDown(true);
-        setIsSubscribing(false);
-        return;
+
+    // Frontend guard: do not start a new payment while an existing
+    // paid Pro subscription is still within its current billing period.
+    const { data: existingSubscription, error: subscriptionError } =
+      await supabase
+        .from("user_plan_subscription")
+        .select(`
+          status,
+          current_period_end,
+          cancel_at_period_end,
+          plan:plan_id (
+            price
+          )
+        `)
+        .eq("user_id", user.id)
+        .eq("status", "active")
+        .order("current_period_end", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+    if (subscriptionError) {
+      throw new Error("Unable to check your current subscription. Please try again.");
+    }
+
+    const existingPeriodEnd = existingSubscription?.current_period_end
+      ? new Date(existingSubscription.current_period_end)
+      : null;
+
+    const existingPlan = Array.isArray(existingSubscription?.plan)
+      ? existingSubscription.plan[0]
+      : existingSubscription?.plan;
+
+    const hasActivePaidPeriod =
+      existingSubscription?.status === "active" &&
+      Number(existingPlan?.price ?? 0) > 0 &&
+      existingPeriodEnd !== null &&
+      existingPeriodEnd.getTime() > Date.now();
+
+    if (hasActivePaidPeriod) {
+      if (existingSubscription.cancel_at_period_end) {
+        throw new Error(
+          "Your Pro subscription is still active until the end of your current billing period. Resume your subscription from Billing Settings instead of purchasing again."
+        );
       }
 
-      const intentJson = await intentRes.json();
-      if (!intentRes.ok) throw new Error(intentJson.error || "Failed to create payment intent");
-      const { paymentIntentId, clientKey } = intentJson;
+      throw new Error(
+        "You already have an active Pro subscription. You cannot purchase another Pro subscription until the current billing period ends."
+      );
+    }
+
+    // 1. Create Payment Intent through the Supabase Edge Function
+const { data: intentJson, error: intentError } =
+  await supabase.functions.invoke("paymongo-payment", {
+    body: {
+      paymentMethod: paymentMethod,
+      userId: user.id,
+      planId: currentPlanId,
+      billingCycle: billingCycle,
+      fullName,
+      email,
+      address,
+      mobileNumber,
+    },
+  });
+
+if (intentError) {
+  console.error("[upgrade] PayMongo Edge Function error:", intentError);
+  throw new Error(
+    intentError.message || "Failed to create payment intent"
+  );
+}
+
+if (!intentJson?.paymentIntentId || !intentJson?.clientKey) {
+  console.error("[upgrade] Invalid payment intent response:", intentJson);
+  throw new Error("PayMongo did not return a valid payment intent");
+}
+
+const { paymentIntentId, clientKey } = intentJson;
 
       // Save billing cycle so we can restore it after a 3DS redirect
       sessionStorage.setItem("dermai_pending_billing_cycle", billingCycle);
+      sessionStorage.setItem("dermai_pending_payment_intent_client_key", clientKey);
 
       // 2. Create Payment Method directly with PayMongo (uses public key)
       const pmRes = await fetch("https://api.paymongo.com/v1/payment_methods", {
@@ -183,12 +256,12 @@ export default function SubscriptionUpgradePage() {
         body: JSON.stringify({
           data: {
             attributes: {
-              type: paymentMethod,
+              type: paymentMethod === "maya" ? "paymaya" : paymentMethod,
               billing: {
                 name: fullName,
                 email,
                 phone: mobileNumber,
-                address: { line1: address, city: "Philippines", country: "PH" },
+                address: { line1: address, city: "Cebu City", country: "PH" },
               },
             },
           },
@@ -200,15 +273,31 @@ export default function SubscriptionUpgradePage() {
       }
       const paymentMethodId = pmJson.data.id;
 
-      // 3. Attach Payment Method to Intent via our backend
-      const returnUrl = `${window.location.origin}/dashboard/upgrade?payment_intent=${paymentIntentId}&payment_intent_client_key=${encodeURIComponent(clientKey)}`;
-      const attachRes = await fetch(`${BACKEND_URL}/api/payments/attach`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paymentIntentId, paymentMethodId, clientKey, returnUrl }),
-      });
-      const intentData = await attachRes.json();
-      if (!attachRes.ok) throw new Error(intentData.error || "Payment processing failed");
+      // 3. Attach Payment Method through the Supabase Edge Function
+      const returnUrl = `${window.location.origin}/patient/payment/success?payment_intent=${paymentIntentId}&payment_intent_client_key=${encodeURIComponent(clientKey)}`;
+
+      const { data: intentData, error: attachError } =
+        await supabase.functions.invoke("paymongo-payment", {
+          body: {
+            action: "attach_payment_method",
+            paymentIntentId,
+            paymentMethodId,
+            clientKey,
+            returnUrl,
+          },
+        });
+
+      if (attachError) {
+        console.error("[upgrade] PayMongo attach error:", attachError);
+        throw new Error(
+          attachError.message || "Payment processing failed"
+        );
+      }
+
+      if (!intentData?.status) {
+        console.error("[upgrade] Invalid attach response:", intentData);
+        throw new Error("PayMongo returned an invalid payment response");
+      }
 
       const status = intentData?.attributes?.status;
 
@@ -218,8 +307,17 @@ export default function SubscriptionUpgradePage() {
         if (!redirectUrl) throw new Error("3DS redirect URL not found");
         window.location.href = redirectUrl;
       } else if (status === "succeeded") {
-        await activateSubscription(billingCycle, paymentMethod);
-      } else {
+
+      sessionStorage.removeItem(
+        "dermai_pending_billing_cycle"
+      );
+
+      sessionStorage.removeItem(
+        "dermai_pending_payment_intent_client_key"
+      );
+
+      setIsSubscribing(false);
+    } else {
         throw new Error(`Payment was not successful (status: ${status}). Please try again.`);
       }
     } catch (err: unknown) {
@@ -232,26 +330,13 @@ export default function SubscriptionUpgradePage() {
   return (
     <div className="min-h-screen bg-white text-gray-900 pt-8 pb-20 px-4 font-sans antialiased">
       <div className="max-w-5xl mx-auto">
-        {/* Top Back Navigation */}
-        <div className="mb-6 flex items-center justify-between">
-          <button
-            onClick={() => navigate(-1)}
-            className="inline-flex items-center gap-2 text-xs font-semibold text-gray-500 hover:text-gray-900 transition-colors px-3 py-1.5 rounded-lg hover:bg-gray-50"
-          >
-            <ArrowLeft className="w-4 h-4" /> Back to Dashboard
-          </button>
-        </div>
-
         {/* Header */}
         <div className="text-center max-w-xl mx-auto mb-8">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-600 text-xs font-semibold mb-3">
-            <Sparkles className="w-3.5 h-3.5" /> Upgrade to DermAI Pro
-          </span>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">
             Unlock Unlimited AI Skin Analysis
           </h1>
           <p className="text-sm text-gray-500 mt-2">
-            Get unlimited AI scans, priority clinic booking, and detailed skin progression analytics.
+            Get unlimited AI scans.
           </p>
 
           {/* Billing Cycle Toggle */}
@@ -267,7 +352,9 @@ export default function SubscriptionUpgradePage() {
               )}
             >
               <Calendar className="w-3.5 h-3.5 text-magenta-500" />
-              <span>Monthly • ₱199</span>
+             <span>
+                Monthly ₱{plans.find((p) => p.billingType === "monthly" && p.status === "active" && p.price > 0)?.price.toLocaleString() ?? "—"}
+             </span>
             </button>
             <button
               type="button"
@@ -280,10 +367,9 @@ export default function SubscriptionUpgradePage() {
               )}
             >
               <CalendarDays className="w-3.5 h-3.5 text-magenta-500" />
-              <span>Yearly • ₱1,999</span>
-              <span className="absolute -top-2.5 -right-1 bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider">
-                -16%
-              </span>
+             <span>
+  Yearly ₱{plans.find((p) => p.billingType === "yearly" && p.status === "active" && p.price > 0)?.price.toLocaleString() ?? "—"}
+</span>
             </button>
           </div>
         </div>
@@ -297,12 +383,13 @@ export default function SubscriptionUpgradePage() {
           >
             <div className="bg-white rounded-3xl border border-gray-100 p-6 sm:p-7 shadow-xs">
               <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
-                <div className="w-12 h-12 rounded-2xl bg-magenta-50 text-magenta-600 flex items-center justify-center shrink-0">
-                  <Crown className="w-6 h-6" />
-                </div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-900">Pro Membership</h2>
-                  <p className="text-xs text-gray-500">Unlimited Anomaly Scans</p>
+                 <h2 className="text-lg font-bold text-gray-900">
+                     {selectedPlan?.name ?? "Subscription Plan"}
+                </h2>
+                  <p className="text-xs text-gray-500">
+                     {selectedPlan?.description || "Subscription Plan"}
+                </p>
                 </div>
               </div>
 
@@ -314,40 +401,35 @@ export default function SubscriptionUpgradePage() {
                 </div>
                 <div className="flex justify-between items-center text-gray-600">
                   <span>Subtotal</span>
-                  <span className="font-semibold text-gray-900">₱{basePrice.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between items-center text-gray-600">
-                  <span>VAT / Tax (12%)</span>
-                  <span className="font-semibold text-gray-900">₱{tax.toFixed(2)}</span>
+                  <span className="font-semibold text-gray-900">{basePrice.toLocaleString()}</span>
                 </div>
                 <div className="pt-3 border-t border-gray-100 flex justify-between items-baseline">
-                  <span className="text-sm font-bold text-gray-900">Total Due Today</span>
+                  <span className="text-sm font-bold text-gray-900"> Due today</span>
                   <span className="text-xl font-bold text-magenta-600">
-                    ₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                     ₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
               </div>
 
               {/* Pro Features Included */}
               <div className="space-y-2.5 pt-4 border-t border-gray-100 mb-5">
-                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Included with Pro</p>
+                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">
+                    INCLUDED WITH {selectedPlan?.name?.toUpperCase() ?? "SUBSCRIPTION PLAN"}
+                </p>
+
                 <div className="space-y-2 text-xs text-gray-600">
-                  <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                    <span>Unlimited AI skin disease scans</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                    <span>Priority clinic consultation requests</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                    <span>Full scan history &amp; severity tracking</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                    <span>Continuous instant updates</span>
-                  </div>
+                    {(selectedPlan?.features ?? []).map((feature, index) => (
+                        <div key={`${selectedPlan?.id}-feature-${index}`} className="flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                            <span>{feature}</span>
+                        </div>
+                    ))}
+
+                    {(!selectedPlan?.features || selectedPlan.features.length === 0) && (
+                        <p className="text-gray-400">
+                            No additional features listed.
+                        </p>
+                    )}
                 </div>
               </div>
 
@@ -378,27 +460,6 @@ export default function SubscriptionUpgradePage() {
                   </div>
                 )}
 
-                {backendDown && (
-                  <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs space-y-3">
-                    <div className="flex items-start gap-2">
-                      <WifiOff className="w-4 h-4 shrink-0 text-amber-500 mt-0.5" />
-                      <div>
-                        <p className="font-semibold">Payment server is currently unreachable</p>
-                        <p className="text-amber-700 mt-0.5 leading-relaxed">
-                          The PayMongo backend (localhost:3001) could not be contacted. You can activate your
-                          subscription directly for testing purposes, or try again later when the server is running.
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => activateSubscription(billingCycle, paymentMethod)}
-                      className="w-full py-2.5 rounded-xl bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors"
-                    >
-                      Activate Directly (Sandbox / Dev Mode)
-                    </button>
-                  </div>
-                )}
 
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1.5">
@@ -516,7 +577,7 @@ export default function SubscriptionUpgradePage() {
                       "Processing Payment..."
                     ) : (
                       <>
-                        <Sparkles className="w-4 h-4" /> Pay &amp; Activate (₱{total.toFixed(2)})
+                         Pay &amp; Activate (₱{total.toFixed(2)})
                       </>
                     )}
                   </button>
@@ -536,3 +597,16 @@ export default function SubscriptionUpgradePage() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+

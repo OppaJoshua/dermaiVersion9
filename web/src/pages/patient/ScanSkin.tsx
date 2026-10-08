@@ -502,8 +502,34 @@ export default function ScanSkinPage() {
       });
 
       // ==========================================================
-      // STEP 2: If authenticated — upload BOTH photos + insert DB row (status: pending)
+      // STEP 2: Call FastAPI /predict with the close-up image FIRST
+      // Pipeline in FastAPI:
+      //   1. Image quality validation (blur, brightness, contrast, resolution)
+      //   2. Human-skin validation (human skin detector)
+      //   3. ResNet50 skin condition classification
+      //   4. Confidence threshold check
+      //
+      // If ANY validation fails:
+      //   - FastAPI raises 400 HTTPException with user-friendly retake instructions
+      //   - We catch it, setAnalyzeError(message), and DO NOT proceed
+      //   - NO storage upload, NO database record created, NO scan quota consumed
       // ==========================================================
+      let aiResult;
+      try {
+        aiResult = await predictSkinCondition(closeUpFile);
+      } catch (err) {
+        const errMsg =
+          err instanceof AIPredictionError
+            ? err.message
+            : "AI prediction failed.";
+        throw new Error(errMsg);
+      }
+
+      // ==========================================================
+      // STEP 3: If authenticated and AI succeeded — upload photos & insert completed record
+      // ==========================================================
+      const conditionUUID = getConditionUUID(aiResult.predicted_class);
+
       if (user?.id) {
         const ts = Date.now();
         // Upload close-up
@@ -520,13 +546,14 @@ export default function ScanSkinPage() {
           .upload(widePath, wideFile, { upsert: false });
         if (!upErr2) uploadedWidePath = widePath;
 
-        // Insert scan record with status 'pending'
+        // Insert ONE completed scan record directly with full AI results and confidence
         const { data: scanInsertData, error: insertErr } = await supabase
           .from("ai_scan_result")
           .insert({
             user_id: user.id,
-            confidence_score: 0,
-            status: "pending",
+            confidence_score: aiResult.confidence,
+            status: "completed",
+            condition_id: conditionUUID,
             photo_url: uploadedCloseUpPath || null,
             photo_url_wide: uploadedWidePath || null,
             body_part: "Skin Assessment",
@@ -540,7 +567,7 @@ export default function ScanSkinPage() {
         } else if (scanInsertData?.analysis_id) {
           analysisId = scanInsertData.analysis_id;
 
-          // Also save questionnaire answers (existing behavior)
+          // Also save questionnaire answers
           try {
             const skinAnswerRows = questionnaireData.map((item, idx) => ({
               analysis_id: analysisId,
@@ -553,54 +580,12 @@ export default function ScanSkinPage() {
             /* ignore if ai_skin_answer table is missing */
           }
         }
-      }
 
-      // ==========================================================
-      // STEP 3: Mark as 'processing' (DB update) + call FastAPI
-      // ==========================================================
-      if (analysisId) {
-        await supabase
-          .from("ai_scan_result")
-          .update({ status: "processing" })
-          .eq("analysis_id", analysisId);
-      }
-
-      // Call FastAPI /predict with the close-up image
-      let aiResult;
-      try {
-        aiResult = await predictSkinCondition(closeUpFile);
-      } catch (err) {
-        const errMsg =
-          err instanceof AIPredictionError
-            ? err.message
-            : "AI prediction failed.";
-        // Mark failed in DB
-        if (analysisId) {
-          await supabase
-            .from("ai_scan_result")
-            .update({ status: "failed" })
-            .eq("analysis_id", analysisId);
-        }
-        throw new Error(errMsg);
-      }
-
-      // ==========================================================
-      // STEP 4: Save AI result to DB + mark 'completed'
-      // ==========================================================
-      const conditionUUID = getConditionUUID(aiResult.predicted_class);
-
-      if (analysisId) {
-        const { error: updateErr } = await supabase
-          .from("ai_scan_result")
-          .update({
-            status: "completed",
-            confidence_score: aiResult.confidence,
-            condition_id: conditionUUID,
-          })
-          .eq("analysis_id", analysisId);
-        if (updateErr) {
-          console.warn("Failed to update ai_scan_result:", updateErr.message);
-        }
+        // Deduct 1 scan from local allowance state so UI reflects usage immediately
+        setSubData((prev) => ({
+          ...prev,
+          scansUsed: prev.scansUsed + 1,
+        }));
       }
 
       // ==========================================================
@@ -670,6 +655,41 @@ export default function ScanSkinPage() {
       setIsAnalyzing(false);
     }
   };
+
+  const handleScanBookingContext = () => {
+    if (scanResult) {
+      try {
+        const questionnairePayload = QUESTIONS.map((q) => {
+          const chosenIndex = answers[q.id];
+          const chosenOption = chosenIndex !== undefined ? q.options[chosenIndex] : null;
+          return {
+            id: q.id,
+            question: q.text,
+            answer: chosenOption?.label || "Not specified",
+            severity: chosenOption?.severity ?? null,
+          };
+        });
+
+        sessionStorage.setItem(
+          "dermai_scan_booking_context",
+          JSON.stringify({
+            scanId: scanResult.id,
+            condition: scanResult.condition,
+            confidence: Math.round(scanResult.confidence || 0),
+            photoUrl: scanResult.imageUrl || "",
+            questionnaire: questionnairePayload,
+            timestamp: Date.now(),
+          })
+        );
+      } catch {
+        /* ignore storage errors */
+      }
+    }
+  };
+
+  const scanClinicsUrl = scanResult
+    ? `/dashboard/clinics?fromScan=1&scanId=${encodeURIComponent(scanResult.id)}&condition=${encodeURIComponent(scanResult.condition)}&confidence=${encodeURIComponent(String(Math.round(scanResult.confidence || 0)))}`
+    : "/dashboard/clinics";
 
   return (
     <div className="min-h-screen bg-white text-slate-900 pt-8 pb-16">
@@ -1196,7 +1216,8 @@ export default function ScanSkinPage() {
                         </p>
                       </div>
                       <Link
-                        to="/dashboard/clinics"
+                        to={scanClinicsUrl}
+                        onClick={handleScanBookingContext}
                         className="px-4 py-2 rounded-full bg-magenta-500 text-white text-xs font-semibold hover:bg-magenta-600 transition-colors"
                       >
                         View
@@ -1208,7 +1229,8 @@ export default function ScanSkinPage() {
                   )}
                 </div>
                 <Link
-                  to="/dashboard/clinics"
+                  to={scanClinicsUrl}
+                  onClick={handleScanBookingContext}
                   className="flex items-center justify-center gap-1 mt-4 text-sm text-magenta-500 font-semibold hover:text-magenta-600"
                 >
                   View all clinics <ArrowRight className="w-4 h-4" />
@@ -1231,7 +1253,8 @@ export default function ScanSkinPage() {
                   Scan Again
                 </button>
                 <Link
-                  to="/dashboard/clinics"
+                  to={scanClinicsUrl}
+                  onClick={handleScanBookingContext}
                   className="flex-1 py-3.5 rounded-full font-semibold text-sm bg-magenta-500 text-white text-center hover:bg-magenta-600 transition-colors shadow-lg shadow-magenta-500/20 active:scale-[0.96]"
                 >
                   Find a Clinic

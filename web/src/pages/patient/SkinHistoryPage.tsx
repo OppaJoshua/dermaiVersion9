@@ -67,6 +67,7 @@ export default function PatientSkinHistory() {
           )
         `)
         .eq("user_id", userId)
+        .eq("status", "completed")
         .order("scanned_at", { ascending: false });
 
       if (cancelled) return;
@@ -274,11 +275,8 @@ export default function PatientSkinHistory() {
         </div>
       ) : (
         <div className="bg-white rounded-3xl border border-dashed border-gray-200 p-16 flex flex-col items-center justify-center text-center">
-          <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 mb-6 group-hover:scale-110 transition-transform">
-            <Activity className="w-10 h-10" />
-          </div>
 
-          <h2 className="text-xl font-bold text-gray-900 mb-2">
+          <h2 className="text-xl font-bold text-graSy-900 mb-2">
             No History Found
           </h2>
 

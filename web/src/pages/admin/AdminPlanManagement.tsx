@@ -21,16 +21,14 @@ import {
 } from "@/lib/store";
 import { logAdminAction } from "@/lib/auditLog";
 
-const BILLING_LABELS: Record<SubscriptionPlan["billingType"], string> = {
+const BILLING_LABELS = {
   monthly: "Monthly",
   yearly: "Yearly",
-  "one-time": "One-time",
 };
 
 const BILLING_COLORS: Record<SubscriptionPlan["billingType"], string> = {
   monthly: "bg-sky-100 text-sky-700",
   yearly: "bg-violet-100 text-violet-700",
-  "one-time": "bg-gray-100 text-gray-600",
 };
 
 const EMPTY_FORM: Omit<SubscriptionPlan, "id" | "createdAt" | "updatedAt"> = {
@@ -91,31 +89,48 @@ export default function AdminPlanManagement() {
   };
 
   const handleSave = async () => {
-    const features = featuresText
-      .split("\n")
-      .map((f) => f.trim())
-      .filter(Boolean);
+  const features = featuresText
+    .split("\n")
+    .map((f) => f.trim())
+    .filter(Boolean);
 
-    if (!form.name.trim()) return;
+  if (!form.name.trim()) return;
 
-    const plan: SubscriptionPlan = {
-      id: editingPlan?.id ?? `plan-${Date.now()}`,
-      ...form,
-      features,
-      createdAt: editingPlan?.createdAt ?? new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+  const normalizedBillingType: SubscriptionPlan["billingType"] =
+  form.billingType;
 
+  const plan: SubscriptionPlan = {
+    id: editingPlan?.id ?? `plan-${Date.now()}`,
+    ...form,
+    billingType: normalizedBillingType,
+    features,
+    createdAt: editingPlan?.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
     await upsertSubscriptionPlan(plan);
+
     logAdminAction(
       editingPlan ? "Plan Updated" : "Plan Created",
       plan.name,
       `${editingPlan ? "Updated" : "Created"} subscription plan: ${plan.name} (₱${plan.price} / ${plan.billingType})`,
       "subscription"
     );
+
     await loadPlans();
     setShowModal(false);
-  };
+  } catch (error) {
+    console.error("[AdminPlanManagement] Failed to save plan:", error);
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "An unexpected error occurred while saving the plan.";
+
+    window.alert(`Failed to save plan.\n\n${message}`);
+  }
+};
 
   const handleDelete = async (plan: SubscriptionPlan) => {
     await deleteSubscriptionPlan(plan.id);
@@ -325,21 +340,43 @@ export default function AdminPlanManagement() {
                     type="number"
                     min={0}
                     value={form.price}
-                    onChange={(e) => setForm((f) => ({ ...f, price: Number(e.target.value) }))}
-                    className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
-                  />
+                  onChange={(e) => {
+ 		    const price = e.target.value === "" ? 0 : Number(e.target.value);
+
+  		    setForm((f) => ({
+                      ...f,
+                      price,
+                    }));
+                  }}                                                     className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
+                    />
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">Billing Type</label>
                   <select
-                    value={form.billingType}
-                    onChange={(e) => setForm((f) => ({ ...f, billingType: e.target.value as SubscriptionPlan["billingType"] }))}
-                    className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all bg-white"
-                  >
+                     value={form.billingType}
+                     onChange={(e) =>
+                       setForm((f) => ({
+                         ...f,
+                         billingType:
+                           e.target.value as SubscriptionPlan["billingType"],         
+                      }))
+                    }
+                    className={cn(
+                      "w-full border rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-magenta-500/20 transition-all",
+                      form.price <= 0
+                        ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                        : "bg-white border-gray-200 focus:ring-magenta-500/20 focus:border-magenta-500"
+                    )}
+                    >
                     <option value="monthly">Monthly</option>
                     <option value="yearly">Yearly</option>
-                    <option value="one-time">One-time</option>
-                  </select>
+                    </select>
+
+                    <p className="text-xs mt-1.5 text-gray-400">
+                      {form.price <= 0
+                        ? "Free plans do not require a billing cycle."
+                        : "Choose how often this plan is billed."}
+                    </p>
                 </div>
               </div>
 

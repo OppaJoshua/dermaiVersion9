@@ -69,7 +69,8 @@ export default function AdminUserManagement() {
             .order("full_name"),
           supabase
             .from("ai_scan_result")
-            .select("user_id"),
+            .select("user_id")
+            .eq("status", "completed"),
           supabase
             .from("user_plan_subscription")
             .select("user_id, status, plan:plan_id(name, scan_limit)")

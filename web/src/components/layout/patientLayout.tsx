@@ -106,7 +106,7 @@ export default function UserLayout({
   profile: customProfile,
   onLogout,
 }: UserLayoutProps) {
-  const { user, session, loading, role, roleLoading, signOut } = useAuth();
+  const { user, session, loading, role, roleLoading, isProfileComplete, signOut } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -127,9 +127,11 @@ export default function UserLayout({
         navigate("/clinic", { replace: true });
       } else if (role === "doctor") {
         navigate("/doctor", { replace: true });
+      } else if (role === "patient" && !isProfileComplete && location.pathname !== "/dashboard/profile") {
+        navigate("/dashboard/profile?incomplete=1", { replace: true });
       }
     }
-  }, [user, session, loading, role, roleLoading, location.pathname, location.search, navigate]);
+  }, [user, session, loading, role, roleLoading, isProfileComplete, location.pathname, location.search, navigate]);
 
   const getLocalProfile = (userId?: string) => {
     if (!userId) return null;
@@ -243,7 +245,7 @@ export default function UserLayout({
         .limit(1)
         .maybeSingle();
 
-      if (subData) {
+    if (subData) {
         const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
         tier = planObj?.name || "Pro Plan";
       }
@@ -497,7 +499,7 @@ export default function UserLayout({
 
       {/* Main Content */}
       <main className="flex-1 lg:ml-70 min-h-screen flex flex-col relative w-full">
-        {/* Top Header — clinic-style breadcrumb + bell */}
+        {/* Top Header Î“Ã‡Ã¶ clinic-style breadcrumb + bell */}
         <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
           <div className="flex items-center gap-3">
             <button
@@ -604,7 +606,7 @@ export default function UserLayout({
                               {n.body}
                             </p>
                             <p className="text-[10px] text-gray-400 mt-1">
-                              {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(n.createdAt).toLocaleDateString()}
+                              {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} Î“Ã‡Ã³ {new Date(n.createdAt).toLocaleDateString()}
                             </p>
                           </div>
                           {!n.isRead && (
@@ -622,14 +624,14 @@ export default function UserLayout({
                     onClick={() => setNotifOpen(false)}
                     className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors"
                   >
-                    Skin scan history →
+                    Skin scan history Î“Ã¥Ã†
                   </Link>
                   <Link
                     to="/patient/appointments"
                     onClick={() => setNotifOpen(false)}
                     className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors"
                   >
-                    Appointments →
+                    Appointments Î“Ã¥Ã†
                   </Link>
                 </div>
               </div>
@@ -642,3 +644,5 @@ export default function UserLayout({
     </div>
   );
 }
+
+
