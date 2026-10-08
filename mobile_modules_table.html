@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DermAI - List of Modules (MOBILE)</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 15mm 15mm;
+    }
+    body {
+      font-family: 'Times New Roman', Times, serif;
+      color: #000;
+      background: #fff;
+      margin: 0;
+      padding: 10px;
+    }
+    h2 {
+      text-align: center;
+      margin: 0 0 10px 0;
+      font-size: 15pt;
+      font-weight: bold;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10.5pt;
+      page-break-inside: auto;
+    }
+    tr {
+      page-break-inside: avoid;
+      page-break-after: auto;
+    }
+    th, td {
+      border: 1.2px solid #000;
+      padding: 5px 8px;
+      vertical-align: middle;
+    }
+    .main-title-header {
+      background-color: #fff;
+      font-weight: bold;
+      text-align: center;
+      font-size: 13pt;
+      padding: 7px;
+    }
+    .col-header {
+      background-color: #bdd7ee;
+      font-weight: bold;
+      text-align: center;
+      font-size: 11pt;
+      padding: 6px 4px;
+    }
+    .category-header {
+      background-color: #d9d9d9;
+      font-weight: bold;
+      text-align: center;
+      font-size: 11pt;
+      padding: 5px;
+    }
+    .programmer-cell {
+      font-weight: bold;
+      text-align: center;
+      vertical-align: middle;
+      width: 25%;
+      font-size: 10.5pt;
+      line-height: 1.3;
+    }
+    .index-cell {
+      text-align: center;
+      width: 6%;
+      font-weight: bold;
+    }
+    .module-cell {
+      text-align: left;
+      width: 53%;
+      padding-left: 10px;
+    }
+    .role-cell {
+      text-align: center;
+      font-weight: bold;
+      font-size: 14pt;
+      width: 16%;
+    }
+    .points-row {
+      background-color: #f2f2f2;
+      font-weight: bold;
+    }
+    .points-label {
+      text-align: left;
+      font-weight: bold;
+      padding-left: 10px;
+    }
+    .points-val {
+      text-align: center;
+      font-weight: bold;
+      font-size: 11pt;
+    }
+    .grand-total-row {
+      background-color: #bdd7ee;
+      font-weight: bold;
+      font-size: 11pt;
+    }
+  </style>
+</head>
+<body>
+
+  <table>
+    <!-- Top Header -->
+    <thead>
+      <tr>
+        <th colspan="4" class="main-title-header">List of Modules (MOBILE)</th>
+      </tr>
+      <tr>
+        <th class="col-header" style="width: 25%;">Programmer</th>
+        <th class="col-header" style="width: 6%;">#</th>
+        <th class="col-header" style="width: 53%;">Modules</th>
+        <th class="col-header" style="width: 16%;">Public User<br>(Patient)</th>
+      </tr>
+    </thead>
+    <tbody>
+
+      <!-- 1. ACCOUNT MANAGEMENT -->
+      <tr>
+        <td colspan="4" class="category-header">Account Management</td>
+      </tr>
+      <tr>
+        <td rowspan="6" class="programmer-cell">Josua<br>Agustine<br>Calago</td>
+        <td class="index-cell">1</td>
+        <td class="module-cell">Register Account (Email &amp; Google Auth)</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">2</td>
+        <td class="module-cell">Login / Logout (Email &amp; Google Auth)</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">3</td>
+        <td class="module-cell">Choose Subscription Tier (Free / Premium)</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">4</td>
+        <td class="module-cell">App Settings &amp; Notification Preferences</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">5</td>
+        <td class="module-cell">Delete / Deactivate Account</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr class="points-row">
+        <td class="points-label" colspan="2">No. of Points (1 point per module user)</td>
+        <td class="points-val">5</td>
+      </tr>
+
+      <!-- 2. AI SKIN ANALYSIS -->
+      <tr>
+        <td colspan="4" class="category-header">AI Skin Analysis</td>
+      </tr>
+      <tr>
+        <td rowspan="5" class="programmer-cell">Juliana<br>Oledan</td>
+        <td class="index-cell">1</td>
+        <td class="module-cell">Pre-Analysis Assessment Questionnaire</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">2</td>
+        <td class="module-cell">Upload Lesion Photos (Close-up &amp; Framing Guide)</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">3</td>
+        <td class="module-cell">View AI Scan Result (Condition Prediction &amp; Confidence Score)</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">4</td>
+        <td class="module-cell">Skin Disease Library &amp; Condition Details</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr class="points-row">
+        <td class="points-label" colspan="2">No. of Points (1 point per module user)</td>
+        <td class="points-val">4</td>
+      </tr>
+
+      <!-- 3. SCAN HISTORY -->
+      <tr>
+        <td colspan="4" class="category-header">Scan History</td>
+      </tr>
+      <tr>
+        <td rowspan="4" class="programmer-cell">Jonathan<br>Bayutas Jr.</td>
+        <td class="index-cell">1</td>
+        <td class="module-cell">View Scan History Timeline &amp; Past Analyses</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">2</td>
+        <td class="module-cell">View Historical Scan Result Detail &amp; Skin Condition Info</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">3</td>
+        <td class="module-cell">Delete Scan History Entry</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr class="points-row">
+        <td class="points-label" colspan="2">No. of Points (1 point per module user)</td>
+        <td class="points-val">3</td>
+      </tr>
+
+      <!-- 4. APPOINTMENT -->
+      <tr>
+        <td colspan="4" class="category-header">Appointment</td>
+      </tr>
+      <tr>
+        <td rowspan="6" class="programmer-cell">Josua<br>Agustine<br>Calago</td>
+        <td class="index-cell">1</td>
+        <td class="module-cell">Book Appointment (Select Clinic, Doctor, Date, Time &amp; Skin Photo)</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">2</td>
+        <td class="module-cell">View Real-Time Multi-Step Appointment Status Tracker</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">3</td>
+        <td class="module-cell">View Upcoming Confirmed Appointments</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">4</td>
+        <td class="module-cell">View Past / Completed Consultations &amp; Clinical Diagnosis</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">5</td>
+        <td class="module-cell">Cancel Pending Appointment Request</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr class="points-row">
+        <td class="points-label" colspan="2">No. of Points (1 point per module user)</td>
+        <td class="points-val">5</td>
+      </tr>
+
+      <!-- 5. UPGRADE PLAN (PREMIUM SUBSCRIPTION) -->
+      <tr>
+        <td colspan="4" class="category-header">Upgrade Plan (Premium Subscription)</td>
+      </tr>
+      <tr>
+        <td rowspan="5" class="programmer-cell">Audrey<br>Lee<br>Saludaga</td>
+        <td class="index-cell">1</td>
+        <td class="module-cell">View Premium Subscription Plans &amp; Benefits</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">2</td>
+        <td class="module-cell">Upgrade to Premium (Monthly / Annual via GCash &amp; Maya)</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">3</td>
+        <td class="module-cell">View Own Subscription Status, Availed Date &amp; Renewal Date</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">4</td>
+        <td class="module-cell">View Billing &amp; Payment Transaction History</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr class="points-row">
+        <td class="points-label" colspan="2">No. of Points (1 point per module user)</td>
+        <td class="points-val">4</td>
+      </tr>
+
+      <!-- 6. MAP & CLINIC FINDER -->
+      <tr>
+        <td colspan="4" class="category-header">Map &amp; Clinic Finder</td>
+      </tr>
+      <tr>
+        <td rowspan="5" class="programmer-cell">Jonathan<br>Bayutas Jr.</td>
+        <td class="index-cell">1</td>
+        <td class="module-cell">Browse &amp; Search Verified Dermatology Clinics Directory</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">2</td>
+        <td class="module-cell">Interactive Cebu Clinic Map View</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">3</td>
+        <td class="module-cell">Filter Map &amp; Clinic Results by Doctor, Specialty, or Services</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">4</td>
+        <td class="module-cell">View Verified Clinic Profile &amp; Operating Hours</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr class="points-row">
+        <td class="points-label" colspan="2">No. of Points (1 point per module user)</td>
+        <td class="points-val">4</td>
+      </tr>
+
+      <!-- 7. PROFILE -->
+      <tr>
+        <td colspan="4" class="category-header">Profile</td>
+      </tr>
+      <tr>
+        <td rowspan="3" class="programmer-cell">Audrey<br>Lee<br>Saludaga</td>
+        <td class="index-cell">1</td>
+        <td class="module-cell">View &amp; Edit Personal Basic Information (Name, Contact, Address)</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">2</td>
+        <td class="module-cell">Manage Emergency Contact Details</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr class="points-row">
+        <td class="points-label" colspan="2">No. of Points (1 point per module user)</td>
+        <td class="points-val">2</td>
+      </tr>
+
+      <!-- 8. NOTIFICATIONS -->
+      <tr>
+        <td colspan="4" class="category-header">Notifications</td>
+      </tr>
+      <tr>
+        <td rowspan="5" class="programmer-cell">Audrey<br>Lee<br>Saludaga</td>
+        <td class="index-cell">1</td>
+        <td class="module-cell">Real-Time Appointment Status &amp; Review Notifications</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">2</td>
+        <td class="module-cell">AI Scan Low-Confidence &amp; Screening Alerts</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">3</td>
+        <td class="module-cell">Subscription Upgrade &amp; Payment Confirmation Alerts</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">4</td>
+        <td class="module-cell">Broadcast System Announcements</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr class="points-row">
+        <td class="points-label" colspan="2">No. of Points (1 point per module user)</td>
+        <td class="points-val">4</td>
+      </tr>
+
+      <!-- 9. HELPDESK & SUPPORT -->
+      <tr>
+        <td colspan="4" class="category-header">Helpdesk &amp; Support</td>
+      </tr>
+      <tr>
+        <td rowspan="3" class="programmer-cell">Juliana<br>Oledan</td>
+        <td class="index-cell">1</td>
+        <td class="module-cell">Submit Support Help Ticket &amp; Inquiries</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr>
+        <td class="index-cell">2</td>
+        <td class="module-cell">Help Center &amp; Frequently Asked Questions (FAQ) Page</td>
+        <td class="role-cell">*</td>
+      </tr>
+      <tr class="points-row">
+        <td class="points-label" colspan="2">No. of Points (1 point per module user)</td>
+        <td class="points-val">2</td>
+      </tr>
+
+      <!-- GRAND TOTAL ROW -->
+      <tr class="grand-total-row">
+        <td colspan="3" style="text-align: center; font-weight: bold; padding: 8px;">TOTAL MODULE POINTS</td>
+        <td class="points-val" style="font-size: 12pt;">33</td>
+      </tr>
+
+    </tbody>
+  </table>
+
+</body>
+</html>

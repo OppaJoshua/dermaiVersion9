@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "864603734097",
+    "firebase_url": "https://dermai-fea40-default-rtdb.firebaseio.com",
+    "project_id": "dermai-fea40",
+    "storage_bucket": "dermai-fea40.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:864603734097:android:1fe796dc1127c913b63870",
+        "android_client_info": {
+          "package_name": "com.dermai.mobile"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "864603734097-h37dbceh6n7avc3a013l568ls4eoalct.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.dermai.mobile",
+            "certificate_hash": "7b8538edc8e162962afd6cd0a780766fc8b2ae39"
+          }
+        },
+        {
+          "client_id": "864603734097-kn91cf1lvg9i6tq6s0smu6lct3tr5bmq.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBEMwDA-pKC4jX5WFPRYns2GNUTcXULHME"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "864603734097-kn91cf1lvg9i6tq6s0smu6lct3tr5bmq.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
