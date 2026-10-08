@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme {
-  --color-magenta-50:  #fdf2f7;
+  --color-magenta-50: #fdf2f7;
   --color-magenta-100: #fce7f0;
   --color-magenta-200: #fbcfe1;
   --color-magenta-300: #f4a3c4;
@@ -51,4 +51,4 @@
 
 .leaflet-bar a:last-child {
   border-bottom: none !important;
-}
+}

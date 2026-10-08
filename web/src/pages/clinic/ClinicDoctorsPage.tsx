@@ -260,19 +260,11 @@ export default function ClinicDoctorsPage() {
     selectedSpecializationIds: [] as string[],
     photoFile: null as File | null,
     photoPreview: "",
-    dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] as string[],
+    dutyDays: [] as string[],
     dutyStartTime: "08:00",
     dutyEndTime: "17:00",
     isCustomSchedule: false,
-    dutySchedule: {
-      Monday: { startTime: "08:00", endTime: "17:00" },
-      Tuesday: { startTime: "08:00", endTime: "17:00" },
-      Wednesday: { startTime: "08:00", endTime: "17:00" },
-      Thursday: { startTime: "08:00", endTime: "17:00" },
-      Friday: { startTime: "08:00", endTime: "17:00" },
-      Saturday: { startTime: "08:00", endTime: "17:00" },
-      Sunday: { startTime: "08:00", endTime: "17:00" },
-    } as Record<string, DayShift>,
+    dutySchedule: {} as Record<string, DayShift>,
   });
   const [formError, setFormError] = useState("");
   const [savingDoctor, setSavingDoctor] = useState(false);
@@ -685,19 +677,11 @@ export default function ClinicDoctorsPage() {
       selectedSpecializationIds: [],
       photoFile: null,
       photoPreview: "",
-      dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
-      dutyStartTime: "09:00",
+      dutyDays: [],
+      dutyStartTime: "08:00",
       dutyEndTime: "17:00",
       isCustomSchedule: false,
-      dutySchedule: {
-        Monday: { startTime: "09:00", endTime: "17:00" },
-        Tuesday: { startTime: "09:00", endTime: "17:00" },
-        Wednesday: { startTime: "09:00", endTime: "17:00" },
-        Thursday: { startTime: "09:00", endTime: "17:00" },
-        Friday: { startTime: "09:00", endTime: "17:00" },
-        Saturday: { startTime: "09:00", endTime: "17:00" },
-        Sunday: { startTime: "09:00", endTime: "17:00" },
-      },
+      dutySchedule: {},
     });
     if (photoFileInputRef.current) photoFileInputRef.current.value = "";
     setFormError("");
@@ -1376,6 +1360,18 @@ export default function ClinicDoctorsPage() {
                   >
                     All Week
                   </button>
+                  {form.dutyDays.length > 0 && (
+                    <>
+                      <span className="text-gray-300">•</span>
+                      <button
+                        type="button"
+                        onClick={() => setForm((p) => ({ ...p, dutyDays: [] }))}
+                        className="text-rose-600 hover:text-rose-700 font-semibold hover:underline cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1493,7 +1489,9 @@ export default function ClinicDoctorsPage() {
                           </span>
                         </div>
                         <span className="text-[11px] text-gray-400">
-                          Active across {form.dutyDays.length} duty day{form.dutyDays.length === 1 ? "" : "s"}
+                          {form.dutyDays.length > 0
+                            ? `Active across ${form.dutyDays.length} duty day${form.dutyDays.length === 1 ? "" : "s"}`
+                            : "No duty days selected yet"}
                         </span>
                       </div>
                     );
@@ -1502,7 +1500,12 @@ export default function ClinicDoctorsPage() {
               ) : (
                 /* Custom Per-Day Shift Mode */
                 <div className="space-y-2 pt-1">
-                  {form.dutyDays.map((day) => {
+                  {form.dutyDays.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-white border border-dashed border-gray-200 text-center text-xs text-gray-400">
+                      Please select one or more weekly duty days above to customize hours.
+                    </div>
+                  ) : (
+                    form.dutyDays.map((day) => {
                     const shift = form.dutySchedule[day] || {
                       startTime: form.dutyStartTime || "08:00",
                       endTime: form.dutyEndTime || "17:00",
@@ -1550,9 +1553,10 @@ export default function ClinicDoctorsPage() {
                         </div>
                       </div>
                     );
-                  })}
-                </div>
-              )}
+                  })
+                )}
+              </div>
+            )}
             </div>
 
             {/* Compact Conflict / Clean Indicator */}
@@ -2147,6 +2151,18 @@ export default function ClinicDoctorsPage() {
                         >
                           All Week
                         </button>
+                        {editForm.dutyDays.length > 0 && (
+                          <>
+                            <span className="text-gray-300">•</span>
+                            <button
+                              type="button"
+                              onClick={() => setEditForm((p) => ({ ...p, dutyDays: [] }))}
+                              className="text-rose-600 hover:text-rose-700 font-semibold hover:underline cursor-pointer"
+                            >
+                              Clear
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { X, Loader2 } from "lucide-react";
 import logo from "@/assets/logo2.png";
+import loginBg from "@/assets/Login Background.png";
 import { useAuth } from "../../context/AuthContext";
 
 function GoogleIcon() {
@@ -78,16 +79,22 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-magenta-600 flex items-center justify-center px-4 py-12 relative">
+    <div
+      className="min-h-screen flex items-center justify-center px-4 py-12 relative bg-cover bg-center bg-no-repeat overflow-hidden"
+      style={{ backgroundImage: `url(${loginBg})` }}
+    >
+      {/* Subtle overlay for depth while preserving the vibrant polygonal background */}
+      <div className="absolute inset-0 bg-gradient-to-b from-black/10 via-transparent to-black/15 pointer-events-none" />
+
       <button
         onClick={() => navigate("/")}
         aria-label="Close"
-        className="absolute top-6 right-6 w-9 h-9 rounded-full bg-white/90 flex items-center justify-center text-magenta-600 hover:bg-white transition-colors cursor-pointer"
+        className="absolute top-6 right-6 w-10 h-10 rounded-full bg-white/80 backdrop-blur-md flex items-center justify-center text-gray-700 hover:text-magenta-600 hover:bg-white shadow-lg transition-all cursor-pointer z-20"
       >
-        <X className="w-4 h-4" />
+        <X className="w-5 h-5" />
       </button>
 
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-8 sm:p-10 text-center">
+      <div className="w-full max-w-md bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl p-8 sm:p-10 text-center relative z-10 border border-white/60">
         <div className="w-16 h-16 flex items-center justify-center mx-auto mb-4 overflow-hidden">
           <img src={logo} alt="DERMA-AI logo" className="w-15 h-15 object-contain" />
         </div>
