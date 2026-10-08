@@ -1,4 +1,4 @@
-import React, { type FormEvent, useRef, useState, useEffect, useMemo } from "react";
+import React, { type FormEvent, useState, useEffect, useMemo } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -6,7 +6,6 @@ import {
   ArrowRight,
   Check,
   ShieldX,
-  Upload,
   X,
   Loader2,
   Calendar,
@@ -520,12 +519,19 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       sessionStorage.setItem("dermai_appointment_draft", JSON.stringify(dataToSave));
       if (targetClinic) {
         sessionStorage.setItem("dermai_booking_return_clinic", String(targetClinic));
+      } else {
+        sessionStorage.removeItem("dermai_booking_return_clinic");
       }
     } catch {}
     const targetUrl = targetClinic
       ? `/dashboard/scan?fromAppointment=1&clinic=${encodeURIComponent(targetClinic)}`
       : `/dashboard/scan?fromAppointment=1`;
-    navigate(targetUrl);
+    navigate(targetUrl, {
+      state: {
+        fromAppointment: true,
+        clinicId: targetClinic,
+      },
+    });
   };
 
   // Continuously persist entered appointment/patient details so going back/forward never resets data
@@ -1544,7 +1550,13 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       // Do NOT fall back to creating an appointment without primary_scan_id!
       if (insertError) {
         console.error("Appointment creation failed:", insertError.message);
-        setSubmitError(`Failed to submit appointment: ${insertError.message}`);
+        if (insertError.message.includes("primary_scan_id") || insertError.message.includes("schema cache")) {
+          setSubmitError(
+            `Database migration pending: The 'primary_scan_id' column has not been added to 'patient_appointment' in Supabase yet. Please execute the SQL migration in your Supabase SQL Editor and try again.`
+          );
+        } else {
+          setSubmitError(`Failed to submit appointment: ${insertError.message}`);
+        }
         setSubmitting(false);
         return;
       }

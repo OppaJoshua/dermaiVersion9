@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import {
   Camera,
   Image,
@@ -320,27 +320,43 @@ export default function ScanSkinPage() {
   const { user } = useAuth();
   const isAuthenticated = !!user;
 
-  // Booking-origin context (when navigated from Appointment booking flow)
+  // Booking-origin context: ONLY active if explicitly launched from Appointment booking flow
+  const location = useLocation();
   const isBookingOrigin = useMemo(() => {
-    if (searchParams.get("fromAppointment") === "1" || searchParams.get("returnTo") === "appointment") {
-      return true;
-    }
-    try {
-      return !!sessionStorage.getItem("dermai_booking_return_clinic");
-    } catch {
-      return false;
-    }
-  }, [searchParams]);
+    const hasQueryParam =
+      searchParams.get("fromAppointment") === "1" ||
+      searchParams.get("returnTo") === "appointment";
+    const hasLocationState = Boolean((location.state as any)?.fromAppointment);
+    return hasQueryParam || hasLocationState;
+  }, [searchParams, location.state]);
 
   const returnClinicId = useMemo(() => {
+    if (!isBookingOrigin) return "";
     const fromParam = searchParams.get("clinic");
     if (fromParam) return fromParam;
+    const fromState = (location.state as any)?.clinicId;
+    if (fromState) return String(fromState);
     try {
       return sessionStorage.getItem("dermai_booking_return_clinic") || "";
     } catch {
       return "";
     }
-  }, [searchParams]);
+  }, [isBookingOrigin, searchParams, location.state]);
+
+  // If user entered Scan Skin normally (NOT from appointment flow),
+  // purge any stale booking return clinic and scan booking context
+  useEffect(() => {
+    if (!isBookingOrigin) {
+      try {
+        sessionStorage.removeItem("dermai_booking_return_clinic");
+        sessionStorage.removeItem("dermai_scan_booking_context");
+      } catch {}
+    } else if (returnClinicId) {
+      try {
+        sessionStorage.setItem("dermai_booking_return_clinic", returnClinicId);
+      } catch {}
+    }
+  }, [isBookingOrigin, returnClinicId]);
   const [currentStep, setCurrentStep] = useState(1);
   const [qIndex, setQIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, number>>(() => {
