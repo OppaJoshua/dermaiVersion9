@@ -1,6 +1,5 @@
 import { useState, useMemo } from "react";
 import {
-  CheckCircle2,
   Calendar,
   User,
   X,
@@ -8,21 +7,39 @@ import {
   Loader2,
   ClipboardList,
   Search,
-  Clock,
-  XCircle,
-  Users,
   Maximize2,
-  Sparkles,
   Phone,
   Mail,
   MapPin,
-  ScanSearch,
+  Stethoscope,
+  CheckCircle2,
+  FileCheck,
+  Clock,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
+
+// Mini Sparkline Bar Chart matching Dashboard summary card design
+function SparklineBars({ values, activeIndex = 3 }: { values: number[]; activeIndex?: number }) {
+  return (
+    <div className="flex items-end gap-1.5 h-11 sm:h-12 shrink-0 pb-0.5">
+      {values.map((v, idx) => (
+        <div
+          key={idx}
+          className={`w-2 sm:w-2.5 rounded-t-[2.5px] transition-all ${
+            idx === activeIndex
+              ? "bg-[#2563EB]"
+              : "bg-[#D4E0FC]"
+          }`}
+          style={{ height: `${Math.max(20, Math.min(100, v))}%` }}
+        />
+      ))}
+    </div>
+  );
+}
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -156,51 +173,121 @@ export default function DoctorPatientHistoryPage() {
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
-            <Users className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-xl font-bold text-gray-900">{history.length}</p>
-            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Total Consultations</p>
-          </div>
-        </div>
+      {/* Stats Cards - Framed container matching Dashboard summary cards styling */}
+      <div className="rounded-3xl border border-slate-200/80 bg-[#F8F8FA] p-5 sm:p-6 shadow-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5">
+          {/* Card 1: Total Consultations */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-[0_2px_8px_rgba(0,0,0,0.03)] overflow-hidden">
+            {/* Top row */}
+            <div className="px-6 py-4 flex items-center gap-3">
+              <Stethoscope className="w-5.5 h-5.5 text-blue-600 stroke-[1.8] shrink-0" />
+              <span className="text-base font-bold text-slate-800 tracking-tight truncate">
+                Total Consultations
+              </span>
+            </div>
 
-        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-            <CheckCircle2 className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-xl font-bold text-emerald-600">{completedList.length}</p>
-            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Completed Visits</p>
-          </div>
-        </div>
+            {/* Horizontal divider line */}
+            <div className="border-b border-slate-100" />
 
-        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-            <Sparkles className="w-5 h-5" />
+            {/* Bottom row */}
+            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                  {history.length}
+                </span>
+                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                  All patient records
+                </p>
+              </div>
+              <SparklineBars values={[35, 60, 45, 95, 70]} activeIndex={3} />
+            </div>
           </div>
-          <div>
-            <p className="text-xl font-bold text-indigo-600">{approvedList.length}</p>
-            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Approved &amp; Diagnosed</p>
-          </div>
-        </div>
 
-        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
-            <Clock className="w-5 h-5" />
+          {/* Card 2: Completed Visits */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-[0_2px_8px_rgba(0,0,0,0.03)] overflow-hidden">
+            {/* Top row */}
+            <div className="px-6 py-4 flex items-center gap-3">
+              <CheckCircle2 className="w-5.5 h-5.5 text-blue-600 stroke-[1.8] shrink-0" />
+              <span className="text-base font-bold text-slate-800 tracking-tight truncate">
+                Completed Visits
+              </span>
+            </div>
+
+            {/* Horizontal divider line */}
+            <div className="border-b border-slate-100" />
+
+            {/* Bottom row */}
+            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                  {completedList.length}
+                </span>
+                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                  Finished consultations
+                </p>
+              </div>
+              <SparklineBars values={[30, 65, 40, 100, 75]} activeIndex={3} />
+            </div>
           </div>
-          <div>
-            <p className="text-xl font-bold text-amber-600">{pendingList.length}</p>
-            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Pending Review</p>
+
+          {/* Card 3: Approved & Diagnosed */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-[0_2px_8px_rgba(0,0,0,0.03)] overflow-hidden">
+            {/* Top row */}
+            <div className="px-6 py-4 flex items-center gap-3">
+              <FileCheck className="w-5.5 h-5.5 text-blue-600 stroke-[1.8] shrink-0" />
+              <span className="text-base font-bold text-slate-800 tracking-tight truncate">
+                Approved &amp; Diagnosed
+              </span>
+            </div>
+
+            {/* Horizontal divider line */}
+            <div className="border-b border-slate-100" />
+
+            {/* Bottom row */}
+            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                  {approvedList.length}
+                </span>
+                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                  Confirmed diagnosis
+                </p>
+              </div>
+              <SparklineBars values={[25, 45, 70, 90, 50]} activeIndex={3} />
+            </div>
+          </div>
+
+          {/* Card 4: Pending Review */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-[0_2px_8px_rgba(0,0,0,0.03)] overflow-hidden">
+            {/* Top row */}
+            <div className="px-6 py-4 flex items-center gap-3">
+              <Clock className="w-5.5 h-5.5 text-blue-600 stroke-[1.8] shrink-0" />
+              <span className="text-base font-bold text-slate-800 tracking-tight truncate">
+                Pending Review
+              </span>
+            </div>
+
+            {/* Horizontal divider line */}
+            <div className="border-b border-slate-100" />
+
+            {/* Bottom row */}
+            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                  {pendingList.length}
+                </span>
+                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                  Awaiting doctor review
+                </p>
+              </div>
+              <SparklineBars values={[40, 55, 30, 85, 60]} activeIndex={3} />
+            </div>
           </div>
         </div>
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex gap-2 border-b border-gray-100 overflow-x-auto pb-px">
+      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto pb-px">
         {[
           { key: "all", label: "All History", count: history.length },
           { key: "completed", label: "Completed Visits", count: completedList.length },
@@ -213,14 +300,14 @@ export default function DoctorPatientHistoryPage() {
             onClick={() => setTab(t.key as any)}
             className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
               tab === t.key
-                ? "border-blue-500 text-blue-600"
+                ? "border-blue-600 text-blue-600"
                 : "border-transparent text-gray-500 hover:text-gray-700"
             }`}
           >
             {t.label}
             <span
               className={`ml-2 text-[11px] px-1.5 py-0.5 rounded-full font-bold ${
-                tab === t.key ? "bg-blue-100 text-blue-600" : "bg-gray-100 text-gray-500"
+                tab === t.key ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
               }`}
             >
               {t.count}
@@ -230,24 +317,21 @@ export default function DoctorPatientHistoryPage() {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-gray-100 flex flex-col items-center justify-center py-20 text-center px-6">
-          <div className="w-14 h-14 rounded-full bg-blue-50 flex items-center justify-center mb-4">
-            <CheckCircle2 className="w-7 h-7 text-blue-400" />
-          </div>
-          <p className="text-base font-semibold text-gray-700 mb-1">
+        <div className="bg-white rounded-2xl border border-slate-200/90 flex flex-col items-center justify-center py-20 text-center px-6 shadow-xs">
+          <p className="text-base font-semibold text-gray-700">
             {search ? "No matching records found" : "No consultation history yet"}
           </p>
-          <p className="text-sm text-gray-400 max-w-xs">
-            {search
-              ? "Try a different search term or filter tab."
-              : "Patients will appear here automatically when appointments or consultations are booked."}
-          </p>
+          {search && (
+            <p className="text-sm text-gray-400 max-w-xs mt-1">
+              Try a different search term or filter tab.
+            </p>
+          )}
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-xs">
+        <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden shadow-xs">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="bg-gray-50/70 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+              <thead className="bg-[#F8F9FA] border-b border-slate-200/80 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
                 <tr>
                   <th className="px-5 py-3">Patient</th>
                   <th className="px-4 py-3">Doctor Diagnosis / Concern</th>
@@ -258,7 +342,7 @@ export default function DoctorPatientHistoryPage() {
                   <th className="px-5 py-3 text-right">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
+              <tbody className="divide-y divide-slate-100">
                 {filtered.map((appt, i) => {
                   const isCompleted = appt.status === "completed" || appt.doctorDone;
                   const isApproved = appt.doctorStatus === "approved" && !isCompleted;
@@ -291,7 +375,7 @@ export default function DoctorPatientHistoryPage() {
                             className="w-9 h-9 rounded-full object-cover border border-gray-200 shrink-0"
                           />
                           <div>
-                            <p className="font-semibold text-gray-900">{appt.patientName || "Patient"}</p>
+                            <p className="font-semibold text-gray-900">{appt.patientName || "Not provided"}</p>
                             <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                               {appt.patientGender && (
                                 <span className="text-[10px] font-semibold text-gray-600 bg-gray-100 px-1.5 py-0.2 rounded">
@@ -309,31 +393,31 @@ export default function DoctorPatientHistoryPage() {
                         {appt.doctorDiagnosis ? (
                           <div>
                             <p className="font-semibold text-gray-900 text-sm">{appt.doctorDiagnosis}</p>
-                            <p className="text-[11px] text-gray-400 mt-0.5">{appt.conditionName || "Consultation"}</p>
+                            <p className="text-[11px] text-gray-400 mt-0.5">{appt.conditionName || "Not provided"}</p>
                           </div>
                         ) : (
-                          <p className="text-blue-600 font-medium text-sm">{appt.conditionName || "General Consultation"}</p>
+                          <p className="text-blue-600 font-medium text-sm">{appt.conditionName || "Not provided"}</p>
                         )}
                       </td>
-                      <td className="px-4 py-3.5">
+                      <td className="px-4 py-3.5 whitespace-nowrap">
                         {isCompleted ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> Completed
+                          <span className="text-xs font-semibold text-emerald-700">
+                            Completed
                           </span>
                         ) : isApproved ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-xs font-semibold">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> Approved
+                          <span className="text-xs font-semibold text-blue-700">
+                            Approved
                           </span>
                         ) : isPending ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-xs font-semibold">
-                            <Clock className="w-3.5 h-3.5" /> Pending Review
+                          <span className="text-xs font-semibold text-amber-700">
+                            Pending Review
                           </span>
                         ) : isRejected ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200 text-xs font-semibold">
-                            <XCircle className="w-3.5 h-3.5" /> Declined
+                          <span className="text-xs font-semibold text-red-700">
+                            Declined
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-gray-50 text-gray-600 border border-gray-200 text-xs font-semibold">
+                          <span className="text-xs font-semibold text-gray-700">
                             Reviewed
                           </span>
                         )}
@@ -388,20 +472,20 @@ export default function DoctorPatientHistoryPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   {viewingAppt.status === "completed" || viewingAppt.doctorDone ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Completed
+                    <span className="text-xs font-semibold text-emerald-700">
+                      Completed
                     </span>
                   ) : viewingAppt.doctorStatus === "approved" ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Approved
+                    <span className="text-xs font-semibold text-blue-700">
+                      Approved
                     </span>
                   ) : viewingAppt.doctorStatus === "rejected" || viewingAppt.status === "rejected" || viewingAppt.status === "cancelled" ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-red-700 text-xs font-semibold">
-                      <XCircle className="w-3.5 h-3.5" /> Declined
+                    <span className="text-xs font-semibold text-red-700">
+                      Declined
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-xs font-semibold">
-                      <Clock className="w-3.5 h-3.5" /> Pending Review
+                    <span className="text-xs font-semibold text-amber-700">
+                      Pending Review
                     </span>
                   )}
                   <button
@@ -413,7 +497,7 @@ export default function DoctorPatientHistoryPage() {
                 </div>
               </div>
 
-              <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
+              <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 {/* Patient Header */}
                 <div className="flex items-center gap-4">
                   <img
@@ -421,13 +505,13 @@ export default function DoctorPatientHistoryPage() {
                       viewingAppt.patientAvatar ||
                       `https://ui-avatars.com/api/?name=${encodeURIComponent(
                         viewingAppt.patientName || "P"
-                      )}&background=dbeafe&color=1d4ed8`
+                      )}&background=EFF6FF&color=2563EB`
                     }
                     alt={viewingAppt.patientName}
                     className="w-14 h-14 rounded-full object-cover border border-gray-200 shrink-0"
                   />
                   <div>
-                    <p className="text-lg font-bold text-gray-900">{viewingAppt.patientName || "Patient"}</p>
+                    <p className="text-lg font-bold text-gray-900">{viewingAppt.patientName || "Not provided"}</p>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                       {viewingAppt.patientGender && (
                         <span className="text-[11px] font-semibold text-gray-700 bg-gray-100 px-2 py-0.5 rounded-full">
@@ -440,7 +524,7 @@ export default function DoctorPatientHistoryPage() {
                         <span className="text-sm text-gray-400">Born {viewingAppt.patientBirthdate}</span>
                       ) : null}
                       <span className="text-xs font-medium text-blue-600">
-                        {viewingAppt.conditionName || "General Consultation"}
+                        {viewingAppt.conditionName || "Not provided"}
                       </span>
                     </div>
                   </div>
@@ -449,10 +533,10 @@ export default function DoctorPatientHistoryPage() {
                 {/* Doctor Diagnosis Box */}
                 {viewingAppt.doctorDiagnosis && (
                   <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-4 space-y-1.5">
-                    <p className="text-[10px] text-blue-600 font-bold uppercase tracking-wide flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5" /> Doctor's Final Diagnosis
+                    <p className="text-[10px] text-blue-600 font-bold uppercase tracking-wide">
+                      Doctor's Final Diagnosis
                     </p>
-                    <p className="text-base font-bold text-blue-950">{viewingAppt.doctorDiagnosis}</p>
+                    <p className="text-base font-bold text-slate-900">{viewingAppt.doctorDiagnosis}</p>
                     {viewingAppt.doctorNote && (
                       <p className="text-xs text-blue-800 leading-relaxed pt-1 border-t border-blue-100/80">
                         <span className="font-semibold">Review Note:</span> {viewingAppt.doctorNote}
@@ -465,19 +549,16 @@ export default function DoctorPatientHistoryPage() {
                 {(viewingAppt.aiConditionName || viewCond) && (
                   <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3.5 space-y-2">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5">
-                        <ScanSearch className="w-4 h-4 text-blue-600" />
-                        <span className="text-xs font-bold text-blue-900 uppercase tracking-wide">
-                          AI Scan Pre-Screening Result
-                        </span>
-                      </div>
+                      <span className="text-xs font-bold text-blue-900 uppercase tracking-wide">
+                        AI Scan Pre-Screening Result
+                      </span>
                       {viewingAppt.aiConfidence !== undefined && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-200 text-blue-800">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
                           {viewingAppt.aiConfidence}% AI Confidence
                         </span>
                       )}
                     </div>
-                    <p className="text-sm font-bold text-blue-950">
+                    <p className="text-sm font-bold text-slate-900">
                       {viewingAppt.aiConditionName || viewingAppt.conditionName || viewCond?.name}
                     </p>
                     {viewCond && (
@@ -583,7 +664,7 @@ export default function DoctorPatientHistoryPage() {
                         {viewingAppt.questionnaireAnswers.length} responses
                       </span>
                     </div>
-                    <div className="p-3.5 space-y-2 max-h-48 overflow-y-auto">
+                    <div className="p-3.5 space-y-2 max-h-48 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                       {viewingAppt.questionnaireAnswers.map((qa, idx) => (
                         <div key={idx} className="p-2 rounded-lg bg-gray-50 border border-gray-100 text-xs">
                           <p className="font-semibold text-gray-800 mb-0.5">

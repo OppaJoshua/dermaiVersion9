@@ -1,21 +1,14 @@
-import { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useMemo, useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   CheckCircle2,
   XCircle,
-  Clock,
   ScanSearch,
   ChevronDown,
   ChevronUp,
-  AlertTriangle,
   Calendar,
-  User,
-  FileText,
   Loader2,
   ClipboardList,
-  Sparkles,
-  Info,
-  Stethoscope,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
@@ -40,22 +33,108 @@ const DECLINE_REASONS = [
   "Doctor on scheduled medical / academic leave",
 ];
 
+
 function formatScheduleDateTime(dateStr?: string, timeStr?: string): string {
   if (!dateStr) return "Schedule pending";
   try {
-    const dt = new Date(dateStr.includes("T") ? dateStr : `${dateStr}T${timeStr || "09:00"}:00`);
+    const dt = new Date(
+      dateStr.includes("T")
+        ? dateStr
+        : `${dateStr}T${timeStr && timeStr !== "—" && timeStr !== "\u2014" ? timeStr : "00:00"}:00`
+    );
     if (isNaN(dt.getTime())) return dateStr;
-    const dateFormatted = dt.toLocaleDateString("en-PH", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-    const timeFormatted = timeStr && !timeStr.includes("—")
-      ? formatTimeSlot(timeStr)
-      : dt.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true });
+
+    const dateFormatted = dt.toLocaleDateString("en-PH", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+
+    if (!timeStr || timeStr === "—" || timeStr === "\u2014") {
+      return dateFormatted;
+    }
+
+    const timeFormatted = formatTimeSlot(timeStr);
     return `${dateFormatted} at ${timeFormatted}`;
   } catch {
     return dateStr;
   }
 }
 
+function formatPreferredSchedule(dateStr?: string, timeStr?: string): string {
+  if (!dateStr) return "N/A";
+  try {
+    let cleanDate = dateStr;
+    let cleanTime = timeStr && timeStr !== "—" && timeStr !== "\u2014" ? timeStr.trim() : "";
+    if (dateStr.includes("T")) {
+      const parts = dateStr.split("T");
+      cleanDate = parts[0];
+      if (!cleanTime && parts[1]) {
+        cleanTime = parts[1].slice(0, 5);
+      }
+    }
+    const [y, m, d] = cleanDate.split("-").map(Number);
+    if (!y || !m || !d) return dateStr;
+
+    const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    if (isNaN(dt.getTime())) return dateStr;
+
+    const dateFormatted = dt.toLocaleDateString("en-US", {
+      timeZone: "UTC",
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+
+    if (!cleanTime) return dateFormatted;
+
+    const timeFormatted = formatTimeSlot(cleanTime);
+    return `${dateFormatted} at ${timeFormatted}`;
+  } catch {
+    return dateStr || "N/A";
+  }
+}
+
+function formatRequestedDate(createdAtStr?: string): string {
+  if (!createdAtStr) return "N/A";
+  try {
+    const dt = new Date(createdAtStr);
+    if (isNaN(dt.getTime())) return createdAtStr;
+
+    const datePart = dt.toLocaleDateString("en-US", {
+      timeZone: "Asia/Manila",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+
+    const timePart = dt.toLocaleTimeString("en-US", {
+      timeZone: "Asia/Manila",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+
+    return `${datePart} at ${timePart}`;
+  } catch {
+    return createdAtStr || "N/A";
+  }
+}
+
+function formatPatientId(appt: AppointmentRecord): string {
+  const year = appt.createdAt ? new Date(appt.createdAt).getFullYear() : 2026;
+  const digits = appt.id.replace(/\D/g, "");
+  const num = digits.length >= 4
+    ? digits.slice(-4)
+    : (appt.queueNumber ? String(appt.queueNumber).padStart(4, "0") : appt.id.slice(0, 4).toUpperCase());
+  return `P-${year}-${num}`;
+}
+
 function formatTimeSlot(timeStr: string): string {
+  if (!timeStr) return "";
+  if (timeStr.includes("AM") || timeStr.includes("PM")) return timeStr;
   try {
     const [h, m] = timeStr.split(":").map(Number);
     const ampm = h >= 12 ? "PM" : "AM";
@@ -72,8 +151,10 @@ function getConditionDetail(conditionId?: string) {
 
 export default function DoctorAppointmentsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { doctorName: _doctorName, appointments: allAppointments, loading, submitDoctorReview } = useDoctorAppointments();
   const [tab, setTab] = useState<"pending" | "reviewed">("pending");
+  const [sortOrder, setSortOrder] = useState<"newest" | "name">("newest");
   const [reviewModal, setReviewModal] = useState<ReviewModal | null>(null);
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -124,7 +205,7 @@ export default function DoctorAppointmentsPage() {
     str.toLowerCase().includes("general dermatol") ||
     str.toLowerCase().includes("general consult");
 
-  const openReview = (appt: AppointmentRecord) => {
+  const openReview = (appt: AppointmentRecord, defaultDecision?: "approved" | "rejected") => {
     const isDirect = isDirectBooking(appt);
     const initialDiagnosis = appt.doctorDiagnosis && !isGenericPlaceholder(appt.doctorDiagnosis)
       ? appt.doctorDiagnosis
@@ -132,13 +213,24 @@ export default function DoctorAppointmentsPage() {
 
     setReviewModal({
       appointment: appt,
-      decision: null,
+      decision: defaultDecision || null,
       diagnosis: initialDiagnosis,
       note: "",
       showAnalysis: false,
     });
     setSubmitError("");
   };
+
+  useEffect(() => {
+    const reviewId = searchParams.get("review");
+    if (!reviewId || loading || reviewModal) return;
+
+    const appointment = allAppointments.find((appt) => appt.id === reviewId);
+    if (!appointment) return;
+
+    openReview(appointment);
+    setSearchParams({}, { replace: true });
+  }, [searchParams, loading, allAppointments, reviewModal, setSearchParams]);
 
   const submitReview = async () => {
     if (!reviewModal) return;
@@ -168,7 +260,7 @@ export default function DoctorAppointmentsPage() {
       );
       setReviewModal(null);
       setSuccessInfo({
-        patientName: appt.patientName || "Patient",
+        patientName: appt.patientName || "Not provided",
         decision: dec,
         date: appt.date,
         time: appt.time,
@@ -181,12 +273,26 @@ export default function DoctorAppointmentsPage() {
     }
   };
 
-  const displayList = tab === "pending" ? pendingReview : reviewed;
+  const filteredList = useMemo(() => {
+    const list = [...(tab === "pending" ? pendingReview : reviewed)];
+    if (sortOrder === "name") {
+      list.sort((a, b) =>
+        (a.patientName || "").localeCompare(b.patientName || "", undefined, { sensitivity: "base" })
+      );
+    } else {
+      list.sort((a, b) => {
+        const timeA = new Date(a.createdAt || a.date || 0).getTime();
+        const timeB = new Date(b.createdAt || b.date || 0).getTime();
+        return timeB - timeA;
+      });
+    }
+    return list;
+  }, [tab, pendingReview, reviewed, sortOrder]);
 
   if (loading) {
     return (
       <div className="py-24 text-center">
-        <Loader2 className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
+        <Loader2 className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-3" />
         <p className="text-sm text-gray-400">Loading patient review records...</p>
       </div>
     );
@@ -203,21 +309,22 @@ export default function DoctorAppointmentsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-gray-100">
+
+      <div className="flex gap-2 border-b border-slate-200/80">
         {(["pending", "reviewed"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={`px-4 py-2.5 text-sm font-semibold capitalize border-b-2 transition-colors cursor-pointer ${
               tab === t
-                ? "border-blue-500 text-blue-600"
+                ? "border-blue-600 text-blue-600"
                 : "border-transparent text-gray-500 hover:text-gray-700"
             }`}
           >
             {t === "pending" ? "Awaiting Your Review" : "All Reviewed"}
             <span
               className={`ml-2 text-[11px] px-2 py-0.5 rounded-full font-bold ${
-                tab === t ? "bg-blue-100 text-blue-600" : "bg-gray-100 text-gray-500"
+                tab === t ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
               }`}
             >
               {t === "pending" ? pendingReview.length : reviewed.length}
@@ -226,225 +333,265 @@ export default function DoctorAppointmentsPage() {
         ))}
       </div>
 
-      {/* List */}
-      {displayList.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-2xl border border-gray-100">
-          <Calendar className="w-10 h-10 text-gray-200 mx-auto mb-3" />
-          <p className="text-sm text-gray-500 font-medium">
-            {tab === "pending" ? "No patient cases currently awaiting your review." : "No reviewed appointments recorded."}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
-            {tab === "pending" ? "New appointments assigned by your clinic triage team will appear here." : "Your clinical review decisions will be archived here."}
-          </p>
-        </div>
-      ) : (
-        <div className="grid gap-3.5">
-          {displayList.map((appt, i) => {
-            const condDetail = getConditionDetail(appt.conditionId);
-            const isCompleted = appt.status === "completed" || appt.doctorDone;
-            const isApproved = appt.doctorStatus === "approved" && !isCompleted;
-            const isRejected = appt.doctorStatus === "rejected";
-            const isScheduled = Boolean(
-              appt.date && (appt.status === "scheduled" || appt.status === "confirmed") && !isCompleted
-            );
+      {/* Table Card matching layout */}
+      {/* Patient Table Card */}
+<div className="grid grid-cols-1 gap-6">
+  <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
 
-            return (
-              <motion.div
-                key={appt.id}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.04 }}
-                className="bg-white rounded-2xl border border-gray-100 p-5 shadow-xs hover:border-gray-200 transition-all"
-              >
-                <div className="flex items-start gap-4">
-                  <img
-                    src={
-                      appt.patientAvatar ||
-                      `https://ui-avatars.com/api/?name=${encodeURIComponent(appt.patientName || "P")}&background=dbeafe&color=1d4ed8`
-                    }
-                    alt={appt.patientName}
-                    className="w-12 h-12 rounded-full object-cover border border-gray-200 shrink-0"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2 flex-wrap">
-                      <div>
-                        <p className="font-bold text-gray-900 text-base">{appt.patientName || "Patient"}</p>
-                        {appt.patientAge && <p className="text-xs text-gray-400">{appt.patientAge} years old</p>}
-                        <p className="text-xs font-semibold text-blue-600 mt-0.5">
-                          {appt.conditionName || "Dermatology Consultation"}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {appt.isAssignedToMe ? (
-                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Assigned to You
-                          </span>
-                        ) : appt.assignedDoctorName && !appt.assignedDoctorName.toLowerCase().includes("unassigned") ? (
-                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-medium flex items-center gap-1">
-                            <Stethoscope className="w-3 h-3 text-indigo-500" /> {appt.assignedDoctorName}
-                          </span>
-                        ) : (
-                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-medium flex items-center gap-1">
-                            <Clock className="w-3 h-3 text-blue-500" /> Clinic Queue
-                          </span>
-                        )}
-                        {appt.doctorStatus === "pending-review" && (
-                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 font-bold flex items-center gap-1">
-                            <Clock className="w-3 h-3 text-amber-600" /> Awaiting Review
-                          </span>
-                        )}
-                        {isCompleted && (
-                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-700" /> Consultation Completed
-                          </span>
-                        )}
-                        {isApproved && (
-                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Confirmed &amp; Finalized
-                          </span>
-                        )}
-                        {isRejected && (
-                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-red-50 text-red-700 border border-red-200 font-bold flex items-center gap-1">
-                            <XCircle className="w-3 h-3 text-red-600" /> Declined by You (Clinic Notified)
-                          </span>
-                        )}
-                      </div>
-                    </div>
+    {/* Card Header */}
+    <div className="flex items-center justify-between p-5 border-b border-slate-100">
+      {/* Table Section Title */}
+    <div className="px-5 py-4 border-b border-slate-100">
+      <h2 className="text-base font-bold text-slate-900">
+        {tab === "pending"
+          ? "Patients Awaiting Your Review"
+          : "All Reviewed Patients"}
+      </h2>
+    </div>
 
-                    <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-500">
-                      <span className="flex items-center gap-1.5">
-                        <User className="w-3.5 h-3.5 shrink-0 text-gray-400" /> {appt.clinicName}
-                      </span>
-                      <span className="flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 shrink-0 text-gray-400" />
-                        Requested{" "}
-                        {new Date(appt.createdAt).toLocaleDateString("en-US", {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                        })}
-                      </span>
-                    </div>
+      {/* Sort */}
+      <button
+        type="button"
+        onClick={() =>
+          setSortOrder((prev) =>
+            prev === "newest" ? "name" : "newest"
+          )
+        }
+        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
+      >
+        <span>
+          Sort: {sortOrder === "newest" ? "Newest" : "A - Z"}
+        </span>
 
-                    {/* Patient Requested Schedule */}
-                    <div className="mt-2.5 p-2.5 rounded-xl bg-blue-50/70 border border-blue-100 flex items-center gap-2 text-xs">
-                      <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
+        <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+      </button>
+    </div>
+
+
+    {/* Responsive Table */}
+    <div className="w-full overflow-x-auto">
+      <table className="w-full min-w-[1100px] text-left text-xs">
+
+        {/* Table Header */}
+        <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 tracking-wider">
+          <tr>
+            <th className="py-3.5 px-5 font-semibold whitespace-nowrap">
+              PATIENT NAME
+            </th>
+
+            <th className="py-3.5 px-4 font-semibold whitespace-nowrap">
+              AGE / GENDER
+            </th>
+
+            <th className="py-3.5 px-4 font-semibold whitespace-nowrap">
+              REASON FOR VISIT
+            </th>
+
+            <th className="py-3.5 px-4 font-semibold whitespace-nowrap">
+              PREFERRED SCHEDULE
+            </th>
+
+            <th className="py-3.5 px-4 font-semibold whitespace-nowrap">
+              REQUESTED DATE
+            </th>
+
+            <th className="py-3.5 px-4 font-semibold whitespace-nowrap">
+              STATUS
+            </th>
+
+            <th className="py-3.5 px-5 font-semibold text-center whitespace-nowrap">
+              ACTIONS
+            </th>
+          </tr>
+        </thead>
+
+        {/* Table Body */}
+        <tbody className="divide-y divide-slate-100 bg-white">
+
+          {filteredList.length === 0 ? (
+            <tr>
+              <td colSpan={7} className="py-16 px-4 text-center">
+
+                <Calendar className="w-9 h-9 text-slate-300 mx-auto mb-2" />
+
+                <p className="text-sm font-semibold text-slate-700">
+                  {tab === "pending"
+                    ? "No patient cases currently awaiting your review"
+                    : "No reviewed appointments recorded"}
+                </p>
+
+                <p className="text-xs text-slate-400 mt-1">
+                  {tab === "pending"
+                    ? "New appointments assigned by your clinic triage team will appear here."
+                    : "Your clinical review decisions will be archived here."}
+                </p>
+
+              </td>
+            </tr>
+          ) : (
+            filteredList.map((appt) => {
+
+              const isCompleted =
+                appt.status === "completed" || appt.doctorDone;
+
+              const isApproved =
+                appt.doctorStatus === "approved" ||
+                appt.status === "scheduled" ||
+                appt.status === "confirmed";
+
+              const isRejected =
+                appt.doctorStatus === "rejected" ||
+                appt.status === "rejected";
+
+              return (
+                <tr
+                  key={appt.id}
+                  className="hover:bg-slate-50/70 transition-colors"
+                >
+
+                  {/* Patient Name */}
+                  <td className="py-4 px-5">
+                    <div className="flex items-center gap-3 min-w-[220px]">
+
+                      <img
+                        src={
+                          appt.patientAvatar ||
+                          `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                            appt.patientName || "P"
+                          )}&background=EFF6FF&color=2563EB`
+                        }
+                        alt={appt.patientName || "Patient"}
+                        className="w-10 h-10 rounded-full object-cover border border-slate-200 shrink-0 shadow-2xs"
+                      />
+
                       <div className="min-w-0">
-                        <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">Patient's Preferred Schedule</span>
-                        <span className="font-bold text-blue-950 truncate">{formatScheduleDateTime(appt.date, appt.time)}</span>
-                      </div>
-                    </div>
-
-                    {appt.notes && (
-                      <p className="mt-2 text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 line-clamp-2 border border-gray-100">
-                        <strong className="text-gray-700">Patient Note: </strong>
-                        {appt.notes}
-                      </p>
-                    )}
-
-                    {/* Doctor Diagnosis Block */}
-                    {appt.doctorDiagnosis && (
-                      <div
-                        className={`mt-2.5 rounded-xl p-3 border ${
-                          isCompleted
-                            ? "bg-emerald-50/90 border-emerald-200 text-emerald-950"
-                            : isApproved
-                            ? "bg-blue-50/90 border-blue-200 text-blue-950"
-                            : "bg-red-50/90 border-red-200 text-red-950"
-                        }`}
-                      >
-                        <p className="text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 text-blue-700">
-                          <Sparkles className="w-3.5 h-3.5" /> Your Clinical Diagnosis / Assessment
+                        <p className="font-bold text-slate-900 text-sm truncate">
+                          {appt.patientName || "Anonymous Patient"}
                         </p>
-                        <p className="text-sm font-bold mt-0.5">{appt.doctorDiagnosis}</p>
-                        {appt.doctorNote && (
-                          <p className="text-xs mt-1 pt-1 border-t border-black/5 text-gray-700">
-                            <span className="font-semibold">Review / Advice Note: </span>
-                            {appt.doctorNote}
-                          </p>
-                        )}
-                      </div>
-                    )}
 
-                    {!appt.doctorDiagnosis && appt.doctorNote && (
-                      <div
-                        className={`mt-2.5 rounded-lg px-3 py-2 text-xs font-medium ${
-                          isApproved
-                            ? "bg-green-50 text-green-700 border border-green-200"
-                            : "bg-red-50 text-red-700 border border-red-200"
-                        }`}
-                      >
-                        <span className="font-bold">Your note: </span>
-                        {appt.doctorNote}
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          Patient ID: {formatPatientId(appt)}
+                        </p>
                       </div>
-                    )}
 
-                    {/* Status workflow prompt info */}
-                    {isApproved && !isScheduled && (
-                      <div className="mt-2 text-[11px] text-emerald-800 bg-emerald-50/80 border border-emerald-200 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                        <span>
-                          <strong>Case Approved:</strong> Your clinic scheduler has been notified to set the final consultation date &amp; time.
-                        </span>
-                      </div>
-                    )}
-                    {isRejected && (
-                      <div className="mt-2 text-[11px] text-red-800 bg-red-50/80 border border-red-200 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5">
-                        <Info className="w-3.5 h-3.5 text-red-600 shrink-0" />
-                        <span>
-                          <strong>Case Declined:</strong> Your clinic triage team was notified with your reason to re-assign this patient to another doctor. (Patient does not see internal rejections).
-                        </span>
-                      </div>
-                    )}
+                    </div>
+                  </td>
 
-                    {/* AI Analysis preview */}
-                    {condDetail && !isDirectBooking(appt) && (
-                      <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/50 p-3">
-                        <div className="flex items-center gap-2 mb-1">
-                          <ScanSearch className="w-3.5 h-3.5 text-blue-500" />
-                          <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wide">
-                            AI Pre-Screening Result
-                          </span>
-                        </div>
-                        <p className="text-xs font-semibold text-blue-800">{condDetail.name}</p>
-                        <p className="text-[11px] text-blue-600 mt-0.5 line-clamp-2">{condDetail.description}</p>
-                      </div>
-                    )}
-                  </div>
+                  {/* Age / Gender */}
+                  <td className="py-4 px-4">
+                    <div className="min-w-[110px]">
+                      <p className="text-slate-800 font-medium">
+                        {appt.patientAge
+                          ? `${appt.patientAge} years old`
+                          : "\u2014"}
+                      </p>
 
-                  {appt.conditionImage && (
-                    <img
-                      src={appt.conditionImage}
-                      alt={appt.conditionName}
-                      className="w-16 h-16 rounded-xl object-cover border border-gray-100 shrink-0 hidden sm:block"
-                    />
-                  )}
-                </div>
+                      <p className="text-slate-500 mt-0.5">
+                        {appt.patientGender || "\u2014"}
+                      </p>
+                    </div>
+                  </td>
 
-                {appt.doctorStatus === "pending-review" && (
-                  <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between gap-3">
-                    <p className="text-xs text-amber-700 font-medium hidden sm:block">
-                      Pre-consultation clinical review required.
+                  {/* Reason */}
+                  <td className="py-4 px-4">
+                    <p className="text-slate-700 max-w-[220px] line-clamp-2 leading-relaxed">
+                      {appt.notes ||
+                        appt.conditionName ||
+                        appt.aiConditionName ||
+                        "Consultation Request"}
                     </p>
-                    <button
-                      onClick={() => openReview(appt)}
-                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition-colors shadow-xs cursor-pointer"
-                    >
-                      <FileText className="w-4 h-4" /> Review &amp; Accept Patient
-                    </button>
-                  </div>
-                )}
-              </motion.div>
-            );
-          })}
-        </div>
-      )}
+                  </td>
+
+                  {/* Preferred Schedule */}
+                  <td className="py-4 px-4">
+                    <div className="flex items-center gap-1.5 text-slate-700 font-medium whitespace-nowrap">
+                      <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+
+                      <span>
+                        {formatPreferredSchedule(
+                          appt.date,
+                          appt.time
+                        )}
+                      </span>
+                    </div>
+                  </td>
+
+                  {/* Requested Date */}
+                  <td className="py-4 px-4">
+                    <span className="text-slate-700 font-medium whitespace-nowrap">
+                      {formatRequestedDate(appt.createdAt)}
+                    </span>
+                  </td>
+
+                  {/* Status */}
+                  <td className="py-4 px-4">
+                    {isCompleted ? (
+                      <span className="inline-flex px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                        Completed
+                      </span>
+                    ) : isApproved ? (
+                      <span className="inline-flex px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                        Accepted
+                      </span>
+                    ) : isRejected ? (
+                      <span className="inline-flex px-3 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200 whitespace-nowrap">
+                        Declined
+                      </span>
+                    ) : (
+                      <span className="inline-flex px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap">
+                        Awaiting Review
+                      </span>
+                    )}
+                  </td>
+
+                  {/* Actions */}
+                  <td className="py-4 px-5 text-center">
+                    {tab === "pending" &&
+                    !isApproved &&
+                    !isRejected &&
+                    !isCompleted ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openReview(appt, "approved")
+                        }
+                        className="inline-flex items-center justify-center px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white transition-colors cursor-pointer shadow-xs whitespace-nowrap"
+                      >
+                        View Detail
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => openReview(appt)}
+                        className="inline-flex items-center justify-center px-3.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        View Details
+                      </button>
+                    )}
+                  </td>
+
+                </tr>
+              );
+            })
+          )}
+
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
       {/* Review Modal */}
       <AnimatePresence>
         {reviewModal && (() => {
           const isDirect = isDirectBooking(reviewModal.appointment);
           const cond = getConditionDetail(reviewModal.appointment.conditionId);
+          const isAlreadyReviewed =
+            tab === "reviewed" ||
+            reviewModal.appointment.doctorStatus === "approved" ||
+            reviewModal.appointment.doctorStatus === "rejected" ||
+            reviewModal.appointment.status === "completed" ||
+            reviewModal.appointment.doctorDone;
 
           return (
             <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
@@ -489,12 +636,12 @@ export default function DoctorAppointmentsPage() {
                         className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
                           isDirect
                             ? "text-slate-700 bg-slate-100 border-slate-200"
-                            : "text-blue-700 bg-blue-50 border-blue-200"
+                            : "text-slate-700 bg-slate-100 border-slate-200"
                         }`}
                       >
                         {isDirect
                           ? "Direct Consultation Request"
-                          : reviewModal.appointment.conditionName || "Skin concern"}
+                          : reviewModal.appointment.conditionName || "Not provided"}
                       </span>
                     </div>
                   </div>
@@ -507,21 +654,16 @@ export default function DoctorAppointmentsPage() {
                 </div>
 
                 {/* Modal Body */}
-                <div className="overflow-y-auto flex-1 p-6 space-y-5">
+                <div className="overflow-y-auto flex-1 p-6 space-y-5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                   {/* Patient's Selected Schedule Banner */}
-                  <div className="rounded-2xl border border-blue-200 bg-linear-to-r from-blue-50/90 to-indigo-50/90 p-4 flex items-center justify-between gap-3 shadow-2xs">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                        <Calendar className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Patient's Preferred Schedule</p>
-                        <p className="text-sm font-bold text-blue-950 truncate">
-                          {formatScheduleDateTime(reviewModal.appointment.date, reviewModal.appointment.time)}
-                        </p>
-                      </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Patient's Preferred Schedule</p>
+                      <p className="text-sm font-bold text-slate-900 truncate">
+                        {formatScheduleDateTime(reviewModal.appointment.date, reviewModal.appointment.time)}
+                      </p>
                     </div>
-                    <span className="shrink-0 text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                    <span className="shrink-0 text-[10px] font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
                       Selected Slot
                     </span>
                   </div>
@@ -547,7 +689,7 @@ export default function DoctorAppointmentsPage() {
                       {
                         label: "Emergency",
                         value: reviewModal.appointment.emergencyContactName
-                          ? `${reviewModal.appointment.emergencyContactName} ${reviewModal.appointment.emergencyRelationship ? `(${reviewModal.appointment.emergencyRelationship})` : ""} · ${reviewModal.appointment.emergencyContactPhone || ""}`
+                          ? `${reviewModal.appointment.emergencyContactName} ${reviewModal.appointment.emergencyRelationship ? `(${reviewModal.appointment.emergencyRelationship})` : ""} \u2022 ${reviewModal.appointment.emergencyContactPhone || ""}`
                           : undefined,
                       },
                     ].map(({ label, value }) => (
@@ -563,51 +705,36 @@ export default function DoctorAppointmentsPage() {
                   </div>
 
                   {/* Pre-Screening Questionnaire Section */}
-                  <div className="rounded-xl border border-blue-200 overflow-hidden bg-white">
-                    <div className="px-4 py-3 bg-blue-50/80 border-b border-blue-100 flex items-center justify-between">
+                  <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+                    <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <ClipboardList className="w-4 h-4 text-blue-600" />
-                        <span className="text-xs font-bold text-blue-900 uppercase tracking-wide">
+                        <ClipboardList className="w-4 h-4 text-slate-600" />
+                        <span className="text-xs font-bold text-slate-800 uppercase tracking-wide">
                           Patient Symptoms &amp; Pre-Screening Questionnaire
                         </span>
                       </div>
                       {reviewModal.appointment.questionnaireAnswers && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-200 text-blue-800">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200/70 text-slate-700">
                           {reviewModal.appointment.questionnaireAnswers.length} responses recorded
                         </span>
                       )}
                     </div>
 
-                    <div className="p-4 space-y-2.5 max-h-56 overflow-y-auto">
+                    <div className="p-4 space-y-2.5 max-h-56 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                       {reviewModal.appointment.questionnaireAnswers &&
                       reviewModal.appointment.questionnaireAnswers.length > 0 ? (
                         reviewModal.appointment.questionnaireAnswers.map((qa, idx) => (
                           <div
                             key={idx}
-                            className="p-2.5 rounded-lg bg-gray-50/80 border border-gray-100 text-xs"
+                            className="p-2.5 rounded-lg bg-slate-50/80 border border-slate-200/60 text-xs"
                           >
-                            <p className="font-semibold text-gray-800 mb-1">
+                            <p className="font-semibold text-slate-800 mb-1">
                               {idx + 1}. {qa.question}
                             </p>
                             <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <span className="text-blue-700 font-medium bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                              <span className="text-slate-800 font-medium bg-white px-2 py-0.5 rounded-md border border-slate-200">
                                 {qa.answer}
                               </span>
-                              {qa.severity !== undefined && qa.severity !== null && (
-                                <span
-                                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                                    qa.severity >= 3
-                                      ? "bg-red-100 text-red-700"
-                                      : qa.severity >= 2
-                                      ? "bg-amber-100 text-amber-700"
-                                      : qa.severity >= 1
-                                      ? "bg-blue-100 text-blue-700"
-                                      : "bg-gray-100 text-gray-600"
-                                  }`}
-                                >
-                                  Severity: Level {qa.severity}
-                                </span>
-                              )}
                             </div>
                           </div>
                         ))
@@ -651,25 +778,25 @@ export default function DoctorAppointmentsPage() {
 
                   {/* AI Analysis Result (if available) */}
                   {!isDirect && (
-                    <div className="rounded-xl border border-blue-200 overflow-hidden">
+                    <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
                       <button
                         type="button"
                         onClick={() =>
                           setReviewModal((prev) => (prev ? { ...prev, showAnalysis: !prev.showAnalysis } : prev))
                         }
-                        className="w-full flex items-center justify-between px-4 py-3 bg-blue-50 hover:bg-blue-100 transition-colors cursor-pointer"
+                        className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
                       >
                         <div className="flex items-center gap-2">
-                          <ScanSearch className="w-4 h-4 text-blue-600" />
-                          <span className="text-sm font-bold text-blue-700">AI Pre-Screening Analysis</span>
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500 text-white font-bold">
+                          <ScanSearch className="w-4 h-4 text-slate-600" />
+                          <span className="text-sm font-bold text-slate-800">AI Pre-Screening Analysis</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-800 font-bold border border-slate-300/60">
                             {reviewModal.appointment.aiConditionName || reviewModal.appointment.conditionName}
                           </span>
                         </div>
                         {reviewModal.showAnalysis ? (
-                          <ChevronUp className="w-4 h-4 text-blue-500" />
+                          <ChevronUp className="w-4 h-4 text-slate-600" />
                         ) : (
-                          <ChevronDown className="w-4 h-4 text-blue-500" />
+                          <ChevronDown className="w-4 h-4 text-slate-600" />
                         )}
                       </button>
 
@@ -681,16 +808,16 @@ export default function DoctorAppointmentsPage() {
                             exit={{ height: 0, opacity: 0 }}
                             className="overflow-hidden"
                           >
-                            <div className="px-4 py-4 space-y-3 border-t border-blue-100">
-                              <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 space-y-2">
-                                <p className="text-[11px] font-bold text-blue-700 uppercase tracking-wide">
+                            <div className="px-4 py-4 space-y-3 border-t border-slate-200">
+                              <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-2">
+                                <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">
                                   Algorithm Suggestion
                                 </p>
                                 <div className="flex gap-2 items-center">
                                   <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide w-28 shrink-0">
                                     Condition
                                   </span>
-                                  <span className="text-sm font-semibold text-blue-800">
+                                  <span className="text-sm font-semibold text-slate-900">
                                     {reviewModal.appointment.aiConditionName ||
                                       reviewModal.appointment.conditionName || (
                                         <span className="text-gray-300 italic">—</span>
@@ -703,15 +830,15 @@ export default function DoctorAppointmentsPage() {
                                   </span>
                                   {reviewModal.appointment.aiConfidence !== undefined ? (
                                     <div className="flex items-center gap-2 flex-1">
-                                      <div className="flex-1 bg-blue-200 rounded-full h-1.5">
+                                      <div className="flex-1 bg-slate-200 rounded-full h-1.5">
                                         <div
-                                          className="h-1.5 rounded-full bg-blue-600"
+                                          className="h-1.5 rounded-full bg-slate-700"
                                           style={{
                                             width: `${Math.min(reviewModal.appointment.aiConfidence, 100)}%`,
                                           }}
                                         />
                                       </div>
-                                      <span className="text-xs font-bold text-blue-700">
+                                      <span className="text-xs font-bold text-slate-800">
                                         {reviewModal.appointment.aiConfidence}%
                                       </span>
                                     </div>
@@ -727,12 +854,12 @@ export default function DoctorAppointmentsPage() {
                                     <img
                                       src={reviewModal.appointment.conditionImage || cond.image}
                                       alt={cond.name}
-                                      className="w-20 h-20 rounded-xl object-cover border border-blue-100 shrink-0"
+                                      className="w-20 h-20 rounded-xl object-cover border border-slate-200 shrink-0"
                                     />
                                     <div>
-                                      <p className="font-semibold text-blue-800">{cond.name}</p>
+                                      <p className="font-semibold text-slate-900">{cond.name}</p>
                                       {cond.filipinoName && (
-                                        <p className="text-xs text-blue-600 italic mb-1">{cond.filipinoName}</p>
+                                        <p className="text-xs text-slate-500 italic mb-1">{cond.filipinoName}</p>
                                       )}
                                       <p className="text-xs text-gray-600 mt-2">{cond.description}</p>
                                     </div>
@@ -746,165 +873,209 @@ export default function DoctorAppointmentsPage() {
                     </div>
                   )}
 
-                  {/* Decision Section */}
-                  <div className="pt-2 border-t border-gray-100">
-                    <p className="text-sm font-bold text-gray-900 mb-2">
-                      Review &amp; Decision for this Schedule <span className="text-red-500">*</span>
-                    </p>
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setReviewModal((prev) => (prev ? { ...prev, decision: "approved" } : prev))}
-                        className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-bold text-sm transition-all cursor-pointer ${
-                          reviewModal.decision === "approved"
-                            ? "border-green-500 bg-green-50 text-green-700 shadow-xs ring-2 ring-green-500/20"
-                            : "border-gray-200 bg-white text-gray-600 hover:border-green-300"
-                        }`}
-                      >
-                        <CheckCircle2 className="w-4 h-4 text-green-600" /> Accept &amp; Finalize Schedule
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setReviewModal((prev) => (prev ? { ...prev, decision: "rejected" } : prev))}
-                        className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-bold text-sm transition-all cursor-pointer ${
-                          reviewModal.decision === "rejected"
-                            ? "border-red-500 bg-red-50 text-red-700 shadow-xs ring-2 ring-red-500/20"
-                            : "border-gray-200 bg-white text-gray-600 hover:border-red-300"
-                        }`}
-                      >
-                        <XCircle className="w-4 h-4 text-red-600" /> Decline (Reassign)
-                      </button>
-                    </div>
-
-                    {/* Explanatory Workflow Banners */}
-                    {reviewModal.decision === "approved" && (
-                      <div className="mt-3 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-start gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                        <p className="leading-relaxed">
-                          <strong>Accept &amp; Finalize Schedule:</strong> Confirming acceptance will <strong>immediately finalize and lock</strong> this consultation schedule. It will appear on your upcoming appointments calendar and clinic records.
+                  {/* Decision Section - Only shown for pending appointments awaiting review */}
+                  {!isAlreadyReviewed ? (
+                    <>
+                      <div className="pt-2 border-t border-gray-100">
+                        <p className="text-sm font-bold text-gray-900 mb-2">
+                          Review &amp; Decision for this Schedule <span className="text-red-500">*</span>
                         </p>
-                      </div>
-                    )}
-
-                    {reviewModal.decision === "rejected" && (
-                      <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
-                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                        <p className="leading-relaxed">
-                          <strong>Decline Referral:</strong> Declining will notify your clinic triage team to <strong>re-assign another doctor</strong> from your clinic roster.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Form fields conditional on decision */}
-                  {reviewModal.decision === "approved" && (
-                    <div className="space-y-3">
-                      <div>
-                        <label htmlFor="doctor-note" className="block text-sm font-bold text-gray-800 mb-1">
-                          Pre-Consultation Notes / Instructions (Optional)
-                        </label>
-                        <textarea
-                          id="doctor-note"
-                          rows={2}
-                          value={reviewModal.note}
-                          onChange={(e) =>
-                            setReviewModal((prev) => (prev ? { ...prev, note: e.target.value } : prev))
-                          }
-                          placeholder="e.g., Patient may proceed. Avoid applying topical creams 24 hours prior to consultation..."
-                          className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 resize-none"
-                        />
-                        <p className="text-[11px] text-gray-400 mt-1">
-                          Optional notes or instructions for the clinic scheduler before the visit.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {reviewModal.decision === "rejected" && (
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <label htmlFor="decline-reason" className="block text-sm font-bold text-gray-800">
-                          Reason for Declining Referral <span className="text-red-500">*</span>
-                        </label>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 font-bold">
-                          Required for clinic re-assignment
-                        </span>
-                      </div>
-
-                      {/* Quick reason pills */}
-                      <div className="flex flex-wrap gap-1.5 mb-2">
-                        {DECLINE_REASONS.map((r) => (
+                        <div className="grid grid-cols-2 gap-3">
                           <button
-                            key={r}
                             type="button"
-                            onClick={() =>
-                              setReviewModal((prev) => (prev ? { ...prev, note: r } : prev))
-                            }
-                            className={`text-[11px] px-2.5 py-1 rounded-lg border text-left transition-all cursor-pointer ${
-                              reviewModal.note === r
-                                ? "bg-red-50 border-red-300 text-red-700 font-semibold"
-                                : "bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100"
+                            onClick={() => setReviewModal((prev) => (prev ? { ...prev, decision: "approved" } : prev))}
+                            className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-bold text-sm transition-all cursor-pointer ${
+                              reviewModal.decision === "approved"
+                                ? "border-green-500 bg-green-50 text-green-700 shadow-xs ring-2 ring-green-500/20"
+                                : "border-gray-200 bg-white text-gray-600 hover:border-green-300"
                             }`}
                           >
-                            {r}
+                            Accept &amp; Finalize Schedule
                           </button>
-                        ))}
+                          <button
+                            type="button"
+                            onClick={() => setReviewModal((prev) => (prev ? { ...prev, decision: "rejected" } : prev))}
+                            className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-bold text-sm transition-all cursor-pointer ${
+                              reviewModal.decision === "rejected"
+                                ? "border-red-500 bg-red-50 text-red-700 shadow-xs ring-2 ring-red-500/20"
+                                : "border-gray-200 bg-white text-gray-600 hover:border-red-300"
+                            }`}
+                          >
+                            Decline (Reassign)
+                          </button>
+                        </div>
+
+                        {/* Explanatory Workflow Banners */}
+                        {reviewModal.decision === "approved" && (
+                          <div className="mt-3 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900">
+                            <p className="leading-relaxed">
+                              <strong>Accept &amp; Finalize Schedule:</strong> Confirming acceptance will <strong>immediately finalize and lock</strong> this consultation schedule. It will appear on your upcoming appointments calendar and clinic records.
+                            </p>
+                          </div>
+                        )}
+
+                        {reviewModal.decision === "rejected" && (
+                          <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
+                            <p className="leading-relaxed">
+                              <strong>Decline Referral:</strong> Declining will notify your clinic triage team to <strong>re-assign another doctor</strong> from your clinic roster.
+                            </p>
+                          </div>
+                        )}
                       </div>
 
-                      <textarea
-                        id="decline-reason"
-                        rows={3}
-                        value={reviewModal.note}
-                        onChange={(e) =>
-                          setReviewModal((prev) => (prev ? { ...prev, note: e.target.value } : prev))
-                        }
-                        placeholder="State your reason for declining so the clinic manager can re-assign appropriately..."
-                        className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 resize-none"
-                      />
-                    </div>
-                  )}
+                      {/* Form fields conditional on decision */}
+                      {reviewModal.decision === "approved" && (
+                        <div className="space-y-3">
+                          <div>
+                            <label htmlFor="doctor-note" className="block text-sm font-bold text-gray-800 mb-1">
+                              Pre-Consultation Notes / Instructions (Optional)
+                            </label>
+                            <textarea
+                              id="doctor-note"
+                              rows={2}
+                              value={reviewModal.note}
+                              onChange={(e) =>
+                                setReviewModal((prev) => (prev ? { ...prev, note: e.target.value } : prev))
+                              }
+                              placeholder="e.g., Patient may proceed. Avoid applying topical creams 24 hours prior to consultation..."
+                              className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 resize-none"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">
+                              Optional notes or instructions for the clinic scheduler before the visit.
+                            </p>
+                          </div>
+                        </div>
+                      )}
 
-                  {submitError && (
-                    <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                      {submitError}
-                    </p>
+                      {reviewModal.decision === "rejected" && (
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <label htmlFor="decline-reason" className="block text-sm font-bold text-gray-800">
+                              Reason for Declining Referral <span className="text-red-500">*</span>
+                            </label>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 font-bold">
+                              Required for clinic re-assignment
+                            </span>
+                          </div>
+
+                          {/* Quick reason pills */}
+                          <div className="flex flex-wrap gap-1.5 mb-2">
+                            {DECLINE_REASONS.map((r) => (
+                              <button
+                                key={r}
+                                type="button"
+                                onClick={() =>
+                                  setReviewModal((prev) => (prev ? { ...prev, note: r } : prev))
+                                }
+                                className={`text-[11px] px-2.5 py-1 rounded-lg border text-left transition-all cursor-pointer ${
+                                  reviewModal.note === r
+                                    ? "bg-red-50 border-red-300 text-red-700 font-semibold"
+                                    : "bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100"
+                                }`}
+                              >
+                                {r}
+                              </button>
+                            ))}
+                          </div>
+
+                          <textarea
+                            id="decline-reason"
+                            rows={3}
+                            value={reviewModal.note}
+                            onChange={(e) =>
+                              setReviewModal((prev) => (prev ? { ...prev, note: e.target.value } : prev))
+                            }
+                            placeholder="State your reason for declining so the clinic manager can re-assign appropriately..."
+                            className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 resize-none"
+                          />
+                        </div>
+                      )}
+
+                      {submitError && (
+                        <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                          {submitError}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    /* Read-only Review Summary for Reviewed Patients */
+                    <div className="pt-2 border-t border-gray-100">
+                      <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                            Clinical Review Decision
+                          </span>
+                          <span
+                            className={`text-xs font-bold px-3 py-1 rounded-full border ${
+                              reviewModal.appointment.doctorStatus === "approved" ||
+                              reviewModal.appointment.status === "scheduled" ||
+                              reviewModal.appointment.status === "confirmed" ||
+                              reviewModal.appointment.status === "completed"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : "bg-red-50 text-red-700 border-red-200"
+                            }`}
+                          >
+                            {reviewModal.appointment.doctorStatus === "approved" ||
+                            reviewModal.appointment.status === "scheduled" ||
+                            reviewModal.appointment.status === "confirmed" ||
+                            reviewModal.appointment.status === "completed"
+                              ? "Accepted & Finalized"
+                              : "Declined"}
+                          </span>
+                        </div>
+                        {reviewModal.appointment.doctorNote && (
+                          <div className="pt-2 border-t border-slate-200/70 text-xs">
+                            <span className="font-semibold text-slate-600">Review Note: </span>
+                            <span className="text-slate-800 leading-relaxed">{reviewModal.appointment.doctorNote}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
 
                 {/* Modal Footer */}
-                <div className="px-6 pb-6 pt-2 flex gap-3 shrink-0 border-t border-gray-100">
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={() => setReviewModal(null)}
-                    className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    disabled={submitting || !reviewModal.decision}
-                    onClick={submitReview}
-                    className={`flex-1 py-3 rounded-xl text-white text-sm font-bold transition-all disabled:opacity-50 inline-flex items-center justify-center gap-2 cursor-pointer shadow-xs ${
-                      reviewModal.decision === "rejected"
-                        ? "bg-red-600 hover:bg-red-700"
-                        : "bg-emerald-600 hover:bg-emerald-700"
-                    }`}
-                  >
-                    {submitting ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" /> Saving...
-                      </>
-                    ) : reviewModal.decision === "rejected" ? (
-                      <>
-                        <XCircle className="w-4 h-4" /> Decline &amp; Send for Reassignment
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" /> Accept &amp; Finalize Schedule
-                      </>
-                    )}
-                  </button>
+                <div className="px-6 pb-6 pt-3 flex gap-3 shrink-0 border-t border-gray-100">
+                  {isAlreadyReviewed ? (
+                    <button
+                      type="button"
+                      onClick={() => setReviewModal(null)}
+                      className="w-full py-3 rounded-xl border border-gray-200 text-gray-700 text-sm font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                    >
+                      Close
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={() => setReviewModal(null)}
+                        className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={submitting || !reviewModal.decision}
+                        onClick={submitReview}
+                        className={`flex-1 py-3 rounded-xl text-white text-sm font-bold transition-all disabled:opacity-50 inline-flex items-center justify-center gap-2 cursor-pointer shadow-xs ${
+                          reviewModal.decision === "rejected"
+                            ? "bg-red-600 hover:bg-red-700"
+                            : "bg-emerald-600 hover:bg-emerald-700"
+                        }`}
+                      >
+                        {submitting ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" /> Saving...
+                          </>
+                        ) : reviewModal.decision === "rejected" ? (
+                          "Decline & Send for Reassignment"
+                        ) : (
+                          "Accept & Finalize Schedule"
+                        )}
+                      </button>
+                    </>
+                  )}
                 </div>
               </motion.div>
             </div>
@@ -949,26 +1120,26 @@ export default function DoctorAppointmentsPage() {
 
               {/* Consultation Details Card */}
               {successInfo.decision === "approved" && (
-                <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-100 text-left space-y-2 text-xs">
+                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-left space-y-2 text-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Patient</span>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Patient</span>
                     <span className="font-bold text-gray-900">{successInfo.patientName}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Confirmed Schedule</span>
-                    <span className="font-semibold text-blue-950">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Confirmed Schedule</span>
+                    <span className="font-semibold text-slate-900">
                       {formatScheduleDateTime(successInfo.date, successInfo.time)}
                     </span>
                   </div>
                   {successInfo.diagnosis && (
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Assessment</span>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Assessment</span>
                       <span className="font-medium text-gray-700 truncate max-w-[200px]">{successInfo.diagnosis}</span>
                     </div>
                   )}
-                  <div className="flex items-center justify-between pt-1 border-t border-blue-100/70">
-                    <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Next Step</span>
-                    <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-200">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Next Step</span>
+                    <span className="text-[11px] font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
                       Assigned to Your Calendar
                     </span>
                   </div>

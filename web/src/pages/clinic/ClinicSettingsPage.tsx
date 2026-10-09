@@ -191,6 +191,8 @@ export default function ClinicSettingsPage() {
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketMessage, setTicketMessage] = useState("");
   const [ticketSent, setTicketSent] = useState(false);
+  const [ticketSubmitting, setTicketSubmitting] = useState(false);
+  const [ticketError, setTicketError] = useState<string | null>(null);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
   const { status: verificationStatus, clinicId, loading } = useClinicVerification();
@@ -471,25 +473,42 @@ export default function ClinicSettingsPage() {
   ];
 
   const submitTicket = async () => {
-    if (!ticketSubject.trim() || !ticketMessage.trim()) return;
+    if (!ticketSubject.trim() || !ticketMessage.trim() || ticketSubmitting) return;
+
+    setTicketSubmitting(true);
+    setTicketError(null);
+    setTicketSent(false);
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
       await createHelpdeskTicketAsync({
-        userId: session?.user?.id,
-        user: settings.name?.trim() || session?.user?.email?.split("@")[0] || "Clinic Administrator",
-        email: settings.email?.trim() || session?.user?.email || "",
+        userId: session.user.id,
+        user: settings.name?.trim() || session.user.email?.split("@")[0] || "Clinic Administrator",
+        email: settings.email?.trim() || session.user.email || "",
         subject: ticketSubject.trim(),
         message: ticketMessage.trim(),
         category: "Clinic Support",
         priority: "medium",
       });
+
+      setTicketSent(true);
+      setTicketSubject("");
+      setTicketMessage("");
+      window.setTimeout(() => setTicketSent(false), 4000);
     } catch (err) {
       console.error("Failed to submit clinic ticket:", err);
+      setTicketError(
+        err instanceof Error
+          ? err.message
+          : "Your ticket could not be submitted. Please try again."
+      );
+    } finally {
+      setTicketSubmitting(false);
     }
-    setTicketSent(true);
-    setTicketSubject("");
-    setTicketMessage("");
-    setTimeout(() => setTicketSent(false), 4000);
   };
 
   return (
@@ -934,7 +953,10 @@ export default function ClinicSettingsPage() {
             <input
               type="text"
               value={ticketSubject}
-              onChange={(e) => setTicketSubject(e.target.value)}
+              onChange={(e) => {
+                setTicketSubject(e.target.value);
+                setTicketError(null);
+              }}
               placeholder="e.g. Unable to update clinic profile"
               className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2"
             />
@@ -943,7 +965,10 @@ export default function ClinicSettingsPage() {
             <label className="block text-xs font-semibold text-gray-500 mb-1">Message</label>
             <textarea
               value={ticketMessage}
-              onChange={(e) => setTicketMessage(e.target.value)}
+              onChange={(e) => {
+                setTicketMessage(e.target.value);
+                setTicketError(null);
+              }}
               rows={4}
               placeholder="Describe your issue or concern in detail..."
               className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 resize-none"
@@ -951,14 +976,24 @@ export default function ClinicSettingsPage() {
           </div>
           <div className="flex items-center gap-3">
             <button
+              type="button"
               onClick={submitTicket}
-              disabled={!ticketSubject.trim() || !ticketMessage.trim()}
+              disabled={ticketSubmitting || !ticketSubject.trim() || !ticketMessage.trim()}
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-magenta-500 text-white text-sm font-semibold hover:bg-magenta-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Send className="w-4 h-4" />
-              Send Ticket
+              {ticketSubmitting ? "Submitting..." : "Send Ticket"}
             </button>
-            {ticketSent && <span className="text-xs text-green-600 font-semibold">Ticket submitted! We&apos;ll be in touch soon.</span>}
+            {ticketSent && (
+              <span className="text-xs text-green-600 font-semibold">
+                Ticket submitted! We&apos;ll be in touch soon.
+              </span>
+            )}
+            {ticketError && (
+              <span role="alert" className="text-xs text-red-600">
+                {ticketError}
+              </span>
+            )}
           </div>
         </div>
       </div>

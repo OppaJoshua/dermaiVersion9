@@ -249,7 +249,7 @@ setPaymentId(paymongoPaymentId);
                           timeStyle: "short",
                         }
                       )
-                    : "â€”"}
+                    : "—"}
                 </span>
               </div>
 
