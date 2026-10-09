@@ -29,6 +29,16 @@ const REQUEST_TIMEOUT_MS = 30_000;
 // TYPES
 // ============================================
 
+export interface EvidencePrediction {
+  predicted_class?: string;
+  display_name?: string;
+  confidence?: number;
+  confidence_level?: string;
+  probabilities?: Record<string, number>;
+  status: "valid" | "invalid";
+  error?: string;
+}
+
 export interface PredictionResult {
   success: boolean;
   predicted_class: string;
@@ -37,6 +47,11 @@ export interface PredictionResult {
   confidence_level: "high" | "medium" | "low";
   probabilities: Record<string, number>;
   inference_time_ms: number;
+  is_combined?: boolean;
+  agreement?: boolean | null;
+  combined_evidence_score?: number | null;
+  primary_prediction?: EvidencePrediction | null;
+  supporting_prediction?: EvidencePrediction | null;
 }
 
 export interface PredictionError {
@@ -64,18 +79,24 @@ export class AIPredictionError extends Error {
 // ============================================
 
 /**
- * Send a skin image to the FastAPI AI backend for classification.
+ * Send skin images to the FastAPI AI backend for classification.
+ * Runs ResNet50 separately on both the primary close-up and supporting wide-view image.
  * 
- * @param imageFile - The close-up photo (File from input or camera)
- * @returns PredictionResult with predicted class + confidence + probabilities
+ * @param imageFile - The primary close-up photo (File from input or camera)
+ * @param wideFile - The optional supporting wide-view photo (File from input or camera)
+ * @returns PredictionResult with derived condition, confidence, and individual image evidence
  * @throws AIPredictionError on failure
  */
 export async function predictSkinCondition(
-  imageFile: File
+  imageFile: File,
+  wideFile?: File | null
 ): Promise<PredictionResult> {
   // Build multipart form data
   const formData = new FormData();
   formData.append("image", imageFile);
+  if (wideFile) {
+    formData.append("wide_image", wideFile);
+  }
 
   // Abort controller for timeout
   const controller = new AbortController();

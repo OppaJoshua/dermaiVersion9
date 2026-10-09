@@ -307,6 +307,23 @@ interface ScanResultData {
   careTips: string[];
   whenToSeeDoctor: string;
   imageUrl?: string;
+  wideImageUrl?: string;
+  primaryPrediction?: {
+    predicted_class?: string;
+    display_name?: string;
+    confidence?: number;
+    status?: string;
+  } | null;
+  supportingPrediction?: {
+    predicted_class?: string;
+    display_name?: string;
+    confidence?: number;
+    status?: string;
+    error?: string;
+  } | null;
+  isCombined?: boolean;
+  agreement?: boolean | null;
+  combinedEvidenceScore?: number | null;
 }
 
 interface RecommendedClinic {
@@ -351,11 +368,11 @@ export default function ScanSkinPage() {
       try {
         sessionStorage.removeItem("dermai_booking_return_clinic");
         sessionStorage.removeItem("dermai_scan_booking_context");
-      } catch {}
+      } catch { }
     } else if (returnClinicId) {
       try {
         sessionStorage.setItem("dermai_booking_return_clinic", returnClinicId);
-      } catch {}
+      } catch { }
     }
   }, [isBookingOrigin, returnClinicId]);
   const [currentStep, setCurrentStep] = useState(1);
@@ -542,21 +559,22 @@ export default function ScanSkinPage() {
       });
 
       // ==========================================================
-      // STEP 2: Call FastAPI /predict with the close-up image FIRST
+      // STEP 2: Call FastAPI /predict with BOTH close-up and wide-view images
       // Pipeline in FastAPI:
-      //   1. Image quality validation (blur, brightness, contrast, resolution)
-      //   2. Human-skin validation (human skin detector)
-      //   3. ResNet50 skin condition classification
-      //   4. Confidence threshold check
+      //   1. Image quality & skin validation on primary close-up
+      //   2. ResNet50 inference on primary close-up
+      //   3. Separate validation & ResNet50 inference on supporting wide-view
+      //   4. Multi-view evidence combination (70% primary, 30% supporting)
       //
-      // If ANY validation fails:
+      // If primary close-up fails:
       //   - FastAPI raises 400 HTTPException with user-friendly retake instructions
       //   - We catch it, setAnalyzeError(message), and DO NOT proceed
-      //   - NO storage upload, NO database record created, NO scan quota consumed
+      // If wide-view fails validation:
+      //   - Scan proceeds with 100% close-up primary evidence
       // ==========================================================
       let aiResult;
       try {
-        aiResult = await predictSkinCondition(closeUpFile);
+        aiResult = await predictSkinCondition(closeUpFile, wideFile);
       } catch (err) {
         const errMsg =
           err instanceof AIPredictionError
@@ -572,14 +590,14 @@ export default function ScanSkinPage() {
 
       if (user?.id) {
         const ts = Date.now();
-        // Upload close-up
+        // Upload close-up (primary evidence)
         const closeUpPath = `${user.id}/${ts}_close_up_${closeUpFile.name}`;
         const { error: upErr1 } = await supabase.storage
           .from("scan-uploads")
           .upload(closeUpPath, closeUpFile, { upsert: false });
         if (!upErr1) uploadedCloseUpPath = closeUpPath;
 
-        // Upload wide view (context only, not analyzed)
+        // Upload wide view (supporting multi-view evidence)
         const widePath = `${user.id}/${ts}_wide_${wideFile.name}`;
         const { error: upErr2 } = await supabase.storage
           .from("scan-uploads")
@@ -641,8 +659,19 @@ export default function ScanSkinPage() {
             severity: quickPreview.severityLevel,
             questionnaire: questionnaireData,
             photoUrl: uploadedCloseUpPath || closeUpImage,
+            photoUrlWide: uploadedWidePath || wideImage,
             analysisId,
             timestamp: Date.now(),
+            primaryPrediction: aiResult.primary_prediction || {
+              predicted_class: aiResult.predicted_class,
+              display_name: aiResult.display_name,
+              confidence: aiResult.confidence,
+              status: "valid",
+            },
+            supportingPrediction: aiResult.supporting_prediction || null,
+            isCombined: aiResult.is_combined,
+            agreement: aiResult.agreement,
+            combinedEvidenceScore: aiResult.combined_evidence_score ?? null,
           })
         );
       } catch {
@@ -656,8 +685,8 @@ export default function ScanSkinPage() {
         id: analysisId || `scan-${Date.now()}`,
         condition: aiResult.display_name,
         localName: aiResult.display_name,
-        confidence: aiResult.confidence,
-        bodyPart: "Uploaded Photo & Questionnaire",
+        confidence: aiResult.primary_prediction?.confidence ?? aiResult.confidence,
+        bodyPart: "Uploaded Photos & Questionnaire",
         date: new Date().toLocaleDateString("en-PH", {
           month: "long",
           day: "numeric",
@@ -665,7 +694,7 @@ export default function ScanSkinPage() {
         }),
         severity: quickPreview.severityLevel,
         description:
-          "AI-generated preliminary assessment based on your uploaded photo. " +
+          "AI-generated preliminary assessment based on your uploaded close-up and supporting photos. " +
           "This is not a medical diagnosis — please consult a licensed dermatologist.",
         symptoms: quickPreview.urgentMessage
           ? [quickPreview.urgentMessage]
@@ -680,6 +709,17 @@ export default function ScanSkinPage() {
           ? "Immediate clinic visit recommended due to reported severe symptoms."
           : "Consult a specialist if symptoms persist or cause discomfort.",
         imageUrl: closeUpImage || undefined,
+        wideImageUrl: wideImage || undefined,
+        primaryPrediction: aiResult.primary_prediction || {
+          predicted_class: aiResult.predicted_class,
+          display_name: aiResult.display_name,
+          confidence: aiResult.confidence,
+          status: "valid",
+        },
+        supportingPrediction: aiResult.supporting_prediction || null,
+        isCombined: aiResult.is_combined,
+        agreement: aiResult.agreement,
+        combinedEvidenceScore: aiResult.combined_evidence_score ?? null,
       });
 
       setShowResult(true);
@@ -1169,42 +1209,108 @@ export default function ScanSkinPage() {
             <motion.div key="step3" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
               <div className="bg-white rounded-[20px] shadow-[0_4px_24px_rgba(160,25,90,0.08)] overflow-hidden">
                 <div className="p-6 sm:p-8 border-b border-magenta-100">
-                  <h2 className="text-3xl font-display font-bold text-magenta-900 mb-1">
-                    Possible {scanResult.condition}
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 text-xs font-semibold mb-2.5 border border-magenta-100">
+                    <Sparkles className="w-3.5 h-3.5 text-magenta-500" />
+                    <span>AI-generated preliminary result</span>
+                  </div>
+                  <h2 className="text-2xl sm:text-3xl font-display font-bold text-magenta-900 mb-2">
+                    Possible Condition: {scanResult.condition}
                   </h2>
-                  <p className="text-magenta-400 text-sm">{scanResult.localName} (Filipino name)</p>
                 </div>
-
                 <div className="px-6 sm:px-8 py-5 border-b border-magenta-100 space-y-4">
                   <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-semibold text-magenta-700">AI Confidence Score</span>
-                      <span className="text-lg font-bold text-magenta-500">{scanResult.confidence}%</span>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div>
+                        <span className="text-sm font-semibold text-magenta-900">
+                          AI Confidence Score
+                        </span>
+                      </div>
+                      <span className="text-lg font-bold text-magenta-600">
+                        {scanResult.primaryPrediction?.confidence ?? scanResult.confidence}%
+                      </span>
                     </div>
                     <div className="w-full h-3 bg-magenta-100 rounded-full overflow-hidden">
                       <motion.div
                         className="h-full bg-linear-to-r from-magenta-400 to-magenta-500 rounded-full"
                         initial={{ width: "0%" }}
-                        animate={{ width: `${scanResult.confidence}%` }}
+                        animate={{ width: `${scanResult.primaryPrediction?.confidence ?? scanResult.confidence}%` }}
                         transition={{ duration: 1, delay: 0.3 }}
                       />
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 bg-magenta-50 rounded-xl px-4 py-3 border border-magenta-100">
-                    <MapPin className="w-4 h-4 text-magenta-400" />
-                    <span className="text-sm text-magenta-700 font-medium">{scanResult.bodyPart}</span>
-                    <span className="ml-auto text-xs text-magenta-400">{scanResult.date}</span>
+
+                  {/* Patient Safety Notice */}
+                  <div className="rounded-xl bg-amber-50/80 border border-amber-200/80 p-3.5 flex items-start gap-2.5">
+                    <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-xs font-bold text-amber-900 mb-0.5">Important to know</p>
+                      <p className="text-xs text-amber-800 leading-relaxed">
+                        AI results can be incorrect and are not a confirmed medical diagnosis. Consult a qualified healthcare professional to assess your skin concerns.
+                      </p>
+                    </div>
                   </div>
                 </div>
 
                 <div className="p-6 sm:p-8 border-b border-magenta-100">
-                  <h3 className="font-display font-bold text-magenta-900 text-lg mb-4">Your Uploaded Photo</h3>
-                  <div className="relative overflow-hidden rounded-2xl border border-magenta-100 bg-magenta-50">
-                    <img
-                      src={scanResult.imageUrl || closeUpImage || undefined}
-                      alt={`${scanResult.condition} scan`}
-                      className="w-full h-64 sm:h-80 object-cover"
-                    />
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-display font-bold text-magenta-900 text-lg">
+                      Uploaded Photos & AI Evidence
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Close-Up Photo Card */}
+                    <div className="rounded-2xl border border-magenta-200 bg-magenta-50/40 p-3.5 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-magenta-900 uppercase tracking-wider flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-magenta-500 ring-2 ring-magenta-200" />
+                          Close-Up Photo
+                        </span>
+                        <span className="text-[11px] font-medium text-magenta-700 bg-magenta-100/80 px-2.5 py-0.5 rounded-full">
+                          Main image for analysis
+                        </span>
+                      </div>
+                      <div className="relative overflow-hidden rounded-xl border border-magenta-100 bg-white aspect-4/3">
+                        <img
+                          src={scanResult.imageUrl || closeUpImage || undefined}
+                          alt="Close-up skin photo"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Wider-Area Photo Card */}
+                    <div className="rounded-2xl border border-magenta-200 bg-magenta-50/20 p-3.5 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-magenta-900 uppercase tracking-wider flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-magenta-400 ring-2 ring-magenta-100" />
+                          Wider-Area Photo
+                        </span>
+                        <span className="text-[11px] font-medium text-magenta-700 bg-magenta-100/60 px-2.5 py-0.5 rounded-full">
+                          Additional image for context
+                        </span>
+                      </div>
+                      <div className="relative overflow-hidden rounded-xl border border-magenta-100 bg-white aspect-4/3">
+                        {scanResult.wideImageUrl || wideImage ? (
+                          <img
+                            src={scanResult.wideImageUrl || wideImage || undefined}
+                            alt="Wider-area skin photo"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-xs text-magenta-400">
+                            <Image className="w-5 h-5 text-magenta-300" />
+                            <span>No photo provided</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-4 px-1">
+                    <MapPin className="w-4 h-4 text-magenta-400 shrink-0" />
+                    <span className="text-sm text-magenta-700 font-medium">{scanResult.bodyPart}</span>
+                    <span className="ml-auto text-xs text-magenta-400">{scanResult.date}</span>
                   </div>
                 </div>
 
