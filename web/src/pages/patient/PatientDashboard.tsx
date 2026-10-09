@@ -19,6 +19,7 @@ import { skinConditions } from "../public/SkinLibrary";
 import { supabase } from "@/lib/supabaseClient";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 import { getCachedPatientNotifications } from "@/lib/notificationService";
+import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 
 type AppointmentRecord = {
   id: string;
@@ -183,6 +184,9 @@ export default function PatientDashboard() {
             doctor_status,
             doctor_note,
             ai_condition_name,
+            condition_id,
+            skin_photo_url,
+            primary_scan_id,
             created_at,
             clinic:clinic_id ( name )
           `)
@@ -190,52 +194,87 @@ export default function PatientDashboard() {
           .order("created_at", { ascending: false })
           .limit(10);
 
-        const mappedAppts: AppointmentRecord[] = (apptRows ?? []).map((a: any) => {
-          const clinicObj = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
-          const apptDate = a.date ? new Date(a.date) : null;
-          const isValidDate = apptDate && !isNaN(apptDate.getTime());
-          const dateStr = isValidDate
-            ? apptDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })
-            : "Date pending";
+        // Pre-fetch scan photo for appointments that have primary_scan_id but missing skin_photo_url
+        const missingScanIds = (apptRows ?? [])
+          .filter((a: any) => !a.skin_photo_url && a.primary_scan_id)
+          .map((a: any) => a.primary_scan_id);
 
-          const timeStr = isValidDate && a.date?.includes("T")
-            ? apptDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true })
-            : "";
-
-          let statusVal: AppointmentRecord["status"] = "pending";
-          if (a.status === "confirmed" || a.status === "scheduled" || a.doctor_status === "approved") {
-            statusVal = "scheduled";
-          } else if (a.status === "completed") {
-            statusVal = "completed";
-          } else if (a.status === "cancelled") {
-            statusVal = "cancelled";
-          } else if (a.status === "rejected") {
-            statusVal = "rejected";
+        const scanPhotoMap = new Map<string, string>();
+        if (missingScanIds.length > 0) {
+          try {
+            const { data: scanData } = await supabase
+              .from("ai_scan_result")
+              .select("analysis_id, photo_url")
+              .in("analysis_id", missingScanIds);
+            (scanData ?? []).forEach((s: any) => {
+              if (s.analysis_id && s.photo_url) {
+                scanPhotoMap.set(s.analysis_id, s.photo_url);
+              }
+            });
+          } catch (err) {
+            console.warn("Failed to fetch primary scan photos:", err);
           }
+        }
 
-          let docDiagnosis = "";
-          if (a.doctor_note) {
-            const match = a.doctor_note.match(/^Diagnosis:\s*([^|\n]+)(?:[|\n]\s*(?:Note:\s*)?(.*))?$/is);
-            if (match) {
-              docDiagnosis = match[1]?.trim() || "";
-            } else {
-              docDiagnosis = a.doctor_note.trim();
+        const mappedAppts: AppointmentRecord[] = await Promise.all(
+          (apptRows ?? []).map(async (a: any) => {
+            const clinicObj = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
+            const apptDate = a.date ? new Date(a.date) : null;
+            const isValidDate = apptDate && !isNaN(apptDate.getTime());
+            const dateStr = isValidDate
+              ? apptDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })
+              : "Date pending";
+
+            const timeStr = isValidDate && a.date?.includes("T")
+              ? apptDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true })
+              : "";
+
+            let statusVal: AppointmentRecord["status"] = "pending";
+            if (a.status === "confirmed" || a.status === "scheduled" || a.doctor_status === "approved") {
+              statusVal = "scheduled";
+            } else if (a.status === "completed") {
+              statusVal = "completed";
+            } else if (a.status === "cancelled") {
+              statusVal = "cancelled";
+            } else if (a.status === "rejected") {
+              statusVal = "rejected";
             }
-          }
 
-          return {
-            id: a.appointment_id,
-            clinicId: 0,
-            clinicName: clinicObj?.name ?? "Clinic",
-            consultationType: "face-to-face" as const,
-            conditionName: docDiagnosis || a.ai_condition_name || undefined,
-            date: dateStr,
-            time: timeStr,
-            notes: "",
-            status: statusVal,
-            createdAt: a.created_at || new Date().toISOString(),
-          };
-        });
+            let docDiagnosis = "";
+            if (a.doctor_note) {
+              const match = a.doctor_note.match(/^Diagnosis:\s*([^|\n]+)(?:[|\n]\s*(?:Note:\s*)?(.*))?$/is);
+              if (match) {
+                docDiagnosis = match[1]?.trim() || "";
+              } else {
+                docDiagnosis = a.doctor_note.trim();
+              }
+            }
+
+            const rawPhotoPath = a.skin_photo_url || (a.primary_scan_id ? scanPhotoMap.get(a.primary_scan_id) : undefined);
+            let conditionImage: string | undefined = undefined;
+            if (rawPhotoPath) {
+              const signed = await getSignedSkinPhotoUrl(rawPhotoPath);
+              if (signed) {
+                conditionImage = signed;
+              }
+            }
+
+            return {
+              id: a.appointment_id,
+              clinicId: 0,
+              clinicName: clinicObj?.name ?? "Clinic",
+              consultationType: "face-to-face" as const,
+              conditionId: a.condition_id || undefined,
+              conditionName: docDiagnosis || a.ai_condition_name || undefined,
+              conditionImage,
+              date: dateStr,
+              time: timeStr,
+              notes: "",
+              status: statusVal,
+              createdAt: a.created_at || new Date().toISOString(),
+            };
+          })
+        );
 
         // Merge offline/optimistic appointments from local storage
         try {
@@ -243,16 +282,30 @@ export default function PatientDashboard() {
           if (rawLocal) {
             const parsedLocal = JSON.parse(rawLocal);
             if (Array.isArray(parsedLocal)) {
-              parsedLocal.forEach((localItem: any) => {
-                if (!mappedAppts.some((m) => m.id === localItem.id)) {
+              for (const localItem of parsedLocal) {
+                const localPhoto = localItem.skinPhotoUrl || localItem.conditionImage;
+                const existing = mappedAppts.find((m) => m.id === localItem.id);
+                if (existing) {
+                  if (!existing.conditionImage && localPhoto) {
+                    const signed = await getSignedSkinPhotoUrl(localPhoto);
+                    if (signed) existing.conditionImage = signed;
+                  }
+                } else {
                   const pDate = localItem.date ? new Date(localItem.date) : null;
                   const isValid = pDate && !isNaN(pDate.getTime());
+                  let localDisplayImage: string | undefined = undefined;
+                  if (localPhoto) {
+                    const signed = await getSignedSkinPhotoUrl(localPhoto);
+                    if (signed) localDisplayImage = signed;
+                  }
                   mappedAppts.unshift({
                     id: localItem.id,
                     clinicId: localItem.clinicId || 0,
                     clinicName: localItem.clinicName || "Clinic",
                     consultationType: "face-to-face" as const,
+                    conditionId: localItem.conditionId || undefined,
                     conditionName: localItem.aiConditionName || localItem.conditionName || "Skin concern",
+                    conditionImage: localDisplayImage,
                     date: isValid ? pDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : (localItem.date || "Date pending"),
                     time: localItem.time || (isValid && localItem.date?.includes("T") ? pDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : ""),
                     notes: localItem.notes || "",
@@ -260,7 +313,7 @@ export default function PatientDashboard() {
                     createdAt: localItem.createdAt || new Date().toISOString(),
                   });
                 }
-              });
+              }
             }
           }
         } catch {}
@@ -275,12 +328,37 @@ export default function PatientDashboard() {
             confidence_score,
             scanned_at,
             body_part,
+            photo_url,
+            condition_id,
             skin_condition:condition_id ( condition_id, name )
           `)
           .eq("user_id", userId)
           .eq("status", "completed")
           .order("scanned_at", { ascending: false })
           .limit(5);
+
+        // Fallback: If any appointment is still missing an image, match with user's completed scans
+        let appointmentsUpdated = false;
+        for (const appt of mappedAppts) {
+          if (!appt.conditionImage) {
+            const matchedScan = (scanRows ?? []).find((s: any) => {
+              const scObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+              const matchesId = appt.conditionId && s.condition_id === appt.conditionId;
+              const matchesName = appt.conditionName && scObj?.name && scObj.name.toLowerCase() === appt.conditionName.toLowerCase();
+              return (matchesId || matchesName) && Boolean(s.photo_url);
+            });
+            if (matchedScan?.photo_url) {
+              const signed = await getSignedSkinPhotoUrl(matchedScan.photo_url);
+              if (signed) {
+                appt.conditionImage = signed;
+                appointmentsUpdated = true;
+              }
+            }
+          }
+        }
+        if (appointmentsUpdated) {
+          setAppointments([...mappedAppts]);
+        }
 
         const mappedHistory: AnalysisRecord[] = (scanRows ?? []).map((s: any) => {
           const skinConditionObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
@@ -379,16 +457,32 @@ export default function PatientDashboard() {
 
     window.addEventListener("derm_profile_updated", handleProfileUpdate);
     window.addEventListener("dermai_notifications_updated", handleProfileUpdate);
+    window.addEventListener("dermai_appointments_updated", handleProfileUpdate);
+    window.addEventListener("appointmentCreated", handleProfileUpdate);
     window.addEventListener("storage", handleProfileUpdate);
 
     return () => {
       window.removeEventListener("derm_profile_updated", handleProfileUpdate);
       window.removeEventListener("dermai_notifications_updated", handleProfileUpdate);
+      window.removeEventListener("dermai_appointments_updated", handleProfileUpdate);
+      window.removeEventListener("appointmentCreated", handleProfileUpdate);
       window.removeEventListener("storage", handleProfileUpdate);
     };
   }, [session]);
 
   const fallbackImage = skinConditions[0]?.image;
+
+  const getConditionFallbackImage = (conditionName?: string) => {
+    if (conditionName) {
+      const clean = conditionName.trim().toLowerCase();
+      const match = skinConditions.find((c) => {
+        const cName = c.name.toLowerCase();
+        return cName === clean || clean.includes(cName) || cName.includes(clean);
+      });
+      if (match?.image) return match.image;
+    }
+    return fallbackImage;
+  };
 
   const firstName = profile.fullName ? profile.fullName.split(" ")[0] : "there";
 
@@ -545,9 +639,15 @@ export default function PatientDashboard() {
             {appointments.slice(0, 3).map((item) => (
               <div key={item.id} className="rounded-xl border border-gray-100 bg-gray-50/70 p-3 flex gap-3">
                 <img
-                  src={item.conditionImage || fallbackImage}
+                  src={item.conditionImage || getConditionFallbackImage(item.conditionName)}
                   alt={item.conditionName || "Skin condition"}
                   className="w-14 h-14 rounded-lg object-cover border border-gray-200"
+                  onError={(e) => {
+                    const fallback = getConditionFallbackImage(item.conditionName);
+                    if ((e.currentTarget as HTMLImageElement).src !== fallback) {
+                      (e.currentTarget as HTMLImageElement).src = fallback;
+                    }
+                  }}
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-2 mb-1">

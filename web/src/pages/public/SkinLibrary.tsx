@@ -13,7 +13,7 @@ export const skinConditions = [
   {
     id: "vitiligo",
     name: "Vitiligo",
-    filipinoName: "Puti sa Balat",
+    filipinoName: "Pagputi ng balat",
     category: "Pigmentation",
     description: "A skin condition in which the body’s immune system destroys melanocytes, the cells that produce skin pigment (melanin), causing areas of skin to lose their color.",
     image: vitiligoImg,
@@ -96,12 +96,12 @@ export const skinConditions = [
   {
     id: "acne",
     name: "Acne",
-    filipinoName: "Tagihawat",
+    filipinoName: "Taghiyawat",
     category: "Acne",
     description: "A common skin condition that occurs when hair follicles become clogged with oil and dead skin cells, causing whiteheads, blackheads, pimples, or deeper cysts.",
     image: acneRosaceaImg,
     symptoms: [
-      "Pimples or pustules", 
+      "Pimples or pustules",
       "Blackheads",
       "Whiteheads",
       "Red or inflamed bumps",
@@ -128,7 +128,7 @@ export const skinConditions = [
   {
     id: "contact-dermatitis",
     name: "Contact Dermatitis",
-    filipinoName: "Pantal",
+    filipinoName: "Pantal/Alerhiya sa balat",
     category: "Inflammatory",
     description: "A skin reaction that occurs when the skin comes into direct contact with an allergen or irritant.\n\nTwo main types: allergic contact dermatitis (immune-mediated) and irritant contact dermatitis (direct skin damage).\n\nCommon among people regularly exposed to chemicals, allergens, or irritants at work or at home.",
     image: contactDermatitisImg,
@@ -261,8 +261,8 @@ export default function SkinLibraryPage() {
                         condition.category === "Acne"
                           ? "bg-rose-50 text-rose-700 border border-rose-200/80"
                           : condition.category === "Inflammatory"
-                          ? "bg-orange-50 text-orange-700 border border-orange-200/80"
-                          : "bg-amber-50 text-amber-700 border border-amber-200/80"
+                            ? "bg-orange-50 text-orange-700 border border-orange-200/80"
+                            : "bg-amber-50 text-amber-700 border border-amber-200/80"
                       )}
                     >
                       {condition.category}
