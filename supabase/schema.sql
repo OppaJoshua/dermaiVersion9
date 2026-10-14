@@ -6,7 +6,163 @@
 
 create extension if not exists "pgcrypto";
 
--- Drop redundant standalone doctors table if exists
+
+-- ============================================================================
+-- PRE-MIGRATION & SCHEMA HARMONIZATION (Ensures existing tables have all columns)
+-- ============================================================================
+
+-- 1. "user" table updates
+alter table if exists "user" add column if not exists phone varchar(30);
+alter table if exists "user" add column if not exists gender varchar(30);
+alter table if exists "user" add column if not exists birthdate date;
+alter table if exists "user" add column if not exists district varchar(100);
+alter table if exists "user" add column if not exists address text;
+alter table if exists "user" add column if not exists avatar_url text;
+alter table if exists "user" add column if not exists google_id varchar(100);
+alter table if exists "user" add column if not exists account_status varchar(20) not null default 'active';
+alter table if exists "user" add column if not exists created_at timestamptz not null default now();
+alter table if exists "user" add column if not exists updated_at timestamptz not null default now();
+
+-- 2. user_notification table updates
+alter table if exists user_notification add column if not exists subtype varchar(50);
+alter table if exists user_notification add column if not exists body text;
+alter table if exists user_notification add column if not exists is_read boolean not null default false;
+alter table if exists user_notification add column if not exists created_at timestamptz not null default now();
+
+-- 3. user_support_ticket table updates
+alter table if exists user_support_ticket add column if not exists category text default 'General';
+alter table if exists user_support_ticket add column if not exists priority text default 'medium';
+alter table if exists user_support_ticket add column if not exists response text;
+alter table if exists user_support_ticket add column if not exists status varchar(20) not null default 'open';
+alter table if exists user_support_ticket add column if not exists created_at timestamptz not null default now();
+alter table if exists user_support_ticket add column if not exists updated_at timestamptz not null default now();
+
+-- 4. user_plan_subscription table updates (PayMongo columns + period dates)
+alter table if exists user_plan_subscription add column if not exists current_period_start timestamptz;
+alter table if exists user_plan_subscription add column if not exists current_period_end timestamptz;
+alter table if exists user_plan_subscription add column if not exists paymongo_subscription_id text;
+alter table if exists user_plan_subscription add column if not exists paymongo_customer_id text;
+alter table if exists user_plan_subscription add column if not exists paymongo_plan_id text;
+alter table if exists user_plan_subscription add column if not exists updated_at timestamptz not null default now();
+
+-- 5. user_payment table updates (PayMongo transaction columns)
+alter table if exists user_payment add column if not exists billing_cycle varchar(20);
+alter table if exists user_payment add column if not exists reference_number text;
+alter table if exists user_payment add column if not exists paymongo_payment_id text;
+alter table if exists user_payment add column if not exists paymongo_payment_intent_id text;
+alter table if exists user_payment add column if not exists created_at timestamptz not null default now();
+alter table if exists user_payment add column if not exists plan_id uuid references plan(plan_id) on delete set null;
+
+-- 6. clinic table updates
+alter table if exists clinic add column if not exists email varchar(100);
+alter table if exists clinic add column if not exists phone varchar(30);
+alter table if exists clinic add column if not exists address text;
+alter table if exists clinic add column if not exists district varchar(100);
+alter table if exists clinic add column if not exists specialization varchar(100);
+alter table if exists clinic add column if not exists description text;
+alter table if exists clinic add column if not exists consultation_fee decimal(10,2);
+alter table if exists clinic add column if not exists logo_url text;
+alter table if exists clinic add column if not exists business_permit_url text;
+alter table if exists clinic add column if not exists business_permit_name text;
+alter table if exists clinic add column if not exists dti_sec_url text;
+alter table if exists clinic add column if not exists dti_sec_name text;
+alter table if exists clinic add column if not exists bir_url text;
+alter table if exists clinic add column if not exists bir_name text;
+alter table if exists clinic add column if not exists prc_license_file_url text;
+alter table if exists clinic add column if not exists prc_license_file_name text;
+alter table if exists clinic add column if not exists latitude decimal(10,7);
+alter table if exists clinic add column if not exists longitude decimal(10,7);
+alter table if exists clinic add column if not exists verified boolean not null default false;
+alter table if exists clinic add column if not exists status varchar(20) not null default 'pending';
+alter table if exists clinic add column if not exists owner_user_id uuid references "user"(user_id) on delete set null;
+alter table if exists clinic drop column if exists slots_per_day;
+alter table if exists clinic_operating_hours drop column if exists slots_per_day;
+
+-- 7. clinic_doctor table updates (rename legacy invite_email to email, add missing columns)
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name = 'clinic_doctor' and column_name = 'invite_email'
+  ) and not exists (
+    select 1 from information_schema.columns
+    where table_name = 'clinic_doctor' and column_name = 'email'
+  ) then
+    alter table clinic_doctor rename column invite_email to email;
+  end if;
+end $$;
+
+alter table if exists clinic_doctor add column if not exists email varchar(100);
+alter table if exists clinic_doctor add column if not exists contact_number varchar(30);
+alter table if exists clinic_doctor add column if not exists photo_url text;
+alter table if exists clinic_doctor add column if not exists duty_schedule jsonb;
+alter table if exists clinic_doctor add column if not exists status varchar(20) not null default 'Active';
+alter table if exists clinic_doctor add column if not exists user_id uuid references "user"(user_id) on delete set null;
+alter table if exists clinic_doctor add column if not exists created_at timestamptz not null default now();
+alter table if exists clinic_doctor add column if not exists updated_at timestamptz not null default now();
+
+-- 8. patient_appointment table updates (consolidate doctor_id -> assigned_doctor_id, add missing fields)
+alter table if exists patient_appointment add column if not exists patient_name varchar(100);
+alter table if exists patient_appointment add column if not exists patient_email varchar(100);
+alter table if exists patient_appointment add column if not exists patient_gender varchar(30);
+alter table if exists patient_appointment add column if not exists patient_birthdate date;
+alter table if exists patient_appointment add column if not exists patient_contact varchar(30);
+alter table if exists patient_appointment add column if not exists patient_address text;
+alter table if exists patient_appointment add column if not exists emergency_contact_name varchar(100);
+alter table if exists patient_appointment add column if not exists emergency_contact_phone varchar(30);
+alter table if exists patient_appointment add column if not exists emergency_contact_relationship varchar(50);
+alter table if exists patient_appointment add column if not exists notes text;
+alter table if exists patient_appointment add column if not exists clinic_note text;
+alter table if exists patient_appointment add column if not exists skin_photo_url text;
+alter table if exists patient_appointment add column if not exists ai_condition_name varchar(200);
+alter table if exists patient_appointment add column if not exists ai_confidence decimal(5,2);
+alter table if exists patient_appointment add column if not exists questionnaire_answers jsonb;
+alter table if exists patient_appointment add column if not exists meeting_link text;
+alter table if exists patient_appointment add column if not exists created_at timestamptz not null default now();
+alter table if exists patient_appointment add column if not exists assigned_doctor_id uuid references clinic_doctor(doctor_id) on delete set null;
+alter table if exists patient_appointment add column if not exists schedule_sent_to_doctor boolean not null default false;
+alter table if exists patient_appointment add column if not exists doctor_status varchar(30);
+alter table if exists patient_appointment add column if not exists doctor_note text;
+alter table if exists patient_appointment add column if not exists doctor_reviewed_at timestamptz;
+alter table if exists patient_appointment add column if not exists condition_id uuid references skin_condition(condition_id) on delete set null;
+alter table if exists patient_appointment add column if not exists primary_scan_id uuid references ai_scan_result(analysis_id) on delete set null;
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name = 'patient_appointment' and column_name = 'doctor_id'
+  ) then
+    update patient_appointment set assigned_doctor_id = doctor_id where assigned_doctor_id is null;
+    alter table patient_appointment drop column doctor_id;
+  end if;
+end $$;
+
+-- 9. clinic_patient_record table updates
+alter table if exists clinic_patient_record add column if not exists file_path text;
+alter table if exists clinic_patient_record add column if not exists uploaded_at timestamptz not null default now();
+
+-- 10. ai_scan_result table updates
+alter table if exists ai_scan_result add column if not exists photo_url text;
+alter table if exists ai_scan_result add column if not exists photo_url_wide text;
+alter table if exists ai_scan_result add column if not exists questionnaire_answers jsonb;
+alter table if exists ai_scan_result add column if not exists referral_suggested boolean not null default false;
+alter table if exists ai_scan_result drop constraint if exists ai_scan_result_status_check;
+alter table if exists ai_scan_result add constraint ai_scan_result_status_check check (status in ('completed','pending','failed','valid','flagged','invalid'));
+
+-- 11. Recreate admin_scan_review if legacy structure exists
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name = 'admin_scan_review' and column_name = 'scan_id'
+  ) then
+    drop table admin_scan_review cascade;
+  end if;
+end $$;
+
+-- 12. Drop redundant standalone doctors table if exists
+
 drop table if exists doctors cascade;
 
 -- ============================================================================
@@ -649,6 +805,7 @@ create index if not exists idx_clinic_pt_rec_cid      on clinic_patient_record (
 create index if not exists idx_pt_appt_uid            on patient_appointment (user_id);
 create index if not exists idx_pt_appt_cid            on patient_appointment (clinic_id);
 create index if not exists idx_pt_appt_assigned_doc   on patient_appointment (assigned_doctor_id);
+create index if not exists idx_patient_appointment_primary_scan_id on patient_appointment (primary_scan_id);
 create index if not exists idx_ai_scan_uid            on ai_scan_result (user_id);
 create index if not exists idx_ai_ans_aid             on ai_skin_answer (analysis_id);
 create index if not exists idx_adm_scan_aid           on admin_scan_review (analysis_id);

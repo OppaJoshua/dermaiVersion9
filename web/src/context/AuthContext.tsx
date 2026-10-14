@@ -88,6 +88,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else if (!data.session) {
         setRoleLoading(false);
       }
+      const cachedRole = localStorage.getItem(`derm_role_${data.session.user.id}`) as UserRole | null;
+      if (cachedRole && ["admin", "clinic", "doctor", "patient"].includes(cachedRole)) {
+        setRole(cachedRole);
+      }
       setLoading(false);
     });
 
@@ -103,6 +107,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRole(null);
         setAccountStatus("active");
         setRoleLoading(false);
+      } else {
+        const cachedRole = localStorage.getItem(`derm_role_${newSession.user.id}`) as UserRole | null;
+        if (cachedRole && ["admin", "clinic", "doctor", "patient"].includes(cachedRole)) {
+          setRole(cachedRole);
+        }
       }
     });
 
@@ -121,6 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (userEmail === "dermaisupport@gmail.com") {
       setRole("admin");
       setAccountStatus("active");
+      setIsProfileComplete(true);
       setRoleLoading(false);
       return;
     }
@@ -129,18 +139,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRoleLoading(true);
 
     async function fetchUserRole() {
+      // Keep track of any known role so we NEVER downgrade to patient on temporary failure
+      let knownRole: UserRole | null = null;
       try {
+        const cachedRole = localStorage.getItem(`derm_role_${session!.user.id}`) as UserRole | null;
+        if (cachedRole && ["admin", "clinic", "doctor", "patient"].includes(cachedRole)) {
+          knownRole = cachedRole;
+        }
+
         const currentEmail = (session!.user.email || "").toLowerCase().trim();
 
         // 1. Check local manual admin override
         const overrideRole = localStorage.getItem("derm_override_role") as UserRole | null;
         if (overrideRole) {
           setRole(overrideRole);
+          setIsProfileComplete(true);
           setRoleLoading(false);
           return;
         }
 
-        // 2. Query user record in DB
+        // 2. Query user record in DB (Primary Authoritative Source)
         let dbUser: any = null;
         const { data: userById } = await supabase
           .from("user")
@@ -159,6 +177,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (userByEmail) dbUser = userByEmail;
         }
 
+        // If DB has an authoritative role, record it as known role
+        if (dbUser?.role && ["admin", "clinic", "doctor", "patient"].includes(dbUser.role)) {
+          knownRole = dbUser.role as UserRole;
+        }
+
         const currentStatus: AccountStatus =
           dbUser?.account_status === "suspended" || dbUser?.account_status === "inactive"
             ? dbUser.account_status
@@ -166,69 +189,131 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // 3. Check Clinic Affiliation (by owner ID or Email)
         let clinicFound: any = null;
-
-        const { data: c1 } = await supabase
-          .from("clinic")
-          .select("clinic_id, status, owner_user_id")
-          .eq("owner_user_id", session!.user.id)
-          .maybeSingle();
-
-        if (c1) {
-          clinicFound = c1;
-        } else if (currentEmail) {
-          const { data: c2 } = await supabase
+        if (knownRole === "clinic") {
+          clinicFound = { clinic_id: "authoritative", status: "active" };
+        } else if (knownRole !== "doctor" && knownRole !== "admin") {
+          const { data: c1 } = await supabase
             .from("clinic")
             .select("clinic_id, status, owner_user_id")
-            .ilike("email", currentEmail)
+            .eq("owner_user_id", session!.user.id)
             .maybeSingle();
 
-          if (c2) {
-            clinicFound = c2;
-            if (!c2.owner_user_id) {
-              await supabase
-                .from("clinic")
-                .update({ owner_user_id: session!.user.id })
-                .eq("clinic_id", c2.clinic_id);
-            }
-          }
-        }
+          if (c1) {
+            clinicFound = c1;
+          } else if (currentEmail) {
+            const { data: c2 } = await supabase
+              .from("clinic")
+              .select("clinic_id, status, owner_user_id")
+              .ilike("email", currentEmail)
+              .maybeSingle();
 
-        // Check local applications cache
-        if (!clinicFound && currentEmail) {
-          try {
-            const localApps = localStorage.getItem("dermai_clinic_applications");
-            if (localApps) {
-              const parsed = JSON.parse(localApps);
-              if (parsed.some((a: any) => a.email?.toLowerCase().trim() === currentEmail)) {
-                clinicFound = { clinic_id: "local", status: "pending" };
+            if (c2) {
+              clinicFound = c2;
+              if (!c2.owner_user_id) {
+                try {
+                  await supabase
+                    .from("clinic")
+                    .update({ owner_user_id: session!.user.id })
+                    .eq("clinic_id", c2.clinic_id);
+                } catch {
+                  // Non-blocking affiliation link
+                }
               }
             }
-          } catch {
-            /* ignore */
+          }
+
+          // Check local applications cache
+          if (!clinicFound && currentEmail) {
+            try {
+              const localApps = localStorage.getItem("dermai_clinic_applications");
+              if (localApps) {
+                const parsed = JSON.parse(localApps);
+                if (parsed.some((a: any) => a.email?.toLowerCase().trim() === currentEmail)) {
+                  clinicFound = { clinic_id: "local", status: "pending" };
+                }
+              }
+            } catch {
+              /* ignore */
+            }
           }
         }
 
-        // 4. Check Doctor Affiliation
+        // 4. Check Doctor Affiliation (try user_id first, then email fallback)
         let doctorFound = false;
-        if (!clinicFound && currentEmail) {
-          const { data: d1 } = await supabase
+        if (knownRole === "doctor") {
+          doctorFound = true;
+        } else if (!clinicFound && knownRole !== "admin") {
+          // 4a. First try by user_id = authenticated Supabase user ID
+          const { data: dById } = await supabase
             .from("clinic_doctor")
-            .select("doctor_id")
-            .ilike("email", currentEmail)
+            .select("doctor_id, clinic_id, user_id")
+            .eq("user_id", session!.user.id)
             .maybeSingle();
-          if (d1) doctorFound = true;
+
+          if (dById) {
+            doctorFound = true;
+          } else if (currentEmail) {
+            // 4b. Fallback to email lookup if user_id was not linked yet
+            const { data: dByEmail } = await supabase
+              .from("clinic_doctor")
+              .select("doctor_id, clinic_id, user_id")
+              .ilike("email", currentEmail)
+              .maybeSingle();
+
+            if (dByEmail) {
+              doctorFound = true;
+              if (!dByEmail.user_id) {
+                try {
+                  await supabase
+                    .from("clinic_doctor")
+                    .update({ user_id: session!.user.id })
+                    .eq("doctor_id", dByEmail.doctor_id);
+                } catch {
+                  // Non-blocking affiliation link
+                }
+              }
+            }
+          }
+
+          // 4c. Secondary fallback to local doctor profile / clinic doctors cache
+          if (!doctorFound) {
+            try {
+              const storedDocProfile = localStorage.getItem("dermai_doctor_profile");
+              const storedClinicDocs = localStorage.getItem("dermai_clinic_doctors");
+              if (storedDocProfile) {
+                const parsed = JSON.parse(storedDocProfile);
+                if (parsed.email?.toLowerCase().trim() === currentEmail || parsed.id === session!.user.id) {
+                  doctorFound = true;
+                }
+              }
+              if (!doctorFound && storedClinicDocs) {
+                const parsedDocs = JSON.parse(storedClinicDocs);
+                if (Array.isArray(parsedDocs) && parsedDocs.some((d: any) => d.email?.toLowerCase().trim() === currentEmail || d.userId === session!.user.id)) {
+                  doctorFound = true;
+                }
+              }
+            } catch {
+              /* ignore */
+            }
+          }
         }
 
-        // 5. Determine Final Role
+        // 5. Determine Final Role — PRIORITIZE AUTHORITATIVE DATABASE ROLE
         let finalRole: UserRole = "patient";
-        if (clinicFound) {
+        if (dbUser?.role && ["admin", "clinic", "doctor"].includes(dbUser.role)) {
+          // 1st priority: authoritative non-patient role already stored in public.user
+          finalRole = dbUser.role as UserRole;
+        } else if (clinicFound) {
           finalRole = "clinic";
         } else if (doctorFound) {
           finalRole = "doctor";
-        } else if (dbUser?.role && ["admin", "clinic", "doctor", "patient"].includes(dbUser.role)) {
-          finalRole = dbUser.role as UserRole;
-        } else if (session!.user.user_metadata?.role) {
+        } else if (dbUser?.role === "patient") {
+          finalRole = "patient";
+        } else if (session!.user.user_metadata?.role && ["admin", "clinic", "doctor", "patient"].includes(session!.user.user_metadata.role)) {
           finalRole = session!.user.user_metadata.role as UserRole;
+        } else if (knownRole && ["admin", "clinic", "doctor"].includes(knownRole)) {
+          // Preserve cached known role if lookup was inconclusive
+          finalRole = knownRole;
         }
 
         // 6. Ensure user row exists and preserve existing account status & profile details
@@ -241,6 +326,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (saved) localProfile = JSON.parse(saved);
         } catch {}
 
+        // Patient-only profile completion check: non-patients are ALWAYS considered complete
         const profileComplete =
           finalRole !== "patient" ||
           isPatientProfileComplete({
@@ -257,24 +343,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ),
           });
 
+        // NEVER write "patient" over an existing non-patient DB role
+        const isExistingNonPatient = dbUser?.role && ["doctor", "clinic", "admin"].includes(dbUser.role);
+        const roleToPersist = isExistingNonPatient && finalRole === "patient" ? dbUser.role : finalRole;
+
         await supabase.from("user").upsert({
           user_id: session!.user.id,
           email: session!.user.email || "",
           full_name: fullName,
-          role: finalRole,
+          role: roleToPersist,
           account_status: currentStatus,
         });
 
         if (cancelled) return;
 
         setAccountStatus(currentStatus);
-        setRole(finalRole);
+        setRole(roleToPersist);
         setIsProfileComplete(profileComplete);
-        localStorage.setItem(`derm_role_${session!.user.id}`, finalRole);
+        localStorage.setItem(`derm_role_${session!.user.id}`, roleToPersist);
       } catch (err) {
         console.error("Failed to resolve user role:", err);
+        if (cancelled) return;
         const fallbackEmail = (session?.user?.email || "").toLowerCase().trim();
-        if (!cancelled) setRole(fallbackEmail === "dermaisupport@gmail.com" ? "admin" : "patient");
+
+        // Safely preserve known role instead of blindly falling back to "patient"
+        const preservedRole: UserRole | null =
+          knownRole && ["admin", "clinic", "doctor"].includes(knownRole)
+            ? knownRole
+            : fallbackEmail === "dermaisupport@gmail.com"
+            ? "admin"
+            : null;
+
+        if (preservedRole) {
+          setRole(preservedRole);
+          setIsProfileComplete(true);
+        } else {
+          // If role is genuinely unknown, do NOT assume patient for profile-completion
+          setRole(null);
+          setIsProfileComplete(true);
+        }
       } finally {
         if (!cancelled) setRoleLoading(false);
       }

@@ -30,7 +30,7 @@ export default function SubscriptionUpgradePage() {
   const [mobileNumber, setMobileNumber] = useState("");
 
   useEffect(() => {
-    getSubscriptionPlansAsync(false).then(setPlans).catch(() => {});
+    getSubscriptionPlansAsync(false).then(setPlans).catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -39,23 +39,23 @@ export default function SubscriptionUpgradePage() {
   }, [user]);
 
   const availablePlans = plans.filter(
-  (p) =>
-    p.billingType === billingCycle &&
-    p.status === "active" &&
-    p.price > 0
-);
+    (p) =>
+      p.billingType === billingCycle &&
+      p.status === "active" &&
+      p.price > 0
+  );
 
-const selectedPlan =
-  availablePlans.find((p) => p.id === selectedPlanId) ??
-  availablePlans[0];
+  const selectedPlan =
+    availablePlans.find((p) => p.id === selectedPlanId) ??
+    availablePlans[0];
 
-const basePrice = selectedPlan?.price ?? 0;
-const total = Math.round(basePrice * 100) / 100;
-const billingLabel = billingCycle === "monthly" ? "Monthly" : "Yearly";
-const currentPlanId = selectedPlan?.id;
+  const basePrice = selectedPlan?.price ?? 0;
+  const total = Math.round(basePrice * 100) / 100;
+  const billingLabel = billingCycle === "monthly" ? "Monthly" : "Yearly";
+  const currentPlanId = selectedPlan?.id;
 
 
-    // On return from PayMongo 3DS redirect, check payment status
+  // On return from PayMongo 3DS redirect, check payment status
   useEffect(() => {
     const runPaymentVerification = async () => {
       // Read directly from the browser URL.
@@ -96,10 +96,10 @@ const currentPlanId = selectedPlan?.id;
             "[upgrade] Payment verification error:",
             verifyError
           );
-          
+
           throw new Error(
             verifyError.message ||
-              "Failed to verify payment"
+            "Failed to verify payment"
           );
         }
 
@@ -149,27 +149,27 @@ const currentPlanId = selectedPlan?.id;
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
+    e.preventDefault();
 
-  if (!user?.id) {
-    setError("You must be logged in to subscribe.");
-    setIsSubscribing(false);
-    return;
-  }
+    if (!user?.id) {
+      setError("You must be logged in to subscribe.");
+      setIsSubscribing(false);
+      return;
+    }
 
-  setIsSubscribing(true);
+    setIsSubscribing(true);
 
-  setError(null);
+    setError(null);
 
-  
+
     try {
 
-    // Frontend guard: do not start a new payment while an existing
-    // paid Pro subscription is still within its current billing period.
-    const { data: existingSubscription, error: subscriptionError } =
-      await supabase
-        .from("user_plan_subscription")
-        .select(`
+      // Frontend guard: do not start a new payment while an existing
+      // paid Pro subscription is still within its current billing period.
+      const { data: existingSubscription, error: subscriptionError } =
+        await supabase
+          .from("user_plan_subscription")
+          .select(`
           status,
           current_period_end,
           cancel_at_period_end,
@@ -177,70 +177,70 @@ const currentPlanId = selectedPlan?.id;
             price
           )
         `)
-        .eq("user_id", user.id)
-        .eq("status", "active")
-        .order("current_period_end", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+          .eq("user_id", user.id)
+          .eq("status", "active")
+          .order("current_period_end", { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-    if (subscriptionError) {
-      throw new Error("Unable to check your current subscription. Please try again.");
-    }
+      if (subscriptionError) {
+        throw new Error("Unable to check your current subscription. Please try again.");
+      }
 
-    const existingPeriodEnd = existingSubscription?.current_period_end
-      ? new Date(existingSubscription.current_period_end)
-      : null;
+      const existingPeriodEnd = existingSubscription?.current_period_end
+        ? new Date(existingSubscription.current_period_end)
+        : null;
 
-    const existingPlan = Array.isArray(existingSubscription?.plan)
-      ? existingSubscription.plan[0]
-      : existingSubscription?.plan;
+      const existingPlan = Array.isArray(existingSubscription?.plan)
+        ? existingSubscription.plan[0]
+        : existingSubscription?.plan;
 
-    const hasActivePaidPeriod =
-      existingSubscription?.status === "active" &&
-      Number(existingPlan?.price ?? 0) > 0 &&
-      existingPeriodEnd !== null &&
-      existingPeriodEnd.getTime() > Date.now();
+      const hasActivePaidPeriod =
+        existingSubscription?.status === "active" &&
+        Number(existingPlan?.price ?? 0) > 0 &&
+        existingPeriodEnd !== null &&
+        existingPeriodEnd.getTime() > Date.now();
 
-    if (hasActivePaidPeriod) {
-      if (existingSubscription.cancel_at_period_end) {
+      if (hasActivePaidPeriod) {
+        if (existingSubscription.cancel_at_period_end) {
+          throw new Error(
+            "Your Pro subscription is still active until the end of your current billing period. Resume your subscription from Billing Settings instead of purchasing again."
+          );
+        }
+
         throw new Error(
-          "Your Pro subscription is still active until the end of your current billing period. Resume your subscription from Billing Settings instead of purchasing again."
+          "You already have an active Pro subscription. You cannot purchase another Pro subscription until the current billing period ends."
         );
       }
 
-      throw new Error(
-        "You already have an active Pro subscription. You cannot purchase another Pro subscription until the current billing period ends."
-      );
-    }
+      // 1. Create Payment Intent through the Supabase Edge Function
+      const { data: intentJson, error: intentError } =
+        await supabase.functions.invoke("paymongo-payment", {
+          body: {
+            paymentMethod: paymentMethod,
+            userId: user.id,
+            planId: currentPlanId,
+            billingCycle: billingCycle,
+            fullName,
+            email,
+            address,
+            mobileNumber,
+          },
+        });
 
-    // 1. Create Payment Intent through the Supabase Edge Function
-const { data: intentJson, error: intentError } =
-  await supabase.functions.invoke("paymongo-payment", {
-    body: {
-      paymentMethod: paymentMethod,
-      userId: user.id,
-      planId: currentPlanId,
-      billingCycle: billingCycle,
-      fullName,
-      email,
-      address,
-      mobileNumber,
-    },
-  });
+      if (intentError) {
+        console.error("[upgrade] PayMongo Edge Function error:", intentError);
+        throw new Error(
+          intentError.message || "Failed to create payment intent"
+        );
+      }
 
-if (intentError) {
-  console.error("[upgrade] PayMongo Edge Function error:", intentError);
-  throw new Error(
-    intentError.message || "Failed to create payment intent"
-  );
-}
+      if (!intentJson?.paymentIntentId || !intentJson?.clientKey) {
+        console.error("[upgrade] Invalid payment intent response:", intentJson);
+        throw new Error("PayMongo did not return a valid payment intent");
+      }
 
-if (!intentJson?.paymentIntentId || !intentJson?.clientKey) {
-  console.error("[upgrade] Invalid payment intent response:", intentJson);
-  throw new Error("PayMongo did not return a valid payment intent");
-}
-
-const { paymentIntentId, clientKey } = intentJson;
+      const { paymentIntentId, clientKey } = intentJson;
 
       // Save billing cycle so we can restore it after a 3DS redirect
       sessionStorage.setItem("dermai_pending_billing_cycle", billingCycle);
@@ -308,16 +308,16 @@ const { paymentIntentId, clientKey } = intentJson;
         window.location.href = redirectUrl;
       } else if (status === "succeeded") {
 
-      sessionStorage.removeItem(
-        "dermai_pending_billing_cycle"
-      );
+        sessionStorage.removeItem(
+          "dermai_pending_billing_cycle"
+        );
 
-      sessionStorage.removeItem(
-        "dermai_pending_payment_intent_client_key"
-      );
+        sessionStorage.removeItem(
+          "dermai_pending_payment_intent_client_key"
+        );
 
-      setIsSubscribing(false);
-    } else {
+        setIsSubscribing(false);
+      } else {
         throw new Error(`Payment was not successful (status: ${status}). Please try again.`);
       }
     } catch (err: unknown) {
@@ -352,9 +352,9 @@ const { paymentIntentId, clientKey } = intentJson;
               )}
             >
               <Calendar className="w-3.5 h-3.5 text-magenta-500" />
-             <span>
+              <span>
                 Monthly ₱{plans.find((p) => p.billingType === "monthly" && p.status === "active" && p.price > 0)?.price.toLocaleString() ?? "—"}
-             </span>
+              </span>
             </button>
             <button
               type="button"
@@ -367,9 +367,9 @@ const { paymentIntentId, clientKey } = intentJson;
               )}
             >
               <CalendarDays className="w-3.5 h-3.5 text-magenta-500" />
-             <span>
-  Yearly ₱{plans.find((p) => p.billingType === "yearly" && p.status === "active" && p.price > 0)?.price.toLocaleString() ?? "—"}
-</span>
+              <span>
+                Yearly ₱{plans.find((p) => p.billingType === "yearly" && p.status === "active" && p.price > 0)?.price.toLocaleString() ?? "—"}
+              </span>
             </button>
           </div>
         </div>
@@ -384,12 +384,12 @@ const { paymentIntentId, clientKey } = intentJson;
             <div className="bg-white rounded-3xl border border-gray-100 p-6 sm:p-7 shadow-xs">
               <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
                 <div>
-                 <h2 className="text-lg font-bold text-gray-900">
-                     {selectedPlan?.name ?? "Subscription Plan"}
-                </h2>
+                  <h2 className="text-lg font-bold text-gray-900">
+                    {selectedPlan?.name ?? "Subscription Plan"}
+                  </h2>
                   <p className="text-xs text-gray-500">
-                     {selectedPlan?.description || "Subscription Plan"}
-                </p>
+                    {selectedPlan?.description || "Subscription Plan"}
+                  </p>
                 </div>
               </div>
 
@@ -406,7 +406,7 @@ const { paymentIntentId, clientKey } = intentJson;
                 <div className="pt-3 border-t border-gray-100 flex justify-between items-baseline">
                   <span className="text-sm font-bold text-gray-900"> Due today</span>
                   <span className="text-xl font-bold text-magenta-600">
-                     ₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
               </div>
@@ -414,22 +414,22 @@ const { paymentIntentId, clientKey } = intentJson;
               {/* Pro Features Included */}
               <div className="space-y-2.5 pt-4 border-t border-gray-100 mb-5">
                 <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">
-                    INCLUDED WITH {selectedPlan?.name?.toUpperCase() ?? "SUBSCRIPTION PLAN"}
+                  INCLUDED WITH {selectedPlan?.name?.toUpperCase() ?? "SUBSCRIPTION PLAN"}
                 </p>
 
                 <div className="space-y-2 text-xs text-gray-600">
-                    {(selectedPlan?.features ?? []).map((feature, index) => (
-                        <div key={`${selectedPlan?.id}-feature-${index}`} className="flex items-center gap-2">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                            <span>{feature}</span>
-                        </div>
-                    ))}
+                  {(selectedPlan?.features ?? []).map((feature, index) => (
+                    <div key={`${selectedPlan?.id}-feature-${index}`} className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                      <span>{feature}</span>
+                    </div>
+                  ))}
 
-                    {(!selectedPlan?.features || selectedPlan.features.length === 0) && (
-                        <p className="text-gray-400">
-                            No additional features listed.
-                        </p>
-                    )}
+                  {(!selectedPlan?.features || selectedPlan.features.length === 0) && (
+                    <p className="text-gray-400">
+                      No additional features listed.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -577,7 +577,7 @@ const { paymentIntentId, clientKey } = intentJson;
                       "Processing Payment..."
                     ) : (
                       <>
-                         Pay &amp; Activate (₱{total.toFixed(2)})
+                        Pay &amp; Activate (₱{total.toFixed(2)})
                       </>
                     )}
                   </button>

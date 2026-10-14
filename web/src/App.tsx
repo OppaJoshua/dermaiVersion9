@@ -109,6 +109,7 @@ function App() {
         {/* Patient / Dashboard Routes */}
         <Route path="/dashboard" element={<UserLayout><PatientDashboard /></UserLayout>} />
         <Route path="/dashboard/scan" element={<UserLayout><ScanSkin /></UserLayout>} />
+        <Route path="/dashboard/scan-skin" element={<Navigate to="/dashboard/scan" replace />} />
         <Route path="/dashboard/profile" element={<UserLayout><PersonalInformationPage /></UserLayout>} />
         <Route path="/dashboard/clinics" element={<UserLayout><FindClinicsPage /></UserLayout>} />
         <Route path="/dashboard/history" element={<UserLayout><SkinHistoryPage /></UserLayout>} />

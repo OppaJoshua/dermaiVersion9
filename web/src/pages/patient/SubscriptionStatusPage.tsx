@@ -223,13 +223,13 @@ export default function SubscriptionStatusPage() {
 
           const remainingDays = subData.renews_at
             ? Math.max(
-                0,
-                Math.ceil(
-                  (new Date(subData.renews_at).getTime() -
-                    Date.now()) /
-                    86400000
-                )
+              0,
+              Math.ceil(
+                (new Date(subData.renews_at).getTime() -
+                  Date.now()) /
+                86400000
               )
+            )
             : null;
 
           const planFeatures: string[] =
@@ -303,8 +303,8 @@ export default function SubscriptionStatusPage() {
                   (p.status === "success"
                     ? "paid"
                     : p.status === "failed"
-                    ? "failed"
-                    : "pending") as BillingTransaction["status"],
+                      ? "failed"
+                      : "pending") as BillingTransaction["status"],
               };
             })
           );
@@ -346,11 +346,11 @@ export default function SubscriptionStatusPage() {
     isPro || maxScans === Infinity
       ? 100
       : maxScans > 0
-      ? Math.min(
+        ? Math.min(
           100,
           Math.round((scansRemaining / maxScans) * 100)
         )
-      : 0;
+        : 0;
 
   // Use the fetched Free Plan as a fallback while the subscription
   // information is being displayed.
@@ -358,10 +358,10 @@ export default function SubscriptionStatusPage() {
     planFeatures.length > 0
       ? planFeatures
       : !isPro && freePlan?.plan_feature
-      ? freePlan.plan_feature
+        ? freePlan.plan_feature
           .map((feature) => feature.feature_text)
           .filter(Boolean)
-      : [];
+        : [];
 
   return (
     <div className="min-h-screen bg-white text-gray-900 pt-8 pb-20 px-4 font-sans antialiased">
@@ -382,7 +382,7 @@ export default function SubscriptionStatusPage() {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-xs flex flex-col items-center text-center"
           >
-          
+
             <h2 className="text-xl font-bold text-gray-900 mb-1">
               {planName}
             </h2>
@@ -454,8 +454,8 @@ export default function SubscriptionStatusPage() {
                     {loading
                       ? "Loading..."
                       : isPro
-                      ? "Unlimited"
-                      : `${scansRemaining} remaining (${scansUsed}/${maxScans} used)`}
+                        ? "Unlimited"
+                        : `${scansRemaining} remaining (${scansUsed}/${maxScans} used)`}
                   </span>
                 </div>
 
@@ -519,11 +519,10 @@ export default function SubscriptionStatusPage() {
                           </p>
 
                           <span
-                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                              item.status === "paid"
+                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${item.status === "paid"
                                 ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                                 : "bg-gray-100 text-gray-600 border border-gray-200"
-                            }`}
+                              }`}
                           >
                             {item.status.toUpperCase()}
                           </span>

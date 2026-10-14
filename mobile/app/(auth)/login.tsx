@@ -189,15 +189,30 @@ export default function LoginScreen() {
 
       let redirectUrl: string;
       if (isExpoGo) {
-        // Use the live Metro host (e.g. "192.168.x.x:8081" or a tunnel domain) so the
-        // redirect works on any developer's machine — never "localhost", which the
-        // phone cannot reach and which Supabase would reject (falling back to Site URL).
-        const hostUri = Constants.expoConfig?.hostUri;
-        if (hostUri && !hostUri.startsWith('localhost') && !hostUri.startsWith('127.0.0.1')) {
-          redirectUrl = `exp://${hostUri}/--/auth/callback`;
-        } else {
-          redirectUrl = makeRedirectUri({ path: 'auth/callback' });
+        // Find the actual IP/host of the Metro bundler so phone can redirect back properly
+        const debuggerHost =
+          (Constants as any).expoGoConfig?.debuggerHost ||
+          (Constants as any).manifest?.debuggerHost ||
+          (Constants as any).manifest2?.extra?.expoGo?.debuggerHost;
+
+        let host = Constants.expoConfig?.hostUri;
+        if (!host || host.startsWith('localhost') || host.startsWith('127.0.0.1')) {
+          host = debuggerHost;
         }
+
+        if ((!host || host.startsWith('localhost') || host.startsWith('127.0.0.1')) && Constants.linkingUri) {
+          const match = Constants.linkingUri.match(/^exp:\/\/([^/]+)/);
+          if (match && match[1] && !match[1].startsWith('localhost') && !match[1].startsWith('127.0.0.1')) {
+            host = match[1];
+          }
+        }
+
+        // Live development fallback to current machine LAN IP
+        if (!host || host.startsWith('localhost') || host.startsWith('127.0.0.1')) {
+          host = '10.63.218.221:8081';
+        }
+
+        redirectUrl = `exp://${host}/--/auth/callback`;
       } else {
         redirectUrl = makeRedirectUri({ scheme: 'dermaimobile', path: 'auth/callback' });
       }

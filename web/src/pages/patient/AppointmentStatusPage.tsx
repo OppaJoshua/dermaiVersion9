@@ -169,10 +169,10 @@ function StatusTracker({ app }: { app: Appointment }) {
                   <div key={step} className="flex flex-col items-center gap-1.5 w-14">
                     <div
                       className={`w-5 h-5 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${isDone
-                          ? isActive
-                            ? "bg-magenta-600 border-magenta-500 scale-105 shadow-2xs"
-                            : "bg-magenta-500 border-magenta-400"
-                          : "bg-white border-gray-200"
+                        ? isActive
+                          ? "bg-magenta-600 border-magenta-500 scale-105 shadow-2xs"
+                          : "bg-magenta-500 border-magenta-400"
+                        : "bg-white border-gray-200"
                         }`}
                     >
                       {isDone ? (
@@ -314,19 +314,19 @@ function StatusTracker({ app }: { app: Appointment }) {
             {app.doctorDiagnosis &&
               !app.doctorDiagnosis.toLowerCase().includes("general dermatol") &&
               !app.doctorDiagnosis.toLowerCase().includes("general consult") && (
-              <div className="rounded-xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200 p-3.5 shadow-2xs">
-                <div className="flex items-center gap-1.5 text-blue-800 font-bold text-[10px] uppercase tracking-wider mb-1">
-                  <Stethoscope className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Dermatologist Clinical Assessment &amp; Diagnosis</span>
+                <div className="rounded-xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200 p-3.5 shadow-2xs">
+                  <div className="flex items-center gap-1.5 text-blue-800 font-bold text-[10px] uppercase tracking-wider mb-1">
+                    <Stethoscope className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Dermatologist Clinical Assessment &amp; Diagnosis</span>
+                  </div>
+                  <p className="text-sm font-bold text-blue-950">{app.doctorDiagnosis}</p>
+                  {app.doctorNote && (
+                    <p className="text-xs text-blue-800/90 mt-1 pt-1 border-t border-blue-200/60 leading-relaxed">
+                      <span className="font-semibold text-blue-900">Clinical Notes / Advice:</span> {app.doctorNote}
+                    </p>
+                  )}
                 </div>
-                <p className="text-sm font-bold text-blue-950">{app.doctorDiagnosis}</p>
-                {app.doctorNote && (
-                  <p className="text-xs text-blue-800/90 mt-1 pt-1 border-t border-blue-200/60 leading-relaxed">
-                    <span className="font-semibold text-blue-900">Clinical Notes / Advice:</span> {app.doctorNote}
-                  </p>
-                )}
-              </div>
-            )}
+              )}
 
             {app.clinicNote && !isCancelled && (
               <div className="text-[11px] text-gray-600 bg-white border border-gray-200/80 rounded-xl px-3 py-2">
@@ -486,8 +486,8 @@ const AppointmentStatusPage: React.FC = () => {
           const docName = (a.assigned_doctor_id && !isDocRejected && docNameMap.has(a.assigned_doctor_id))
             ? `Dr. ${docNameMap.get(a.assigned_doctor_id)!.replace(/^dr\.\s*/i, "")}`
             : (a.assigned_doctor_id && !isDocRejected)
-            ? "Doctor Assigned"
-            : "To be assigned";
+              ? "Doctor Assigned"
+              : "To be assigned";
 
           let docDiagnosis = "";
           let docNoteClean = "";
@@ -537,7 +537,7 @@ const AppointmentStatusPage: React.FC = () => {
                 if (!existing) {
                   const pDate = localItem.date ? new Date(localItem.date) : null;
                   const isValid = pDate && !isNaN(pDate.getTime());
-                  
+
                   let formattedLocalTime = "Time pending";
                   if (localItem.time && localItem.time !== "Time pending") {
                     if (localItem.time.includes("AM") || localItem.time.includes("PM")) {
@@ -581,7 +581,7 @@ const AppointmentStatusPage: React.FC = () => {
               });
             }
           }
-        } catch {}
+        } catch { }
 
         setAllAppointments(mapped);
       }

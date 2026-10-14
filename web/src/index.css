@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme {
-  --color-magenta-50: #fdf2f7;
+  --color-magenta-50:  #fdf2f7;
   --color-magenta-100: #fce7f0;
   --color-magenta-200: #fbcfe1;
   --color-magenta-300: #f4a3c4;
@@ -12,8 +12,62 @@
   --color-magenta-800: #520b2e;
   --color-magenta-900: #3d0824;
 
+  /* Bento shell surfaces */
+  --color-canvas: #ffffff;
+  --color-panel:  #ffffff;
+  --color-panel-edge: #e5e7eb;
+
   --font-display: "Poppins", sans-serif;
   --font-mono-accent: "JetBrains Mono", monospace;
+}
+
+/* Diagonal-stripe fill used by bento chart pills */
+.bento-stripes {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(160, 25, 90, 0.28) 0,
+    rgba(160, 25, 90, 0.28) 3px,
+    transparent 3px,
+    transparent 8px
+  );
+  background-color: #fbeaf2;
+}
+
+/* Self-contained dark magenta gradients (glow layers on top of the base gradient).
+   Defined fully here because a bare background-image would override Tailwind's gradient utilities. */
+.bento-magenta {
+  background-image:
+    radial-gradient(circle at 88% 10%, rgba(255, 255, 255, 0.18) 0, transparent 40%),
+    radial-gradient(circle at 5% 115%, rgba(255, 255, 255, 0.14) 0, transparent 50%),
+    linear-gradient(135deg, #b52070 0%, #A0195A 55%, #8c154f 100%);
+}
+.bento-dark {
+  background-image:
+    radial-gradient(circle at 88% 10%, rgba(255, 255, 255, 0.16) 0, transparent 40%),
+    radial-gradient(circle at 5% 115%, rgba(255, 255, 255, 0.10) 0, transparent 50%),
+    linear-gradient(135deg, #A0195A 0%, #8c154f 60%, #7a1146 100%);
+}
+
+/* Thin, unobtrusive scrollbar for the main bento panel */
+.panel-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.14) transparent;
+}
+.panel-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.panel-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.14);
+  border-radius: 999px;
+}
+
+/* Patient shell: let legacy page roots (full-screen white / gray) blend into the panel */
+.patient-content > .min-h-screen {
+  min-height: 0;
+  background-color: transparent;
+}
+.patient-content > [class*="calc(100vh-4rem)"] {
+  height: 100%;
 }
 
 /* Minimal Flat Overrides - No Shadows */
@@ -51,4 +105,13 @@
 
 .leaflet-bar a:last-child {
   border-bottom: none !important;
+}
+
+/* Custom scrollbar utility for clean sidebars */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

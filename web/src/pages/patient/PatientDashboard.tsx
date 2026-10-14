@@ -7,12 +7,14 @@ import {
     User,
     TrendingUp,
     Shield,
-    Clock,
   Bell,
   CheckCircle2,
   XCircle,
   X,
+  ArrowUpRight,
+  Stethoscope,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { skinConditions } from "../public/SkinLibrary";
@@ -345,22 +347,41 @@ export default function PatientDashboard() {
 
   const firstName = profile.fullName ? profile.fullName.split(" ")[0] : "there";
 
+  const card = "bg-white rounded-3xl border border-gray-200";
+
+  const statTiles = [
+    { label: "Total Scans", value: stats.totalScans },
+    { label: "Conditions Found", value: stats.conditionsFound },
+    { label: "Clinics Saved", value: stats.clinicsSaved },
+    { label: "Last Scan", value: stats.lastScan },
+  ];
+
   return (
     <div className="w-full">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Welcome */}
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
-          <h1 className="text-2xl sm:text-3xl font-display font-bold text-gray-900">
-            Good morning, {firstName}!
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">
-            Here's your skin health overview — stay informed, stay healthy.
-          </p>
+      <div className="px-4 sm:px-6 pb-6 pt-1">
+        {/* Title row */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-5 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4"
+        >
+          <div>
+            <h1 className="text-3xl sm:text-4xl font-display font-bold text-gray-900 tracking-tight">
+              Good morning, {firstName}!
+            </h1>
+            <p className="text-gray-500 text-sm mt-1">
+              Here's your skin health overview — stay informed, stay healthy.
+            </p>
+          </div>
         </motion.div>
 
         {/* Clinic Notifications */}
         {notifications.length > 0 && (
-          <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={cn(card, "mb-4 p-5")}
+          >
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Bell className="w-4 h-4 text-magenta-500" />
@@ -407,175 +428,71 @@ export default function PatientDashboard() {
           </motion.div>
         )}
 
-        {/* Quick Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-          {[
-            { label: "Total Scans", value: stats.totalScans, icon: Camera, color: "text-magenta-500" },
-            { label: "Conditions Found", value: stats.conditionsFound, icon: Calendar, color: "text-blue-500" },
-            { label: "Clinics Saved", value: stats.clinicsSaved, icon: MapPin, color: "text-emerald-500" },
-            { label: "Last Scan", value: stats.lastScan, icon: Clock, color: "text-amber-500" },
-          ].map((stat, i) => (
-            <motion.div
-              key={stat.label}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.06 }}
-              className="bg-white rounded-2xl p-4 border border-gray-100 hover:border-gray-200 transition-all hover:shadow-sm"
-            >
-              <div className={`${stat.color} mb-3`}>
-                <stat.icon className="w-6 h-6" />
-              </div>
-              <p className="text-xl font-display font-bold text-gray-900">
-                {loading ? <span className="inline-block w-6 h-4 rounded bg-gray-100 animate-pulse" /> : stat.value}
-              </p>
-              <p className="text-xs text-gray-400 mt-0.5">{stat.label}</p>
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Quick Actions */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
-            <Link
-              to="/dashboard/scan"
-              className="group flex items-center gap-5 bg-linear-to-r from-magenta-500 to-magenta-600 rounded-2xl p-6 text-white hover:shadow-lg hover:shadow-magenta-500/20 transition-all"
-            >
-              <div className="w-14 h-14 rounded-2xl bg-white/15 flex items-center justify-center group-hover:scale-105 transition-transform shrink-0">
-                <Camera className="w-7 h-7" />
-              </div>
-              <div className="flex-1">
-                <h3 className="font-display font-bold text-lg mb-0.5">Scan Your Skin</h3>
-                <p className="text-magenta-100 text-sm">AI-powered analysis in seconds</p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-white/60 group-hover:translate-x-1 transition-transform" />
-            </Link>
-          </motion.div>
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
-            <Link
-              to="/dashboard/clinics"
-              className="group flex items-center gap-5 bg-white rounded-2xl p-6 border border-gray-100 hover:border-magenta-200 hover:shadow-sm transition-all"
-            >
-              <div className="flex items-center justify-center group-hover:scale-105 transition-transform shrink-0">
-                <MapPin className="w-7 h-7 text-magenta-500" />
-              </div>
-              <div className="flex-1">
-                <h3 className="font-display font-bold text-lg text-gray-900 mb-0.5">Find a Clinic</h3>
-                <p className="text-gray-400 text-sm">Verified dermatologists near you</p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-gray-300 group-hover:translate-x-1 group-hover:text-magenta-400 transition-all" />
-            </Link>
-          </motion.div>
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-            <Link
-              to="/dashboard/clinics"
-              className="group flex items-center gap-5 bg-white rounded-2xl p-6 border border-gray-100 hover:border-magenta-200 hover:shadow-sm transition-all"
-            >
-              <div className="flex items-center justify-center group-hover:scale-105 transition-transform shrink-0">
-                <Calendar className="w-7 h-7 text-amber-500" />
-              </div>
-              <div className="flex-1">
-                <h3 className="font-display font-bold text-lg text-gray-900 mb-0.5">Book Appointment</h3>
-                <p className="text-gray-400 text-sm">Find verified clinic and schedule</p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-gray-300 group-hover:translate-x-1 group-hover:text-amber-500 transition-all" />
-            </Link>
-          </motion.div>
-        </div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.22 }}
-          className="mb-8 bg-white rounded-2xl border border-gray-100 overflow-hidden"
-        >
-          <div className="px-6 pt-5 pb-3 flex items-center justify-between">
-            <h2 className="font-display font-bold text-gray-900">My Appointments</h2>
-            <Link to="/dashboard/appointment-status" className="text-xs text-magenta-600 font-semibold hover:text-magenta-700">
-              Manage
-            </Link>
-          </div>
-          <div className="px-6 pb-5 space-y-3">
-            {appointments.slice(0, 3).map((item) => (
-              <div key={item.id} className="rounded-xl border border-gray-100 bg-gray-50/70 p-3 flex gap-3">
-                <img
-                  src={item.conditionImage || fallbackImage}
-                  alt={item.conditionName || "Skin condition"}
-                  className="w-14 h-14 rounded-lg object-cover border border-gray-200"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2 mb-1">
-                    <p className="text-xs font-semibold text-gray-900 truncate">{item.conditionName || "Skin concern"}</p>
-                    <span
-                      className={`text-[10px] px-2.5 py-0.5 rounded-full border font-semibold ${
-                        item.status === "scheduled" || item.status === "accepted"
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : item.status === "cancelled"
-                          ? "bg-gray-100 text-gray-600 border-gray-200"
-                          : item.status === "rejected"
-                          ? "bg-rose-50 text-rose-700 border-rose-200"
-                          : item.status === "completed"
-                          ? "bg-green-50 text-green-700 border-green-200"
-                          : "bg-amber-50 text-amber-700 border-amber-200"
-                      }`}
-                    >
-                      {item.status === "scheduled" || item.status === "accepted"
-                        ? "Scheduled"
-                        : item.status === "cancelled"
-                        ? "Cancelled"
-                        : item.status === "rejected"
-                        ? "Declined"
-                        : item.status === "completed"
-                        ? "Completed"
-                        : "Pending Review"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <p className="text-[11px] text-gray-600 truncate font-medium">{item.clinicName}</p>
-                    <VerifiedBadge size={13} className="w-3.5 h-3.5" title="Verified Clinic" />
-                  </div>
-                  <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-3">
-                    <span className="inline-flex items-center gap-1">
-                      <MapPin className="w-3 h-3" />
-                      Face-to-face
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Calendar className="w-3 h-3" /> {item.date || "Schedule pending"} {item.time ? `· ${item.time}` : ""}
-                    </span>
-                  </div>
+        {/* Bento grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          {/* Stat tiles */}
+          {statTiles.map((stat, i) => {
+            const featured = i === 0;
+            return (
+              <motion.div
+                key={stat.label}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.06 }}
+                className={cn(
+                  "lg:col-span-3 relative overflow-hidden rounded-3xl p-5 min-h-36 flex flex-col justify-between",
+                  featured
+                    ? "bento-magenta text-white"
+                    : "bg-white border border-gray-200 text-gray-900"
+                )}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className={cn("text-sm font-semibold", featured ? "text-white" : "text-gray-800")}>{stat.label}</p>
+                  <span
+                    className={cn(
+                      "w-10 h-10 rounded-full border flex items-center justify-center shrink-0",
+                      featured ? "border-white/60 text-white" : "border-gray-300 text-gray-800"
+                    )}
+                  >
+                    <ArrowUpRight className="w-5 h-5" />
+                  </span>
                 </div>
-              </div>
-            ))}
-            {!loading && appointments.length === 0 && (
-              <p className="text-xs text-gray-500">No appointment requests yet.</p>
-            )}
-          </div>
-        </motion.div>
+                <p className="text-4xl font-display font-bold tracking-tight">
+                  {loading ? (
+                    <span className={cn("inline-block w-10 h-8 rounded-lg animate-pulse", featured ? "bg-white/25" : "bg-gray-100")} />
+                  ) : (
+                    stat.value
+                  )}
+                </p>
+              </motion.div>
+            );
+          })}
 
-        <div className="space-y-6">
-          {/* Recent Analyses */}
+          {/* Recent Analyses — pill chart + list */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
-            className="bg-white rounded-2xl border border-gray-100 overflow-hidden"
+            className={cn(card, "lg:col-span-8 p-5 sm:p-6")}
           >
-            <div className="flex items-center justify-between px-6 pt-5 pb-4">
-              <h2 className="font-display font-bold text-gray-900">Recent Analyses</h2>
-              <Link to="/dashboard/history" className="text-xs text-magenta-500 font-semibold flex items-center gap-1 hover:text-magenta-600 transition-colors">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-display font-bold text-gray-900 text-lg">Recent Analyses</h2>
+              <Link to="/dashboard/history" className="text-xs text-magenta-600 font-semibold flex items-center gap-1 hover:text-magenta-700 transition-colors">
                 View All <ChevronRight className="w-3 h-3" />
               </Link>
             </div>
-            <div className="px-6 pb-5 space-y-3">
-              {history.map((analysis, i) => (
+
+            <div className="space-y-2.5">
+              {history.slice(0, 3).map((analysis, i) => (
                 <Link key={analysis.id} to="/dashboard/history" className="block">
                   <motion.div
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: 0.25 + i * 0.08 }}
-                    className="flex items-center gap-4 p-4 rounded-xl bg-gray-50/70 hover:bg-gray-50 transition-colors group cursor-pointer"
+                    className="flex items-center gap-5 p-4 rounded-2xl border border-gray-200 hover:border-magenta-200 hover:bg-magenta-50/40 transition-colors group cursor-pointer"
                   >
-                    <div className="relative w-12 h-12 shrink-0">
-                      <svg className="w-12 h-12 -rotate-90" viewBox="0 0 36 36">
+                    <div className="relative w-20 h-20 shrink-0">
+                      <svg className="w-20 h-20 -rotate-90" viewBox="0 0 36 36">
                         <path
                           className="text-gray-200"
                           d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
@@ -592,13 +509,13 @@ export default function PatientDashboard() {
                           strokeDasharray={`${analysis.confidence}, 100`}
                         />
                       </svg>
-                      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold text-gray-700">
+                      <span className="absolute inset-0 flex items-center justify-center text-base font-bold text-gray-800">
                         {analysis.confidence}%
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <h4 className="font-semibold text-gray-900 text-sm truncate">{analysis.condition}</h4>
+                        <h4 className="font-semibold text-gray-900 text-base truncate">{analysis.condition}</h4>
                       </div>
                       <div className="flex items-center gap-3 text-xs text-gray-400">
                         <span className="flex items-center gap-1">
@@ -614,7 +531,7 @@ export default function PatientDashboard() {
                 </Link>
               ))}
               {!loading && history.length === 0 && (
-                <div className="text-center py-6">
+                <div className="text-center py-8">
                   <p className="text-gray-400 text-sm">No analysis history yet.</p>
                   <Link to="/dashboard/scan" className="text-magenta-500 text-xs font-semibold mt-2 inline-block">Start your first scan</Link>
                 </div>
@@ -622,37 +539,169 @@ export default function PatientDashboard() {
             </div>
           </motion.div>
 
-          {/* Skin Tips */}
+          {/* Right column — quick actions */}
+          <div className="lg:col-span-4 flex flex-col gap-4">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="relative overflow-hidden rounded-3xl bento-dark p-6 text-white"
+            >
+              <p className="text-sm font-semibold text-magenta-200">Skin Scan</p>
+              <h3 className="font-display font-bold text-2xl leading-tight mt-1">Scan Your Skin</h3>
+              <p className="text-magenta-100/80 text-sm mt-1.5">AI-powered analysis in seconds</p>
+              <Link
+                to="/dashboard/scan"
+                className="group mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white text-magenta-600 hover:bg-magenta-50 transition-colors py-3 text-sm font-semibold"
+              >
+                <Camera className="w-4 h-4" /> Start Scan
+                <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+              </Link>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15 }}
+              className={cn(card, "p-3 space-y-1")}
+            >
+              <Link
+                to="/dashboard/clinics"
+                className="group flex items-center gap-4 rounded-2xl p-3 hover:bg-gray-50 transition-colors"
+              >
+                <div className="w-11 h-11 rounded-full bg-magenta-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <MapPin className="w-5 h-5 text-magenta-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-display font-bold text-gray-900">Find a Clinic</h3>
+                  <p className="text-gray-400 text-xs">Verified dermatologists near you</p>
+                </div>
+                <ArrowUpRight className="w-4 h-4 text-magenta-300 group-hover:text-magenta-600 transition-colors" />
+              </Link>
+              <Link
+                to="/dashboard/clinics"
+                className="group flex items-center gap-4 rounded-2xl p-3 hover:bg-gray-50 transition-colors"
+              >
+                <div className="w-11 h-11 rounded-full bg-magenta-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <Calendar className="w-5 h-5 text-magenta-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-display font-bold text-gray-900">Book Appointment</h3>
+                  <p className="text-gray-400 text-xs">Find verified clinic and schedule</p>
+                </div>
+                <ArrowUpRight className="w-4 h-4 text-magenta-300 group-hover:text-magenta-600 transition-colors" />
+              </Link>
+            </motion.div>
+          </div>
+
+          {/* My Appointments */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.22 }}
+            className={cn(card, "lg:col-span-8 p-5 sm:p-6")}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-display font-bold text-gray-900 text-lg">My Appointments</h2>
+              <Link
+                to="/dashboard/appointment-status"
+                className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 text-gray-700 hover:border-magenta-400 hover:text-magenta-600 transition-colors text-xs font-semibold px-3.5 py-1.5"
+              >
+                Manage
+              </Link>
+            </div>
+            <div className="space-y-2.5">
+              {appointments.slice(0, 3).map((item) => (
+                <div key={item.id} className="rounded-2xl border border-gray-200 p-3 flex gap-3.5 items-center">
+                  <img
+                    src={item.conditionImage || fallbackImage}
+                    alt={item.conditionName || "Skin condition"}
+                    className="w-14 h-14 rounded-full object-cover border-2 border-white"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{item.conditionName || "Skin concern"}</p>
+                      <span
+                        className={`text-[10px] px-2.5 py-0.5 rounded-md font-semibold shrink-0 ${
+                          item.status === "scheduled" || item.status === "accepted"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : item.status === "cancelled"
+                            ? "bg-gray-200 text-gray-600"
+                            : item.status === "rejected"
+                            ? "bg-rose-100 text-rose-700"
+                            : item.status === "completed"
+                            ? "bg-green-100 text-green-700"
+                            : "bg-amber-100 text-amber-700"
+                        }`}
+                      >
+                        {item.status === "scheduled" || item.status === "accepted"
+                          ? "Scheduled"
+                          : item.status === "cancelled"
+                          ? "Cancelled"
+                          : item.status === "rejected"
+                          ? "Declined"
+                          : item.status === "completed"
+                          ? "Completed"
+                          : "Pending Review"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <p className="text-xs text-gray-600 truncate font-medium">{item.clinicName}</p>
+                      <VerifiedBadge size={13} className="w-3.5 h-3.5" title="Verified Clinic" />
+                    </div>
+                    <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-3 flex-wrap">
+                      <span className="inline-flex items-center gap-1">
+                        <MapPin className="w-3 h-3" />
+                        Face-to-face
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <Calendar className="w-3 h-3" /> {item.date || "Schedule pending"} {item.time ? `· ${item.time}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {!loading && appointments.length === 0 && (
+                <p className="text-xs text-gray-500">No appointment requests yet.</p>
+              )}
+            </div>
+          </motion.div>
+
+          {/* Right column — tips + reminder */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4 }}
-            className="grid grid-cols-1 sm:grid-cols-2 gap-4"
+            className="lg:col-span-4 flex flex-col gap-4"
           >
-            {skinTips.map((tip) => (
-              <div key={tip.title} className="bg-white rounded-2xl p-5 border border-gray-100 flex items-start gap-4">
-                <div className="flex items-center justify-center shrink-0">
-                  <tip.icon className="w-5 h-5 text-magenta-500" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-gray-900 mb-0.5">{tip.title}</h4>
-                  <p className="text-xs text-gray-400 leading-relaxed">{tip.desc}</p>
-                </div>
+            <div className={cn(card, "p-5 sm:p-6")}>
+              <h2 className="font-display font-bold text-gray-900 text-lg mb-4">Skin Care Tips</h2>
+              <div className="space-y-2.5">
+                {skinTips.map((tip) => (
+                  <div key={tip.title} className="flex items-start gap-4 rounded-2xl border border-gray-200 p-3.5">
+                    <div className="w-11 h-11 rounded-full bg-magenta-100 flex items-center justify-center shrink-0">
+                      <tip.icon className="w-5 h-5 text-magenta-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-semibold text-gray-900 mb-0.5">{tip.title}</h4>
+                      <p className="text-xs text-gray-500 leading-relaxed">{tip.desc}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </motion.div>
+            </div>
 
-          {/* Health Reminder */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.45 }}
-            className="bg-linear-to-br from-magenta-50 to-pink-50 rounded-2xl border border-magenta-100 p-5"
-          >
-            <p className="text-xs font-semibold text-magenta-600 mb-1">⚕️ Reminder</p>
-            <p className="text-xs text-magenta-500 leading-relaxed">
-              DERMAI provides AI-assisted analysis only. Always consult a licensed dermatologist for proper diagnosis and treatment.
-            </p>
+            <div className="relative overflow-hidden rounded-3xl bento-magenta p-5 sm:p-6 text-white flex-1">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+                  <Stethoscope className="w-5 h-5" />
+                </div>
+                <h3 className="font-display font-bold text-lg">Reminder</h3>
+              </div>
+              <p className="text-sm text-white/90 leading-relaxed">
+                DERMAI provides AI-assisted analysis only. Always consult a licensed dermatologist for proper diagnosis and treatment.
+              </p>
+            </div>
           </motion.div>
         </div>
       </div>

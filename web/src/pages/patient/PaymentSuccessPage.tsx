@@ -37,7 +37,7 @@ export default function PaymentSuccessPage() {
       }
 
       try {
-        
+
         const { data, error: verifyError } =
           await supabase.functions.invoke("paymongo-payment", {
             body: {
@@ -57,8 +57,7 @@ export default function PaymentSuccessPage() {
           data?.attributes?.status || data?.status;
         if (status !== "succeeded") {
           throw new Error(
-            `Payment was not completed. PayMongo status: ${
-              status || "unknown"
+            `Payment was not completed. PayMongo status: ${status || "unknown"
             }`
           );
         }
@@ -84,7 +83,7 @@ export default function PaymentSuccessPage() {
           throw new Error("PayMongo payment ID was not found.");
         }
 
-setPaymentId(paymongoPaymentId);
+        setPaymentId(paymongoPaymentId);
 
         const methodType =
           payment?.attributes?.source?.type ||
@@ -95,8 +94,8 @@ setPaymentId(paymongoPaymentId);
           methodType === "paymaya"
             ? "Maya"
             : methodType === "gcash"
-            ? "GCash"
-            : methodType || "Online Payment"
+              ? "GCash"
+              : methodType || "Online Payment"
         );
 
         setPaymentDate(new Date().toISOString());
@@ -243,12 +242,12 @@ setPaymentId(paymongoPaymentId);
                   <CalendarDays className="w-4 h-4" />
                   {paymentDate
                     ? new Date(paymentDate).toLocaleString(
-                        "en-PH",
-                        {
-                          dateStyle: "long",
-                          timeStyle: "short",
-                        }
-                      )
+                      "en-PH",
+                      {
+                        dateStyle: "long",
+                        timeStyle: "short",
+                      }
+                    )
                     : "â€”"}
                 </span>
               </div>
@@ -268,7 +267,7 @@ setPaymentId(paymongoPaymentId);
                 </span>
 
                 <span className="text-xl font-bold text-magenta-600">
-                 ₱{formatAmount(amount)}
+                  ₱{formatAmount(amount)}
                 </span>
               </div>
             </div>

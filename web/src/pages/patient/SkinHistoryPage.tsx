@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   X,
+  Loader2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "@/lib/supabaseClient";
@@ -31,6 +32,10 @@ export default function PatientSkinHistory() {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedItem, setSelectedItem] =
     useState<SkinHistoryItem | null>(null);
+  const [deleteTarget, setDeleteTarget] =
+    useState<SkinHistoryItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,16 +164,42 @@ export default function PatientSkinHistory() {
     };
   }, []);
 
-  const deleteItem = async (id: string) => {
-    setHistory((prev) => prev.filter((item) => item.id !== id));
+  const confirmDelete = async () => {
+    if (!deleteTarget || isDeleting) return;
 
-    const { error } = await supabase
-      .from("ai_scan_result")
-      .delete()
-      .eq("analysis_id", id);
+    setIsDeleting(true);
+    setDeleteError(null);
 
-    if (error) {
-      console.error("[SkinHistory] delete error:", error.message);
+    const targetId = deleteTarget.id;
+
+    try {
+      const { error } = await supabase
+        .from("ai_scan_result")
+        .delete()
+        .eq("analysis_id", targetId);
+
+      if (error) {
+        console.error("[SkinHistory] delete error:", error.message);
+        setDeleteError("Failed to delete the skin scan. Please try again.");
+        setIsDeleting(false);
+        return;
+      }
+
+      // Remove from history list
+      setHistory((prev) => prev.filter((item) => item.id !== targetId));
+
+      // Close details modal if it was viewing this item
+      if (selectedItem?.id === targetId) {
+        setSelectedItem(null);
+      }
+
+      // Close delete confirmation modal
+      setDeleteTarget(null);
+    } catch (err: any) {
+      console.error("[SkinHistory] delete exception:", err);
+      setDeleteError(err?.message || "An unexpected error occurred while deleting.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -251,11 +282,13 @@ export default function PatientSkinHistory() {
 
                 <div className="flex items-center gap-3 pl-4 sm:border-l border-gray-100">
                   <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      deleteItem(item.id);
+                      setDeleteError(null);
+                      setDeleteTarget(item);
                     }}
-                    className="p-2.5 rounded-xl hover:bg-rose-50 text-gray-300 hover:text-rose-500 transition-all"
+                    className="p-2.5 rounded-xl hover:bg-rose-50 text-gray-300 hover:text-rose-500 transition-all cursor-pointer"
                     title="Delete record"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -293,6 +326,80 @@ export default function PatientSkinHistory() {
           </Link>
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {deleteTarget && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+            onClick={() => {
+              if (!isDeleting) {
+                setDeleteTarget(null);
+                setDeleteError(null);
+              }
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              transition={{ duration: 0.15 }}
+              className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-gray-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-500 mb-4">
+                <Trash2 className="w-6 h-6" />
+              </div>
+
+              <h3 className="text-lg font-bold text-gray-900 mb-2">
+                Delete Skin Scan?
+              </h3>
+              <p className="text-sm text-gray-500 leading-relaxed mb-6">
+                Are you sure you want to delete this skin scan result? This action cannot be undone.
+              </p>
+
+              {deleteError && (
+                <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-100 text-xs text-rose-600 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-500" />
+                  <span>{deleteError}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => {
+                    setDeleteTarget(null);
+                    setDeleteError(null);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={confirmDelete}
+                  className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold transition-colors shadow-sm disabled:opacity-60 flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                >
+                  {isDeleting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <span>Delete</span>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* View Full Results Modal */}
       <AnimatePresence>

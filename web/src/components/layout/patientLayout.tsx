@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import Logo from "@/assets/logo2.png";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
@@ -52,23 +53,39 @@ interface UserLayoutProps {
 // STATIC NAV CONFIG
 // ---------------------------------------------------------------------------
 
-const sidebarSections = [
+export interface NavLink {
+  label: string;
+  path: string;
+}
+
+export interface NavSection {
+  id: string;
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  links: NavLink[];
+}
+
+const navSections: NavSection[] = [
   {
+    id: "skin-scan",
     title: "Skin Scan",
     icon: ScanLine,
     links: [{ label: "Scan Skin", path: "/dashboard/scan" }],
   },
   {
+    id: "profile-management",
     title: "Profile Management",
     icon: UserCircle,
     links: [{ label: "Personal Information", path: "/dashboard/profile" }],
   },
   {
+    id: "appointment-booking",
     title: "Appointment Booking",
     icon: CalendarDays,
     links: [{ label: "Search Clinic", path: "/dashboard/clinics" }],
   },
   {
+    id: "monitor",
     title: "Monitor",
     icon: ActivitySquare,
     links: [
@@ -78,11 +95,13 @@ const sidebarSections = [
     ],
   },
   {
+    id: "subscription",
     title: "Subscription",
     icon: CreditCard,
     links: [{ label: "Upgrade Plan", path: "/dashboard/upgrade" }],
   },
   {
+    id: "settings",
     title: "Settings",
     icon: Settings,
     links: [
@@ -94,8 +113,85 @@ const sidebarSections = [
 
 const allLinks = [
   { label: "Dashboard", path: "/dashboard" },
-  ...sidebarSections.flatMap((s) => s.links),
+  { label: "Upgrade Plan", path: "/dashboard/upgrade" },
+  { label: "Upgrade Plan", path: "/user/upgrade" },
+  { label: "Book Appointment", path: "/dashboard/appointment" },
+  { label: "Book Appointment", path: "/appointment" },
+  ...navSections.flatMap((s) => s.links),
 ];
+
+function isLinkActive(linkPath: string, currentPath: string): boolean {
+  if (linkPath === "/dashboard") {
+    return currentPath === "/dashboard";
+  }
+  if (linkPath === "/dashboard/scan") {
+    return (
+      currentPath === "/dashboard/scan" ||
+      currentPath === "/dashboard/scan-skin" ||
+      currentPath === "/scan"
+    );
+  }
+  if (linkPath === "/dashboard/profile") {
+    return (
+      currentPath === "/dashboard/profile" ||
+      currentPath === "/dashboard/settings/account"
+    );
+  }
+  if (linkPath === "/dashboard/clinics") {
+    return (
+      currentPath === "/dashboard/clinics" ||
+      currentPath === "/find-clinics"
+    );
+  }
+  if (linkPath === "/dashboard/upgrade") {
+    return currentPath === "/dashboard/upgrade" || currentPath === "/user/upgrade";
+  }
+  return currentPath === linkPath;
+}
+
+function isSectionActive(sectionId: string, currentPath: string): boolean {
+  if (sectionId === "skin-scan") {
+    return (
+      currentPath === "/dashboard/scan" ||
+      currentPath === "/dashboard/scan-skin" ||
+      currentPath === "/scan"
+    );
+  }
+  if (sectionId === "profile-management") {
+    return (
+      currentPath === "/dashboard/profile" ||
+      currentPath === "/dashboard/settings/account"
+    );
+  }
+  if (sectionId === "appointment-booking") {
+    return (
+      currentPath === "/dashboard/clinics" ||
+      currentPath === "/find-clinics" ||
+      currentPath === "/dashboard/appointment" ||
+      currentPath === "/appointment"
+    );
+  }
+  if (sectionId === "monitor") {
+    return (
+      currentPath === "/dashboard/history" ||
+      currentPath === "/dashboard/appointment-status" ||
+      currentPath === "/dashboard/subscription-status"
+    );
+  }
+  if (sectionId === "subscription") {
+    return (
+      currentPath === "/dashboard/upgrade" ||
+      currentPath === "/user/upgrade"
+    );
+  }
+  if (sectionId === "settings") {
+    return (
+      currentPath.startsWith("/dashboard/settings") &&
+      currentPath !== "/dashboard/settings/account"
+    );
+  }
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // COMPONENT
@@ -114,6 +210,35 @@ export default function UserLayout({
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifications, setNotifications] = useState<PatientNotif[]>([]);
   const notifRef = useRef<HTMLDivElement>(null);
+
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    for (const section of navSections) {
+      if (isSectionActive(section.id, location.pathname)) {
+        initial[section.id] = true;
+      }
+    }
+    return initial;
+  });
+
+  const toggleSection = (sectionId: string) => {
+    setOpenSections((prev) => ({
+      ...prev,
+      [sectionId]: !prev[sectionId],
+    }));
+  };
+
+  // Automatically expand parent section of active route on route change
+  useEffect(() => {
+    for (const section of navSections) {
+      if (isSectionActive(section.id, location.pathname)) {
+        setOpenSections((prev) => {
+          if (prev[section.id]) return prev;
+          return { ...prev, [section.id]: true };
+        });
+      }
+    }
+  }, [location.pathname]);
 
   useEffect(() => {
     if (!loading && !roleLoading && (location.pathname.startsWith("/dashboard") || location.pathname === "/appointment")) {
@@ -245,7 +370,7 @@ export default function UserLayout({
         .limit(1)
         .maybeSingle();
 
-    if (subData) {
+      if (subData) {
         const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
         tier = planObj?.name || "Pro Plan";
       }
@@ -296,7 +421,7 @@ export default function UserLayout({
         .from("user_notification")
         .update({ is_read: true })
         .eq("notif_id", notifId);
-    } catch {}
+    } catch { }
   };
 
   const markAllRead = async () => {
@@ -309,7 +434,7 @@ export default function UserLayout({
         .update({ is_read: true })
         .eq("user_id", user.id)
         .eq("is_read", false);
-    } catch {}
+    } catch { }
   };
 
   useEffect(() => {
@@ -373,7 +498,7 @@ export default function UserLayout({
   };
 
   return (
-    <div className="min-h-screen bg-gray-50/80 flex flex-col lg:flex-row">
+    <div className="min-h-screen lg:h-screen bg-white lg:p-2 font-sans">
       {/* Backdrop Overlay */}
       <div
         className={cn(
@@ -383,264 +508,322 @@ export default function UserLayout({
         onClick={() => setSidebarOpen(false)}
       />
 
-      {/* Sidebar */}
-      <aside
-        className={cn(
-          "flex flex-col w-70 bg-white border-r border-gray-100 h-screen fixed left-0 top-0 z-50 overflow-hidden",
-          "transition-transform duration-300 ease-in-out",
-          "shadow-[4px_0_32px_rgba(0,0,0,0.08)] lg:shadow-none",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
-        )}
-      >
-        {/* Logo */}
-        <div className="flex items-center justify-between px-6 h-16 border-b border-gray-100 shrink-0">
-          <div className="flex items-center gap-2.5">
-            <img src={Logo} alt="DERMAI logo" className="h-9 w-auto object-contain" />
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-magenta-50 text-magenta-600 font-semibold ml-0.5">
-              Patient
-            </span>
-          </div>
-          <button
-            onClick={() => setSidebarOpen(false)}
-            className="lg:hidden p-1.5 rounded-xl hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
-            aria-label="Close sidebar"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Patient Account Info */}
-        <div className="p-6 border-b border-gray-100">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-full ring-2 ring-magenta-100 bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-lg font-bold shrink-0">
-              {dynamicProfile.profilePictureUrl && !imgError ? (
-                <img
-                  src={dynamicProfile.profilePictureUrl}
-                  alt="Profile"
-                  className="w-full h-full object-cover"
-                  onError={() => setImgError(true)}
-                />
-              ) : (
-                initial
-              )}
+      {/* App frame */}
+      <div className="flex min-h-screen lg:min-h-0 lg:h-full w-full bg-white lg:p-2 lg:gap-3">
+        {/* Sidebar */}
+        <aside
+          className={cn(
+            "flex flex-col w-72 bg-panel h-screen fixed left-0 top-0 z-50 overflow-hidden",
+            "lg:static lg:h-full lg:shrink-0 lg:rounded-3xl lg:border lg:border-panel-edge",
+            "transition-transform duration-300 ease-in-out",
+            "shadow-[4px_0_32px_rgba(0,0,0,0.12)] lg:shadow-none",
+            sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+          )}
+        >
+          {/* Logo */}
+          <div className="flex items-center justify-between px-6 h-20 shrink-0">
+            <div className="flex items-center gap-2.5">
+              <img src={Logo} alt="DERMAI logo" className="h-9 w-auto object-contain" />
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-magenta-100 text-magenta-600 font-semibold ml-0.5">
+                Patient
+              </span>
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-base font-semibold text-gray-900 leading-tight truncate">{displayFullName}</p>
-              {dynamicProfile.membershipTier && (
-                <p className="text-xs text-gray-500 mt-0.5">{dynamicProfile.membershipTier}</p>
-              )}
-            </div>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="lg:hidden p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+              aria-label="Close sidebar"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          {dynamicProfile.location && <p className="text-xs text-gray-400">{dynamicProfile.location}</p>}
-        </div>
 
-        {/* Navigation Sections */}
-        <div className="flex-1 overflow-y-auto scrollbar-hide py-4 px-3 space-y-6">
-          <div className="space-y-1">
+          {/* Navigation Sections */}
+          <div className="flex-1 overflow-y-auto no-scrollbar pb-3 pr-3 space-y-1">
+            <p className="px-6 pb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">Menu</p>
+
+            {/* 1. Dashboard */}
             <Link
               to="/dashboard"
               onClick={() => setSidebarOpen(false)}
               className={cn(
-                "flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors",
+                "relative flex items-center gap-3 pl-6 pr-3 py-2.5 rounded-r-2xl text-sm transition-colors",
                 location.pathname === "/dashboard"
-                  ? "bg-magenta-50 text-magenta-600"
-                  : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                  ? "text-gray-900 font-semibold bg-magenta-50"
+                  : "text-gray-500 font-medium hover:bg-gray-50 hover:text-gray-900"
               )}
             >
-              <LayoutGrid className="w-5 h-5" />
-              Dashboard
+              {location.pathname === "/dashboard" && (
+                <span className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-1 rounded-r-full bg-magenta-500" />
+              )}
+              <LayoutGrid
+                className={cn("w-5 h-5 shrink-0", location.pathname === "/dashboard" ? "text-magenta-500" : "text-gray-400")}
+              />
+              <span>Dashboard</span>
             </Link>
+
+            {/* Collapsible Sections */}
+            {navSections.map((section) => {
+              const SectionIcon = section.icon;
+              const isOpen = !!openSections[section.id];
+              const isChildActive = isSectionActive(section.id, location.pathname);
+
+              return (
+                <div key={section.id} className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => toggleSection(section.id)}
+                    className={cn(
+                      "relative w-full flex items-center justify-between pl-6 pr-3 py-2.5 rounded-r-2xl text-sm transition-all select-none text-left cursor-pointer",
+                      isChildActive
+                        ? "text-gray-900 font-semibold bg-magenta-50"
+                        : "text-gray-500 font-medium hover:text-gray-900 hover:bg-gray-50"
+                    )}
+                  >
+                    {isChildActive && (
+                      <span className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-1 rounded-r-full bg-magenta-500" />
+                    )}
+                    <div className="flex items-center gap-3 min-w-0">
+                      <SectionIcon
+                        className={cn(
+                          "w-5 h-5 shrink-0 transition-colors",
+                          isChildActive ? "text-magenta-500" : "text-gray-400"
+                        )}
+                      />
+                      <span className="truncate">{section.title}</span>
+                    </div>
+                    <ChevronRight
+                      className={cn(
+                        "w-3.5 h-3.5 shrink-0 transition-transform duration-200 text-gray-400",
+                        isOpen ? "rotate-90 text-gray-600" : "rotate-0"
+                      )}
+                    />
+                  </button>
+
+                  <AnimatePresence initial={false}>
+                    {isOpen && (
+                      <motion.div
+                        key={`content-${section.id}`}
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2, ease: "easeInOut" }}
+                        className="overflow-hidden"
+                      >
+                        <div className="pt-0.5 pb-1 pl-6 space-y-0.5">
+                          {section.links.map((link) => {
+                            const isActive = isLinkActive(link.path, location.pathname);
+                            return (
+                              <Link
+                                key={link.path}
+                                to={link.path}
+                                onClick={() => setSidebarOpen(false)}
+                                className={cn(
+                                  "flex items-center pl-8 pr-3 py-2 rounded-xl text-[13px] transition-colors",
+                                  isActive
+                                    ? "bg-magenta-50 text-magenta-600 font-semibold"
+                                    : "text-gray-500 font-medium hover:bg-gray-50 hover:text-gray-900"
+                                )}
+                              >
+                                {link.label}
+                              </Link>
+                            );
+                          })}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
           </div>
 
-          {sidebarSections.map((section, idx) => {
-            const SectionIcon = section.icon;
-            return (
-              <div key={idx} className="space-y-1">
-                <div className="flex items-center gap-2 px-3 mb-2 text-gray-400">
-                  <SectionIcon className="w-4 h-4" />
-                  <p className="text-[11px] font-semibold uppercase tracking-wider">{section.title}</p>
-                </div>
-                <div className="space-y-0.5">
-                  {section.links.map((link) => {
-                    const isActive = location.pathname === link.path;
-                    return (
-                      <Link
-                        key={link.path}
-                        to={link.path}
-                        onClick={() => setSidebarOpen(false)}
-                        className={cn(
-                          "block px-3 py-2 rounded-xl text-sm font-medium pl-9 transition-colors",
-                          isActive
-                            ? "bg-magenta-50 text-magenta-600"
-                            : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
-                        )}
-                      >
-                        {link.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Logout */}
-        <div className="p-4 border-t border-gray-100 bg-gray-50/50">
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors bg-white border border-gray-200"
-          >
-            <LogOut className="w-4.5 h-4.5" />
-            Logout
-          </button>
-        </div>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 lg:ml-70 min-h-screen flex flex-col relative w-full">
-        {/* Top Header Î“Ã‡Ã¶ clinic-style breadcrumb + bell */}
-        <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
-          <div className="flex items-center gap-3">
+          {/* Footer: logout */}
+          <div className="p-3 shrink-0">
             <button
-              className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500"
-              onClick={() => setSidebarOpen((prev) => !prev)}
+              onClick={handleLogout}
+              className="w-full flex items-center gap-3 pl-4 pr-3 py-2.5 rounded-xl text-sm font-medium text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors cursor-pointer"
             >
-              <Menu className="w-5 h-5" />
+              <LogOut className="w-5 h-5" />
+              Log out
             </button>
-            <div className="flex items-center gap-1.5 text-sm">
-              <span className="text-gray-400">Patient</span>
-              <ChevronRight className="w-3.5 h-3.5 text-gray-300" />
-              <span className="font-semibold text-gray-900">{currentPage}</span>
+          </div>
+        </aside>
+
+        {/* Main Content */}
+        <main className="flex-1 min-w-0 min-h-screen lg:min-h-0 flex flex-col relative bg-panel lg:rounded-3xl lg:border lg:border-panel-edge lg:overflow-hidden">
+          {/* Top Header — breadcrumb pill + bell + profile chip */}
+          <div className="px-4 sm:px-6 h-20 shrink-0 flex items-center justify-between gap-3 sticky top-0 lg:relative z-40 bg-panel/90 backdrop-blur lg:bg-transparent lg:backdrop-blur-none">
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                className="lg:hidden w-10 h-10 flex items-center justify-center rounded-full bg-white border border-panel-edge text-gray-500"
+                onClick={() => setSidebarOpen((prev) => !prev)}
+                aria-label="Open sidebar"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+              <div className="flex items-center gap-1.5 text-sm bg-white rounded-full px-4 py-2.5 border border-panel-edge min-w-0">
+                <span className="text-gray-400">Patient</span>
+                <ChevronRight className="w-3.5 h-3.5 text-gray-300 shrink-0" />
+                <span className="font-semibold text-gray-900 truncate">{currentPage}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <div ref={notifRef} className="relative">
+                <button
+                  onClick={() => setNotifOpen((o) => !o)}
+                  className="relative w-10 h-10 flex items-center justify-center rounded-full bg-white border border-panel-edge hover:border-magenta-200 transition-colors"
+                  aria-label="Notifications"
+                >
+                  <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")} />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none animate-pulse">
+                      {unreadCount > 9 ? "9+" : unreadCount}
+                    </span>
+                  )}
+                </button>
+
+                {notifOpen && (
+                  <div className="absolute right-0 top-full mt-2 w-80 sm:w-88 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/50">
+                      <div className="flex items-center gap-2">
+                        <Bell className="w-4 h-4 text-magenta-500" />
+                        <span className="font-semibold text-gray-900 text-sm">Notifications</span>
+                      </div>
+                      {unreadCount > 0 ? (
+                        <button
+                          onClick={markAllRead}
+                          className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700"
+                        >
+                          Mark all read
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-gray-400">All caught up</span>
+                      )}
+                    </div>
+
+                    {notifications.length === 0 ? (
+                      <div className="py-10 text-center">
+                        <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                        <p className="text-sm text-gray-400">No new notifications</p>
+                      </div>
+                    ) : (
+                      <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+                        {notifications.map((n) => {
+                          const isBroadcast = n.type === "broadcast";
+                          const isAppointment = n.type.includes("appointment");
+                          const isScan = n.type.includes("scan");
+
+                          return (
+                            <div
+                              key={n.id}
+                              onClick={() => {
+                                if (!n.isRead) markAsRead(n.id);
+                                setNotifOpen(false);
+                                if (isAppointment) {
+                                  navigate("/patient/appointments");
+                                } else if (isScan) {
+                                  navigate("/dashboard/history");
+                                }
+                              }}
+                              className={cn(
+                                "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
+                                !n.isRead && "bg-magenta-50/20"
+                              )}
+                            >
+                              <div
+                                className={cn(
+                                  "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
+                                  isBroadcast
+                                    ? "bg-amber-100 text-amber-600"
+                                    : isAppointment
+                                      ? "bg-blue-100 text-blue-600"
+                                      : isScan
+                                        ? "bg-magenta-100 text-magenta-600"
+                                        : "bg-purple-100 text-purple-600"
+                                )}
+                              >
+                                {isBroadcast ? (
+                                  <Megaphone className="w-4 h-4" />
+                                ) : isAppointment ? (
+                                  <Calendar className="w-4 h-4" />
+                                ) : isScan ? (
+                                  <ScanSearch className="w-4 h-4" />
+                                ) : (
+                                  <Bell className="w-4 h-4" />
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-semibold text-gray-900 truncate">
+                                  {n.title}
+                                </p>
+                                <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
+                                  {n.body}
+                                </p>
+                                <p className="text-[10px] text-gray-400 mt-1">
+                                  {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {new Date(n.createdAt).toLocaleDateString()}
+                                </p>
+                              </div>
+                              {!n.isRead && (
+                                <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between text-xs">
+                      <Link
+                        to="/dashboard/history"
+                        onClick={() => setNotifOpen(false)}
+                        className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors flex items-center gap-1"
+                      >
+                        Skin scan history &rarr;
+                      </Link>
+                      <Link
+                        to="/patient/appointments"
+                        onClick={() => setNotifOpen(false)}
+                        className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors flex items-center gap-1"
+                      >
+                        Appointments &rarr;
+                      </Link>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Profile chip */}
+              <Link
+                to="/dashboard/profile"
+                className="flex items-center gap-2.5 bg-white rounded-full pl-1.5 pr-4 py-1.5 border border-panel-edge hover:border-magenta-200 transition-colors"
+              >
+                <div className="w-9 h-9 rounded-full bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-sm font-bold shrink-0">
+                  {dynamicProfile.profilePictureUrl && !imgError ? (
+                    <img
+                      src={dynamicProfile.profilePictureUrl}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
+                      onError={() => setImgError(true)}
+                    />
+                  ) : (
+                    initial
+                  )}
+                </div>
+                <div className="hidden sm:block min-w-0 max-w-40">
+                  <p className="text-[13px] font-semibold text-gray-900 leading-tight truncate">{displayFullName}</p>
+                  <p className="text-[11px] text-gray-400 leading-tight truncate">
+                    {dynamicProfile.membershipTier}
+                    {dynamicProfile.location ? ` · ${dynamicProfile.location}` : ""}
+                  </p>
+                </div>
+              </Link>
             </div>
           </div>
 
-          <div ref={notifRef} className="relative">
-            <button
-              onClick={() => setNotifOpen((o) => !o)}
-              className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors"
-            >
-              <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")} />
-              {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none animate-pulse">
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </span>
-              )}
-            </button>
-
-            {notifOpen && (
-              <div className="absolute right-0 top-full mt-2 w-80 sm:w-88 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/50">
-                  <div className="flex items-center gap-2">
-                    <Bell className="w-4 h-4 text-magenta-500" />
-                    <span className="font-semibold text-gray-900 text-sm">Notifications</span>
-                  </div>
-                  {unreadCount > 0 ? (
-                    <button
-                      onClick={markAllRead}
-                      className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700"
-                    >
-                      Mark all read
-                    </button>
-                  ) : (
-                    <span className="text-[11px] text-gray-400">All caught up</span>
-                  )}
-                </div>
-
-                {notifications.length === 0 ? (
-                  <div className="py-10 text-center">
-                    <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                    <p className="text-sm text-gray-400">No new notifications</p>
-                  </div>
-                ) : (
-                  <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
-                    {notifications.map((n) => {
-                      const isBroadcast = n.type === "broadcast";
-                      const isAppointment = n.type.includes("appointment");
-                      const isScan = n.type.includes("scan");
-
-                      return (
-                        <div
-                          key={n.id}
-                          onClick={() => {
-                            if (!n.isRead) markAsRead(n.id);
-                            setNotifOpen(false);
-                            if (isAppointment) {
-                              navigate("/patient/appointments");
-                            } else if (isScan) {
-                              navigate("/dashboard/history");
-                            }
-                          }}
-                          className={cn(
-                            "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
-                            !n.isRead && "bg-magenta-50/20"
-                          )}
-                        >
-                          <div
-                            className={cn(
-                              "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
-                              isBroadcast
-                                ? "bg-amber-100 text-amber-600"
-                                : isAppointment
-                                ? "bg-blue-100 text-blue-600"
-                                : isScan
-                                ? "bg-magenta-100 text-magenta-600"
-                                : "bg-purple-100 text-purple-600"
-                            )}
-                          >
-                            {isBroadcast ? (
-                              <Megaphone className="w-4 h-4" />
-                            ) : isAppointment ? (
-                              <Calendar className="w-4 h-4" />
-                            ) : isScan ? (
-                              <ScanSearch className="w-4 h-4" />
-                            ) : (
-                              <Bell className="w-4 h-4" />
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-semibold text-gray-900 truncate">
-                              {n.title}
-                            </p>
-                            <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
-                              {n.body}
-                            </p>
-                            <p className="text-[10px] text-gray-400 mt-1">
-                              {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} Î“Ã‡Ã³ {new Date(n.createdAt).toLocaleDateString()}
-                            </p>
-                          </div>
-                          {!n.isRead && (
-                            <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between text-xs">
-                  <Link
-                    to="/dashboard/history"
-                    onClick={() => setNotifOpen(false)}
-                    className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors"
-                  >
-                    Skin scan history Î“Ã¥Ã†
-                  </Link>
-                  <Link
-                    to="/patient/appointments"
-                    onClick={() => setNotifOpen(false)}
-                    className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors"
-                  >
-                    Appointments Î“Ã¥Ã†
-                  </Link>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-x-hidden">{children}</div>
-      </main>
+          <div className="patient-content flex-1 min-h-0 overflow-x-hidden lg:overflow-y-auto panel-scroll">{children}</div>
+        </main>
+      </div>
     </div>
   );
 }
