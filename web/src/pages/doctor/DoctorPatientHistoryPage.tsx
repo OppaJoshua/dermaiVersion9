@@ -22,24 +22,7 @@ import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/use
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 
-// Mini Sparkline Bar Chart matching Dashboard summary card design
-function SparklineBars({ values, activeIndex = 3 }: { values: number[]; activeIndex?: number }) {
-  return (
-    <div className="flex items-end gap-1.5 h-11 sm:h-12 shrink-0 pb-0.5">
-      {values.map((v, idx) => (
-        <div
-          key={idx}
-          className={`w-2 sm:w-2.5 rounded-t-[2.5px] transition-all ${
-            idx === activeIndex
-              ? "bg-[#2563EB]"
-              : "bg-[#D4E0FC]"
-          }`}
-          style={{ height: `${Math.max(20, Math.min(100, v))}%` }}
-        />
-      ))}
-    </div>
-  );
-}
+
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -144,23 +127,23 @@ export default function DoctorPatientHistoryPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6 min-w-0">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-display font-bold text-gray-900">Patient History</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-xl sm:text-2xl font-display font-bold text-gray-900">Patient History</h1>
+          <p className="text-base text-slate-500 mt-1">
             Review past consultations, approved clinical diagnoses, and completed visits.
           </p>
         </div>
-        <div className="relative">
+        <div className="relative w-full sm:w-auto">
           <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             placeholder="Search patient, diagnosis..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-9 pr-4 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 w-64 md:w-80"
+            className="pl-9 pr-8 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 w-full sm:w-64 md:w-80"
           />
           {search && (
             <button
@@ -174,8 +157,8 @@ export default function DoctorPatientHistoryPage() {
       </div>
 
       {/* Stats Cards - Framed container matching Dashboard summary cards styling */}
-      <div className="rounded-3xl border border-slate-200/80 bg-[#F8F8FA] p-5 sm:p-6 shadow-xs">
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5">
+      <div className="rounded-2xl sm:rounded-3xl border border-slate-200/80 bg-[#F8F8FA] p-3.5 sm:p-5 lg:p-6 shadow-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5 sm:gap-5">
           {/* Card 1: Total Consultations */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-[0_2px_8px_rgba(0,0,0,0.03)] overflow-hidden">
             {/* Top row */}
@@ -190,16 +173,13 @@ export default function DoctorPatientHistoryPage() {
             <div className="border-b border-slate-100" />
 
             {/* Bottom row */}
-            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
-                  {history.length}
-                </span>
-                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
-                  All patient records
-                </p>
-              </div>
-              <SparklineBars values={[35, 60, 45, 95, 70]} activeIndex={3} />
+            <div className="px-6 pt-4.5 pb-5.5">
+              <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                {history.length}
+              </span>
+              <p className="text-base sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                All patient records
+              </p>
             </div>
           </div>
 
@@ -217,16 +197,13 @@ export default function DoctorPatientHistoryPage() {
             <div className="border-b border-slate-100" />
 
             {/* Bottom row */}
-            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
-                  {completedList.length}
-                </span>
-                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
-                  Finished consultations
-                </p>
-              </div>
-              <SparklineBars values={[30, 65, 40, 100, 75]} activeIndex={3} />
+            <div className="px-6 pt-4.5 pb-5.5">
+              <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                {completedList.length}
+              </span>
+              <p className="text-base sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                Finished consultations
+              </p>
             </div>
           </div>
 
@@ -244,16 +221,13 @@ export default function DoctorPatientHistoryPage() {
             <div className="border-b border-slate-100" />
 
             {/* Bottom row */}
-            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
-                  {approvedList.length}
-                </span>
-                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
-                  Confirmed diagnosis
-                </p>
-              </div>
-              <SparklineBars values={[25, 45, 70, 90, 50]} activeIndex={3} />
+            <div className="px-6 pt-4.5 pb-5.5">
+              <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                {approvedList.length}
+              </span>
+              <p className="text-base sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                Confirmed diagnosis
+              </p>
             </div>
           </div>
 
@@ -271,23 +245,20 @@ export default function DoctorPatientHistoryPage() {
             <div className="border-b border-slate-100" />
 
             {/* Bottom row */}
-            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
-                  {pendingList.length}
-                </span>
-                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
-                  Awaiting doctor review
-                </p>
-              </div>
-              <SparklineBars values={[40, 55, 30, 85, 60]} activeIndex={3} />
+            <div className="px-6 pt-4.5 pb-5.5">
+              <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                {pendingList.length}
+              </span>
+              <p className="text-base sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                Awaiting doctor review
+              </p>
             </div>
           </div>
         </div>
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto pb-px">
+      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px">
         {[
           { key: "all", label: "All History", count: history.length },
           { key: "completed", label: "Completed Visits", count: completedList.length },
@@ -298,7 +269,7 @@ export default function DoctorPatientHistoryPage() {
           <button
             key={t.key}
             onClick={() => setTab(t.key as any)}
-            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
+            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               tab === t.key
                 ? "border-blue-600 text-blue-600"
                 : "border-transparent text-gray-500 hover:text-gray-700"
@@ -328,9 +299,9 @@ export default function DoctorPatientHistoryPage() {
           )}
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden shadow-xs">
+        <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden shadow-xs min-w-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+            <table className="w-full min-w-[760px] text-left text-sm">
               <thead className="bg-[#F8F9FA] border-b border-slate-200/80 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
                 <tr>
                   <th className="px-5 py-3">Patient</th>
@@ -378,12 +349,12 @@ export default function DoctorPatientHistoryPage() {
                             <p className="font-semibold text-gray-900">{appt.patientName || "Not provided"}</p>
                             <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                               {appt.patientGender && (
-                                <span className="text-[10px] font-semibold text-gray-600 bg-gray-100 px-1.5 py-0.2 rounded">
+                                <span className="text-[11px] font-semibold text-gray-600 bg-gray-100 px-1.5 py-0.2 rounded">
                                   {appt.patientGender}
                                 </span>
                               )}
                               {appt.patientAge && (
-                                <span className="text-xs text-gray-400">{appt.patientAge} yrs old</span>
+                                <span className="text-sm text-gray-400">{appt.patientAge} yrs old</span>
                               )}
                             </div>
                           </div>
@@ -401,23 +372,23 @@ export default function DoctorPatientHistoryPage() {
                       </td>
                       <td className="px-4 py-3.5 whitespace-nowrap">
                         {isCompleted ? (
-                          <span className="text-xs font-semibold text-emerald-700">
+                          <span className="text-sm font-semibold text-emerald-700">
                             Completed
                           </span>
                         ) : isApproved ? (
-                          <span className="text-xs font-semibold text-blue-700">
+                          <span className="text-sm font-semibold text-blue-700">
                             Approved
                           </span>
                         ) : isPending ? (
-                          <span className="text-xs font-semibold text-amber-700">
+                          <span className="text-sm font-semibold text-amber-700">
                             Pending Review
                           </span>
                         ) : isRejected ? (
-                          <span className="text-xs font-semibold text-red-700">
+                          <span className="text-sm font-semibold text-red-700">
                             Declined
                           </span>
                         ) : (
-                          <span className="text-xs font-semibold text-gray-700">
+                          <span className="text-sm font-semibold text-gray-700">
                             Reviewed
                           </span>
                         )}
@@ -465,26 +436,26 @@ export default function DoctorPatientHistoryPage() {
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
-                <div>
-                  <h2 className="text-base font-bold text-gray-900">Consultation History Record</h2>
-                  <p className="text-xs text-gray-400 mt-0.5">Patient consultation &amp; diagnosis archive</p>
+              <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-gray-100 shrink-0">
+                <div className="min-w-0">
+                  <h2 className="text-base font-bold text-gray-900 truncate">Consultation History Record</h2>
+                  <p className="text-sm text-gray-400 mt-0.5 truncate">Patient consultation &amp; diagnosis archive</p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0 ml-2">
                   {viewingAppt.status === "completed" || viewingAppt.doctorDone ? (
-                    <span className="text-xs font-semibold text-emerald-700">
+                    <span className="text-sm font-semibold text-emerald-700">
                       Completed
                     </span>
                   ) : viewingAppt.doctorStatus === "approved" ? (
-                    <span className="text-xs font-semibold text-blue-700">
+                    <span className="text-sm font-semibold text-blue-700">
                       Approved
                     </span>
                   ) : viewingAppt.doctorStatus === "rejected" || viewingAppt.status === "rejected" || viewingAppt.status === "cancelled" ? (
-                    <span className="text-xs font-semibold text-red-700">
+                    <span className="text-sm font-semibold text-red-700">
                       Declined
                     </span>
                   ) : (
-                    <span className="text-xs font-semibold text-amber-700">
+                    <span className="text-sm font-semibold text-amber-700">
                       Pending Review
                     </span>
                   )}
@@ -497,7 +468,7 @@ export default function DoctorPatientHistoryPage() {
                 </div>
               </div>
 
-              <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              <div className="px-4 sm:px-6 py-4 sm:py-5 space-y-4 overflow-y-auto flex-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 {/* Patient Header */}
                 <div className="flex items-center gap-4">
                   <img
@@ -516,14 +487,14 @@ export default function DoctorPatientHistoryPage() {
                       {viewingAppt.patientGender && (
                         <span className="text-[11px] font-semibold text-gray-700 bg-gray-100 px-2 py-0.5 rounded-full">
                           {viewingAppt.patientGender}
-                        </span>
+                        </span> 
                       )}
                       {viewingAppt.patientAge ? (
                         <span className="text-sm text-gray-400">{viewingAppt.patientAge} years old</span>
                       ) : viewingAppt.patientBirthdate ? (
                         <span className="text-sm text-gray-400">Born {viewingAppt.patientBirthdate}</span>
                       ) : null}
-                      <span className="text-xs font-medium text-blue-600">
+                      <span className="text-sm font-medium text-blue-600">
                         {viewingAppt.conditionName || "Not provided"}
                       </span>
                     </div>
@@ -533,12 +504,12 @@ export default function DoctorPatientHistoryPage() {
                 {/* Doctor Diagnosis Box */}
                 {viewingAppt.doctorDiagnosis && (
                   <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-4 space-y-1.5">
-                    <p className="text-[10px] text-blue-600 font-bold uppercase tracking-wide">
+                    <p className="text-[11px] text-blue-600 font-bold uppercase tracking-wide">
                       Doctor's Final Diagnosis
                     </p>
                     <p className="text-base font-bold text-slate-900">{viewingAppt.doctorDiagnosis}</p>
                     {viewingAppt.doctorNote && (
-                      <p className="text-xs text-blue-800 leading-relaxed pt-1 border-t border-blue-100/80">
+                      <p className="text-sm text-blue-800 leading-relaxed pt-1 border-t border-blue-100/80">
                         <span className="font-semibold">Review Note:</span> {viewingAppt.doctorNote}
                       </p>
                     )}
@@ -549,11 +520,11 @@ export default function DoctorPatientHistoryPage() {
                 {(viewingAppt.aiConditionName || viewCond) && (
                   <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3.5 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-blue-900 uppercase tracking-wide">
+                      <span className="text-sm font-bold text-blue-900 uppercase tracking-wide">
                         AI Scan Pre-Screening Result
                       </span>
                       {viewingAppt.aiConfidence !== undefined && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                        <span className="text-sm font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
                           {viewingAppt.aiConfidence}% AI Confidence
                         </span>
                       )}
@@ -562,7 +533,7 @@ export default function DoctorPatientHistoryPage() {
                       {viewingAppt.aiConditionName || viewingAppt.conditionName || viewCond?.name}
                     </p>
                     {viewCond && (
-                      <p className="text-xs text-blue-700 leading-relaxed">
+                      <p className="text-sm text-blue-700 leading-relaxed">
                         {viewCond.description}
                       </p>
                     )}
@@ -576,18 +547,18 @@ export default function DoctorPatientHistoryPage() {
                   viewingAppt.patientGender ||
                   viewingAppt.patientBirthdate) && (
                   <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 space-y-2">
-                    <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5">
+                    <p className="text-[11px] text-gray-400 font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5">
                       <User className="w-3.5 h-3.5 text-gray-500" /> Personal Information
                     </p>
                     {viewingAppt.patientGender && (
                       <div className="flex gap-2 text-sm">
-                        <span className="text-xs font-semibold text-gray-400 w-20 shrink-0 pt-0.5">Gender</span>
+                        <span className="text-sm font-semibold text-gray-400 w-20 shrink-0 pt-0.5">Gender</span>
                         <span className="text-gray-700">{viewingAppt.patientGender}</span>
                       </div>
                     )}
                     {viewingAppt.patientBirthdate && (
                       <div className="flex gap-2 text-sm">
-                        <span className="text-xs font-semibold text-gray-400 w-20 shrink-0 pt-0.5">Birthdate</span>
+                        <span className="text-sm font-semibold text-gray-400 w-20 shrink-0 pt-0.5">Birthdate</span>
                         <span className="text-gray-700">
                           {viewingAppt.patientBirthdate}
                           {viewingAppt.patientAge ? ` (${viewingAppt.patientAge} yrs old)` : ""}
@@ -596,7 +567,7 @@ export default function DoctorPatientHistoryPage() {
                     )}
                     {viewingAppt.patientEmail && (
                       <div className="flex gap-2 text-sm">
-                        <span className="text-xs font-semibold text-gray-400 w-20 shrink-0 pt-0.5 flex items-center gap-1">
+                        <span className="text-sm font-semibold text-gray-400 w-20 shrink-0 pt-0.5 flex items-center gap-1">
                           <Mail className="w-3 h-3" /> Email
                         </span>
                         <span className="text-gray-700">{viewingAppt.patientEmail}</span>
@@ -604,7 +575,7 @@ export default function DoctorPatientHistoryPage() {
                     )}
                     {viewingAppt.patientContact && (
                       <div className="flex gap-2 text-sm">
-                        <span className="text-xs font-semibold text-gray-400 w-20 shrink-0 pt-0.5 flex items-center gap-1">
+                        <span className="text-sm font-semibold text-gray-400 w-20 shrink-0 pt-0.5 flex items-center gap-1">
                           <Phone className="w-3 h-3" /> Contact
                         </span>
                         <span className="text-gray-700">{viewingAppt.patientContact}</span>
@@ -612,7 +583,7 @@ export default function DoctorPatientHistoryPage() {
                     )}
                     {viewingAppt.patientAddress && (
                       <div className="flex gap-2 text-sm">
-                        <span className="text-xs font-semibold text-gray-400 w-20 shrink-0 pt-0.5 flex items-center gap-1">
+                        <span className="text-sm font-semibold text-gray-400 w-20 shrink-0 pt-0.5 flex items-center gap-1">
                           <MapPin className="w-3 h-3" /> Address
                         </span>
                         <span className="text-gray-700">{viewingAppt.patientAddress}</span>
@@ -625,7 +596,7 @@ export default function DoctorPatientHistoryPage() {
                 {viewingAppt.skinPhotoUrl && (
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">
+                      <p className="text-[11px] text-gray-400 font-semibold uppercase tracking-wide">
                         Uploaded Skin Photo
                       </p>
                       <button
@@ -684,13 +655,13 @@ export default function DoctorPatientHistoryPage() {
                   </p>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 text-center">
-                      <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-1">Date</p>
+                      <p className="text-[11px] text-gray-400 font-semibold uppercase tracking-wide mb-1">Date</p>
                       <p className="text-sm font-bold text-gray-800">
                         {formatDate(viewingAppt.date, viewingAppt.createdAt)}
                       </p>
                     </div>
                     <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 text-center">
-                      <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-1">Time</p>
+                      <p className="text-[11px] text-gray-400 font-semibold uppercase tracking-wide mb-1">Time</p>
                       <p className="text-xl font-bold text-gray-800">{formatTime(viewingAppt.time)}</p>
                     </div>
                   </div>
@@ -703,7 +674,7 @@ export default function DoctorPatientHistoryPage() {
                 {/* Notes */}
                 {viewingAppt.notes && (
                   <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-                    <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-1">
+                    <p className="text-[11px] text-gray-400 font-semibold uppercase tracking-wide mb-1">
                       Patient Symptoms &amp; Notes
                     </p>
                     <p className="text-sm text-gray-700 italic">"{viewingAppt.notes}"</p>

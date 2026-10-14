@@ -1,4 +1,4 @@
-﻿import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Link } from "react-router-dom";
 import {
   CheckCircle2,
@@ -18,24 +18,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 
-// Mini Sparkline Bar Chart matching the Mediczen aesthetic exactly (4 pastel bars + 1 royal blue bar)
-function SparklineBars({ values, activeIndex = 3 }: { values: number[]; activeIndex?: number }) {
-  return (
-    <div className="flex items-end gap-1.5 h-11 sm:h-12 shrink-0 pb-0.5">
-      {values.map((v, idx) => (
-        <div
-          key={idx}
-          className={`w-2 sm:w-2.5 rounded-t-[2.5px] transition-all ${
-            idx === activeIndex
-              ? "bg-[#2563EB]"
-              : "bg-[#D4E0FC]"
-          }`}
-          style={{ height: `${Math.max(20, Math.min(100, v))}%` }}
-        />
-      ))}
-    </div>
-  );
-}
+
 
 
 
@@ -293,20 +276,20 @@ export default function DoctorDashboardPage() {
   }
 
   return (
-    <div className="space-y-7 max-w-7xl mx-auto">
+    <div className="space-y-5 sm:space-y-7 max-w-7xl mx-auto min-w-0">
       {/* Top Welcome Header - Mediczen Style */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight font-sans">
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight font-sans">
             {greeting}, Dr. {doctorName || "Doctor"}!
           </h1>
           {doctorClinic ? (
-            <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5 font-medium">
+            <p className="text-sm text-slate-500 mt-0.5 flex items-center gap-1.5 font-medium">
               <Building2 className="w-3.5 h-3.5 text-slate-400" />
               <span>{doctorClinic}</span>
             </p>
           ) : null}
-          <p className="text-xs text-slate-400 mt-1 font-medium">
+          <p className="text-base text-slate-500 mt-1">
             {pendingReview.length > 0
               ? `I hope you're in a good mood because there are ${pendingReview.length} patients waiting for your review`
               : "All patient cases are up to date. Have a productive day in the clinic."}
@@ -315,8 +298,8 @@ export default function DoctorDashboardPage() {
       </div>
 
       {/* Top 4 Stat Cards - Framed container matching Mediczen styling with the 4 doctor cards */}
-      <div className="rounded-3xl border border-slate-200/80 bg-[#F8F8FA] p-5 sm:p-6 shadow-xs">
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5">
+      <div className="rounded-2xl sm:rounded-3xl border border-slate-200/80 bg-[#F8F8FA] p-3.5 sm:p-5 lg:p-6 shadow-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5 sm:gap-5">
           {/* Card 1: Awaiting Review */}
           <Link
             to="/doctor/appointments"
@@ -334,17 +317,14 @@ export default function DoctorDashboardPage() {
             {/* Horizontal divider line matching Mediczen */}
             <div className="border-b border-slate-100" />
 
-            {/* Bottom row: Dynamic count + subtitle on left, 5-bar sparkline on right */}
-            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
-                  {pendingReview.length}
-                </span>
-                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
-                  In triage queue
-                </p>
-              </div>
-              <SparklineBars values={[35, 60, 45, 95, 70]} activeIndex={3} />
+            {/* Bottom row */}
+            <div className="px-6 pt-4.5 pb-5.5">
+              <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                {pendingReview.length}
+              </span>
+              <p className="text-sm sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                In triage queue
+              </p>
             </div>
           </Link>
 
@@ -366,16 +346,13 @@ export default function DoctorDashboardPage() {
             <div className="border-b border-slate-100" />
 
             {/* Bottom row */}
-            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
-                  {approved.length}
-                </span>
-                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
-                  Awaiting clinic lock
-                </p>
-              </div>
-              <SparklineBars values={[25, 45, 70, 90, 50]} activeIndex={3} />
+            <div className="px-6 pt-4.5 pb-5.5">
+              <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                {approved.length}
+              </span>
+              <p className="text-sm sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                Awaiting clinic lock
+              </p>
             </div>
           </Link>
 
@@ -397,16 +374,13 @@ export default function DoctorDashboardPage() {
             <div className="border-b border-slate-100" />
 
             {/* Bottom row */}
-            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
-                  {scheduledSent.length}
-                </span>
-                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
-                  Locked sessions
-                </p>
-              </div>
-              <SparklineBars values={[40, 55, 30, 85, 60]} activeIndex={3} />
+            <div className="px-6 pt-4.5 pb-5.5">
+              <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                {scheduledSent.length}
+              </span>
+              <p className="text-sm sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                Locked sessions
+              </p>
             </div>
           </Link>
 
@@ -428,16 +402,13 @@ export default function DoctorDashboardPage() {
             <div className="border-b border-slate-100" />
 
             {/* Bottom row */}
-            <div className="px-6 pt-4.5 pb-5.5 flex items-end justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
-                  {completedList.length}
-                </span>
-                <p className="text-xs sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
-                  Completed cases
-                </p>
-              </div>
-              <SparklineBars values={[30, 65, 40, 100, 75]} activeIndex={3} />
+            <div className="px-6 pt-4.5 pb-5.5">
+              <span className="text-3xl sm:text-[34px] font-black text-slate-900 tracking-tight leading-none block">
+                {completedList.length}
+              </span>
+              <p className="text-sm sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
+                Completed cases
+              </p>
             </div>
           </Link>
         </div>
@@ -446,11 +417,11 @@ export default function DoctorDashboardPage() {
       {/* Middle Grid: Two Columns (Patient List on Left, Calendar on Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Column: Patient List (approx 65% / 7 cols) */}
-        <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200/90 p-6 shadow-xs">
-          <div className="flex items-center justify-between pb-5">
+        <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-6 shadow-xs min-w-0">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-5">
             <div>
               <h2 className="text-lg font-bold text-slate-900 tracking-tight">Patient</h2>
-              <p className="text-xs text-slate-400 mt-0.5 font-medium">
+              <p className="text-sm text-slate-400 mt-0.5 font-medium">
                  To Review Appointment list
               </p>
             </div>
@@ -468,7 +439,7 @@ export default function DoctorDashboardPage() {
 
               <Link
                 to="/doctor/appointments"
-                className="text-xs font-bold text-blue-600 hover:text-blue-700 hover:underline"
+                className="text-sm font-bold text-blue-600 hover:text-blue-700 hover:underline"
               >
                 See All
               </Link>
@@ -478,16 +449,16 @@ export default function DoctorDashboardPage() {
           {/* Patient Table matching the Mediczen screenshot layout */}
           {displayPatients.length === 0 ? (
             <div className="py-12 text-center">
-              <p className="text-[11px] text-slate-400 mt-0.5">
+              <p className="text-sm text-slate-400 mt-0.5">
                 No To Review patient appointments assigned yet.
               </p>
             </div>
           ) : (
             <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white">
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="w-full min-w-[480px] text-left text-sm">
                   <thead>
-                    <tr className="bg-[#F8F9FB] border-b border-slate-200/80 text-[11px] font-semibold text-slate-500">
+                    <tr className="bg-[#F8F9FB] border-b border-slate-200/80 text-[12px] font-semibold text-slate-500">
                       <th className="py-3 px-4 font-semibold">Name</th>
                       <th className="py-3 px-4 font-semibold">Ward No.</th>
                       <th className="py-3 px-4 font-semibold">Date</th>
@@ -534,7 +505,7 @@ export default function DoctorDashboardPage() {
                                 <p className="font-bold text-slate-900 text-xs truncate">
                                   {appt.patientName || "Anonymous Patient"}
                                 </p>
-                                <p className="text-[11px] text-slate-400 truncate mt-0.5 font-medium">
+                                <p className="text-[12px] text-slate-400 truncate mt-0.5 font-medium">
                                   {genderText}, {ageText}
                                 </p>
                               </div>
@@ -542,12 +513,12 @@ export default function DoctorDashboardPage() {
                           </td>
 
                           {/* Case Ref / Ward */}
-                          <td className="py-3.5 px-4 text-slate-500 font-medium text-xs">
+                          <td className="py-3.5 px-4 text-slate-500 font-medium text-sm">
                             {caseRef}
                           </td>
 
                           {/* Date */}
-                          <td className="py-3.5 px-4 text-slate-600 font-medium text-xs">
+                          <td className="py-3.5 px-4 text-slate-600 font-medium text-sm">
                             {formattedDate}
                           </td>
 
@@ -555,7 +526,7 @@ export default function DoctorDashboardPage() {
                           <td className="py-3.5 px-4 text-right">
                             <Link
                               to={`/doctor/appointments?review=${encodeURIComponent(appt.id)}`}
-                              className="text-xs font-bold text-blue-600 hover:text-blue-800 transition-colors"
+                              className="text-sm font-bold text-blue-600 hover:text-blue-800 transition-colors"
                             >
                               Review
                             </Link>
@@ -571,15 +542,15 @@ export default function DoctorDashboardPage() {
         </div>
 
         {/* Right Column: Calendar Widget (approx 35% / 5 cols) */}
-        <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200/90 p-6 shadow-xs">
+        <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-6 shadow-xs min-w-0">
           {/* Calendar Header with Legend and Month Nav */}
-          <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
             <div>
               <h3 className="text-base font-bold text-slate-900 tracking-tight">
                 {calendarDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
               </h3>
               {/* Legend dots matching Mediczen screenshot */}
-              <div className="flex items-center gap-3.5 mt-2 text-[10px] font-medium text-slate-500">
+              <div className="flex items-center gap-3.5 mt-1.5 text-[12px] font-medium text-slate-500">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-blue-600 inline-block" />
                   <span>Scheduled</span>
@@ -591,7 +562,7 @@ export default function DoctorDashboardPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-1">
+            <div className="flex items-center justify-between sm:justify-end gap-1 w-full sm:w-auto">
               <button
                 type="button"
                 onClick={() =>
@@ -627,7 +598,7 @@ export default function DoctorDashboardPage() {
           </div>
 
           {/* Day Grid */}
-          <div className="grid grid-cols-7 gap-y-1.5 text-center text-xs">
+          <div className="grid grid-cols-7 gap-y-1.5 text-center text-sm">
             {calendarDays.map((cell, idx) => {
               const isSelected = cell.dateStr === selectedCalendarDate;
               const isToday =
@@ -644,12 +615,12 @@ export default function DoctorDashboardPage() {
                   className="flex flex-col items-center justify-center py-1 rounded-xl transition-all cursor-pointer relative group"
                 >
                   {isSelected ? (
-                    <div className="w-7 h-7 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shadow-xs">
+                    <div className="w-7 h-7 rounded-full bg-blue-600 text-white font-bold text-sm flex items-center justify-center shadow-xs">
                       {cell.day}
                     </div>
                   ) : (
                     <span
-                      className={`w-7 h-7 rounded-full flex items-center justify-center text-xs transition-colors ${
+                      className={`w-7 h-7 rounded-full flex items-center justify-center text-sm transition-colors ${
                         isToday
                           ? "bg-blue-50 text-blue-600 font-bold"
                           : cell.isCurrentMonth
@@ -685,11 +656,11 @@ export default function DoctorDashboardPage() {
 
           {/* Mini preview of selected date */}
           <div className="mt-4 pt-3.5 border-t border-slate-100">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+            <p className="text-[12px] font-bold text-slate-400 uppercase tracking-wider">
               Appointments on {selectedCalendarDate}
             </p>
             {selectedDayAppointments.length === 0 ? (
-              <p className="text-xs text-slate-400 mt-1">No confirmed sessions scheduled on this date.</p>
+              <p className="text-sm text-slate-400 mt-1">No confirmed sessions scheduled on this date.</p>
             ) : (
               <div className="space-y-2 mt-2.5 max-h-48 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 {selectedDayAppointments.map((a) => {
@@ -704,7 +675,7 @@ export default function DoctorDashboardPage() {
                         <p className="font-bold text-slate-900 truncate group-hover:text-blue-600 transition-colors">
                           {a.patientName}
                         </p>
-                        <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                        <p className="text-sm text-slate-500 truncate mt-0.5">
                           {a.time || "Scheduled"} • {a.conditionName || "Consultation"}
                         </p>
                       </div>
@@ -728,7 +699,7 @@ export default function DoctorDashboardPage() {
                             e.stopPropagation();
                             openConsultation(a);
                           }}
-                          className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-all cursor-pointer shadow-2xs shrink-0 hover:scale-102 active:scale-98"
+                          className="text-sm font-bold px-2.5 py-1 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-all cursor-pointer shadow-2xs shrink-0 hover:scale-102 active:scale-98"
                           title="Click to conduct visit and complete consultation"
                         >
                           Conduct Visit
@@ -761,16 +732,16 @@ export default function DoctorDashboardPage() {
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
-              <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700">
+              <div className="bg-white border-b border-slate-100 px-4 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700 shrink-0">
                     <Stethoscope className="w-5 h-5" />
                   </div>
-                  <div>
-                    <h3 className="font-bold text-slate-900 text-base">
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-slate-900 text-base truncate">
                       Consultation &amp; Clinical Result
                     </h3>
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-slate-400 truncate">
                       Scheduled Visit: {consultingAppt.date} at {consultingAppt.time || "Scheduled"}
                     </p>
                   </div>
@@ -778,14 +749,14 @@ export default function DoctorDashboardPage() {
                 <button
                   type="button"
                   onClick={() => setConsultingAppt(null)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer shrink-0 ml-2"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
               {/* Body */}
-              <div className="overflow-y-auto flex-1 p-6 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 {/* Patient Header */}
                 <div className="flex items-center gap-3.5 p-3 rounded-xl bg-slate-50/80 border border-slate-100">
                   <img
@@ -895,7 +866,7 @@ export default function DoctorDashboardPage() {
               </div>
 
               {/* Footer */}
-              <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-3 shrink-0 bg-white">
+              <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0 bg-white">
                 <Link
                   to={`/doctor/scheduled?date=${consultingAppt.date}&id=${consultingAppt.id}`}
                   className="text-xs font-semibold text-blue-600 hover:text-blue-800 inline-flex items-center gap-1.5"
@@ -904,7 +875,7 @@ export default function DoctorDashboardPage() {
                   <ExternalLink className="w-3.5 h-3.5" />
                 </Link>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center justify-end gap-2 w-full sm:w-auto">
                   {consultingAppt.status === "completed" || consultingAppt.doctorDone ? (
                     <div className="inline-flex items-center px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold">
                       Consultation Completed &amp; Saved
@@ -914,7 +885,7 @@ export default function DoctorDashboardPage() {
                       type="button"
                       disabled={savingConsultation}
                       onClick={handleCompleteConsultation}
-                      className="inline-flex items-center px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 shadow-2xs"
+                      className="inline-flex items-center justify-center px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 shadow-2xs flex-1 sm:flex-initial"
                     >
                       {savingConsultation ? (
                         <>

@@ -321,23 +321,23 @@ export default function DoctorScheduledAppointmentsPage() {
   }
 
   return (
-    <div className="w-full space-y-6">
+    <div className="w-full space-y-5 sm:space-y-6 min-w-0">
       {/* Top Header */}
       <div>
-        <h1 className="text-2xl md:text-3xl font-bold text-[#0f172a] tracking-tight">
+        <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-[#0f172a] tracking-tight">
           Assigned Appointments
         </h1>
-        <p className="text-xs md:text-sm text-slate-500 mt-1">
+        <p className="text-base text-slate-500 mt-1">
           Finalized schedules confirmed by the clinic &mdash; conduct consultation and record clinical results.
         </p>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-slate-200/80">
+      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px">
         <button
           type="button"
           onClick={() => setTab("upcoming")}
-          className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors cursor-pointer flex items-center ${
+          className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors cursor-pointer flex items-center shrink-0 ${
             tab === "upcoming"
               ? "border-blue-600 text-blue-600"
               : "border-transparent text-gray-500 hover:text-gray-700"
@@ -378,23 +378,23 @@ export default function DoctorScheduledAppointmentsPage() {
       </div>
 
       {/* Responsive Two-Column Grid Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start min-w-0">
         {/* ================= CARD 1 (LEFT): CALENDAR ================= */}
-        <div className="bg-white rounded-2xl p-6 md:p-7 border border-slate-200/90 shadow-xs flex flex-col justify-between min-h-[560px]">
+        <div className="bg-white rounded-2xl p-4 sm:p-6 md:p-7 border border-slate-200/90 shadow-xs flex flex-col justify-between min-h-[560px] min-w-0">
           <div>
             {/* Header */}
-            <div className="flex items-center justify-between gap-4 pb-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4">
               <div>
                 <h2 className="text-base md:text-lg font-bold text-slate-900 leading-tight">
                   Assigned Appointment Calendar
                 </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
+                <p className="text-sm text-slate-500 mt-0.5">
                   View your scheduled patients. Click a date to see the list of approved appointments.
                 </p>
               </div>
 
               {/* Month / Year Controls */}
-              <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center justify-between sm:justify-end gap-1.5 shrink-0 w-full sm:w-auto">
                 <button
                   type="button"
                   onClick={handlePrevMonth}
@@ -403,7 +403,7 @@ export default function DoctorScheduledAppointmentsPage() {
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
-                <span className="text-xs md:text-sm font-bold text-slate-800 px-1 whitespace-nowrap">
+                <span className="text-sm md:text-sm font-bold text-slate-800 px-1 whitespace-nowrap">
                   {currentMonthYearLabel}
                 </span>
                 <button
@@ -422,7 +422,7 @@ export default function DoctorScheduledAppointmentsPage() {
               {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((dayName) => (
                 <div
                   key={dayName}
-                  className="text-center text-xs font-semibold text-slate-400 py-2"
+                  className="text-center text-sm font-semibold text-slate-400 py-2"
                 >
                   {dayName}
                 </div>
@@ -495,22 +495,22 @@ export default function DoctorScheduledAppointmentsPage() {
         </div>
 
         {/* ================= CARD 2 (RIGHT): SELECTED DATE PATIENT LIST ================= */}
-        <div className="bg-white rounded-2xl p-6 md:p-7 border border-slate-200/90 shadow-xs flex flex-col justify-between min-h-[560px]">
+        <div className="bg-white rounded-2xl p-4 sm:p-6 md:p-7 border border-slate-200/90 shadow-xs flex flex-col justify-between min-h-[560px] min-w-0">
           <div>
             {/* Header */}
-            <div className="flex items-center justify-between gap-4 pb-4 border-b border-slate-100">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
               <div>
                 <h2 className="text-base md:text-lg font-bold text-slate-900 leading-tight">
                   Appointments for {formatDateHeader(selectedDate)}
                 </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
+                <p className="text-sm text-slate-500 mt-0.5">
                   {selectedDateAppointments.length}{" "}
                   {selectedDateAppointments.length === 1 ? "approved patient" : "approved patients"}
                 </p>
               </div>
 
               {/* Weekday tag */}
-              <div className="px-3.5 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-100/80 shrink-0">
+              <div className="px-3.5 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-100/80 shrink-0 self-start sm:self-auto">
                 {getWeekdayName(selectedDate)}
               </div>
             </div>
@@ -518,10 +518,10 @@ export default function DoctorScheduledAppointmentsPage() {
             {/* Patient Cards List */}
             {selectedDateAppointments.length === 0 ? (
               <div className="py-24 text-center px-4 flex flex-col items-center justify-center">
-                <p className="text-sm font-semibold text-slate-700 mb-1">
+                <p className="text-base font-semibold text-slate-700 mb-1">
                   No approved appointments scheduled for this date.
                 </p>
-                <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
+                <p className="text-sm text-slate-400 max-w-xs leading-relaxed">
                   Click on any highlighted date in the calendar to view approved scheduled patients.
                 </p>
               </div>
@@ -589,11 +589,11 @@ export default function DoctorScheduledAppointmentsPage() {
                         </div>
                       </div>
                       {/* Right: Conduct Visit Button */}
-                      <div className="shrink-0 flex items-center xl:justify-end">
+                      <div className="shrink-0 flex items-center xl:justify-end w-full sm:w-auto">
                         <button
                           type="button"
                           onClick={() => openApptModal(appt)}
-                          className="h-10 px-4.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-xs shrink-0 cursor-pointer"
+                          className="h-10 px-4.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-xs shrink-0 cursor-pointer w-full sm:w-auto"
                         >
                           <ClipboardList className="w-3.5 h-3.5" />
                           <span>{tab === "completed" || appt.doctorDone ? "View Result" : "Conduct Visit"}</span>
@@ -624,14 +624,14 @@ export default function DoctorScheduledAppointmentsPage() {
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
-              <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-2">
-                  <Stethoscope className="w-5 h-5 text-slate-700" />
-                  <div>
-                    <h3 className="font-bold text-slate-900 text-base">
+              <div className="bg-white border-b border-slate-100 px-4 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Stethoscope className="w-5 h-5 text-slate-700 shrink-0" />
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-slate-900 text-base truncate">
                       Consultation &amp; Clinical Result
                     </h3>
-                    <p className="text-xs text-slate-400">
+                    <p className="text-sm text-slate-400 truncate">
                       Scheduled Visit for {formatDateHeader(viewingAppt.date)} at{" "}
                       {formatTime(viewingAppt.time, viewingAppt.date)}
                     </p>
@@ -640,14 +640,14 @@ export default function DoctorScheduledAppointmentsPage() {
                 <button
                   type="button"
                   onClick={() => setViewingAppt(null)}
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer shrink-0 ml-2"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
               {/* Body */}
-              <div className="overflow-y-auto flex-1 p-6 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 {/* Patient Header */}
                 <div className="flex items-center gap-3">
                   <img
@@ -681,7 +681,7 @@ export default function DoctorScheduledAppointmentsPage() {
                       ) : null}
                     </div>
                     {viewingAppt.emergencyContactName && (
-                      <p className="text-xs text-rose-600 font-medium mt-1">
+                      <p className="text-sm text-rose-600 font-medium mt-1">
                         <span className="font-semibold text-rose-700">
                           Emergency Contact:
                         </span>{" "}
@@ -699,12 +699,12 @@ export default function DoctorScheduledAppointmentsPage() {
 
                 {/* Confirmed Schedule Banner */}
                 <div className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2">
-                  <p className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                  <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">
                     Confirmed Schedule
                   </p>
-                  <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="grid grid-cols-2 gap-3 text-sm">
                     <div className="bg-slate-50/70 rounded-xl border border-slate-200/80 p-2.5">
-                      <span className="text-[10px] text-slate-400 font-semibold block uppercase">
+                      <span className="text-[11px] text-slate-400 font-semibold block uppercase">
                         Date
                       </span>
                       <span className="font-bold text-slate-900">
@@ -712,7 +712,7 @@ export default function DoctorScheduledAppointmentsPage() {
                       </span>
                     </div>
                     <div className="bg-slate-50/70 rounded-xl border border-slate-200/80 p-2.5">
-                      <span className="text-[10px] text-slate-400 font-semibold block uppercase">
+                      <span className="text-[11px] text-slate-400 font-semibold block uppercase">
                         Time
                       </span>
                       <span className="font-bold text-slate-900">
@@ -775,11 +775,11 @@ export default function DoctorScheduledAppointmentsPage() {
                   viewingAppt.questionnaireAnswers.length > 0 && (
                     <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
                       <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                        <span className="text-sm font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
                           <ClipboardList className="w-3.5 h-3.5 text-slate-600" />{" "}
                           Pre-screening Responses
                         </span>
-                        <span className="text-[10px] font-semibold text-slate-500">
+                        <span className="text-[11px] font-semibold text-slate-500">
                           {viewingAppt.questionnaireAnswers.length} questions
                         </span>
                       </div>
@@ -805,7 +805,7 @@ export default function DoctorScheduledAppointmentsPage() {
                 <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
                   <div className="flex items-center gap-2">
                     <FileCheck className="w-4 h-4 text-slate-700" />
-                    <p className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                    <p className="text-sm font-bold text-slate-900 uppercase tracking-wider">
                       Doctor's Clinical Decision &amp; Findings
                     </p>
                   </div>
@@ -835,7 +835,7 @@ export default function DoctorScheduledAppointmentsPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-sm font-bold text-slate-700 mb-1">
                       Prescription, Treatment Plan &amp; Consultation Notes
                     </label>
                     <textarea
@@ -851,9 +851,9 @@ export default function DoctorScheduledAppointmentsPage() {
               </div>
 
               {/* Footer */}
-              <div className="px-6 py-4 border-t border-slate-100 flex gap-3 shrink-0 bg-white">
+              <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-t border-slate-100 flex flex-col sm:flex-row gap-2.5 sm:gap-3 shrink-0 bg-white">
                 {viewingAppt.doctorDone ? (
-                  <div className="flex-1 flex items-center justify-center py-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-xs font-bold">
+                  <div className="flex-1 flex items-center justify-center py-2.5 sm:py-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-xs font-bold text-center">
                     Consultation Completed &amp; Result Saved
                   </div>
                 ) : (
@@ -861,11 +861,11 @@ export default function DoctorScheduledAppointmentsPage() {
                     type="button"
                     disabled={savingResult}
                     onClick={handleCompleteConsultation}
-                    className="flex-1 inline-flex items-center justify-center py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+                    className="flex-1 inline-flex items-center justify-center py-2.5 sm:py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 text-center"
                   >
                     {savingResult ? (
                       <>
-                        <Loader2 className="w-4 h-4 animate-spin" /> Saving Result...
+                        <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> Saving Result...
                       </>
                     ) : (
                       "Complete Consultation & Save Clinical Result"
@@ -875,7 +875,7 @@ export default function DoctorScheduledAppointmentsPage() {
                 <button
                   type="button"
                   onClick={() => setViewingAppt(null)}
-                  className="py-3 px-5 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                  className="py-2.5 sm:py-3 px-5 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer w-full sm:w-auto text-center"
                 >
                   Close
                 </button>

@@ -428,17 +428,17 @@ export default function DoctorSettingsPage() {
   };
 
   return (
-    <div className="max-w-6xl space-y-6 pb-12">
+    <div className="max-w-7xl space-y-6 pb-12">
       {/* Header */}
       <div className="pb-2 border-b border-slate-200/80">
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">Help &amp; Clinical Support</h1>
-        <p className="text-xs text-slate-500 mt-1">
+        <p className="text-base text-slate-500 mt-1">
           Review your doctor profile, browse clinical FAQs, and contact platform support.
         </p>
       </div>
 
       {/* Doctor Information - Top Banner Card */}
-      <div className="bg-white rounded-2xl border border-sky-100/80 p-6 sm:p-7 shadow-xs relative overflow-hidden">
+      <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-6 md:p-7 shadow-xs relative overflow-hidden min-w-0">
         {/* Subtle decorative faceted gradient accent on the right */}
         <div
           aria-hidden="true"
@@ -448,7 +448,7 @@ export default function DoctorSettingsPage() {
 
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
           {/* Left: Doctor Photo & Primary Info */}
-          <div className="flex items-center gap-5 sm:gap-6 min-w-0">
+          <div className="flex flex-col sm:flex-row items-center sm:items-start text-center sm:text-left gap-4 sm:gap-6 min-w-0">
             <div className="relative group shrink-0">
               {profile.photo ? (
                 <img
@@ -483,14 +483,14 @@ export default function DoctorSettingsPage() {
             </div>
 
             <div className="min-w-0">
-              <div className="flex items-center gap-3 flex-wrap">
-                <h2 className="text-2xl sm:text-[26px] font-bold text-slate-900 tracking-tight">
+              <div className="flex items-center justify-center sm:justify-start gap-3 flex-wrap">
+                <h2 className="text-xl sm:text-2xl md:text-[26px] font-bold text-slate-900 tracking-tight">
                   {profile.fullName || "Doctor"}
                 </h2>
 
               </div>
 
-              <p className="text-sm font-medium text-[#64748B] flex items-center gap-2 mt-2">
+              <p className="text-sm font-medium text-[#64748B] flex items-center justify-center sm:justify-start gap-2 mt-2">
                 <Stethoscope className="w-4 h-4 text-[#64748B] shrink-0" />
                 <span>{profile.clinicName || "Clinic not assigned"}</span>
               </p>
@@ -515,13 +515,13 @@ export default function DoctorSettingsPage() {
           </div>
 
           {/* Right: Specialization */}
-          <div className="flex items-center gap-4 lg:pl-10 lg:border-l lg:border-slate-200/80 shrink-0">
+          <div className="flex items-center sm:items-start gap-4 lg:pl-10 lg:border-l lg:border-slate-200/80 pt-4 lg:pt-0 border-t border-slate-100 lg:border-t-0 shrink-0">
             <CaduceusIcon className="w-7 h-7 text-[#5B6B82] shrink-0" />
             <div>
-              <p className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]/80 mb-0.5">
+              <p className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 mb-0.5">
                 SPECIALIZATION
               </p>
-              <p className="text-xl font-bold text-slate-900 tracking-tight">
+              <p className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
                 {profile.specializations && profile.specializations.length > 0
                   ? profile.specializations.join(", ")
                   : "Not assigned"}
@@ -535,12 +535,12 @@ export default function DoctorSettingsPage() {
       </div>
 
       {/* Row 2: PRC License, Email, Contact Number */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-5 min-w-0">
         {/* Card 1: PRC License ID */}
-        <div className="bg-white rounded-2xl border border-sky-100/80 p-5 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4">
+        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4">
           <IdCardIcon className="w-6 h-6 text-[#1D4ED8] shrink-0" />
           <div className="min-w-0 flex-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">
+            <span className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">
               PRC LICENSE ID
             </span>
             <p className="font-bold text-slate-900 text-lg sm:text-xl tracking-tight truncate">
@@ -550,15 +550,15 @@ export default function DoctorSettingsPage() {
                   : `#${profile.prcLicense}`
                 : "Not provided"}
             </p>
-            <p className="text-xs text-[#94A3B8] mt-0.5">PRC license number on file</p>
+            <p className="text-sm text-[#94A3B8] mt-0.5">PRC license number on file</p>
           </div>
         </div>
 
         {/* Card 2: Clinical Email */}
-        <div className="bg-white rounded-2xl border border-sky-100/80 p-5 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4">
-          <Mail className="w-6 h-6 text-[#1D4ED8] shrink-0" />
+        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4">
+          <Mail className="w-7 h-6 text-[#1D4ED8] shrink-0" />
           <div className="min-w-0 flex-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">
+            <span className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">
               CLINICAL EMAIL
             </span>
             <p
@@ -567,33 +567,33 @@ export default function DoctorSettingsPage() {
             >
               {profile.email || "—"}
             </p>
-            <p className="text-xs text-[#94A3B8] mt-0.5">Roster login address</p>
+            <p className="text-sm text-[#94A3B8] mt-0.5">Roster login address</p>
           </div>
         </div>
 
         {/* Card 3: Contact Number */}
-        <div className="bg-white rounded-2xl border border-sky-100/80 p-5 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4">
+        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4 sm:col-span-2 xl:col-span-1">
           <Phone className="w-6 h-6 text-[#1D4ED8] shrink-0" />
           <div className="min-w-0 flex-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">
+            <span className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">
               CONTACT NUMBER
             </span>
             <p className="font-bold text-slate-900 text-base sm:text-lg tracking-tight truncate">
               {profile.phone || "Not provided"}
             </p>
-            <p className="text-xs text-[#94A3B8] mt-0.5">Official clinic mobile</p>
+            <p className="text-sm text-[#94A3B8] mt-0.5">Official clinic mobile</p>
           </div>
         </div>
       </div>
 
-      {/* Row 3: Duty Schedule Card (Wide, zero side scroll) */}
-      <div className="w-full max-w-4xl">
-        <div className="bg-white rounded-2xl border border-sky-100/80 p-6 shadow-xs flex flex-col justify-between">
+      {/* Row 3: Duty Schedule Card (Full width, generous spacing) */}
+      <div className="w-full min-w-0">
+        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-6 md:p-7 shadow-xs flex flex-col justify-between min-w-0">
           {/* Header */}
           <div className="flex items-center justify-between pb-4 border-b border-slate-50">
             <div className="flex items-center gap-2.5">
               <CalendarCardIcon className="w-5 h-5 text-[#1D4ED8] shrink-0" />
-              <span className="text-[11px] font-bold uppercase tracking-wider text-[#475569]">
+              <span className="text-[14px] font-bold uppercase tracking-wider text-[#475569]">
                 DUTY SCHEDULE
               </span>
             </div>
@@ -603,10 +603,10 @@ export default function DoctorSettingsPage() {
             </div>
           </div>
 
-          {/* Duty Days & Shifts - Wide layout with equal column distribution, no scrollbar */}
-          <div className="py-4 w-full">
+          {/* Duty Days & Shifts - Wide layout with equal column distribution */}
+          <div className="py-4 w-full min-w-0">
             {profile.dutyDays && profile.dutyDays.length > 0 ? (
-              <div className="flex items-stretch divide-x divide-slate-100 w-full">
+              <div className="flex items-stretch divide-x divide-slate-100 w-full overflow-x-auto pb-1">
                 {profile.dutyDays.map((day) => {
                   const sched = profile.dutySchedule[day];
                   const timeRange = sched
@@ -615,9 +615,9 @@ export default function DoctorSettingsPage() {
                   return (
                     <div
                       key={day}
-                      className="flex-1 min-w-0 flex flex-col px-3 sm:px-6 first:pl-0 last:pr-0"
+                      className="flex-1 min-w-[110px] sm:min-w-[120px] flex flex-col px-3.5 sm:px-6 md:px-8 first:pl-0 last:pr-0 shrink-0"
                     >
-                      <span className="text-xs font-medium text-slate-500 mb-1">{day}</span>
+                      <span className="text-base font-medium text-slate-500 mb-1">{day}</span>
                       <span className="text-sm font-bold text-slate-900 tracking-tight whitespace-nowrap">
                         {timeRange}
                       </span>
@@ -642,7 +642,7 @@ export default function DoctorSettingsPage() {
 
       {/* Row 4: Disclaimer Footer */}
       <div className="pt-4 border-t border-slate-200/60">
-        <p className="text-[11px] text-slate-400 italic">
+        <p className="text-[12px] text-slate-400 italic">
           * Medical provider credentials, roster assignments, and clinic affiliations are managed by your clinic administration.
         </p>
       </div>
@@ -652,18 +652,18 @@ export default function DoctorSettingsPage() {
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex items-start gap-3.5">
           <Mail className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
           <div>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Clinical Support Email</p>
+            <p className="text-[14px] font-bold text-slate-400 uppercase tracking-wider">Clinical Support Email</p>
             <p className="font-bold text-slate-900 text-sm mt-0.5">support@dermai.ph</p>
-            <p className="text-[11px] text-slate-500 mt-0.5">Direct response within 24 hours on business days</p>
+            <p className="text-[12px] text-slate-500 mt-0.5">Direct response within 24 hours on business days</p>
           </div>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex items-start gap-3.5">
           <Phone className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
           <div>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Direct Hotline</p>
+            <p className="text-[14px] font-bold text-slate-400 uppercase tracking-wider">Direct Hotline</p>
             <p className="font-bold text-slate-900 text-sm mt-0.5">(032) 888-3472</p>
-            <p className="text-[11px] text-slate-500 mt-0.5">Monday – Friday, 8:00 AM – 5:00 PM PHT</p>
+            <p className="text-[12px] text-slate-500 mt-0.5">Monday – Friday, 8:00 AM – 5:00 PM PHT</p>
           </div>
         </div>
       </div>
@@ -672,7 +672,7 @@ export default function DoctorSettingsPage() {
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
           <LifeBuoy className="w-4 h-4 text-slate-700" />
-          <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Doctor Help &amp; FAQs</h2>
+          <h2 className="text-base font-bold text-slate-900 uppercase tracking-wider">Doctor Help &amp; FAQs</h2>
         </div>
 
         <div className="space-y-2">
@@ -681,7 +681,7 @@ export default function DoctorSettingsPage() {
               <button
                 type="button"
                 onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                className="w-full flex items-center justify-between px-4 py-3 text-left text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+                className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
               >
                 <span>{faq.question}</span>
                 {openFaq === i ? (
@@ -691,7 +691,7 @@ export default function DoctorSettingsPage() {
                 )}
               </button>
               {openFaq === i && (
-                <div className="px-4 pb-3.5 text-xs text-slate-600 leading-relaxed bg-slate-50/50 border-t border-slate-100">
+                <div className="px-4 pb-3.5 text-sm text-slate-600 leading-relaxed bg-slate-50/50 border-t border-slate-100">
                   {faq.answer}
                 </div>
               )}
@@ -703,15 +703,15 @@ export default function DoctorSettingsPage() {
       {/* Support Ticket Submission */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
         <div className="border-b border-slate-100 pb-3">
-          <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Submit Doctor Support Ticket</h2>
-          <p className="text-[11px] text-slate-500 mt-0.5">
+          <h2 className="text-base font-bold text-slate-900 uppercase tracking-wider">Submit Doctor Support Ticket</h2>
+          <p className="text-sm text-slate-500 mt-0.5">
             Need technical help or have questions regarding patient triage data?
           </p>
         </div>
 
         <form onSubmit={handleSendTicket} className="space-y-3.5 text-xs">
           <div>
-            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+            <label className="block text-[14px] font-bold text-slate-400 uppercase tracking-wider mb-1">
               Subject
             </label>
             <input
@@ -727,7 +727,7 @@ export default function DoctorSettingsPage() {
           </div>
 
           <div>
-            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+            <label className="block text-[14px] font-bold text-slate-400 uppercase tracking-wider mb-1">
               Message Details
             </label>
             <textarea
@@ -738,26 +738,26 @@ export default function DoctorSettingsPage() {
                 setTicketError(null);
               }}
               placeholder="Describe your inquiry, ticket details, or issue..."
-              className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-200 text-slate-900 outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400 resize-none"
+              className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 text-slate-900 outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400 resize-none"
             />
           </div>
 
-          <div className="flex items-center gap-3 pt-1">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
             <button
               type="submit"
               disabled={ticketSubmitting || !ticketSubject.trim() || !ticketMessage.trim()}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer shadow-xs w-full sm:w-auto"
             >
               <Send className="w-3.5 h-3.5" />
               <span>{ticketSubmitting ? "Submitting..." : "Send Inquiry"}</span>
             </button>
             {ticketSent && (
-              <span className="text-xs text-emerald-700 font-semibold inline-flex items-center gap-1">
+              <span className="text-sm text-emerald-700 font-semibold inline-flex items-center gap-1">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Inquiry submitted successfully!
               </span>
             )}
             {ticketError && (
-              <span role="alert" className="text-xs text-red-600">
+              <span role="alert" className="text-sm text-red-600">
                 {ticketError}
               </span>
             )}
