@@ -427,7 +427,7 @@ export default function PatientSkinHistory() {
 
                   {selectedItem.localName && (
                     <p className="text-sm text-gray-400 mt-0.5">
-                      {selectedItem.localName} (Filipino name)
+                      {selectedItem.localName}
                     </p>
                   )}
                 </div>

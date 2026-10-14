@@ -219,7 +219,7 @@ export function saveLocalHelpdeskTickets(tickets: HelpdeskTicket[]): void {
 }
 
 // GET helpdesk tickets (Strictly real data from Supabase + localStorage)
-export async function getHelpdeskTicketsAsync(userId?: string): Promise<HelpdeskTicket[]> {
+export async function getHelpdeskTicketsAsync(userId?: string, options?: { requireDatabase?: boolean }): Promise<HelpdeskTicket[]> {
   const localTickets = getLocalHelpdeskTickets();
   let dbTickets: HelpdeskTicket[] = [];
 
@@ -290,11 +290,15 @@ export async function getHelpdeskTicketsAsync(userId?: string): Promise<Helpdesk
         };
       });
     } else if (error) {
+      if (options?.requireDatabase) throw error;
       console.warn("[store] getHelpdeskTicketsAsync query warning:", error.message);
     }
   } catch (err) {
+    if (options?.requireDatabase) throw err;
     console.warn("[store] getHelpdeskTicketsAsync network error:", err);
   }
+
+  if (options?.requireDatabase) return dbTickets;
 
   // Merge DB tickets and real local tickets created in session
   const ticketMap = new Map<string, HelpdeskTicket>();
@@ -328,205 +332,186 @@ export async function createHelpdeskTicketAsync(input: {
   category?: string;
   priority?: "low" | "medium" | "high" | "urgent";
 }): Promise<HelpdeskTicket> {
-  const generatedId = `TKT-${Date.now().toString().slice(-6)}`;
-  let savedId = generatedId;
+  const subject = input.subject.trim();
+  const message = input.message.trim();
+
+  if (!subject || !message) {
+    throw new Error("Please enter both a subject and a message.");
+  }
+
+  const { data: sessionData, error: sessionError } =
+    await supabase.auth.getSession();
+
+  if (sessionError) {
+    throw new Error("Unable to verify your sign-in. Please try again.");
+  }
+
+  const sessionUserId = sessionData.session?.user?.id;
+  const effectiveUserId = sessionUserId || input.userId;
+
+  if (!effectiveUserId) {
+    throw new Error("Please sign in again before submitting a support ticket.");
+  }
+
+  if (sessionUserId && input.userId && sessionUserId !== input.userId) {
+    throw new Error("The signed-in account does not match the ticket account.");
+  }
 
   const ticketCategory = input.category || "General Support";
   const ticketPriority = input.priority || "medium";
 
-  // 1. Resolve an effective user ID for the foreign key constraint
-  let effectiveUserId = input.userId;
-  if (!effectiveUserId) {
-    try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      effectiveUserId = sessionData?.session?.user?.id;
-    } catch {
-      /* ignore */
-    }
+  const { data, error } = await supabase
+    .from("user_support_ticket")
+    .insert({
+      user_id: effectiveUserId,
+      subject,
+      message,
+      status: "open",
+      category: ticketCategory,
+      priority: ticketPriority,
+    })
+    .select("ticket_id, created_at, updated_at")
+    .single();
+
+  if (error) {
+    console.error("[store] Failed to create helpdesk ticket:", error.message);
+    throw new Error("Your ticket could not be submitted. Please try again.");
   }
 
-  // 2. If still no user ID, pick or create an existing platform user
-  if (!effectiveUserId) {
-    try {
-      const { data: anyUser } = await supabase
-        .from("user")
-        .select("user_id")
-        .limit(1)
-        .maybeSingle();
-
-      if (anyUser?.user_id) {
-        effectiveUserId = anyUser.user_id;
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // 3. Ensure effectiveUserId exists in "user" table to avoid FK error (23503)
-  if (effectiveUserId) {
-    try {
-      const { data: userRow } = await supabase
-        .from("user")
-        .select("user_id")
-        .eq("user_id", effectiveUserId)
-        .maybeSingle();
-
-      if (!userRow) {
-        await supabase.from("user").insert({
-          user_id: effectiveUserId,
-          full_name: input.user || "Platform User",
-          email: input.email || "user@dermai.ph",
-          role: "patient",
-        });
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // 4. Insert ticket into Supabase user_support_ticket
-  if (effectiveUserId) {
-    try {
-      // First attempt with all fields
-      let { data, error } = await supabase
-        .from("user_support_ticket")
-        .insert({
-          user_id: effectiveUserId,
-          subject: input.subject.trim(),
-          message: input.message.trim(),
-          status: "open",
-          category: ticketCategory,
-          priority: ticketPriority,
-        })
-        .select("ticket_id, created_at")
-        .maybeSingle();
-
-      // If category/priority column error, fallback to baseline columns
-      if (error && (error.code === "42703" || error.message?.includes("column"))) {
-        const fallbackRes = await supabase
-          .from("user_support_ticket")
-          .insert({
-            user_id: effectiveUserId,
-            subject: input.subject.trim(),
-            message: input.message.trim(),
-            status: "open",
-          })
-          .select("ticket_id, created_at")
-          .maybeSingle();
-
-        if (!fallbackRes.error && fallbackRes.data?.ticket_id) {
-          savedId = fallbackRes.data.ticket_id;
-        }
-      } else if (!error && data?.ticket_id) {
-        savedId = data.ticket_id;
-      }
-    } catch (err) {
-      console.warn("[store] Supabase insert ticket network error:", err);
-    }
+  if (!data?.ticket_id) {
+    throw new Error("The database did not confirm the ticket. Please check your tickets before retrying.");
   }
 
   const newTicket: HelpdeskTicket = {
-    id: savedId,
+    id: data.ticket_id,
     userId: effectiveUserId,
     user: input.user || "Current User",
     email: input.email || "",
-    subject: input.subject.trim(),
-    message: input.message.trim(),
+    subject,
+    message,
     status: "open",
     category: ticketCategory,
     priority: ticketPriority,
-    createdAt: new Date().toISOString(),
+    createdAt: data.created_at || new Date().toISOString(),
+    updatedAt: data.updated_at || undefined,
   };
 
-  // Sync to local storage
   const currentLocal = getLocalHelpdeskTickets();
-  saveLocalHelpdeskTickets([newTicket, ...currentLocal.filter((t) => t.id !== savedId)]);
+  saveLocalHelpdeskTickets([
+    newTicket,
+    ...currentLocal.filter((ticket) => ticket.id !== newTicket.id),
+  ]);
 
-  // Dispatch events for cross-tab and cross-component live sync
   try {
-    window.dispatchEvent(new CustomEvent("dermai_tickets_updated", { detail: newTicket }));
+    window.dispatchEvent(
+      new CustomEvent("dermai_tickets_updated", { detail: newTicket })
+    );
     window.dispatchEvent(new Event("storage"));
   } catch {
-    /* ignore */
+    /* Ignore local event-dispatch errors. */
   }
 
   return newTicket;
 }
-
 // PATCH helpdesk ticket status & optional admin response
 export async function updateHelpdeskTicketStatus(
   id: string,
   status: HelpdeskTicketStatus,
   response?: string
 ): Promise<void> {
-  const mapped = status === "in-progress" ? "pending" : status === "resolved" ? "closed" : "open";
+  const mapped =
+    status === "in-progress" ? "pending" :
+    status === "resolved" ? "closed" : "open";
+
   const updatePayload: Record<string, any> = {
     status: mapped,
     updated_at: new Date().toISOString(),
   };
+
   if (response !== undefined) {
     updatePayload.response = response;
   }
 
-  try {
-    const { error } = await supabase
-      .from("user_support_ticket")
-      .update(updatePayload)
-      .eq("ticket_id", id);
+  const { data, error } = await supabase
+    .from("user_support_ticket")
+    .update(updatePayload)
+    .eq("ticket_id", id)
+    .select("ticket_id")
+    .maybeSingle();
 
-    if (error) console.warn("[store] updateHelpdeskTicketStatus Supabase warn:", error.message);
-  } catch (err) {
-    console.warn("[store] updateHelpdeskTicketStatus error:", err);
+  if (error) {
+    throw new Error(`Unable to update support ticket: ${error.message}`);
   }
 
-  // Update local storage
+  if (!data) {
+    throw new Error(
+      "No support ticket was updated. It may have been deleted, or you may not have permission."
+    );
+  }
+
+  // Update local storage only after the database confirms success.
   const local = getLocalHelpdeskTickets();
-  const existingInLocal = local.find((t) => t.id === id);
+  const existingInLocal = local.find((ticket) => ticket.id === id);
 
   if (existingInLocal) {
-    const updatedLocal = local.map((t) =>
-      t.id === id
-        ? {
-          ...t,
-          status,
-          response: response !== undefined ? response : t.response,
-          updatedAt: new Date().toISOString(),
-        }
-        : t
+    saveLocalHelpdeskTickets(
+      local.map((ticket) =>
+        ticket.id === id
+          ? {
+              ...ticket,
+              status,
+              response: response !== undefined ? response : ticket.response,
+              updatedAt: new Date().toISOString(),
+            }
+          : ticket
+      )
     );
-    saveLocalHelpdeskTickets(updatedLocal);
   }
 
-  // Dispatch live sync event
   try {
-    window.dispatchEvent(new CustomEvent("dermai_tickets_updated", { detail: { id, status, response } }));
+    window.dispatchEvent(
+      new CustomEvent("dermai_tickets_updated", {
+        detail: { id, status, response },
+      })
+    );
     window.dispatchEvent(new Event("storage"));
   } catch {
-    /* ignore */
+    /* Ignore local event-dispatch errors. */
   }
 }
 
 // DELETE helpdesk ticket
 export async function deleteHelpdeskTicketAsync(id: string): Promise<void> {
-  try {
-    const { error } = await supabase
-      .from("user_support_ticket")
-      .delete()
-      .eq("ticket_id", id);
+  const { data, error } = await supabase
+    .from("user_support_ticket")
+    .delete()
+    .eq("ticket_id", id)
+    .select("ticket_id")
+    .maybeSingle();
 
-    if (error) console.warn("[store] deleteHelpdeskTicketAsync Supabase warn:", error.message);
-  } catch (err) {
-    console.warn("[store] deleteHelpdeskTicketAsync error:", err);
+  if (error) {
+    throw new Error(`Unable to delete support ticket: ${error.message}`);
   }
 
+  if (!data) {
+    throw new Error(
+      "No support ticket was deleted. It may already be deleted, or you may not have permission."
+    );
+  }
+
+  // Remove local data only after the database confirms deletion.
   const local = getLocalHelpdeskTickets();
-  saveLocalHelpdeskTickets(local.filter((t) => t.id !== id));
+  saveLocalHelpdeskTickets(local.filter((ticket) => ticket.id !== id));
 
   try {
-    window.dispatchEvent(new CustomEvent("dermai_tickets_updated", { detail: { id, deleted: true } }));
+    window.dispatchEvent(
+      new CustomEvent("dermai_tickets_updated", {
+        detail: { id, deleted: true },
+      })
+    );
     window.dispatchEvent(new Event("storage"));
   } catch {
-    /* ignore */
+    /* Ignore local event-dispatch errors. */
   }
 }
 

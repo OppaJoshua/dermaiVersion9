@@ -19,6 +19,7 @@ import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
+import { createPatientNotification } from "@/lib/notificationService";
 
 type AppointmentRecord = {
   id: string;
@@ -59,6 +60,7 @@ type AppointmentRecord = {
   batchTime?: string;
   checkInStatus?: "scheduled" | "arrived" | "in-consultation" | "completed" | "no-show";
   isWalkIn?: boolean;
+  userId?: string;
 };
 
 type DoctorAccount = {
@@ -326,6 +328,7 @@ export default function ClinicAppointmentsPage() {
           batchTime: a.batch_time || undefined,
           checkInStatus: a.check_in_status || "scheduled",
           isWalkIn: Boolean(a.is_walk_in),
+          userId: a.user_id || undefined,
         };
       });
 
@@ -371,6 +374,7 @@ export default function ClinicAppointmentsPage() {
                   skinPhotoUrl: localItem.skinPhotoUrl || undefined,
                   aiConditionName: localItem.aiConditionName || undefined,
                   aiConfidence: localItem.aiConfidence ? Number(localItem.aiConfidence) : undefined,
+                  userId: localItem.userId || localItem.user_id || undefined,
                 });
               }
             }
@@ -595,6 +599,17 @@ export default function ClinicAppointmentsPage() {
         .eq("appointment_id", id);
     } catch (err: any) {
       console.error("Failed to reject appointment in Supabase:", err.message);
+    }
+
+    const appt = appointments.find((a) => a.id === id);
+    if (appt?.userId) {
+      createPatientNotification({
+        userId: appt.userId,
+        type: "appointment-rejected",
+        subtype: "declined",
+        title: "Appointment Declined",
+        body: `Your appointment request for ${appt.date || "scheduled date"} was declined by ${clinicName || "the clinic"}: ${rejectionReason}`,
+      });
     }
 
     setAppointments((prev) => {
@@ -871,6 +886,16 @@ export default function ClinicAppointmentsPage() {
       }
     } catch (err: any) {
       console.error("Failed to finalize schedule in Supabase:", err.message);
+    }
+
+    if (appt?.userId) {
+      createPatientNotification({
+        userId: appt.userId,
+        type: "appointment-scheduled",
+        subtype: "confirmed",
+        title: "Appointment Confirmed",
+        body: `Your consultation schedule with Dr. ${doctorDisplayName.replace(/^dr\.\s*/i, "")} at ${clinicName || "the clinic"} has been confirmed for ${finalizeScheduleModal.date} at ${finalizeScheduleModal.time}.`,
+      });
     }
 
     setAppointments((prev) => {

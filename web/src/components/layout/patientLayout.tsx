@@ -22,6 +22,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Logo from "@/assets/logo2.png";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
+import { getCachedPatientNotifications } from "../../lib/notificationService";
 
 // ---------------------------------------------------------------------------
 // TYPES
@@ -380,15 +381,16 @@ export default function UserLayout({
 
     // 3. Fetch notifications & unread count
     try {
-      const { data: notifRows } = await supabase
+      const { data: notifRows, error: notifErr } = await supabase
         .from("user_notification")
         .select("notif_id, type, title, body, is_read, created_at")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
-        .limit(15);
+        .limit(20);
 
-      if (notifRows) {
-        const mapped = notifRows.map((n) => ({
+      let finalNotifs: PatientNotif[] = [];
+      if (!notifErr && notifRows && notifRows.length > 0) {
+        finalNotifs = notifRows.map((n) => ({
           id: n.notif_id,
           type: n.type || "system",
           title: n.title,
@@ -396,11 +398,37 @@ export default function UserLayout({
           isRead: Boolean(n.is_read),
           createdAt: n.created_at,
         }));
-        setNotifications(mapped);
-        setUnreadCount(mapped.filter((n) => !n.isRead).length);
+      } else {
+        // Fallback to local cached notifications for this patient
+        const cached = getCachedPatientNotifications(user.id);
+        if (cached && cached.length > 0) {
+          finalNotifs = cached.map((n: any) => ({
+            id: n.id,
+            type: n.type || "system",
+            title: n.title,
+            body: n.body || "",
+            isRead: Boolean(n.isRead),
+            createdAt: n.createdAt,
+          }));
+        }
       }
+
+      setNotifications(finalNotifs);
+      setUnreadCount(finalNotifs.filter((n) => !n.isRead).length);
     } catch {
-      /* ignore */
+      const cached = getCachedPatientNotifications(user.id);
+      if (cached && cached.length > 0) {
+        const mapped = cached.map((n: any) => ({
+          id: n.id,
+          type: n.type || "system",
+          title: n.title,
+          body: n.body || "",
+          isRead: Boolean(n.isRead),
+          createdAt: n.createdAt,
+        }));
+        setNotifications(mapped);
+        setUnreadCount(mapped.filter((n: any) => !n.isRead).length);
+      }
     }
 
     setDynamicProfile({
@@ -416,6 +444,24 @@ export default function UserLayout({
       prev.map((n) => (n.id === notifId ? { ...n, isRead: true } : n))
     );
     setUnreadCount((prev) => Math.max(0, prev - 1));
+
+    // Update local cache
+    if (user?.id) {
+      try {
+        const key = `dermai_patient_notifications_${user.id}`;
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const list = JSON.parse(raw);
+          if (Array.isArray(list)) {
+            const patched = list.map((item: any) =>
+              item.id === notifId ? { ...item, isRead: true } : item
+            );
+            localStorage.setItem(key, JSON.stringify(patched));
+          }
+        }
+      } catch { }
+    }
+
     try {
       await supabase
         .from("user_notification")
@@ -428,6 +474,20 @@ export default function UserLayout({
     if (!user) return;
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
     setUnreadCount(0);
+
+    // Update local cache
+    try {
+      const key = `dermai_patient_notifications_${user.id}`;
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          const patched = list.map((item: any) => ({ ...item, isRead: true }));
+          localStorage.setItem(key, JSON.stringify(patched));
+        }
+      }
+    } catch { }
+
     try {
       await supabase
         .from("user_notification")
@@ -445,6 +505,7 @@ export default function UserLayout({
     };
 
     window.addEventListener("derm_profile_updated", handleProfileUpdate);
+    window.addEventListener("dermai_notifications_updated", handleProfileUpdate);
     window.addEventListener("storage", handleProfileUpdate);
 
     // Realtime notifications for logged-in patient
@@ -469,6 +530,7 @@ export default function UserLayout({
 
     return () => {
       window.removeEventListener("derm_profile_updated", handleProfileUpdate);
+      window.removeEventListener("dermai_notifications_updated", handleProfileUpdate);
       window.removeEventListener("storage", handleProfileUpdate);
       if (channel) supabase.removeChannel(channel);
     };
@@ -795,29 +857,29 @@ export default function UserLayout({
 
               {/* Profile chip */}
               <Link
-                to="/dashboard/profile"
-                className="flex items-center gap-2.5 bg-white rounded-full pl-1.5 pr-4 py-1.5 border border-panel-edge hover:border-magenta-200 transition-colors"
-              >
-                <div className="w-9 h-9 rounded-full bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-sm font-bold shrink-0">
-                  {dynamicProfile.profilePictureUrl && !imgError ? (
-                    <img
-                      src={dynamicProfile.profilePictureUrl}
-                      alt="Profile"
-                      className="w-full h-full object-cover"
-                      onError={() => setImgError(true)}
-                    />
-                  ) : (
-                    initial
-                  )}
-                </div>
-                <div className="hidden sm:block min-w-0 max-w-40">
-                  <p className="text-[13px] font-semibold text-gray-900 leading-tight truncate">{displayFullName}</p>
-                  <p className="text-[11px] text-gray-400 leading-tight truncate">
-                    {dynamicProfile.membershipTier}
-                    {dynamicProfile.location ? ` · ${dynamicProfile.location}` : ""}
-                  </p>
-                </div>
-              </Link>
+    to="/dashboard/profile"
+    className="flex items-center gap-2.5 bg-white rounded-full pl-1.5 pr-4 py-1.5 border border-panel-edge hover:border-magenta-200 transition-colors"
+  >
+    <div className="w-9 h-9 rounded-full bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-sm font-bold shrink-0">
+      {dynamicProfile.profilePictureUrl && !imgError ? (
+        <img
+          src={dynamicProfile.profilePictureUrl}
+          alt="Profile"
+          className="w-full h-full object-cover"
+          onError={() => setImgError(true)}
+        />
+      ) : (
+        initial
+      )}
+    </div>
+    <div className="hidden sm:block min-w-0 max-w-40">
+      <p className="text-[13px] font-semibold text-gray-900 leading-tight truncate">{displayFullName}</p>
+      <p className="text-[11px] text-gray-400 leading-tight truncate">
+        {dynamicProfile.membershipTier}
+        {dynamicProfile.location ? ` · ${dynamicProfile.location}` : ""}
+      </p>
+    </div>
+  </Link>
             </div>
           </div>
 

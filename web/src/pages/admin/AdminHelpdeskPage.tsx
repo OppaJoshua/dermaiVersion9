@@ -80,6 +80,7 @@ export default function AdminHelpdeskPage() {
   const [tickets, setTickets] = useState<HelpdeskTicket[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<FilterStatus>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -89,14 +90,21 @@ export default function AdminHelpdeskPage() {
   const [replyText, setReplyText] = useState("");
   const [replySubmitting, setReplySubmitting] = useState(false);
   const [replySuccess, setReplySuccess] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const fetchTickets = useCallback(async (isManualRefresh = false) => {
     if (isManualRefresh) setRefreshing(true);
     try {
-      const data = await getHelpdeskTicketsAsync();
+      const data = await getHelpdeskTicketsAsync(undefined, { requireDatabase: true });
       setTickets(data);
+      setFetchError(null);
     } catch (err) {
       console.error("Failed to load helpdesk tickets:", err);
+      setFetchError(
+        err && typeof err === "object" && "message" in err
+          ? String(err.message)
+          : "Unable to load support tickets from the database. Please try again."
+      );
     } finally {
       setLoading(false);
       if (isManualRefresh) setRefreshing(false);
@@ -189,14 +197,29 @@ export default function AdminHelpdeskPage() {
 
   // Actions
   const handleStatusChange = async (id: string, newStatus: HelpdeskTicketStatus) => {
-    setTickets((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, status: newStatus } : t))
-    );
-    await updateHelpdeskTicketStatus(id, newStatus);
+    setActionError(null);
+    setReplySuccess(false);
+
+    try {
+      await updateHelpdeskTicketStatus(id, newStatus);
+      setTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.id === id ? { ...ticket, status: newStatus } : ticket
+        )
+      );
+    } catch (err) {
+      console.error("Failed to update ticket status:", err);
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : "Unable to update the ticket status. Please try again."
+      );
+    }
   };
 
   const handleSaveReply = async (resolveTicket = false) => {
     if (!selectedTicket) return;
+    setActionError(null);
     setReplySubmitting(true);
     const targetStatus = resolveTicket ? "resolved" : selectedTicket.status;
     try {
@@ -219,6 +242,12 @@ export default function AdminHelpdeskPage() {
       }
     } catch (err) {
       console.error("Failed to update response:", err);
+      setReplySuccess(false);
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : "Unable to save the response. Please try again."
+      );
     } finally {
       setReplySubmitting(false);
     }
@@ -226,9 +255,24 @@ export default function AdminHelpdeskPage() {
 
   const handleDeleteTicket = async (id: string) => {
     if (!window.confirm("Are you sure you want to delete this ticket?")) return;
-    setTickets((prev) => prev.filter((t) => t.id !== id));
-    if (selectedTicketId === id) setSelectedTicketId(null);
-    await deleteHelpdeskTicketAsync(id);
+
+    setActionError(null);
+
+    try {
+      await deleteHelpdeskTicketAsync(id);
+      setTickets((prev) => prev.filter((ticket) => ticket.id !== id));
+
+      if (selectedTicketId === id) {
+        setSelectedTicketId(null);
+      }
+    } catch (err) {
+      console.error("Failed to delete ticket:", err);
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : "Unable to delete the ticket. Please try again."
+      );
+    }
   };
 
   const getCategoryIcon = (category: string) => {
@@ -426,6 +470,24 @@ export default function AdminHelpdeskPage() {
                   <td colSpan={6} className="px-6 py-16 text-center text-gray-400">
                     <Loader2 className="w-7 h-7 text-magenta-600 animate-spin mx-auto mb-2" />
                     Loading support tickets...
+                  </td>
+                </tr>
+              ) : fetchError ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-16 text-center">
+                    <div className="max-w-md mx-auto space-y-3">
+                      <AlertCircle className="w-7 h-7 text-red-500 mx-auto" />
+                      <p className="text-sm font-semibold text-red-700">Could not load support tickets</p>
+                      <p role="alert" className="text-xs text-red-600 break-words">{fetchError}</p>
+                      <button
+                        onClick={() => fetchTickets(true)}
+                        disabled={refreshing || loading}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold"
+                      >
+                        <RefreshCw className={cn("w-3.5 h-3.5", (refreshing || loading) && "animate-spin")} />
+                        <span>Retry</span>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ) : filteredTickets.length === 0 ? (
@@ -683,6 +745,11 @@ export default function AdminHelpdeskPage() {
                     <MessageSquare className="w-3.5 h-3.5 text-magenta-600" />
                     Admin Response &amp; Resolution Notes
                   </label>
+                  {actionError && (
+                    <p role="alert" className="text-xs text-red-600 font-medium">
+                      {actionError}
+                    </p>
+                  )}
                   {replySuccess && (
                     <span className="text-xs text-emerald-600 font-semibold inline-flex items-center gap-1">
                       <Check className="w-3.5 h-3.5" /> Response saved!

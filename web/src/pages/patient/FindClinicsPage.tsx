@@ -157,23 +157,77 @@ function formatTime12h(timeStr: string): string {
 }
 
 // Synonyms dictionary for smart AI condition matching
+// DermAI supported conditions only:
+// Acne Vulgaris, Atopic Dermatitis, Contact Dermatitis, Melasma, Vitiligo
+
 const CONDITION_SYNONYMS: Record<string, string[]> = {
-    "melasma": ["melasma", "pigmentation", "hyperpigmentation", "dark spots", "skin lightening", "chemical peel", "laser", "bleaching", "cosmetic dermatology", "general dermatology"],
-    "acne": ["acne", "pimples", "blackheads", "whiteheads", "breakouts", "acne scar", "extraction", "comedone", "general dermatology"],
-    "acne vulgaris": ["acne", "pimples", "blackheads", "breakouts", "acne scar", "general dermatology"],
-    "atopic dermatitis": ["atopic dermatitis", "eczema", "dermatitis", "skin allergy", "itch", "rash", "dry skin", "general dermatology"],
-    "eczema": ["eczema", "atopic dermatitis", "dermatitis", "skin allergy", "itch", "rash", "dry skin", "general dermatology"],
-    "psoriasis": ["psoriasis", "scalp psoriasis", "plaque", "scaling", "autoimmune skin", "general dermatology"],
-    "rosacea": ["rosacea", "redness", "erythema", "facial flushing", "vascular", "general dermatology"],
-    "tinea": ["fungal", "ringworm", "tinea", "infection", "anti-fungal", "general dermatology"],
-    "vitiligo": ["vitiligo", "depigmentation", "white spots", "phototherapy", "general dermatology"],
-    "alopecia": ["hair loss", "alopecia", "scalp", "trichology", "general dermatology"],
+    "acne vulgaris": [
+        "acne vulgaris",
+        "acne",
+        "pimples",
+        "blackheads",
+        "whiteheads",
+        "breakouts",
+        "comedones",
+        "acne scars",
+        "general dermatology"
+    ],
+
+    "atopic dermatitis": [
+        "atopic dermatitis",
+        "eczema",
+        "itchy rash",
+        "itch",
+        "dry skin",
+        "red rash",
+        "skin allergy",
+        "dermatitis",
+        "general dermatology"
+    ],
+
+    "contact dermatitis": [
+        "contact dermatitis",
+        "dermatitis",
+        "skin irritation",
+        "skin allergy",
+        "allergic rash",
+        "irritant rash",
+        "itchy rash",
+        "red rash",
+        "itch",
+        "general dermatology"
+    ],
+
+    "melasma": [
+        "melasma",
+        "hyperpigmentation",
+        "pigmentation",
+        "dark patches",
+        "dark spots",
+        "facial pigmentation",
+        "brown patches",
+        "general dermatology"
+    ],
+
+    "vitiligo": [
+        "vitiligo",
+        "depigmentation",
+        "loss of skin color",
+        "white patches",
+        "white spots",
+        "hypopigmentation",
+        "general dermatology"
+    ],
 };
 
 function clinicTreatsCondition(clinic: ClinicItem, condition: string): boolean {
     if (!condition || condition === "Assessment Queued") return true;
     const condLower = condition.toLowerCase().trim();
-    const synonyms = CONDITION_SYNONYMS[condLower] || [condLower, "general dermatology"];
+    const synonyms =
+        CONDITION_SYNONYMS[condLower] ||
+        (condLower === "acne" ? CONDITION_SYNONYMS["acne vulgaris"] : null) ||
+        (condLower === "eczema" ? CONDITION_SYNONYMS["atopic dermatitis"] : null) ||
+        [condLower, "general dermatology"];
 
     const allClinicText = [
         clinic.name,
@@ -404,11 +458,10 @@ function getInitialFindClinics(): ClinicItem[] {
 
 const COMMON_CONDITIONS = [
     "Melasma",
-    "Acne",
+    "Acne Vulgaris",
     "Atopic Dermatitis",
-    "Psoriasis",
-    "Rosacea",
-    "Eczema",
+    "Contact Dermatitis",
+    "Vitiligo",
 ];
 
 export default function FindClinicsPage() {
@@ -762,7 +815,12 @@ export default function FindClinicsPage() {
                 clinic.name.toLowerCase().includes(q) ||
                 clinic.address.toLowerCase().includes(q) ||
                 clinic.doctors.some((doc) => doc.name.toLowerCase().includes(q) || doc.specialization.toLowerCase().includes(q)) ||
-                clinic.conditionsTreated.some((cond) => cond.toLowerCase().includes(q)) ||
+                clinic.conditionsTreated.some((cond) => {
+                    const cLower = cond.toLowerCase();
+                    if (cLower.includes(q)) return true;
+                    const syns = CONDITION_SYNONYMS[cLower];
+                    return syns ? syns.some((s) => s.includes(q) || q.includes(s)) : false;
+                }) ||
                 clinic.description.toLowerCase().includes(q);
 
             const matchesDistrict = selectedDistrict === "All Districts" || clinic.district === selectedDistrict;

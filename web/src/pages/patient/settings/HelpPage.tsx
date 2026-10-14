@@ -129,6 +129,7 @@ export default function HelpPage() {
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submittedId, setSubmittedId] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // User tickets list
   const [myTickets, setMyTickets] = useState<HelpdeskTicket[]>([]);
@@ -172,6 +173,7 @@ export default function HelpPage() {
   const handleSubmitTicket = async () => {
     if (!subject.trim() || !message.trim()) return;
     setSubmitting(true);
+    setSubmitError(null);
     try {
       const created = await createHelpdeskTicketAsync({
         userId: user?.id,
@@ -197,7 +199,12 @@ export default function HelpPage() {
       fetchMyTickets();
     } catch (err) {
       console.error("Failed to submit ticket:", err);
-      setSubmittedId(`TKT-${Date.now().toString().slice(-6)}`);
+      setSubmittedId(null);
+      setSubmitError(
+        err instanceof Error
+          ? err.message
+          : "Your ticket could not be submitted. Please try again."
+      );
     } finally {
       setSubmitting(false);
     }
@@ -206,6 +213,7 @@ export default function HelpPage() {
   const resetForm = () => {
     setShowTicketForm(false);
     setSubmittedId(null);
+    setSubmitError(null);
   };
 
   return (
@@ -240,6 +248,7 @@ export default function HelpPage() {
           onClick={() => {
             setShowTicketForm(true);
             setSubmittedId(null);
+    setSubmitError(null);
           }}
           className="flex items-center gap-4 bg-white border border-gray-100 rounded-2xl p-4 shadow-xs hover:border-magenta-200 hover:bg-magenta-50/20 transition-all text-left group"
         >
@@ -313,7 +322,10 @@ export default function HelpPage() {
                   <input
                     type="text"
                     value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
+                    onChange={(e) => {
+                      setSubject(e.target.value);
+                      setSubmitError(null);
+                    }}
                     placeholder="e.g. Pro subscription not reflecting or scan issue"
                     className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 transition-all"
                   />
@@ -326,11 +338,20 @@ export default function HelpPage() {
                   <textarea
                     rows={4}
                     value={message}
-                    onChange={(e) => setMessage(e.target.value)}
+                    onChange={(e) => {
+                      setMessage(e.target.value);
+                      setSubmitError(null);
+                    }}
                     placeholder="Please provide details so we can assist you quickly..."
                     className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 transition-all resize-none"
                   />
                 </div>
+
+                {submitError && (
+                  <p role="alert" className="text-xs text-red-600">
+                    {submitError}
+                  </p>
+                )}
 
                 <div className="pt-2">
                   <button

@@ -268,6 +268,7 @@ export default function ClinicDoctorsPage() {
   });
   const [formError, setFormError] = useState("");
   const [savingDoctor, setSavingDoctor] = useState(false);
+  const saveDoctorLockRef = useRef(false);
   const [successMsg, setSuccessMsg] = useState("");
 
   const photoFileInputRef = useRef<HTMLInputElement>(null);
@@ -791,19 +792,35 @@ export default function ClinicDoctorsPage() {
 
   // Save new doctor & associate multiple specializations
   const saveDoctor = async () => {
+    if (saveDoctorLockRef.current) return;
+    saveDoctorLockRef.current = true;
     setSavingDoctor(true);
     setFormError("");
 
+    let createdDoctorId: string | null = null;
+
     try {
-      let uploadedPhotoUrl = form.photoPreview;
-      if (form.photoFile) {
-        uploadedPhotoUrl = await uploadDoctorPhoto(form.photoFile);
+      if (!clinicId) {
+        throw new Error("Your clinic could not be verified. Refresh the page and try again.");
       }
+
+      const doctorName = form.name.trim();
+      const doctorEmail = form.email.trim().toLowerCase();
+      const doctorContact = form.contactNumber.trim();
+      const doctorLicense = form.prcLicense.trim();
 
       const assignedSpecs = specializations.filter((s) =>
         form.selectedSpecializationIds.includes(s.id)
       );
-      const specString = assignedSpecs.map((s) => s.name).join(", ");
+
+      if (assignedSpecs.length === 0) {
+        throw new Error("Select at least one specialization.");
+      }
+
+      let uploadedPhotoUrl = form.photoPreview;
+      if (form.photoFile) {
+        uploadedPhotoUrl = await uploadDoctorPhoto(form.photoFile);
+      }
 
       const customSchedulePayload: Record<string, DayShift> = {};
       form.dutyDays.forEach((d) => {
@@ -813,15 +830,88 @@ export default function ClinicDoctorsPage() {
         };
       });
 
-      const tempId = `doc-local-${Date.now()}`;
-      const newDocObj: DoctorAccount = {
-        id: tempId,
-        name: form.name.trim(),
-        email: form.email.trim().toLowerCase(),
-        contactNumber: form.contactNumber.trim(),
-        prcLicense: form.prcLicense.trim(),
+      const { data: inviteData, error: inviteError } = await supabase.rpc(
+        "invite_doctor",
+        {
+          target_clinic_id: clinicId,
+          doctor_email: doctorEmail,
+          doctor_full_name: doctorName,
+          doctor_prc_license: doctorLicense,
+          doctor_specialization: assignedSpecs[0].name,
+        }
+      );
+
+      if (inviteError) {
+        throw new Error(`Doctor account linking failed: ${inviteError.message}`);
+      }
+      if (!inviteData) {
+        throw new Error("The server did not return a doctor record ID.");
+      }
+
+      createdDoctorId = inviteData;
+
+      const updatePayload: Record<string, unknown> = {
+        contact_number: doctorContact,
+        photo_url: uploadedPhotoUrl || null,
+        duty_days: form.dutyDays,
+        duty_start_time: form.dutyStartTime,
+        duty_end_time: form.dutyEndTime,
+        duty_schedule: form.isCustomSchedule ? customSchedulePayload : null,
+      };
+
+      let updateRes = await supabase
+        .from("clinic_doctor")
+        .update(updatePayload)
+        .eq("doctor_id", createdDoctorId)
+        .eq("clinic_id", clinicId);
+
+      if (updateRes.error?.message?.includes("duty_schedule")) {
+        delete updatePayload.duty_schedule;
+        updateRes = await supabase
+          .from("clinic_doctor")
+          .update(updatePayload)
+          .eq("doctor_id", createdDoctorId)
+          .eq("clinic_id", clinicId);
+      }
+
+      if (updateRes.error) {
+        throw new Error(`Doctor details could not be saved: ${updateRes.error.message}`);
+      }
+
+      const deleteSpecsRes = await supabase
+        .from("doctor_specializations")
+        .delete()
+        .eq("doctor_id", createdDoctorId);
+
+      if (deleteSpecsRes.error) {
+        throw new Error(
+          `Specializations could not be updated: ${deleteSpecsRes.error.message}`
+        );
+      }
+
+      const junctionRows = assignedSpecs.map((spec) => ({
+        doctor_id: createdDoctorId as string,
+        specialization_id: spec.id,
+      }));
+
+      const insertSpecsRes = await supabase
+        .from("doctor_specializations")
+        .insert(junctionRows);
+
+      if (insertSpecsRes.error) {
+        throw new Error(
+          `Selected specializations could not be saved: ${insertSpecsRes.error.message}`
+        );
+      }
+
+      const finalizedDoctor: DoctorAccount = {
+        id: createdDoctorId as string,
+        name: doctorName,
+        email: doctorEmail,
+        contactNumber: doctorContact,
+        prcLicense: doctorLicense,
         photo: uploadedPhotoUrl || undefined,
-        specialization: specString || "General Dermatology",
+        specialization: assignedSpecs.map((s) => s.name).join(", "),
         specializations: assignedSpecs,
         clinicName: clinicDisplayName,
         status: "Active",
@@ -831,72 +921,31 @@ export default function ClinicDoctorsPage() {
         dutySchedule: form.isCustomSchedule ? customSchedulePayload : undefined,
       };
 
-      const updatedList = [newDocObj, ...allDoctors];
+      const updatedList = [finalizedDoctor, ...allDoctors];
       setAllDoctors(updatedList);
       localStorage.setItem("dermai_clinic_doctors", JSON.stringify(updatedList));
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
 
       resetForm();
-      setSuccessMsg(`Dr. ${newDocObj.name} was successfully added.`);
+      setSuccessMsg(`Dr. ${finalizedDoctor.name} was successfully added.`);
       setTimeout(() => setSuccessMsg(""), 4000);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "An unexpected error occurred.";
 
-      // Save to Supabase
-      const insertPayload: any = {
-        clinic_id: clinicId || null,
-        doctor_name: newDocObj.name,
-        email: newDocObj.email,
-        contact_number: newDocObj.contactNumber,
-        prc_license: newDocObj.prcLicense,
-        photo_url: uploadedPhotoUrl || null,
-        duty_days: newDocObj.dutyDays,
-        duty_start_time: newDocObj.dutyStartTime,
-        duty_end_time: newDocObj.dutyEndTime,
-        duty_schedule: form.isCustomSchedule ? customSchedulePayload : null,
-        status: "Active",
-      };
-
-      let docRes = await supabase
-        .from("clinic_doctor")
-        .insert([insertPayload])
-        .select("doctor_id")
-        .single();
-
-      if (docRes.error && docRes.error.message?.includes("duty_schedule")) {
-        delete insertPayload.duty_schedule;
-        docRes = await supabase
-          .from("clinic_doctor")
-          .insert([insertPayload])
-          .select("doctor_id")
-          .single();
-      }
-
-      if (!docRes.error && docRes.data?.doctor_id) {
-        const createdId = docRes.data.doctor_id;
-        const finalized = updatedList.map((d) =>
-          d.id === tempId ? { ...d, id: createdId } : d
+      if (createdDoctorId) {
+        setFormError(
+          `${message} A doctor record may already exist (ID: ${createdDoctorId}). No automatic deletion was attempted. Please verify the record before retrying.`
         );
-        setAllDoctors(finalized);
-        localStorage.setItem("dermai_clinic_doctors", JSON.stringify(finalized));
-        window.dispatchEvent(new Event("storage"));
-        window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
-
-        if (form.selectedSpecializationIds.length > 0) {
-          const junctionRows = form.selectedSpecializationIds.map((specId) => ({
-            doctor_id: createdId,
-            specialization_id: specId,
-          }));
-          await supabase.from("doctor_specializations").insert(junctionRows);
-        }
       } else {
-        window.dispatchEvent(new Event("storage"));
-        window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
+        setFormError(message);
       }
-    } catch (err: any) {
-      console.warn("Database sync notice:", err);
     } finally {
+      saveDoctorLockRef.current = false;
       setSavingDoctor(false);
     }
   };
-
   // Open Edit Doctor Modal
   const handleOpenEdit = (doctor: DoctorAccount) => {
     setSelectedDoctorForDetails(null);
@@ -1141,7 +1190,7 @@ export default function ClinicDoctorsPage() {
 
   return (
     <div className="space-y-6 pb-12 max-w-6xl mx-auto">
-      {/* ── Top Header ─────────────────────────────────────────────── */}
+      {/* ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Top Header ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-100 pb-4">
         <div>
           <h1 className="text-xl font-bold text-gray-900 tracking-tight">
@@ -1156,7 +1205,7 @@ export default function ClinicDoctorsPage() {
         </span>
       </div>
 
-      {/* ── Success Notification ───────────────────────────────────── */}
+      {/* ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Success Notification ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ */}
       <AnimatePresence>
         {successMsg && (
           <motion.div
@@ -1171,7 +1220,7 @@ export default function ClinicDoctorsPage() {
         )}
       </AnimatePresence>
 
-      {/* ── Add Doctor Form Card (Original Clean Minimal Structure) ── */}
+      {/* ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Add Doctor Form Card (Original Clean Minimal Structure) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ */}
       <div
         ref={formSectionRef}
         className="bg-white rounded-2xl border border-gray-200/80 p-5 sm:p-6 shadow-xs"
@@ -1342,17 +1391,17 @@ export default function ClinicDoctorsPage() {
                     onClick={() => setForm((p) => ({ ...p, dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] }))}
                     className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
                   >
-                    Mon–Fri
+                    MonÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Fri
                   </button>
-                  <span className="text-gray-300">•</span>
+                  <span className="text-gray-300">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢</span>
                   <button
                     type="button"
                     onClick={() => setForm((p) => ({ ...p, dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] }))}
                     className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
                   >
-                    Mon–Sat
+                    MonÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Sat
                   </button>
-                  <span className="text-gray-300">•</span>
+                  <span className="text-gray-300">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢</span>
                   <button
                     type="button"
                     onClick={() => setForm((p) => ({ ...p, dutyDays: [...ALL_DAYS_OF_WEEK] }))}
@@ -1419,7 +1468,7 @@ export default function ClinicDoctorsPage() {
                   <p className="text-[11px] text-gray-500 mt-0.5">
                     {form.isCustomSchedule
                       ? "Custom hours configured per duty day"
-                      : "Clinic Operating Hours: 8:00 AM – 8:00 PM"}
+                      : "Clinic Operating Hours: 8:00 AM ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ 8:00 PM"}
                   </p>
                 </div>
 
@@ -1443,7 +1492,7 @@ export default function ClinicDoctorsPage() {
                   }}
                   className="text-xs font-semibold text-magenta-700 hover:text-magenta-800 px-3 py-1 rounded-lg border border-magenta-200 bg-white hover:bg-magenta-50 transition-colors cursor-pointer"
                 >
-                  {form.isCustomSchedule ? "← Uniform Shift (Same for all days)" : "+ Customize hours per day"}
+                  {form.isCustomSchedule ? "ÃƒÂ¢Ã¢â‚¬Â Ã‚Â Uniform Shift (Same for all days)" : "+ Customize hours per day"}
                 </button>
               </div>
 
@@ -1481,9 +1530,9 @@ export default function ClinicDoctorsPage() {
                       <div className="pt-2 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-gray-900">
-                            {formatTime12h(form.dutyStartTime)} – {formatTime12h(form.dutyEndTime)}
+                            {formatTime12h(form.dutyStartTime)} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ {formatTime12h(form.dutyEndTime)}
                           </span>
-                          <span className="text-gray-300">•</span>
+                          <span className="text-gray-300">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢</span>
                           <span className="font-bold text-magenta-700 bg-magenta-50 px-2.5 py-0.5 rounded-full border border-magenta-200">
                             {duration} Hours Active Duty
                           </span>
@@ -1569,7 +1618,7 @@ export default function ClinicDoctorsPage() {
                 <div className="space-y-0.5 pl-4 text-[11px] text-amber-800">
                   {addFormConflicts.map((c, idx) => (
                     <p key={idx}>
-                      • <strong>{c.day}:</strong> {c.doctorName} ({formatTime12h(c.dutyStart)} – {formatTime12h(c.dutyEnd)})
+                      ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ <strong>{c.day}:</strong> {c.doctorName} ({formatTime12h(c.dutyStart)} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ {formatTime12h(c.dutyEnd)})
                     </p>
                   ))}
                 </div>
@@ -1610,7 +1659,7 @@ export default function ClinicDoctorsPage() {
         </div>
       </div>
 
-      {/* ── Doctor List Section (Original Clean Structure) ─────────── */}
+      {/* ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Doctor List Section (Original Clean Structure) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold text-gray-900">
@@ -1666,7 +1715,7 @@ export default function ClinicDoctorsPage() {
                         PRC: #{doc.prcLicense || "Pending"}
                       </span>
                     </div>
-                    <p className="text-xs text-gray-500 mt-0.5">{doc.email} • {doc.contactNumber || "No phone"}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{doc.email} ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ {doc.contactNumber || "No phone"}</p>
 
                     {/* Specializations */}
                     <div className="mt-1 flex flex-wrap gap-1">
@@ -1711,7 +1760,7 @@ export default function ClinicDoctorsPage() {
         )}
       </div>
 
-      {/* ── Add Doctor Confirmation Modal ──────────────────────────── */}
+      {/* ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Add Doctor Confirmation Modal ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ */}
       <AnimatePresence>
         {showAddConfirmModal && (
           <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
@@ -1762,7 +1811,7 @@ export default function ClinicDoctorsPage() {
                       {form.name.trim()}
                     </h4>
                     <p className="text-[11px] text-gray-500 mt-0.5">
-                      PRC: #{form.prcLicense.trim()} • {form.contactNumber.trim()}
+                      PRC: #{form.prcLicense.trim()} ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ {form.contactNumber.trim()}
                     </p>
                   </div>
                 </div>
@@ -1774,7 +1823,7 @@ export default function ClinicDoctorsPage() {
                   </span>
                   {!form.isCustomSchedule ? (
                     <div className="flex items-center justify-between text-magenta-950 font-semibold text-xs">
-                      <span>Hours: {formatTime12h(form.dutyStartTime)} – {formatTime12h(form.dutyEndTime)}</span>
+                      <span>Hours: {formatTime12h(form.dutyStartTime)} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ {formatTime12h(form.dutyEndTime)}</span>
                       <span>Days: {form.dutyDays.map((d) => d.slice(0, 3)).join(", ")}</span>
                     </div>
                   ) : (
@@ -1790,7 +1839,7 @@ export default function ClinicDoctorsPage() {
                             className="px-2 py-1 rounded-lg bg-white border border-magenta-100 text-[10px] flex items-center justify-between font-medium text-magenta-950"
                           >
                             <span className="font-bold">{day}:</span>
-                            <span>{formatTime12h(shift.startTime)} – {formatTime12h(shift.endTime)}</span>
+                            <span>{formatTime12h(shift.startTime)} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ {formatTime12h(shift.endTime)}</span>
                           </div>
                         );
                       })}
@@ -1836,7 +1885,7 @@ export default function ClinicDoctorsPage() {
         )}
       </AnimatePresence>
 
-      {/* ── Doctor Details Modal ────────────────────────────────────── */}
+      {/* ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Doctor Details Modal ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ */}
       <AnimatePresence>
         {selectedDoctorForDetails && (
           <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
@@ -1900,7 +1949,7 @@ export default function ClinicDoctorsPage() {
                   {!selectedDoctorForDetails.dutySchedule || Object.keys(selectedDoctorForDetails.dutySchedule).length === 0 ? (
                     <>
                       <p className="font-bold text-magenta-700">
-                        {formatTime12h(selectedDoctorForDetails.dutyStartTime || "09:00")} – {formatTime12h(selectedDoctorForDetails.dutyEndTime || "17:00")}
+                        {formatTime12h(selectedDoctorForDetails.dutyStartTime || "09:00")} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ {formatTime12h(selectedDoctorForDetails.dutyEndTime || "17:00")}
                       </p>
                       <p className="text-[11px] text-gray-600">
                         {selectedDoctorForDetails.dutyDays && selectedDoctorForDetails.dutyDays.length > 0
@@ -1915,7 +1964,7 @@ export default function ClinicDoctorsPage() {
                         return (
                           <div key={d} className="flex items-center justify-between text-xs py-0.5 border-b border-gray-200/50 last:border-b-0">
                             <span className="font-semibold text-gray-800">{d}</span>
-                            <span className="font-bold text-magenta-700">{formatTime12h(shift.startTime)} – {formatTime12h(shift.endTime)}</span>
+                            <span className="font-bold text-magenta-700">{formatTime12h(shift.startTime)} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ {formatTime12h(shift.endTime)}</span>
                           </div>
                         );
                       })}
@@ -1931,12 +1980,12 @@ export default function ClinicDoctorsPage() {
 
                   <div>
                     <p className="text-[10px] font-bold tracking-wider text-gray-400 uppercase">CONTACT NUMBER</p>
-                    <p className="font-medium text-gray-800 mt-0.5">{selectedDoctorForDetails.contactNumber || "—"}</p>
+                    <p className="font-medium text-gray-800 mt-0.5">{selectedDoctorForDetails.contactNumber || "ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â"}</p>
                   </div>
 
                   <div>
                     <p className="text-[10px] font-bold tracking-wider text-gray-400 uppercase">PRC LICENSE #</p>
-                    <p className="font-medium text-gray-800 mt-0.5">{selectedDoctorForDetails.prcLicense || "—"}</p>
+                    <p className="font-medium text-gray-800 mt-0.5">{selectedDoctorForDetails.prcLicense || "ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â"}</p>
                   </div>
 
                   <div>
@@ -1988,7 +2037,7 @@ export default function ClinicDoctorsPage() {
         )}
       </AnimatePresence>
 
-      {/* ── Edit Doctor Modal ───────────────────────────────────────── */}
+      {/* ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Edit Doctor Modal ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ */}
       <AnimatePresence>
         {editingDoctor && (
           <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
@@ -2133,17 +2182,17 @@ export default function ClinicDoctorsPage() {
                           onClick={() => setEditForm((p) => ({ ...p, dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] }))}
                           className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
                         >
-                          Mon–Fri
+                          MonÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Fri
                         </button>
-                        <span className="text-gray-300">•</span>
+                        <span className="text-gray-300">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢</span>
                         <button
                           type="button"
                           onClick={() => setEditForm((p) => ({ ...p, dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] }))}
                           className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
                         >
-                          Mon–Sat
+                          MonÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Sat
                         </button>
-                        <span className="text-gray-300">•</span>
+                        <span className="text-gray-300">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢</span>
                         <button
                           type="button"
                           onClick={() => setEditForm((p) => ({ ...p, dutyDays: [...ALL_DAYS_OF_WEEK] }))}
@@ -2199,7 +2248,7 @@ export default function ClinicDoctorsPage() {
                         <p className="text-[11px] text-gray-500">
                           {editForm.isCustomSchedule
                             ? "Custom hours configured per duty day"
-                            : "Clinic Operating Hours: 8:00 AM – 8:00 PM"}
+                            : "Clinic Operating Hours: 8:00 AM ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ 8:00 PM"}
                         </p>
                       </div>
 
@@ -2223,7 +2272,7 @@ export default function ClinicDoctorsPage() {
                         }}
                         className="text-xs font-semibold text-magenta-700 hover:text-magenta-800 px-2.5 py-1 rounded-lg border border-magenta-200 bg-white hover:bg-magenta-50 transition-colors cursor-pointer"
                       >
-                        {editForm.isCustomSchedule ? "← Uniform Shift (Same for all days)" : "+ Customize hours per day"}
+                        {editForm.isCustomSchedule ? "ÃƒÂ¢Ã¢â‚¬Â Ã‚Â Uniform Shift (Same for all days)" : "+ Customize hours per day"}
                       </button>
                     </div>
 
@@ -2261,9 +2310,9 @@ export default function ClinicDoctorsPage() {
                             <div className="pt-2 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-xs">
                               <div className="flex items-center gap-2">
                                 <span className="font-bold text-gray-900">
-                                  {formatTime12h(editForm.dutyStartTime)} – {formatTime12h(editForm.dutyEndTime)}
+                                  {formatTime12h(editForm.dutyStartTime)} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ {formatTime12h(editForm.dutyEndTime)}
                                 </span>
-                                <span className="text-gray-300">•</span>
+                                <span className="text-gray-300">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢</span>
                                 <span className="font-bold text-magenta-700 bg-magenta-50 px-2 py-0.5 rounded-full border border-magenta-200 text-[11px]">
                                   {duration} Hours Active Duty
                                 </span>
@@ -2341,7 +2390,7 @@ export default function ClinicDoctorsPage() {
                         <div className="space-y-0.5 pl-4 text-[11px] text-amber-800">
                           {editFormConflicts.map((c, idx) => (
                             <p key={idx}>
-                              • <strong>{c.day}:</strong> {c.doctorName} ({formatTime12h(c.dutyStart)} – {formatTime12h(c.dutyEnd)})
+                              ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ <strong>{c.day}:</strong> {c.doctorName} ({formatTime12h(c.dutyStart)} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ {formatTime12h(c.dutyEnd)})
                             </p>
                           ))}
                         </div>
@@ -2381,7 +2430,7 @@ export default function ClinicDoctorsPage() {
         )}
       </AnimatePresence>
 
-      {/* ── Status Toggle Confirmation Modal ────────────────────────── */}
+      {/* ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Status Toggle Confirmation Modal ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ */}
       <AnimatePresence>
         {statusConfirmDoctor && (
           <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
@@ -2440,7 +2489,7 @@ export default function ClinicDoctorsPage() {
         )}
       </AnimatePresence>
 
-      {/* ── Delete Confirmation Modal ───────────────────────────────── */}
+      {/* ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Delete Confirmation Modal ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ */}
       <AnimatePresence>
         {deleteTarget && (
           <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">

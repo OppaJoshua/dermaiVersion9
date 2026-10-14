@@ -242,13 +242,13 @@ export default function PaymentSuccessPage() {
                   <CalendarDays className="w-4 h-4" />
                   {paymentDate
                     ? new Date(paymentDate).toLocaleString(
-                      "en-PH",
-                      {
-                        dateStyle: "long",
-                        timeStyle: "short",
-                      }
-                    )
-                    : "â€”"}
+                        "en-PH",
+                        {
+                          dateStyle: "long",
+                          timeStyle: "short",
+                        }
+                      )
+                    : "—"}
                 </span>
               </div>
 

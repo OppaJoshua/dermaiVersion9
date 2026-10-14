@@ -254,7 +254,7 @@ export default function SubscriptionStatusPage() {
           });
         } else {
           // ----------------------------------------------------------
-          // 8. No active subscription â†’ use Admin Free Plan
+          // 8. No active subscription → use Admin Free Plan
           // ----------------------------------------------------------
           const freePlan = freePlanData as PlanDetails | null;
 

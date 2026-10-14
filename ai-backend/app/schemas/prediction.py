@@ -3,7 +3,18 @@ DERMAI - Pydantic Response Schemas
 """
 
 from pydantic import BaseModel, Field
-from typing import Dict, List
+from typing import Dict, List, Optional, Any
+
+
+class EvidencePrediction(BaseModel):
+    """Prediction evidence for an individual image (close-up or wide-view)"""
+    predicted_class: Optional[str] = None
+    display_name: Optional[str] = None
+    confidence: Optional[float] = None
+    confidence_level: Optional[str] = None
+    probabilities: Optional[Dict[str, float]] = None
+    status: str = "valid"
+    error: Optional[str] = None
 
 
 class PredictionResponse(BaseModel):
@@ -23,6 +34,15 @@ class PredictionResponse(BaseModel):
         default_factory=dict,
         description="Image quality metrics (blur_score, brightness, contrast)",
     )
+    # Dual-image / Multi-view scan evidence fields
+    is_combined: bool = False
+    agreement: Optional[bool] = None
+    combined_evidence_score: Optional[float] = Field(
+        None,
+        description="Derived system-level fusion score (70% primary + 30% supporting), NOT raw ResNet50 confidence",
+    )
+    primary_prediction: Optional[EvidencePrediction] = None
+    supporting_prediction: Optional[EvidencePrediction] = None
 
 
 class ErrorResponse(BaseModel):
