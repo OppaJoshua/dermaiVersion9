@@ -24,6 +24,18 @@ import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 import { createPatientNotification } from "@/lib/notificationService";
+import {
+  type DoctorWeeklySchedule,
+  type ConsultationSlot,
+  type DayShiftSlotsGroup,
+  timeToMinutes,
+  formatTime12h,
+  normalizeDayName,
+  parseDoctorSchedule,
+  getEffectiveShiftSettings,
+  generateDaySlotsForDoctor,
+  computeNextQueueNumber,
+} from "@/lib/schedulingService";
 
 export type ClinicDoctorItem = {
   id: string;
@@ -33,30 +45,12 @@ export type ClinicDoctorItem = {
   dutyDays: string[];
   dutyStartTime: string;
   dutyEndTime: string;
-  dutySchedule?: Record<string, { startTime: string; endTime: string }>;
+  dutySchedule?: Record<string, any>;
+  weeklySchedule?: DoctorWeeklySchedule;
   status?: string;
+  maxPatientsPerDay?: number;
+  slotIntervalMinutes?: number;
 };
-
-function formatTime12h(timeStr: string): string {
-  if (!timeStr) return "";
-  const [h, m] = timeStr.split(":").map(Number);
-  const ampm = (h || 0) >= 12 ? "PM" : "AM";
-  const hour = (h || 0) % 12 || 12;
-  return `${hour}:${String(m || 0).padStart(2, "0")} ${ampm}`;
-}
-
-export function normalizeDayName(d: string): string {
-  if (!d) return "";
-  const s = String(d).trim().toLowerCase();
-  if (s.startsWith("mon")) return "Monday";
-  if (s.startsWith("tue")) return "Tuesday";
-  if (s.startsWith("wed")) return "Wednesday";
-  if (s.startsWith("thu")) return "Thursday";
-  if (s.startsWith("fri")) return "Friday";
-  if (s.startsWith("sat")) return "Saturday";
-  if (s.startsWith("sun")) return "Sunday";
-  return d;
-}
 
 export function parseDoctorDutyDays(rawDays: any, rawSchedule?: any): string[] {
   let days: string[] = [];
@@ -89,6 +83,12 @@ export function parseDoctorDutyDays(rawDays: any, rawSchedule?: any): string[] {
       } catch {}
     }
     if (schedObj && typeof schedObj === "object" && !Array.isArray(schedObj)) {
+      if (schedObj.weeklyShifts && typeof schedObj.weeklyShifts === "object") {
+        const wDays = Object.keys(schedObj.weeklyShifts).filter(
+          (d) => Array.isArray(schedObj.weeklyShifts[d]) && schedObj.weeklyShifts[d].length > 0
+        );
+        if (wDays.length > 0) return wDays.map(normalizeDayName);
+      }
       const schedKeys = Object.keys(schedObj).filter(Boolean);
       if (schedKeys.length > 0 && days.length === 0) {
         days = schedKeys;
@@ -124,39 +124,44 @@ export function parseDoctorDutySchedule(rawSched: any): Record<string, { startTi
       }
     }
     return Object.keys(result).length > 0 ? result : undefined;
-  } else if (Array.isArray(obj)) {
-    const result: Record<string, { startTime: string; endTime: string }> = {};
-    obj.forEach((it: any) => {
-      if (it?.day) {
-        const normDay = normalizeDayName(it.day);
-        result[normDay] = {
-          startTime: it.startTime || it.start_time || it.start || "09:00",
-          endTime: it.endTime || it.end_time || it.end || "17:00",
-        };
-      }
-    });
-    return Object.keys(result).length > 0 ? result : undefined;
   }
   return undefined;
 }
 
-export function isDoctorOnDutyOnDay(doc: ClinicDoctorItem, dayOfWeek: string): boolean {
+export function isDoctorOnDutyOnDay(doc: ClinicDoctorItem | null | undefined, dayOfWeek: string): boolean {
   if (!doc) return false;
   if (doc.status === "Inactive") return false;
   const target = normalizeDayName(dayOfWeek);
+  if (!target) return false;
 
-  if (doc.dutySchedule && typeof doc.dutySchedule === "object") {
-    const scheduleDays = Object.keys(doc.dutySchedule).map(normalizeDayName);
-    if (scheduleDays.length > 0) {
-      return scheduleDays.includes(target);
-    }
-  }
-
+  // Strict check: If doc.dutyDays is defined and has days, target day must be in dutyDays
   if (Array.isArray(doc.dutyDays) && doc.dutyDays.length > 0) {
-    return doc.dutyDays.some((d) => normalizeDayName(d) === target);
+    const isDayIncluded = doc.dutyDays.some((d: string) => normalizeDayName(d) === target);
+    if (!isDayIncluded) return false;
   }
 
-  return !["Saturday", "Sunday"].includes(target);
+  // 1. Check weeklySchedule if available
+  if (doc.weeklySchedule?.weeklyShifts) {
+    const shifts = doc.weeklySchedule.weeklyShifts[target];
+    if (Array.isArray(shifts) && shifts.length > 0) return true;
+  }
+
+  // 2. Check dutySchedule JSON
+  if (doc.dutySchedule && typeof doc.dutySchedule === "object") {
+    if (doc.dutySchedule.weeklyShifts && typeof doc.dutySchedule.weeklyShifts === "object") {
+      const shifts = doc.dutySchedule.weeklyShifts[target];
+      if (Array.isArray(shifts) && shifts.length > 0) return true;
+    }
+    const schedDays = Object.keys(doc.dutySchedule).map(normalizeDayName);
+    if (schedDays.includes(target)) return true;
+  }
+
+  // 3. Fallback to dutyDays array
+  if (Array.isArray(doc.dutyDays) && doc.dutyDays.length > 0) {
+    return doc.dutyDays.some((d: string) => normalizeDayName(d) === target);
+  }
+
+  return false;
 }
 
 function cleanDocName(name?: string): string {
@@ -245,6 +250,11 @@ type ClinicData = {
   doctors: ClinicDoctorItem[];
   conditionsTreated: string[];
   photos?: string[];
+  slotIntervalMinutes?: number;
+  maxPatientsPerDay?: number;
+  openTime?: string;
+  closeTime?: string;
+  operatingDays?: string;
 };
 
 type ConsultationType = "face-to-face";
@@ -341,6 +351,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   }, [searchParams]);
 
   const [selectedClinic, setSelectedClinic] = useState<ClinicData | null>(null);
+  const [availableClinics, setAvailableClinics] = useState<{ id: string; name: string; district?: string }[]>([]);
   const [loadingClinic, setLoadingClinic] = useState(true);
   const [showClinicDetailsModal, setShowClinicDetailsModal] = useState(false);
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
@@ -392,6 +403,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return "";
   });
   const [submitted, setSubmitted] = useState(false);
+  const [confirmedQueueNumber, setConfirmedQueueNumber] = useState<number>(1);
 
   const selectedScan = useMemo(() => {
     return patientScans.find((s) => s.id === selectedScanId) || null;
@@ -403,6 +415,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     async function loadPatientScans() {
       if (!user?.id) {
         setPatientScans([]);
+        setSelectedScanId("");
         setLoadingScans(false);
         return;
       }
@@ -419,71 +432,79 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             photo_url,
             condition_id,
             questionnaire_answers,
+            status,
             skin_condition:condition_id (
               name,
               local_name
             )
           `)
           .eq("user_id", user.id)
-          .eq("status", "completed")
           .order("scanned_at", { ascending: false });
 
         if (cancelled) return;
 
-        if (error) {
-          console.error("Failed to load completed AI scans:", error.message);
-          setPatientScans([]);
-          setLoadingScans(false);
-          return;
+        let resolvedList: CompletedScanItem[] = [];
+
+        if (!error && Array.isArray(data)) {
+          resolvedList = await Promise.all(
+            data.map(async (row: any) => {
+              const cond = Array.isArray(row.skin_condition) ? row.skin_condition[0] : row.skin_condition;
+              let displayUrl = row.photo_url || "";
+
+              if (row.photo_url && !row.photo_url.startsWith("http") && !row.photo_url.startsWith("data:")) {
+                try {
+                  const { data: signedData } = await supabase.storage
+                    .from("scan-uploads")
+                    .createSignedUrl(row.photo_url, 3600);
+                  if (signedData?.signedUrl) {
+                    displayUrl = signedData.signedUrl;
+                  }
+                } catch {}
+              }
+
+              return {
+                id: String(row.analysis_id),
+                conditionName: cond?.name || "Skin Assessment",
+                localName: cond?.local_name || undefined,
+                confidence: Number(row.confidence_score) || 0,
+                bodyPart: row.body_part || "Skin Assessment",
+                scannedAt: row.scanned_at,
+                photoUrl: row.photo_url || "",
+                imageUrl: displayUrl,
+                conditionId: row.condition_id || undefined,
+                questionnaireAnswers: row.questionnaire_answers || null,
+              };
+            })
+          );
+        } else if (error) {
+          console.warn("[AppointmentPage] ai_scan_result fetch warning:", error.message);
         }
-
-        const resolvedList: CompletedScanItem[] = await Promise.all(
-          (data || []).map(async (row: any) => {
-            const cond = Array.isArray(row.skin_condition) ? row.skin_condition[0] : row.skin_condition;
-            let displayUrl = row.photo_url || "";
-
-            if (row.photo_url && !row.photo_url.startsWith("http") && !row.photo_url.startsWith("data:")) {
-              try {
-                const { data: signedData } = await supabase.storage
-                  .from("scan-uploads")
-                  .createSignedUrl(row.photo_url, 3600);
-                if (signedData?.signedUrl) {
-                  displayUrl = signedData.signedUrl;
-                }
-              } catch {}
-            }
-
-            return {
-              id: String(row.analysis_id),
-              conditionName: cond?.name || "Skin Assessment",
-              localName: cond?.local_name || undefined,
-              confidence: Number(row.confidence_score) || 0,
-              bodyPart: row.body_part || "Skin Assessment",
-              scannedAt: row.scanned_at,
-              photoUrl: row.photo_url || "",
-              imageUrl: displayUrl,
-              conditionId: row.condition_id || undefined,
-              questionnaireAnswers: row.questionnaire_answers || null,
-            };
-          })
-        );
 
         if (!cancelled) {
           setPatientScans(resolvedList);
 
-          // If a scanId was passed in URL, booking context, or draft, select it ONLY IF it belongs to the verified scan list
+          // If a scanId was passed in URL, booking context, or draft, select it if valid
           const requestedScanId =
             searchParams.get("scanId") ||
             scanContext?.scanId ||
             (isDraftValid ? draft?.primaryScanId : "");
+
           if (requestedScanId && resolvedList.some((s) => s.id === requestedScanId)) {
             setSelectedScanId(requestedScanId);
-          } else if (selectedScanId && !resolvedList.some((s) => s.id === selectedScanId)) {
+          } else if (selectedScanId && resolvedList.some((s) => s.id === selectedScanId)) {
+            // Keep existing selection
+          } else if (resolvedList.length > 0) {
+            setSelectedScanId(resolvedList[0].id);
+          } else {
             setSelectedScanId("");
           }
         }
       } catch (err) {
         console.error("Error fetching patient scans:", err);
+        if (!cancelled) {
+          setPatientScans([]);
+          setSelectedScanId("");
+        }
       } finally {
         if (!cancelled) setLoadingScans(false);
       }
@@ -621,6 +642,57 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return age >= 0 ? age : null;
   }, [patientBirthdate]);
 
+  // Active chosen doctor on duty
+  const activeDutyDoctor = useMemo<ClinicDoctorItem | null>(() => {
+    const docs = selectedClinic?.doctors || [];
+    if (docs.length === 0) return null;
+    const found = docs.find((d) => d.id === selectedDoctorId);
+    return found || docs[0];
+  }, [selectedClinic?.doctors, selectedDoctorId]);
+
+  // Keep selectedDoctorId initialized when doctors load
+  useEffect(() => {
+    if (!selectedDoctorId && selectedClinic?.doctors && selectedClinic.doctors.length > 0) {
+      setSelectedDoctorId(selectedClinic.doctors[0].id);
+    }
+  }, [selectedClinic?.doctors, selectedDoctorId]);
+
+  // Determine day of week for selectedDate (e.g. "Monday", "Wednesday")
+  const dayOfWeekForSelectedDate = useMemo(() => {
+    if (!selectedDate) return "";
+    try {
+      const [y, m, d] = selectedDate.split("-").map(Number);
+      const dt = new Date(y, m - 1, d);
+      return dt.toLocaleDateString("en-US", { weekday: "long" });
+    } catch {
+      return "";
+    }
+  }, [selectedDate]);
+
+  // Automatically advance selectedDate to doctor's next duty day if the current date is not on duty
+  useEffect(() => {
+    if (!activeDutyDoctor || !selectedDate) return;
+    try {
+      const [y, m, d] = selectedDate.split("-").map(Number);
+      const dt = new Date(y, m - 1, d);
+      const currentDayOfWeek = dt.toLocaleDateString("en-US", { weekday: "long" });
+
+      if (!isDoctorOnDutyOnDay(activeDutyDoctor, currentDayOfWeek)) {
+        const start = new Date();
+        for (let i = 1; i <= 45; i++) {
+          const cand = new Date(start);
+          cand.setDate(start.getDate() + i);
+          const candDay = cand.toLocaleDateString("en-US", { weekday: "long" });
+          if (isDoctorOnDutyOnDay(activeDutyDoctor, candDay)) {
+            const candStr = `${cand.getFullYear()}-${String(cand.getMonth() + 1).padStart(2, "0")}-${String(cand.getDate()).padStart(2, "0")}`;
+            setSelectedDate(candStr);
+            break;
+          }
+        }
+      }
+    } catch {}
+  }, [activeDutyDoctor?.id]);
+
   // Generate calendar days for the current calendarMonth (42 cells to support full 6 weeks)
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear();
@@ -644,12 +716,17 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const inCurrentMonth = d.getMonth() === month;
       const isPast = dateStr < todayStr;
       const isTooFar = d > maxDate;
-      const isDisabled = isPast || isTooFar;
       const isToday = dateStr === todayStr;
 
       const dayOfWeek = d.toLocaleDateString("en-US", { weekday: "long" });
       const onDutyDocs = doctors.filter((doc) => isDoctorOnDutyOnDay(doc, dayOfWeek));
-      const hasDoctorsOnDuty = onDutyDocs.length > 0;
+
+      // Strictly evaluate availability based on the SELECTED doctor's schedule!
+      const isSelectedDocOnDuty = activeDutyDoctor
+        ? isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeek)
+        : onDutyDocs.length > 0;
+
+      const isDisabled = isPast || isTooFar || !isSelectedDocOnDuty;
 
       return {
         dateStr,
@@ -660,104 +737,57 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         isDisabled,
         isToday,
         onDutyDocs,
-        hasDoctorsOnDuty,
+        hasDoctorsOnDuty: isSelectedDocOnDuty,
       };
     });
-  }, [calendarMonth, selectedClinic?.doctors]);
-
-  // Determine day of week for selectedDate (e.g. "Monday", "Wednesday")
-  const dayOfWeekForSelectedDate = useMemo(() => {
-    if (!selectedDate) return "";
-    try {
-      const [y, m, d] = selectedDate.split("-").map(Number);
-      const dt = new Date(y, m - 1, d);
-      return dt.toLocaleDateString("en-US", { weekday: "long" });
-    } catch {
-      return "";
-    }
-  }, [selectedDate]);
+  }, [calendarMonth, selectedClinic?.doctors, activeDutyDoctor]);
 
   // Filter doctors who are on duty on this day of week
   const onDutyDoctorsForDate = useMemo(() => {
     if (!selectedClinic?.doctors || selectedClinic.doctors.length === 0) return [];
     if (!dayOfWeekForSelectedDate) return [];
 
-    const matched = selectedClinic.doctors.filter((doc) =>
+    return selectedClinic.doctors.filter((doc) =>
       isDoctorOnDutyOnDay(doc, dayOfWeekForSelectedDate)
     );
-
-    return matched;
   }, [selectedClinic?.doctors, dayOfWeekForSelectedDate]);
 
-  // Active chosen doctor on duty
-  const activeDutyDoctor = useMemo<ClinicDoctorItem | null>(() => {
-    if (onDutyDoctorsForDate.length === 0) {
-      return null;
-    }
-    const found = onDutyDoctorsForDate.find((d) => d.id === selectedDoctorId);
-    return found || onDutyDoctorsForDate[0];
-  }, [onDutyDoctorsForDate, selectedDoctorId]);
-
-  // Sync selectedDoctorId when onDutyDoctorsForDate updates
-  useEffect(() => {
-    if (onDutyDoctorsForDate.length > 0) {
-      if (!onDutyDoctorsForDate.some((d) => d.id === selectedDoctorId)) {
-        setSelectedDoctorId(onDutyDoctorsForDate[0].id);
-      }
-    }
-  }, [onDutyDoctorsForDate, selectedDoctorId]);
-
-  // Doctor consultation schedule hours for selected date
+  // Doctor consultation schedule hours summary for selected date
   const activeDoctorHours = useMemo(() => {
     if (!activeDutyDoctor) {
-      return "General Consultation (Clinic Queue)";
+      return "General Consultation";
     }
-    const shift =
-      activeDutyDoctor.dutySchedule &&
-      dayOfWeekForSelectedDate &&
-      activeDutyDoctor.dutySchedule[dayOfWeekForSelectedDate]
-        ? activeDutyDoctor.dutySchedule[dayOfWeekForSelectedDate]
-        : { startTime: activeDutyDoctor.dutyStartTime || "09:00", endTime: activeDutyDoctor.dutyEndTime || "17:00" };
-    return `${formatTime12h(shift.startTime)} – ${formatTime12h(shift.endTime)}`;
+    const docSched =
+      activeDutyDoctor.weeklySchedule ||
+      parseDoctorSchedule(activeDutyDoctor.dutySchedule, activeDutyDoctor.dutyDays);
+    const shifts = docSched.weeklyShifts[normalizeDayName(dayOfWeekForSelectedDate)] || [];
+    if (shifts.length === 0) {
+      return `${formatTime12h(activeDutyDoctor.dutyStartTime || "08:00")} – ${formatTime12h(activeDutyDoctor.dutyEndTime || "17:00")}`;
+    }
+    return shifts
+      .map((s) => `${formatTime12h(s.startTime)} – ${formatTime12h(s.endTime)}`)
+      .join(", ");
   }, [activeDutyDoctor, dayOfWeekForSelectedDate]);
-
-  // Consultation Batches and Real-time Slot Availability (NowServing model)
-  const BATCH_CAPACITY = 3;
-
-  type ConsultationBatch = {
-    batchTime: string; // e.g. "09:00"
-    label: string; // e.g. "09:00 AM Batch"
-    timeRange: string; // e.g. "09:00 AM – 10:00 AM"
-    totalSlots: number;
-    bookedCount: number;
-    availableSlots: number;
-    isFull: boolean;
-    nextQueueNumber: number;
-    estimatedWindow: string;
-  };
 
   const [existingBookings, setExistingBookings] = useState<any[]>([]);
   const [_loadingBookings, setLoadingBookings] = useState(false);
 
-  // Fetch real-time active bookings for the chosen date and doctor
+  // Fetch real-time active bookings for the clinic and chosen date
   useEffect(() => {
     let cancelled = false;
     async function fetchBookings() {
       if (!selectedDate) return;
       setLoadingBookings(true);
       try {
-        const docId = activeDutyDoctor?.id;
         const clinicId = selectedClinic?.id;
 
         let query = supabase
           .from("patient_appointment")
-          .select("appointment_id, date, batch_time, queue_number, status, doctor_status")
+          .select("appointment_id, date, time, batch_time, queue_number, status, doctor_status, assigned_doctor_id, clinic_id")
           .neq("status", "cancelled")
           .neq("status", "rejected");
 
-        if (docId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(docId)) {
-          query = query.eq("assigned_doctor_id", docId);
-        } else if (clinicId) {
+        if (clinicId) {
           query = query.eq("clinic_id", clinicId);
         }
 
@@ -765,6 +795,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         if (!cancelled && data && !error) {
           const matched = data.filter((row: any) => {
             if (!row.date) return false;
+            const st = String(row.status || "").toLowerCase().trim();
+            if (st === "cancelled" || st === "rejected" || st === "declined") return false;
             return String(row.date).startsWith(selectedDate);
           });
           setExistingBookings(matched);
@@ -779,112 +811,67 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return () => {
       cancelled = true;
     };
-  }, [selectedDate, activeDutyDoctor?.id, selectedClinic?.id]);
+  }, [selectedDate, selectedClinic?.id]);
 
-  // Dynamically compute 1-hour consultation batches within the attending doctor's duty shift
-  const consultationBatches = useMemo<ConsultationBatch[]>(() => {
-    let startH = 8;
-    let endH = 20;
+  // Dynamically generate consecutive consultation slots grouped by shift using unified schedulingService
+  const dayShiftGroups = useMemo<DayShiftSlotsGroup[]>(() => {
+    if (!activeDutyDoctor || !selectedDate || !dayOfWeekForSelectedDate) return [];
+    if (!isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate)) return [];
 
-    if (activeDutyDoctor) {
-      const shift =
-        activeDutyDoctor.dutySchedule &&
-        dayOfWeekForSelectedDate &&
-        activeDutyDoctor.dutySchedule[dayOfWeekForSelectedDate]
-          ? activeDutyDoctor.dutySchedule[dayOfWeekForSelectedDate]
-          : { startTime: activeDutyDoctor.dutyStartTime || "09:00", endTime: activeDutyDoctor.dutyEndTime || "17:00" };
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const isToday = selectedDate === todayStr;
+    const currentMinutesNow = now.getHours() * 60 + now.getMinutes();
 
-      startH = parseInt(shift.startTime.split(":")[0], 10) || 9;
-      endH = parseInt(shift.endTime.split(":")[0], 10) || 17;
-    } else if (selectedClinic?.hours) {
-      // Parse clinic operating hours (e.g. "8:00 AM – 8:00 PM")
-      const match = selectedClinic.hours.match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*[-–—]\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-      if (match) {
-        let opH = parseInt(match[1], 10);
-        const opAmpm = match[3].toUpperCase();
-        if (opAmpm === "PM" && opH < 12) opH += 12;
-        if (opAmpm === "AM" && opH === 12) opH = 0;
+    const docSchedule =
+      activeDutyDoctor.weeklySchedule ||
+      parseDoctorSchedule(activeDutyDoctor.dutySchedule, activeDutyDoctor.dutyDays);
 
-        let clH = parseInt(match[4], 10);
-        const clAmpm = match[6].toUpperCase();
-        if (clAmpm === "PM" && clH < 12) clH += 12;
-        if (clAmpm === "AM" && clH === 12) clH = 0;
+    const clinicDefaults = {
+      defaultSlotIntervalMinutes: selectedClinic?.slotIntervalMinutes || 30,
+      openTime: selectedClinic?.openTime,
+      closeTime: selectedClinic?.closeTime,
+    };
 
-        if (clH > opH) {
-          startH = opH;
-          endH = clH;
-        }
-      }
-    }
+    return generateDaySlotsForDoctor({
+      doctorSchedule: docSchedule,
+      dayOfWeek: dayOfWeekForSelectedDate,
+      doctorId: activeDutyDoctor.id,
+      clinicDefaults,
+      existingAppointments: existingBookings,
+      isToday,
+      currentMinutesNow,
+    });
+  }, [activeDutyDoctor, selectedDate, dayOfWeekForSelectedDate, selectedClinic, existingBookings]);
 
-    if (endH <= startH) endH = startH + 8;
+  // Flattened consultation slots across all shifts for quick lookup
+  const consultationSlots = useMemo<ConsultationSlot[]>(() => {
+    return dayShiftGroups.flatMap((g) => g.slots);
+  }, [dayShiftGroups]);
 
-    const batches: ConsultationBatch[] = [];
-    for (let h = startH; h < endH; h++) {
-      const batchTime = `${String(h).padStart(2, "0")}:00`;
-      const nextH = h + 1;
-      const timeRange = `${formatTime12h(batchTime)} – ${formatTime12h(`${String(nextH).padStart(2, "0")}:00`)}`;
-
-      // Count active bookings in this batch
-      const bookedInBatch = existingBookings.filter((b) => {
-        if (b.batch_time) {
-          return b.batch_time === batchTime || b.batch_time.startsWith(`${String(h).padStart(2, "0")}:`);
-        }
-        if (b.date) {
-          const dObj = new Date(b.date);
-          return !isNaN(dObj.getTime()) && dObj.getHours() === h;
-        }
-        return false;
-      });
-
-      const bookedCount = bookedInBatch.length;
-      const availableSlots = Math.max(0, BATCH_CAPACITY - bookedCount);
-      const isFull = availableSlots === 0;
-      const nextQueueNumber = isFull ? BATCH_CAPACITY : bookedCount + 1;
-
-      // Estimated window for the next queue (e.g. #1: 00-20, #2: 20-40, #3: 40-60)
-      const slotIndex = isFull ? BATCH_CAPACITY - 1 : bookedCount;
-      const estStartM = slotIndex * 20;
-      const estEndM = (slotIndex + 1) * 20;
-      const estStartStr = formatTime12h(`${String(h).padStart(2, "0")}:${String(estStartM).padStart(2, "0")}`);
-      const estEndStr = formatTime12h(
-        estEndM === 60 ? `${String(nextH).padStart(2, "0")}:00` : `${String(h).padStart(2, "0")}:${String(estEndM).padStart(2, "0")}`
-      );
-
-      batches.push({
-        batchTime,
-        label: `${formatTime12h(batchTime)} Batch`,
-        timeRange,
-        totalSlots: BATCH_CAPACITY,
-        bookedCount,
-        availableSlots,
-        isFull,
-        nextQueueNumber,
-        estimatedWindow: `${estStartStr} – ${estEndStr}`,
-      });
-    }
-
-    return batches;
-  }, [activeDutyDoctor, dayOfWeekForSelectedDate, existingBookings]);
-
-
-  // Keep selectedTime synchronized to first available batch
+  // Keep selectedTime synchronized to first available slot
   useEffect(() => {
-    if (consultationBatches.length > 0) {
-      const match = consultationBatches.find((b) => b.batchTime === selectedTime);
-      if (!match || match.isFull) {
-        const firstAvail = consultationBatches.find((b) => !b.isFull) || consultationBatches[0];
-        if (firstAvail && firstAvail.batchTime !== selectedTime) {
-          setSelectedTime(firstAvail.batchTime);
+    if (consultationSlots.length > 0) {
+      const match = consultationSlots.find((s) => s.slotTime === selectedTime && s.isAvailable);
+      if (!match) {
+        const firstAvail = consultationSlots.find((s) => s.isAvailable);
+        if (firstAvail && firstAvail.slotTime !== selectedTime) {
+          setSelectedTime(firstAvail.slotTime);
         }
       }
     }
-  }, [consultationBatches, selectedTime]);
+  }, [consultationSlots, selectedTime]);
 
-  const selectedBatch = useMemo<ConsultationBatch | null>(() => {
-    if (consultationBatches.length === 0) return null;
-    return consultationBatches.find((b) => b.batchTime === selectedTime) || consultationBatches[0];
-  }, [consultationBatches, selectedTime]);
+  const selectedSlot = useMemo<ConsultationSlot | null>(() => {
+    if (consultationSlots.length === 0) return null;
+    return consultationSlots.find((s) => s.slotTime === selectedTime) || null;
+  }, [consultationSlots, selectedTime]);
+
+
+  const isDailyCapacityReached = useMemo(() => {
+    if (dayShiftGroups.length === 0) return false;
+    return dayShiftGroups.every((g) => g.isCapacityReached);
+  }, [dayShiftGroups]);
 
   const formattedPreviewDate = useMemo(() => {
     if (!selectedDate) return "Select date";
@@ -898,8 +885,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   }, [selectedDate]);
 
   const formattedPreviewTime = useMemo(() => {
-    return selectedBatch ? selectedBatch.label : selectedTime ? formatTime12h(selectedTime) : activeDoctorHours;
-  }, [selectedBatch, selectedTime, activeDoctorHours]);
+    return selectedSlot ? selectedSlot.timeRange : selectedTime ? formatTime12h(selectedTime) : activeDoctorHours;
+  }, [selectedSlot, selectedTime, activeDoctorHours]);
 
   // Note: AI condition, confidence, questionnaire, and photo are cleanly initialized
   // in useState from draft / scanContext, avoiding harmful overwrites on step navigation.
@@ -909,9 +896,44 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     let cancelled = false;
     async function loadClinic() {
       setLoadingClinic(true);
-      const clinicIdFromUrl = searchParams.get("clinic");
+      let targetClinicId = searchParams.get("clinic");
 
-      if (!clinicIdFromUrl) {
+      // Query available approved clinics from Supabase and select default if none in URL
+      try {
+        const { data: allClinics } = await supabase
+          .from("clinic")
+          .select("clinic_id, name, district")
+          .eq("status", "approved");
+
+        if (allClinics && allClinics.length > 0) {
+          setAvailableClinics(allClinics.map((c: any) => ({ id: c.clinic_id, name: c.name, district: c.district })));
+          if (!targetClinicId) {
+            targetClinicId = allClinics[0].clinic_id;
+          }
+        }
+      } catch (err) {
+        console.warn("[AppointmentPage] Error loading clinic list:", err);
+      }
+
+      if (!targetClinicId) {
+        try {
+          const cachedClinicId = sessionStorage.getItem("dermai_selected_clinic_id");
+          if (cachedClinicId) {
+            targetClinicId = cachedClinicId;
+          } else {
+            const { data: anyClinic } = await supabase
+              .from("clinic")
+              .select("clinic_id")
+              .limit(1)
+              .maybeSingle();
+            if (anyClinic?.clinic_id) {
+              targetClinicId = anyClinic.clinic_id;
+            }
+          }
+        } catch {}
+      }
+
+      if (!targetClinicId) {
         setLoadingClinic(false);
         return;
       }
@@ -934,7 +956,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             clinic_service_offered ( service_name ),
             clinic_operating_hours ( day_of_week, open_time, close_time )
           `)
-          .eq("clinic_id", clinicIdFromUrl)
+          .eq("clinic_id", targetClinicId)
           .maybeSingle();
 
         // Fetch doctors with resilient query and local cache fallback
@@ -943,7 +965,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           const { data: docRows1, error: err1 } = await supabase
             .from("clinic_doctor")
             .select("*")
-            .eq("clinic_id", clinicIdFromUrl);
+            .eq("clinic_id", targetClinicId);
 
           if (!err1 && Array.isArray(docRows1) && docRows1.length > 0) {
             rawDoctorRows = docRows1;
@@ -1004,10 +1026,25 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           .map((d: any) => {
             const docName = d.doctor_name || d.name || "Attending Dermatologist";
 
-            let pDays = parseDoctorDutyDays(d.duty_days || d.dutyDays, d.duty_schedule || d.dutySchedule);
-            let parsedSched = parseDoctorDutySchedule(d.duty_schedule || d.dutySchedule);
-            let startT = d.duty_start_time || d.dutyStartTime || "09:00";
+            const rawSchedObj = d.duty_schedule || d.dutySchedule;
+            let weeklySched = parseDoctorSchedule(
+              rawSchedObj,
+              d.duty_days || d.dutyDays,
+              d.duty_start_time || d.dutyStartTime || "08:00",
+              d.duty_end_time || d.dutyEndTime || "17:00"
+            );
+
+            let pDays = Object.keys(weeklySched.weeklyShifts).filter(
+              (day) => weeklySched.weeklyShifts[day] && weeklySched.weeklyShifts[day].length > 0
+            );
+            if (pDays.length === 0) {
+              pDays = parseDoctorDutyDays(d.duty_days || d.dutyDays, rawSchedObj);
+            }
+
+            let startT = d.duty_start_time || d.dutyStartTime || "08:00";
             let endT = d.duty_end_time || d.dutyEndTime || "17:00";
+            let maxPatients = weeklySched.maxPatientsPerShift || 10;
+            let slotInterval = weeklySched.slotIntervalMinutes || 30;
 
             // Live synchronization with clinic roster settings
             try {
@@ -1017,28 +1054,37 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 if (Array.isArray(parsed)) {
                   const match = parsed.find((cd: any) => isDoctorMatch(cd, d));
                   if (match) {
-                    const localDays = parseDoctorDutyDays(match.dutyDays || match.duty_days, match.dutySchedule || match.duty_schedule);
-                    if (localDays.length > 0) {
-                      pDays = localDays;
-                    }
-                    const localSched = parseDoctorDutySchedule(match.dutySchedule || match.duty_schedule);
-                    if (localSched) {
-                      parsedSched = { ...(parsedSched || {}), ...localSched };
+                    const localWeekly = parseDoctorSchedule(
+                      match.dutySchedule || match.duty_schedule || (match.weeklyShifts ? match : undefined),
+                      match.dutyDays || match.duty_days,
+                      match.dutyStartTime || "08:00",
+                      match.dutyEndTime || "17:00"
+                    );
+                    const localActiveDays = Object.keys(localWeekly.weeklyShifts).filter(
+                      (day) => localWeekly.weeklyShifts[day] && localWeekly.weeklyShifts[day].length > 0
+                    );
+                    if (localActiveDays.length > 0) {
+                      weeklySched = localWeekly;
+                      pDays = localActiveDays;
                     }
                     if (match.dutyStartTime) startT = match.dutyStartTime;
                     if (match.dutyEndTime) endT = match.dutyEndTime;
+                    if (match.maxPatientsPerDay || match.maxPatientsPerShift) {
+                      maxPatients = Number(match.maxPatientsPerDay || match.maxPatientsPerShift);
+                      weeklySched.maxPatientsPerShift = maxPatients;
+                    }
+                    if (match.slotIntervalMinutes) {
+                      slotInterval = Number(match.slotIntervalMinutes);
+                      weeklySched.slotIntervalMinutes = slotInterval;
+                    }
                   }
                 }
               }
             } catch {}
 
-            // If duty days are unconfigured, inherit from custom schedule days or weekdays
+            // If duty days are unconfigured, default to Mon-Fri
             if (pDays.length === 0) {
-              if (parsedSched && Object.keys(parsedSched).length > 0) {
-                pDays = Object.keys(parsedSched);
-              } else {
-                pDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-              }
+              pDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
             }
 
             let specStr = "General Dermatology";
@@ -1061,15 +1107,25 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               dutyDays: pDays,
               dutyStartTime: startT,
               dutyEndTime: endT,
-              dutySchedule: parsedSched,
+              dutySchedule: rawSchedObj,
+              weeklySchedule: weeklySched,
+              maxPatientsPerDay: maxPatients,
+              slotIntervalMinutes: slotInterval,
               status: d.status || "Active",
             };
           });
 
         if (!cancelled && !error && data) {
           let hoursStr = "";
+          let clinicOpenTime = "08:00";
+          let clinicCloseTime = "17:00";
+          let clinicOpDays = "Monday - Saturday";
+
           if (Array.isArray(data.clinic_operating_hours) && data.clinic_operating_hours.length > 0) {
             const h = data.clinic_operating_hours[0];
+            if (h.open_time) clinicOpenTime = String(h.open_time).slice(0, 5);
+            if (h.close_time) clinicCloseTime = String(h.close_time).slice(0, 5);
+            if (h.day_of_week) clinicOpDays = h.day_of_week;
             const op = h.open_time ? formatTime12h(h.open_time) : "8:00 AM";
             const cl = h.close_time ? formatTime12h(h.close_time) : "5:00 PM";
             hoursStr = `${h.day_of_week || "Monday - Saturday"}: ${op} – ${cl}`.trim();
@@ -1110,10 +1166,16 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                     photosList = matched.clinicPhotos.filter(Boolean);
                   }
                   if (matched?.hours && !hoursStr) hoursStr = matched.hours;
+                  if (matched?.openTime) clinicOpenTime = matched.openTime;
+                  if (matched?.closeTime) clinicCloseTime = matched.closeTime;
+                  if (matched?.operatingDays) clinicOpDays = matched.operatingDays;
                 }
               }
             } catch {}
           }
+
+          let clinicInterval = 30;
+          let clinicMaxPatients = 20;
 
           // Overlay real-time clinic settings
           try {
@@ -1124,6 +1186,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 (sett.name && data.name && sett.name.toLowerCase().trim() === data.name.toLowerCase().trim()) ||
                 (sett.email && data.email && sett.email.toLowerCase().trim() === data.email.toLowerCase().trim());
               if (isMatch) {
+                if (sett.openTime) clinicOpenTime = sett.openTime;
+                if (sett.closeTime) clinicCloseTime = sett.closeTime;
+                if (sett.operatingDays) clinicOpDays = sett.operatingDays;
                 if (sett.operatingDays || sett.openTime || sett.closeTime) {
                   const oDays = sett.operatingDays || "Monday - Saturday";
                   const oOpen = sett.openTime ? formatTime12h(sett.openTime) : "8:00 AM";
@@ -1135,6 +1200,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 if (sett.phone) clinicPhone = sett.phone;
                 if (sett.description) clinicDesc = sett.description;
                 if (sett.logo) logoUrl = sett.logo;
+                if (sett.slotIntervalMinutes) clinicInterval = Number(sett.slotIntervalMinutes);
+                if (sett.maxPatientsPerDay) clinicMaxPatients = Number(sett.maxPatientsPerDay);
               }
             }
           } catch {}
@@ -1152,13 +1219,18 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             doctors: doctorsList,
             conditionsTreated: servicesList,
             photos: photosList,
+            slotIntervalMinutes: clinicInterval,
+            maxPatientsPerDay: clinicMaxPatients,
+            openTime: clinicOpenTime,
+            closeTime: clinicCloseTime,
+            operatingDays: clinicOpDays,
           });
         } else if (!cancelled) {
           // Fallback query if nested relations were not available
           const { data: simpleData } = await supabase
             .from("clinic")
             .select("clinic_id, name, logo_url, district, address, phone, status, description, consultation_fee")
-            .eq("clinic_id", clinicIdFromUrl)
+            .eq("clinic_id", targetClinicId)
             .maybeSingle();
 
           if (simpleData) {
@@ -1174,7 +1246,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               const { data: pRows } = await supabase
                 .from("clinic_photo")
                 .select("photo_url")
-                .eq("clinic_id", clinicIdFromUrl)
+                .eq("clinic_id", targetClinicId)
                 .order("sort_order");
               if (pRows && pRows.length > 0) {
                 photosList = pRows.map((p: any) => p.photo_url).filter(Boolean);
@@ -1310,8 +1382,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         setSubmitError("Please enter your contact phone number.");
         return false;
       }
-      if (patientContact.trim().length !== 11) {
-        setSubmitError("Patient phone number must be exactly 11 digits (e.g. 09171234567).");
+      const cleanContact = patientContact.replace(/\D/g, "");
+      if (cleanContact.length < 10 || cleanContact.length > 12) {
+        setSubmitError("Patient phone number must be a valid 11-digit number (e.g. 09171234567).");
         return false;
       }
       if (!patientAddress.trim()) {
@@ -1334,8 +1407,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         setSubmitError("Please enter your emergency contact's phone number.");
         return false;
       }
-      if (emergencyContactPhone.trim().length !== 11) {
-        setSubmitError("Emergency contact phone number must be exactly 11 digits (e.g. 09171234567).");
+      const cleanEmergency = emergencyContactPhone.replace(/\D/g, "");
+      if (cleanEmergency.length < 10 || cleanEmergency.length > 12) {
+        setSubmitError("Emergency contact phone number must be a valid 11-digit number (e.g. 09171234567).");
         return false;
       }
       if (!emergencyRelationship.trim()) {
@@ -1415,56 +1489,79 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     }
 
     if (!selectedScanId) {
-      setSubmitError("Please select a primary AI skin scan for this appointment.");
+      setSubmitError("Please select a completed AI skin scan for this appointment.");
       return;
     }
 
     setSubmitting(true);
     try {
-      // 1. Strictly verify scan ownership and completion status in database
-      const { data: verifiedScan, error: verifyError } = await supabase
-        .from("ai_scan_result")
-        .select(`
-          analysis_id,
-          confidence_score,
-          body_part,
-          scanned_at,
-          photo_url,
-          condition_id,
-          questionnaire_answers,
-          user_id,
-          status,
-          skin_condition:condition_id (
-            name,
-            local_name
-          )
-        `)
-        .eq("analysis_id", selectedScanId)
-        .eq("user_id", activeUserId)
-        .eq("status", "completed")
-        .maybeSingle();
+      let scanIdToSave: string | null = null;
+      let photoPath: string | null = null;
+      let conditionLabel = selectedScan?.conditionName || "Skin Assessment";
+      let confNum: number | null = selectedScan?.confidence ? Number(selectedScan.confidence) : null;
+      let condId: string | null = selectedScan?.conditionId || null;
+      let qAnswers: any = selectedScan?.questionnaireAnswers || null;
 
-      if (verifyError || !verifiedScan) {
+      try {
+        const { data: verifiedScan } = await supabase
+          .from("ai_scan_result")
+          .select(`
+            analysis_id,
+            confidence_score,
+            body_part,
+            scanned_at,
+            photo_url,
+            condition_id,
+            questionnaire_answers,
+            user_id,
+            status,
+            skin_condition:condition_id (
+              name,
+              local_name
+            )
+          `)
+          .eq("analysis_id", selectedScanId)
+          .eq("user_id", activeUserId)
+          .maybeSingle();
+
+        if (verifiedScan) {
+          scanIdToSave = verifiedScan.analysis_id;
+          photoPath = verifiedScan.photo_url || selectedScan?.photoUrl || null;
+          const verifiedCondObj = Array.isArray(verifiedScan.skin_condition)
+            ? verifiedScan.skin_condition[0]
+            : verifiedScan.skin_condition;
+          conditionLabel = verifiedCondObj?.name || selectedScan?.conditionName || "Skin Assessment";
+          confNum = verifiedScan.confidence_score !== undefined && verifiedScan.confidence_score !== null
+            ? Number(verifiedScan.confidence_score)
+            : confNum;
+          condId = verifiedScan.condition_id || condId;
+          qAnswers = verifiedScan.questionnaire_answers || qAnswers;
+        } else if (selectedScan) {
+          scanIdToSave = selectedScan.id;
+          photoPath = selectedScan.photoUrl || null;
+          conditionLabel = selectedScan.conditionName || "Skin Assessment";
+          confNum = selectedScan.confidence ? Number(selectedScan.confidence) : null;
+          condId = selectedScan.conditionId || null;
+          qAnswers = selectedScan.questionnaireAnswers || null;
+        }
+      } catch (scanErr) {
+        console.warn("[AppointmentPage] Scan resolution note:", scanErr);
+        if (selectedScan) {
+          scanIdToSave = selectedScan.id;
+          photoPath = selectedScan.photoUrl || null;
+          conditionLabel = selectedScan.conditionName || "Skin Assessment";
+        }
+      }
+
+      if (!scanIdToSave) {
         setSubmitError("The selected AI skin scan is invalid or does not belong to your account.");
         setSubmitting(false);
         return;
       }
 
-      // 2. Prepare appointment payload
-      let targetClinicId: any = selectedClinic.id;
-      if (/^\d+$/.test(String(selectedClinic.id))) {
-        targetClinicId = Number(selectedClinic.id);
-      }
-
-      const verifiedCondObj = Array.isArray(verifiedScan.skin_condition)
-        ? verifiedScan.skin_condition[0]
-        : verifiedScan.skin_condition;
-      const conditionLabel = verifiedCondObj?.name || selectedScan?.conditionName || null;
-      const confNum = verifiedScan.confidence_score !== undefined && verifiedScan.confidence_score !== null
-        ? Number(verifiedScan.confidence_score)
-        : null;
-      const photoPath = verifiedScan.photo_url || selectedScan?.photoUrl || null;
-      const scheduledDateTimeIso = `${selectedDate}T${selectedTime}:00+08:00`;
+      // 2. Prepare appointment payload with valid UUID clinic ID
+      const targetClinicId = String(selectedClinic.id);
+      const scheduledDateTimeIso = `${selectedDate}T${selectedTime || "09:00"}:00+08:00`;
 
       let assignedDocId = activeDutyDoctor?.id && !activeDutyDoctor.id.startsWith("doc-")
         ? activeDutyDoctor.id
@@ -1485,12 +1582,189 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         } catch {}
       }
 
-      const assignedQueueNum = selectedBatch?.nextQueueNumber || 1;
+      // Validate that doctor is scheduled to work on this weekday
+      const targetDay = normalizeDayName(dayOfWeekForSelectedDate);
+      const docSchedule =
+        activeDutyDoctor?.weeklySchedule ||
+        (activeDutyDoctor ? parseDoctorSchedule(activeDutyDoctor.dutySchedule, activeDutyDoctor.dutyDays) : null);
+      const doctorShifts = docSchedule?.weeklyShifts[targetDay] || [];
+
+      if (activeDutyDoctor) {
+        if (doctorShifts.length === 0 && !isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate)) {
+          setSubmitError(`Dr. ${activeDutyDoctor.name} is not scheduled to work on ${dayOfWeekForSelectedDate}.`);
+          setSubmitting(false);
+          return;
+        }
+      }
+
+      const reqStartM = timeToMinutes(selectedTime || "08:00");
+      const matchedShift = doctorShifts.find((s) => {
+        const sStart = timeToMinutes(s.startTime);
+        const sEnd = timeToMinutes(s.endTime);
+        return reqStartM >= sStart && reqStartM < sEnd;
+      });
+
+      if (activeDutyDoctor && doctorShifts.length > 0 && !matchedShift) {
+        setSubmitError(`The selected time (${formatTime12h(selectedTime)}) is outside Dr. ${activeDutyDoctor.name}'s scheduled shifts on ${dayOfWeekForSelectedDate}. Please choose a valid slot.`);
+        setSubmitting(false);
+        return;
+      }
+
+      const clinicDefaults = {
+        defaultSlotIntervalMinutes: selectedClinic?.slotIntervalMinutes || 30,
+        openTime: selectedClinic?.openTime,
+        closeTime: selectedClinic?.closeTime,
+      };
+
+      const effectiveSettings = matchedShift
+        ? getEffectiveShiftSettings(matchedShift, docSchedule, clinicDefaults)
+        : {
+            interval: activeDutyDoctor?.slotIntervalMinutes || selectedClinic?.slotIntervalMinutes || 30,
+            effectiveCapacity: 999,
+            intervalSource: "clinic" as const,
+            capacitySource: "clinic" as const,
+            possibleSlots: 999,
+            capacity: 999,
+          };
+
+      if (matchedShift) {
+        const shiftStartM = timeToMinutes(matchedShift.startTime);
+        const shiftEndM = timeToMinutes(matchedShift.endTime);
+
+        if (reqStartM + effectiveSettings.interval > shiftEndM) {
+          setSubmitError(`The selected consultation slot (${formatTime12h(selectedTime)}) exceeds the shift end time (${formatTime12h(matchedShift.endTime)}). Please choose a valid slot.`);
+          setSubmitting(false);
+          return;
+        }
+
+        // Validate interval alignment
+        if ((reqStartM - shiftStartM) % effectiveSettings.interval !== 0) {
+          setSubmitError(`The selected appointment time does not match the configured ${effectiveSettings.interval}-minute interval.`);
+          setSubmitting(false);
+          return;
+        }
+
+        // Validate breaks
+        if (Array.isArray(matchedShift.breaks)) {
+          for (const brk of matchedShift.breaks) {
+            const bStart = timeToMinutes(brk.startTime);
+            const bEnd = timeToMinutes(brk.endTime);
+            if (reqStartM < bEnd && reqStartM + effectiveSettings.interval > bStart) {
+              setSubmitError(`The selected consultation slot overlaps with a scheduled break (${formatTime12h(brk.startTime)} – ${formatTime12h(brk.endTime)}).`);
+              setSubmitting(false);
+              return;
+            }
+          }
+        }
+      }
+
+      // Validate not past if appointment date is today
+      const nowCheck = new Date();
+      const todayIsoStr = `${nowCheck.getFullYear()}-${String(nowCheck.getMonth() + 1).padStart(2, "0")}-${String(nowCheck.getDate()).padStart(2, "0")}`;
+      if (selectedDate === todayIsoStr && reqStartM <= nowCheck.getHours() * 60 + nowCheck.getMinutes()) {
+        setSubmitError(`The selected consultation slot (${formatTime12h(selectedTime)}) has already passed today.`);
+        setSubmitting(false);
+        return;
+      }
+
+      // Enforce doctor shift capacity and exclusive slot reservation directly against Supabase
+      try {
+        let capQuery = supabase
+          .from("patient_appointment")
+          .select("appointment_id, time, batch_time, date, status, assigned_doctor_id")
+          .gte("date", `${selectedDate}T00:00:00`)
+          .lte("date", `${selectedDate}T23:59:59`)
+          .neq("status", "cancelled")
+          .neq("status", "rejected");
+
+        if (assignedDocId) {
+          capQuery = capQuery.eq("assigned_doctor_id", assignedDocId);
+        } else {
+          capQuery = capQuery.eq("clinic_id", targetClinicId);
+        }
+
+        const { data: dbDayAppts } = await capQuery;
+        const activeDayBookings = (dbDayAppts || []).filter((b: any) => {
+          const st = String(b.status || "").toLowerCase().trim();
+          if (st === "cancelled" || st === "rejected" || st === "declined") return false;
+          // Multi-doctor isolation: only count appointments assigned to this doctor
+          if (assignedDocId && b.assigned_doctor_id && String(b.assigned_doctor_id) !== String(assignedDocId)) {
+            return false;
+          }
+          return true;
+        });
+
+        // Enforce shift-specific capacity
+        if (matchedShift) {
+          const shiftStartM = timeToMinutes(matchedShift.startTime);
+          const shiftEndM = timeToMinutes(matchedShift.endTime);
+          const activeShiftBookings = activeDayBookings.filter((b: any) => {
+            const bTime = (b.time || b.batch_time || "").slice(0, 5);
+            const bM = timeToMinutes(bTime);
+            return bM >= shiftStartM && bM < shiftEndM;
+          });
+
+          if (activeShiftBookings.length >= effectiveSettings.effectiveCapacity) {
+            setSubmitError(`Dr. ${activeDutyDoctor?.name || "the attending doctor"} has no remaining available slots for this ${matchedShift.label} shift. Please select another shift or date.`);
+            setSubmitting(false);
+            return;
+          }
+        }
+
+        // Check if this specific slot is already occupied for this doctor
+        const isSlotTaken = activeDayBookings.some((b: any) => {
+          if (assignedDocId && b.assigned_doctor_id && String(b.assigned_doctor_id) !== String(assignedDocId)) {
+            return false;
+          }
+          const bTime = (b.time || b.batch_time || "").slice(0, 5);
+          if (bTime === (selectedTime || "08:00").slice(0, 5)) return true;
+          if (b.date) {
+            const d = new Date(b.date);
+            if (!isNaN(d.getTime())) {
+              const hh = String(d.getHours()).padStart(2, "0");
+              const mm = String(d.getMinutes()).padStart(2, "0");
+              if (`${hh}:${mm}` === (selectedTime || "08:00").slice(0, 5)) return true;
+            }
+          }
+          return false;
+        });
+
+        if (isSlotTaken) {
+          setSubmitError(`The ${selectedSlot?.timeRange || formatTime12h(selectedTime)} slot was just reserved by another patient. Please choose another available consultation slot.`);
+          setSubmitting(false);
+          return;
+        }
+      } catch (capErr) {
+        console.warn("[AppointmentPage] Capacity pre-check warning:", capErr);
+      }
+
+      // Compute safe daily queue number scoped to this doctor and calendar date (Asia/Manila)
+      let assignedQueueNum = 1;
+      try {
+        const { data: qData, error: qErr } = await supabase.rpc("get_next_queue_number", {
+          p_clinic_id: targetClinicId,
+          p_doctor_id: assignedDocId || null,
+          p_date: scheduledDateTimeIso,
+        });
+        if (!qErr && typeof qData === "number" && qData > 0) {
+          assignedQueueNum = qData;
+        } else {
+          // Fallback query directly from patient_appointment table
+          const { data: dayAppts } = await supabase
+            .from("patient_appointment")
+            .select("queue_number, date, assigned_doctor_id, status")
+            .eq("clinic_id", targetClinicId);
+          assignedQueueNum = computeNextQueueNumber(dayAppts || existingBookings, assignedDocId, selectedDate);
+        }
+      } catch {
+        assignedQueueNum = computeNextQueueNumber(existingBookings, assignedDocId, selectedDate);
+      }
 
       const apptPayload: Record<string, any> = {
         user_id: activeUserId,
         clinic_id: targetClinicId,
         date: scheduledDateTimeIso,
+        time: `${selectedTime || "08:00"}:00`,
         status: "pending",
         patient_name: patientName.trim() || user?.user_metadata?.full_name || "Patient",
         patient_email: patientEmail.trim() || user?.email || null,
@@ -1501,67 +1775,104 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         emergency_contact_name: emergencyContactName.trim() || null,
         emergency_contact_phone: emergencyContactPhone.trim() || null,
         emergency_contact_relationship: emergencyRelationship.trim() || null,
-        questionnaire_answers: verifiedScan.questionnaire_answers || selectedScan?.questionnaireAnswers || null,
+        questionnaire_answers: qAnswers || questionnaireData || null,
         notes: notes.trim() || null,
         clinic_note: activeDutyDoctor?.name ? `Attending Doctor: ${activeDutyDoctor.name}` : null,
-        primary_scan_id: verifiedScan.analysis_id, // Authoritative relationship
+        primary_scan_id: scanIdToSave,
         skin_photo_url: photoPath,
         ai_condition_name: conditionLabel,
         ai_confidence: confNum,
-        condition_id: verifiedScan.condition_id || null,
+        condition_id: condId,
         assigned_doctor_id: assignedDocId || null,
         doctor_status: "pending-review",
         schedule_sent_to_doctor: true,
         queue_number: assignedQueueNum,
-        batch_time: selectedTime,
+        batch_time: selectedTime || "08:00",
         check_in_status: "scheduled",
-        is_walk_in: false,
       };
 
-      // 3. Insert appointment request with primary_scan_id
+      // 3. Insert appointment request into Supabase
       let insertedApptId: string | null = null;
       let { data: insertedData, error: insertError } = await supabase
         .from("patient_appointment")
         .insert(apptPayload)
-        .select("appointment_id")
+        .select("appointment_id, queue_number")
         .maybeSingle();
 
       if (insertedData?.appointment_id) {
         insertedApptId = String(insertedData.appointment_id);
       }
-
-      if (insertError && (insertError.message.includes("assigned_doctor_id") || insertError.message.includes("doctor_status") || insertError.message.includes("schedule_sent_to_doctor"))) {
-        console.warn("Retrying appointment insert without assigned_doctor_id...", insertError.message);
-        delete apptPayload.assigned_doctor_id;
-        delete apptPayload.doctor_status;
-        delete apptPayload.schedule_sent_to_doctor;
-        const retry1 = await supabase
-          .from("patient_appointment")
-          .insert(apptPayload)
-          .select("appointment_id")
-          .maybeSingle();
-        insertError = retry1.error;
-        if (retry1.data?.appointment_id) {
-          insertedApptId = String(retry1.data.appointment_id);
-        }
+      if (insertedData?.queue_number) {
+        assignedQueueNum = Number(insertedData.queue_number);
       }
 
-      // CRITICAL REQUIREMENT:
-      // If primary_scan_id fails or insertion fails, STOP the booking operation and report error.
-      // Do NOT fall back to creating an appointment without primary_scan_id!
-      if (insertError) {
-        console.error("Appointment creation failed:", insertError.message);
-        if (insertError.message.includes("primary_scan_id") || insertError.message.includes("schema cache")) {
-          setSubmitError(
-            `Database migration pending: The 'primary_scan_id' column has not been added to 'patient_appointment' in Supabase yet. Please execute the SQL migration in your Supabase SQL Editor and try again.`
-          );
-        } else {
-          setSubmitError(`Failed to submit appointment: ${insertError.message}`);
-        }
+      // Handle duplicate booking error gracefully
+      if (insertError && (insertError.message.includes("ERR_DUPLICATE_SLOT") || insertError.message.includes("exclusive_doctor_slot") || insertError.message.includes("duplicate"))) {
+        setSubmitError(`The ${selectedSlot?.timeRange || formatTime12h(selectedTime)} slot was just booked by another patient. Please choose another available consultation slot.`);
         setSubmitting(false);
         return;
       }
 
+      // Resilient column fallback: If insert failed due to optional columns, retry safely
+      if (insertError) {
+        console.warn("[AppointmentPage] First insert attempt warning, retrying with stripped optional fields:", insertError.message);
+        const retryPayload = { ...apptPayload };
+        if (insertError.message.includes("is_walk_in")) delete retryPayload.is_walk_in;
+        if (insertError.message.includes("assigned_doctor_id")) delete retryPayload.assigned_doctor_id;
+        if (insertError.message.includes("doctor_status")) delete retryPayload.doctor_status;
+        if (insertError.message.includes("schedule_sent_to_doctor")) delete retryPayload.schedule_sent_to_doctor;
+        if (insertError.message.includes("queue_number")) delete retryPayload.queue_number;
+        if (insertError.message.includes("batch_time")) delete retryPayload.batch_time;
+        if (insertError.message.includes("check_in_status")) delete retryPayload.check_in_status;
+        if (insertError.message.includes("primary_scan_id")) delete retryPayload.primary_scan_id;
+
+        const retryRes = await supabase
+          .from("patient_appointment")
+          .insert(retryPayload)
+          .select("appointment_id, queue_number")
+          .maybeSingle();
+
+        insertError = retryRes.error;
+        if (retryRes.data?.appointment_id) {
+          insertedApptId = String(retryRes.data.appointment_id);
+        }
+        if (retryRes.data?.queue_number) {
+          assignedQueueNum = Number(retryRes.data.queue_number);
+        }
+      }
+
+      if (insertError) {
+        console.error("Appointment creation failed:", insertError.message);
+        setSubmitError(`Failed to submit appointment: ${insertError.message}`);
+        setSubmitting(false);
+        return;
+      }
+
+      // Concurrency collision protection: Verify that this booking was first in time
+      if (insertedApptId && assignedDocId) {
+        try {
+          const { data: collisionCheck } = await supabase
+            .from("patient_appointment")
+            .select("appointment_id, created_at, queue_number")
+            .eq("assigned_doctor_id", assignedDocId)
+            .gte("date", `${selectedDate}T00:00:00`)
+            .lte("date", `${selectedDate}T23:59:59`)
+            .or(`time.eq.${selectedTime || "08:00"}:00,batch_time.eq.${selectedTime || "08:00"}`)
+            .neq("status", "cancelled")
+            .neq("status", "rejected")
+            .order("created_at", { ascending: true });
+
+          if (collisionCheck && collisionCheck.length > 1 && String(collisionCheck[0].appointment_id) !== insertedApptId) {
+            // Concurrent race collision: another patient booked first, rollback this one
+            await supabase.from("patient_appointment").delete().eq("appointment_id", insertedApptId);
+            setSubmitError(`This consultation slot was reserved by another patient just a moment ago. Please select another time slot.`);
+            setSubmitting(false);
+            return;
+          }
+        } catch (colErr) {
+          console.warn("[AppointmentPage] Concurrency check warning:", colErr);
+        }
+      }
 
       // 4. Save to local cache & notify listeners
       try {
@@ -1581,8 +1892,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           date: selectedDate,
           time: selectedTime,
           status: "pending",
-          primaryScanId: verifiedScan.analysis_id,
-          conditionId: verifiedScan.condition_id || undefined,
+          queueNumber: assignedQueueNum,
+          primaryScanId: scanIdToSave || undefined,
+          conditionId: condId || undefined,
           notes: notes.trim() || "",
           skinPhotoUrl: photoPath,
           aiConditionName: conditionLabel,
@@ -1614,6 +1926,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         window.dispatchEvent(new Event("appointmentCreated"));
       } catch { }
 
+      setConfirmedQueueNumber(assignedQueueNum);
       setSubmitted(true);
       try {
         sessionStorage.removeItem("dermai_appointment_draft");
@@ -1815,6 +2128,24 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <h2 className="text-lg sm:text-xl font-bold text-gray-900 tracking-tight">{selectedClinic.name}</h2>
                     {selectedClinic.verified && <VerifiedBadge size={16} className="w-4 h-4" />}
+                    {availableClinics.length > 1 && (
+                      <select
+                        value={selectedClinic.id}
+                        onChange={(e) => {
+                          const newClinicId = e.target.value;
+                          setSearchParams((prev) => {
+                            const next = new URLSearchParams(prev);
+                            next.set("clinic", newClinicId);
+                            return next;
+                          });
+                        }}
+                        className="text-[11px] font-semibold bg-slate-50 border border-gray-200 rounded-lg px-2 py-0.5 text-gray-700 ml-1.5 focus:outline-none focus:border-magenta-500"
+                      >
+                        {availableClinics.map((c) => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                   <p className="text-xs text-gray-500 mt-0.5">
                     Step 1 of 2: Patient Profile &amp; Skin Concern Photo
@@ -2138,7 +2469,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       </div>
 
                       <p className="text-[10px] text-gray-400 italic">
-                        * Preliminary AI assessment for physician review. The attending doctor will provide the official medical diagnosis.
+                        * The attending doctor will conduct an in-person physical clinical skin examination and provide the official diagnosis.
                       </p>
                     </div>
                   )}
@@ -2203,10 +2534,12 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               </div>
 
               <div className="space-y-4 text-left">
+
+
                 {/* Modern Landscape Two-Column Layout */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-                  {/* ════════ LEFT COLUMN: Minimal Landscape Calendar (7 cols on lg, 8 cols on xl) ════════ */}
-                  <div className="lg:col-span-7 xl:col-span-8 space-y-3">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                  {/* ════════ LEFT COLUMN: Minimal Landscape Calendar (7 cols on lg/xl) ════════ */}
+                  <div className="lg:col-span-7 xl:col-span-7 w-full min-w-0 space-y-3">
                     <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3.5">
                       {/* Month Title & Prev/Next Navigation */}
                       <div className="flex items-center justify-between gap-3 pb-3 border-b border-gray-100">
@@ -2357,8 +2690,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                     </div>
                   </div>
 
-                  {/* ════════ RIGHT COLUMN: Attending Doctor Selection, Summary & Booking (5 cols on lg, 4 cols on xl) ════════ */}
-                  <div className="lg:col-span-5 xl:col-span-4 space-y-3.5 lg:sticky lg:top-6">
+                  {/* ════════ RIGHT COLUMN: Attending Doctor Selection, Summary & Booking (5 cols on lg/xl) ════════ */}
+                  <div className="lg:col-span-5 xl:col-span-5 w-full min-w-0 space-y-3.5">
                     {/* 1. Attending Doctor Selection Card */}
                     <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3">
                       <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
@@ -2381,20 +2714,21 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       </div>
 
                       {onDutyDoctorsForDate.length === 0 ? (
-                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-dashed border-gray-200 text-center space-y-1">
-                          <p className="text-xs font-bold text-gray-700">General Clinic Queue</p>
+                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-dashed border-gray-200 text-center space-y-1 min-h-[76px] flex flex-col justify-center">
+                          <p className="text-xs font-bold text-gray-700">General Clinic Consultation</p>
                           <p className="text-[11px] text-gray-400">
-                            No specific doctor is scheduled for this date. Your consultation will be attended on a first-come queue basis.
+                            No specific doctor is scheduled for this date. Your consultation will be attended by an on-duty clinic doctor.
                           </p>
                         </div>
                       ) : (
                         <div className="space-y-2.5 max-h-60 overflow-y-auto pr-0.5 no-scrollbar">
                           {onDutyDoctorsForDate.map((doc) => {
                             const isDocSelected = activeDutyDoctor?.id === doc.id;
-                            const shift =
-                              doc.dutySchedule && doc.dutySchedule[dayOfWeekForSelectedDate]
-                                ? doc.dutySchedule[dayOfWeekForSelectedDate]
-                                : { startTime: doc.dutyStartTime || "09:00", endTime: doc.dutyEndTime || "17:00" };
+                            const docWeekly = doc.weeklySchedule || parseDoctorSchedule(doc.dutySchedule, doc.dutyDays);
+                            const docShifts = docWeekly.weeklyShifts[normalizeDayName(dayOfWeekForSelectedDate)] || [];
+                            const shiftSummaryText = docShifts.length > 0
+                              ? docShifts.map((s) => `${formatTime12h(s.startTime)}–${formatTime12h(s.endTime)}`).join(", ")
+                              : `${formatTime12h(doc.dutyStartTime || "08:00")} – ${formatTime12h(doc.dutyEndTime || "17:00")}`;
                             const docPhoto = getDoctorPhoto(doc);
 
                             return (
@@ -2439,7 +2773,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                   <div className="flex items-center gap-2 mt-1">
                                     <span className="text-[10px] text-gray-500 flex items-center gap-1 font-medium">
                                       <Clock className="w-3 h-3 text-magenta-500 shrink-0" />
-                                      <span>{formatTime12h(shift.startTime)} – {formatTime12h(shift.endTime)}</span>
+                                      <span>{shiftSummaryText}</span>
                                     </span>
                                     <span className="text-[9px] px-1.5 py-0.2 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                                       Available
@@ -2453,90 +2787,189 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       )}
                     </div>
 
-                    {/* 2. NowServing-Style Consultation Batches (Linked to Doctor Shift) */}
-                    <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3">
-                      <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+                    {/* 2. Dynamic Consultation Time Slots Grouped by Shift */}
+                    <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3.5">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-100 pb-2.5 gap-2">
                         <div>
                           <h4 className="text-xs sm:text-sm font-bold text-gray-900 flex items-center gap-1.5">
                             <Clock className="w-3.5 h-3.5 text-magenta-600" />
-                            <span>Select Consultation Time</span>
+                            <span>Select Consultation Time Slot</span>
                           </h4>
-                          <p className="text-[10px] text-gray-400 mt-0.5">
+                          <p className="text-[11px] text-gray-500 mt-0.5">
                             {activeDutyDoctor ? (
-                              <>Shift: <span className="font-bold text-magenta-700">{activeDoctorHours}</span> • 3 slots per batch</>
+                              <>
+                                Attending: <strong className="text-magenta-700 font-semibold">{activeDutyDoctor.name.startsWith("Dr") ? activeDutyDoctor.name : `Dr. ${activeDutyDoctor.name}`}</strong> •{" "}
+                                <span className="text-gray-700 font-medium">{dayOfWeekForSelectedDate} Shifts</span>
+                              </>
                             ) : (
-                              <>General Clinic Hours • 3 slots per 1-hour batch</>
+                              <>Clinic Hours: <strong className="text-magenta-700 font-semibold">{activeDoctorHours}</strong></>
                             )}
                           </p>
                         </div>
+
+                        {/* Overall Day Status */}
+                        {dayShiftGroups.length > 0 && (
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`text-[10px] font-bold px-2.5 py-1 rounded-full border shadow-2xs ${
+                                isDailyCapacityReached
+                                  ? "bg-rose-50 text-rose-700 border-rose-200"
+                                  : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              }`}
+                            >
+                              {isDailyCapacityReached
+                                ? "All Shifts at Capacity"
+                                : `${dayShiftGroups.length} Active Shift${dayShiftGroups.length > 1 ? "s" : ""}`}
+                            </span>
+                          </div>
+                        )}
                       </div>
 
-                      {consultationBatches.length === 0 ? (
-                        <div className="p-3 text-center text-xs text-gray-400">
-                          No consultation batches available for this doctor's shift.
+                      {/* Shift groups rendering */}
+                      {dayShiftGroups.length === 0 ? (
+                        <div className="p-5 text-center text-xs border border-dashed border-gray-200 rounded-2xl bg-slate-50/50 space-y-1.5 min-h-[220px] flex flex-col justify-center items-center">
+                          {activeDutyDoctor && !isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate) ? (
+                            <>
+                              <p className="font-bold text-gray-800">
+                                Dr. {activeDutyDoctor.name} is not on duty on {dayOfWeekForSelectedDate}.
+                              </p>
+                              <p className="text-[11px] text-gray-500">
+                                Scheduled duty days: <strong className="text-magenta-700">{activeDutyDoctor.dutyDays?.join(", ") || "Mon–Fri"}</strong>
+                              </p>
+                              {onDutyDoctorsForDate.length > 0 && (
+                                <p className="text-[11px] text-magenta-700 font-semibold pt-1">
+                                  Other doctors are on duty on this date. Select an attending doctor above.
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <p className="text-gray-400">No consultation shifts or slots available for this duty date.</p>
+                          )}
                         </div>
                       ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-0.5 no-scrollbar">
-                          {consultationBatches.map((batch) => {
-                            const isBatchSelected = selectedTime === batch.batchTime;
-                            const isFull = batch.isFull;
-
+                        <div className="space-y-4 max-h-[320px] overflow-y-auto pr-1.5">
+                          {dayShiftGroups.map((group) => {
                             return (
-                              <button
-                                key={batch.batchTime}
-                                type="button"
-                                disabled={isFull}
-                                onClick={() => {
-                                  if (!isFull) {
-                                    setSelectedTime(batch.batchTime);
-                                  }
-                                }}
-                                className={`p-3 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${
-                                  isFull
-                                    ? "bg-slate-50/70 border-gray-200 text-gray-400 cursor-not-allowed opacity-60"
-                                    : isBatchSelected
-                                    ? "bg-magenta-50/90 border-2 border-magenta-600 text-gray-900 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer"
-                                    : "bg-white border-gray-200/90 text-gray-800 hover:border-magenta-300 hover:bg-slate-50/60 cursor-pointer"
+                              <div
+                                key={group.shift.id}
+                                className={`p-3.5 rounded-2xl border transition-all ${
+                                  group.isCapacityReached
+                                    ? "bg-rose-50/30 border-rose-200"
+                                    : "bg-slate-50/40 border-gray-200/90"
                                 }`}
                               >
-                                <div className="flex items-center justify-between gap-1 w-full">
-                                  <span className="text-xs font-bold leading-tight text-gray-900">
-                                    {batch.timeRange}
-                                  </span>
-                                  {isFull ? (
-                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200 uppercase tracking-wide">
-                                      Full
+                                {/* Shift Header */}
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 pb-2 border-b border-gray-100">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs font-bold text-gray-900">
+                                      {group.shift.label}
                                     </span>
-                                  ) : isBatchSelected ? (
-                                    <span className="w-4 h-4 rounded-full bg-magenta-600 text-white flex items-center justify-center text-[10px] shrink-0 font-bold">
-                                      ✓
+                                    <span className="text-[11px] font-semibold text-magenta-700 bg-magenta-50 px-2 py-0.5 rounded-full border border-magenta-200/60">
+                                      {formatTime12h(group.shift.startTime)} – {formatTime12h(group.shift.endTime)}
                                     </span>
-                                  ) : null}
+                                    <span className="text-[10px] text-gray-500 font-medium">
+                                      {group.effectiveSettings.interval}m interval
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <span
+                                      className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${
+                                        group.isCapacityReached
+                                          ? "bg-rose-100 text-rose-700 border-rose-200"
+                                          : group.remainingCapacity <= 2
+                                          ? "bg-amber-100 text-amber-700 border-amber-200"
+                                          : "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                      }`}
+                                    >
+                                      {group.isCapacityReached
+                                        ? `Shift Full (${group.effectiveSettings.effectiveCapacity} slots)`
+                                        : `${group.totalBooked} / ${group.effectiveSettings.effectiveCapacity} Booked (${group.remainingCapacity} left)`}
+                                    </span>
+                                  </div>
                                 </div>
 
-                                <div className="mt-2.5 pt-1.5 border-t border-gray-100/80 flex items-center justify-between text-[10px]">
-                                  {isFull ? (
-                                    <span className="text-rose-600 font-semibold">Booked out</span>
-                                  ) : (
-                                    <>
-                                      <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
-                                        {batch.availableSlots} of {batch.totalSlots} left
-                                      </span>
-                                      <span className="text-magenta-700 font-bold">
-                                        Queue #{batch.nextQueueNumber}
-                                      </span>
-                                    </>
-                                  )}
-                                </div>
-                              </button>
+                                {/* Notice if shift reached capacity */}
+                                {group.isCapacityReached && (
+                                  <div className="mt-2 p-2 rounded-xl bg-rose-50 border border-rose-200 text-[11px] text-rose-800 flex items-center gap-1.5 font-medium">
+                                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                    <span>
+                                      All {group.effectiveSettings.effectiveCapacity} consultation slots for this shift are fully booked.
+                                    </span>
+                                  </div>
+                                )}
+
+                                {/* Slot Grid */}
+                                {group.slots.length === 0 ? (
+                                  <p className="text-[11px] text-gray-400 mt-2 text-center py-2">
+                                    No slots fit within this shift duration.
+                                  </p>
+                                ) : (
+                                  <div className="grid grid-cols-3 gap-2.5 sm:gap-3 mt-3">
+                                    {group.slots.map((slot) => {
+                                      const isSlotSelected = selectedTime === slot.slotTime;
+                                      const isAvailable = slot.isAvailable;
+
+                                      return (
+                                        <button
+                                          key={slot.slotTime}
+                                          type="button"
+                                          disabled={!isAvailable}
+                                          onClick={() => {
+                                            if (isAvailable) {
+                                              setSelectedTime(slot.slotTime);
+                                            }
+                                          }}
+                                          className={`py-2.5 sm:py-3 px-3 rounded-2xl border text-left transition-all relative flex items-center justify-between gap-1.5 ${
+                                            !isAvailable
+                                              ? "bg-slate-50/70 border-gray-200 text-gray-400 cursor-not-allowed opacity-60"
+                                              : isSlotSelected
+                                              ? "bg-magenta-50/90 border-2 border-magenta-600 text-magenta-950 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer font-bold"
+                                              : "bg-white border-gray-200 text-gray-800 hover:border-magenta-300 hover:bg-magenta-50/30 cursor-pointer shadow-2xs"
+                                          }`}
+                                        >
+                                          <span className={`text-xs sm:text-[13px] font-bold leading-tight ${
+                                            isSlotSelected
+                                              ? "text-magenta-950 font-extrabold"
+                                              : !isAvailable
+                                              ? "text-gray-400"
+                                              : "text-gray-900"
+                                          }`}>
+                                            {slot.label}
+                                          </span>
+
+                                          {slot.isBooked ? (
+                                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200 uppercase tracking-wide shrink-0">
+                                              Booked
+                                            </span>
+                                          ) : slot.isPast ? (
+                                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200 uppercase tracking-wide shrink-0">
+                                              Passed
+                                            </span>
+                                          ) : slot.isCapacityFull ? (
+                                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 uppercase tracking-wide shrink-0">
+                                              Full
+                                            </span>
+                                          ) : isSlotSelected ? (
+                                            <span className="w-4 h-4 rounded-full bg-magenta-600 text-white flex items-center justify-center text-[10px] shrink-0 font-bold shadow-2xs">
+                                              ✓
+                                            </span>
+                                          ) : (
+                                            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" title="Available" />
+                                          )}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
                             );
                           })}
                         </div>
                       )}
                     </div>
 
-                    {/* 3. NowServing-Style Consultation Summary Card */}
+                    {/* 3. Consultation Summary Card */}
                     <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3.5">
                       <div className="flex items-center justify-between border-b border-gray-100 pb-2">
                         <h4 className="text-xs sm:text-sm font-bold text-gray-900 flex items-center gap-1.5">
@@ -2552,30 +2985,35 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         </button>
                       </div>
 
-                      {/* Prominent NowServing Queue Card */}
-                      {selectedBatch && (
-                        <div className="p-3.5 rounded-2xl bg-magenta-50/80 border border-magenta-200/80 space-y-1.5">
+                      {/* Prominent Slot Consultation Details */}
+                      {selectedSlot ? (
+                        <div className="p-3.5 rounded-2xl bg-magenta-50/80 border border-magenta-200/80 space-y-1.5 min-h-[96px] flex flex-col justify-center">
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-bold uppercase tracking-wider text-magenta-800">
-                              Your Assigned Queue
+                              Selected Consultation Slot
                             </span>
                             <span className="px-2.5 py-0.5 rounded-full bg-magenta-600 text-white font-bold text-xs shadow-2xs">
-                              Queue #{selectedBatch.nextQueueNumber}
+                              {selectedSlot.durationMinutes} mins
                             </span>
                           </div>
-                          <p className="text-xs font-bold text-gray-900">
-                            {activeDutyDoctor?.name || "Attending Dermatologist"}
+                          <p className="text-xs font-bold text-gray-900 truncate">
+                            {activeDutyDoctor?.name ? (activeDutyDoctor.name.startsWith("Dr") ? activeDutyDoctor.name : `Dr. ${activeDutyDoctor.name}`) : "Attending Dermatologist"}
                           </p>
                           <p className="text-[11px] text-gray-700">
-                            Batch: <strong className="text-magenta-900 font-semibold">{selectedBatch.label}</strong> ({selectedBatch.timeRange})
+                            Time Slot: <strong className="text-magenta-900 font-semibold">{selectedSlot.timeRange}</strong>
                           </p>
                           <p className="text-[10px] text-gray-500 italic">
-                            Estimated call window: ~{selectedBatch.estimatedWindow}
+                            Slot #{selectedSlot.slotIndex} of shift • Individual patient consultation
                           </p>
+                        </div>
+                      ) : (
+                        <div className="p-3.5 rounded-2xl bg-slate-50/80 border border-dashed border-gray-200/90 space-y-1 text-center min-h-[96px] flex flex-col justify-center">
+                          <p className="text-xs font-semibold text-gray-700">No Time Slot Selected</p>
+                          <p className="text-[11px] text-gray-400">Please choose an available consultation slot above.</p>
                         </div>
                       )}
 
-                      {/* Clean Minimal NowServing Schedule Details */}
+                      {/* Clean Minimal Schedule Details */}
                       <div className="p-3.5 rounded-2xl bg-slate-50 border border-gray-100 space-y-2 text-xs">
                         <div className="flex items-start gap-3">
                           {selectedClinic.logo ? (
@@ -2627,7 +3065,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         <button
                           type="button"
                           onClick={() => handleSubmitAppointment()}
-                          disabled={submitting || (selectedBatch?.isFull ?? false)}
+                          disabled={submitting || (selectedSlot ? !selectedSlot.isAvailable : false) || isDailyCapacityReached}
                           className="w-full py-3 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-bold text-xs uppercase tracking-wider shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
                         >
                           {submitting ? (

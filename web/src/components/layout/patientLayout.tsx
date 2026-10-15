@@ -372,7 +372,7 @@ export default function UserLayout({
         .limit(1)
         .maybeSingle();
 
-    if (subData) {
+      if (subData) {
         const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
         tier = planObj?.name || "Pro Plan";
       }
@@ -460,7 +460,7 @@ export default function UserLayout({
             localStorage.setItem(key, JSON.stringify(patched));
           }
         }
-      } catch {}
+      } catch { }
     }
 
     try {
@@ -468,7 +468,7 @@ export default function UserLayout({
         .from("user_notification")
         .update({ is_read: true })
         .eq("notif_id", notifId);
-    } catch {}
+    } catch { }
   };
 
   const markAllRead = async () => {
@@ -487,7 +487,7 @@ export default function UserLayout({
           localStorage.setItem(key, JSON.stringify(patched));
         }
       }
-    } catch {}
+    } catch { }
 
     try {
       await supabase
@@ -495,7 +495,7 @@ export default function UserLayout({
         .update({ is_read: true })
         .eq("user_id", user.id)
         .eq("is_read", false);
-    } catch {}
+    } catch { }
   };
 
   useEffect(() => {
@@ -574,7 +574,7 @@ export default function UserLayout({
       {/* Sidebar */}
       <aside
         className={cn(
-          "flex flex-col w-70 bg-white border-r border-gray-100 h-screen fixed left-0 top-0 z-50 overflow-hidden",
+          "flex flex-col w-70 bg-white border-r border-gray-100 h-screen fixed left-0 top-0 z-50 overflow-hidden text-[14px]",
           "transition-transform duration-300 ease-in-out",
           "shadow-[4px_0_32px_rgba(0,0,0,0.08)] lg:shadow-none",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
@@ -623,13 +623,13 @@ export default function UserLayout({
         </div>
 
         {/* Navigation Sections */}
-        <div className="flex-1 overflow-y-auto no-scrollbar py-3 px-3 space-y-1">
+        <div className="flex-1 overflow-y-auto no-scrollbar py-3 px-3 space-y-1 text-[14px]">
           {/* 1. Dashboard */}
           <Link
             to="/dashboard"
             onClick={() => setSidebarOpen(false)}
             className={cn(
-              "flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors",
+              "flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[15px] font-semibold transition-colors",
               location.pathname === "/dashboard"
                 ? "bg-magenta-50 text-magenta-600"
                 : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
@@ -651,7 +651,7 @@ export default function UserLayout({
                   type="button"
                   onClick={() => toggleSection(section.id)}
                   className={cn(
-                    "w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-semibold uppercase tracking-wider transition-all select-none text-left cursor-pointer",
+                    "w-full flex items-center justify-between px-3 py-2 rounded-xl text-[13px] font-semibold uppercase tracking-wider transition-all select-none text-left cursor-pointer",
                     isChildActive
                       ? "text-magenta-700 bg-magenta-50/40 hover:bg-magenta-50/70"
                       : "text-gray-400 hover:text-gray-700 hover:bg-gray-50"
@@ -693,7 +693,7 @@ export default function UserLayout({
                               to={link.path}
                               onClick={() => setSidebarOpen(false)}
                               className={cn(
-                                "block px-3 py-2 rounded-xl text-sm font-medium pl-9 transition-colors",
+                                "block px-3 py-2 rounded-xl text-[14px] font-medium pl-9 transition-colors",
                                 isActive
                                   ? "bg-magenta-50 text-magenta-600 font-semibold"
                                   : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
@@ -716,7 +716,7 @@ export default function UserLayout({
         <div className="p-3.5 border-t border-gray-100 bg-gray-50/50 shrink-0">
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors bg-white border border-gray-200 cursor-pointer"
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-[14px] font-medium text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors bg-white border border-gray-200 cursor-pointer"
           >
             <LogOut className="w-4.5 h-4.5" />
             Logout
@@ -809,10 +809,10 @@ export default function UserLayout({
                               isBroadcast
                                 ? "bg-amber-100 text-amber-600"
                                 : isAppointment
-                                ? "bg-blue-100 text-blue-600"
-                                : isScan
-                                ? "bg-magenta-100 text-magenta-600"
-                                : "bg-purple-100 text-purple-600"
+                                  ? "bg-blue-100 text-blue-600"
+                                  : isScan
+                                    ? "bg-magenta-100 text-magenta-600"
+                                    : "bg-purple-100 text-purple-600"
                             )}
                           >
                             {isBroadcast ? (

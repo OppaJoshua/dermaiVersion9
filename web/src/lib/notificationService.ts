@@ -2,7 +2,16 @@ import { supabase } from "./supabaseClient";
 
 export interface PatientNotificationPayload {
   userId: string;
-  type: "appointment-scheduled" | "appointment-rejected" | "appointment-completed" | "scan-completed" | "broadcast" | "system";
+  type:
+    | "appointment-scheduled"
+    | "appointment-rejected"
+    | "appointment-completed"
+    | "appointment-reschedule-needed"
+    | "appointment-reschedule-declined"
+    | "doctor-assigned"
+    | "scan-completed"
+    | "broadcast"
+    | "system";
   subtype?: string;
   title: string;
   body: string;

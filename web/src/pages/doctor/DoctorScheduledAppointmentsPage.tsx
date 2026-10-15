@@ -119,12 +119,14 @@ export default function DoctorScheduledAppointmentsPage() {
         a.doctorStatus === "approved" &&
         !a.doctorDone &&
         a.status !== "completed" &&
+        a.checkInStatus !== "completed" &&
+        a.checkInStatus !== "no-show" &&
         !!a.date
     );
   }, [appointments]);
 
   const completedList = useMemo(() => {
-    return appointments.filter((a) => a.status === "completed" || a.doctorDone);
+    return appointments.filter((a) => a.status === "completed" || a.doctorDone || a.checkInStatus === "completed" || a.checkInStatus === "no-show");
   }, [appointments]);
 
   // Counts for the tabs are derived only from real appointment data
@@ -134,9 +136,9 @@ export default function DoctorScheduledAppointmentsPage() {
   // Active appointments according to selected tab
   const activeTabAppointments = useMemo(() => {
     if (tab === "completed") {
-      return approvedAppointments.filter((a) => a.status === "completed" || a.doctorDone);
+      return approvedAppointments.filter((a) => a.status === "completed" || a.doctorDone || a.checkInStatus === "completed" || a.checkInStatus === "no-show");
     }
-    return approvedAppointments.filter((a) => a.status !== "completed" && !a.doctorDone);
+    return approvedAppointments.filter((a) => a.status !== "completed" && !a.doctorDone && a.checkInStatus !== "completed" && a.checkInStatus !== "no-show");
   }, [approvedAppointments, tab]);
 
   // Map of counts per date (YYYY-MM-DD -> count)
@@ -596,7 +598,13 @@ export default function DoctorScheduledAppointmentsPage() {
                           className="h-10 px-4.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-xs shrink-0 cursor-pointer w-full sm:w-auto"
                         >
                           <ClipboardList className="w-3.5 h-3.5" />
-                          <span>{tab === "completed" || appt.doctorDone ? "View Result" : "Conduct Visit"}</span>
+                          <span>
+                            {appt.checkInStatus === "no-show"
+                              ? "View No-Show Record"
+                              : tab === "completed" || appt.doctorDone || appt.status === "completed"
+                              ? "View Result"
+                              : "Conduct Visit"}
+                          </span>
                         </button>
                       </div>
                     </div>
@@ -707,7 +715,7 @@ export default function DoctorScheduledAppointmentsPage() {
                       <span className="text-[11px] text-slate-400 font-semibold block uppercase">
                         Date
                       </span>
-                      <span className="font-bold text-slate-900">
+                      <span className="font-bold text-slate-900 truncate block">
                         {formatDateHeader(viewingAppt.date)}
                       </span>
                     </div>
@@ -715,7 +723,7 @@ export default function DoctorScheduledAppointmentsPage() {
                       <span className="text-[11px] text-slate-400 font-semibold block uppercase">
                         Time
                       </span>
-                      <span className="font-bold text-slate-900">
+                      <span className="font-bold text-slate-900 truncate block">
                         {formatTime(viewingAppt.time, viewingAppt.date)}
                       </span>
                     </div>
@@ -826,7 +834,7 @@ export default function DoctorScheduledAppointmentsPage() {
                     </label>
                     <input
                       type="text"
-                      disabled={viewingAppt.doctorDone}
+                      disabled={viewingAppt.doctorDone || viewingAppt.checkInStatus === "no-show" || viewingAppt.status === "completed"}
                       value={clinicalDiagnosis}
                       onChange={(e) => setClinicalDiagnosis(e.target.value)}
                       placeholder="Enter final clinical diagnosis..."
@@ -840,7 +848,7 @@ export default function DoctorScheduledAppointmentsPage() {
                     </label>
                     <textarea
                       rows={3}
-                      disabled={viewingAppt.doctorDone}
+                      disabled={viewingAppt.doctorDone || viewingAppt.checkInStatus === "no-show" || viewingAppt.status === "completed"}
                       value={consultationNotes}
                       onChange={(e) => setConsultationNotes(e.target.value)}
                       placeholder="Enter prescription recommendations, topical medication, lifestyle care, and follow-up advice..."
@@ -852,7 +860,11 @@ export default function DoctorScheduledAppointmentsPage() {
 
               {/* Footer */}
               <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-t border-slate-100 flex flex-col sm:flex-row gap-2.5 sm:gap-3 shrink-0 bg-white">
-                {viewingAppt.doctorDone ? (
+                {viewingAppt.checkInStatus === "no-show" ? (
+                  <div className="flex-1 flex items-center justify-center py-2.5 sm:py-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold text-center">
+                    Appointment Finalized as No-Show (Patient Did Not Attend)
+                  </div>
+                ) : viewingAppt.doctorDone ? (
                   <div className="flex-1 flex items-center justify-center py-2.5 sm:py-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-xs font-bold text-center">
                     Consultation Completed &amp; Result Saved
                   </div>

@@ -128,7 +128,7 @@ function formatPatientId(appt: AppointmentRecord): string {
   const digits = appt.id.replace(/\D/g, "");
   const num = digits.length >= 4
     ? digits.slice(-4)
-    : (appt.queueNumber ? String(appt.queueNumber).padStart(4, "0") : appt.id.slice(0, 4).toUpperCase());
+    : appt.id.slice(0, 4).toUpperCase();
   return `P-${year}-${num}`;
 }
 

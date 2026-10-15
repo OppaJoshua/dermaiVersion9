@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { createPatientNotification } from "@/lib/notificationService";
+import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 
 export type DoctorAppointmentRecord = {
   id: string;
@@ -49,6 +50,7 @@ export type DoctorAppointmentRecord = {
     severity?: number | null;
   }>;
   userId?: string;
+  appointmentHistory?: AppointmentHistoryEntry[];
 };
 
 function calculateAgeFromBirthdate(birthdateStr?: string | null): number | undefined {
@@ -433,6 +435,7 @@ export function useDoctorAppointments() {
                 batchTime: row.batch_time || undefined,
                 checkInStatus: row.check_in_status || undefined,
                 isWalkIn: Boolean(row.is_walk_in),
+                appointmentHistory: Array.isArray(row.appointment_history) ? row.appointment_history : (Array.isArray(row.questionnaire_answers?.appointment_history) ? row.questionnaire_answers.appointment_history : []),
               });
             }
           }
@@ -637,13 +640,27 @@ export function useDoctorAppointments() {
         doctor_reviewed_at: new Date().toISOString(),
       };
 
+      const existingAppt = appointments.find((a) => a.id === appointmentId);
+      const historyEntry: AppointmentHistoryEntry = {
+        action: isApproved ? "doctor_approved" : "doctor_rejected",
+        actor: "doctor",
+        timestamp: new Date().toISOString(),
+        doctorId: clinicDoctorIdRef.current || user?.id,
+        doctorName: doctorName || undefined,
+        reason: note || undefined,
+      };
+      const prevHistory = Array.isArray(existingAppt?.appointmentHistory)
+        ? existingAppt.appointmentHistory
+        : [];
+      const updatedHistory = [...prevHistory, historyEntry];
+      updatePayload.appointment_history = updatedHistory;
+
       if (isApproved) {
         updatePayload.status = "confirmed";
         updatePayload.schedule_sent_to_doctor = true;
         updatePayload.clinic_note = `Appointment schedule finalized and confirmed by ${docLabel}.`;
         
         // Only assign if currently unassigned, and ensure it is a valid clinic_doctor doctor_id
-        const existingAppt = appointments.find((a) => a.id === appointmentId);
         if (!existingAppt?.assignedDoctorId) {
           const validClinicDocId =
             clinicDoctorIdRef.current ||

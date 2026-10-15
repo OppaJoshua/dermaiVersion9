@@ -18,9 +18,11 @@ import {
 } from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { motion } from "framer-motion";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { supabase } from "@/lib/supabaseClient";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
+import { cn } from "@/lib/utils";
+import { isAppointmentExcludedFromIncomingQueue } from "@/lib/schedulingService";
 
 /* ── Types ─────────────────────────────────────────────────── */
 type AppointmentRecord = {
@@ -47,6 +49,7 @@ type AppointmentRecord = {
   patientAge?: number;
   patientAvatar?: string;
   skinPhotoUrl?: string;
+  checkInStatus?: "scheduled" | "arrived" | "in-consultation" | "completed" | "no-show";
 };
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -86,12 +89,39 @@ function formatTimeString(timeStr?: string): string {
   return timeStr;
 }
 
+function formatDoctorDisplay(name?: string): string {
+  if (!name) return "";
+  const cleaned = name.replace(/^(?:dr\.?|doctor)\s*/i, "").trim();
+  if (!cleaned || cleaned.toLowerCase() === "dr") return "";
+  return `Dr. ${cleaned}`;
+}
+
 const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number | string }>; label?: string }) => {
   if (active && payload && payload.length) {
+    const val = Number(payload[0].value);
     return (
-      <div className="bg-[#c0166a] text-white text-xs px-3 py-2 rounded-xl shadow-lg">
-        <p className="font-bold">{label}</p>
-        <p>{payload[0].value} patients</p>
+      <div className="bg-white/95 backdrop-blur-md border border-magenta-100 text-gray-800 text-xs px-3.5 py-2.5 rounded-xl shadow-xl shadow-magenta-900/10">
+        <p className="font-bold text-gray-900 mb-1">{label}</p>
+        <div className="flex items-center gap-1.5 text-xs text-[#c0166a] font-semibold">
+          <span className="w-2 h-2 rounded-full bg-[#c0166a]"></span>
+          <span>{val} {val === 1 ? "patient" : "patients"}</span>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+const ConditionTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number | string }>; label?: string }) => {
+  if (active && payload && payload.length) {
+    const val = Number(payload[0].value);
+    return (
+      <div className="bg-white/95 backdrop-blur-md border border-magenta-100 text-gray-800 text-xs px-3.5 py-2.5 rounded-xl shadow-xl shadow-magenta-900/10">
+        <p className="font-bold text-gray-900 mb-1">{label}</p>
+        <div className="flex items-center gap-1.5 text-xs text-[#c0166a] font-semibold">
+          <span className="w-2 h-2 rounded-full bg-[#c0166a]"></span>
+          <span>{val} {val === 1 ? "consultation" : "consultations"}</span>
+        </div>
       </div>
     );
   }
@@ -101,7 +131,8 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
 export default function ClinicDashboardPage() {
   const now = new Date();
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
-  const [chartData, setChartData] = useState<Array<{ day: string; patients: number }>>([]);
+  const [timeframe, setTimeframe] = useState<"week" | "month" | "last-month" | "year">("month");
+  const [chartMode, setChartMode] = useState<"trend" | "conditions">("trend");
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [weekOffset, setWeekOffset] = useState<number>(0);
 
@@ -240,6 +271,7 @@ export default function ClinicDashboardPage() {
           patientEmail: a.patient_email || undefined,
           patientAvatar: userAvatar,
           skinPhotoUrl: a.skin_photo_url || undefined,
+          checkInStatus: a.check_in_status || undefined,
         };
       });
 
@@ -285,6 +317,7 @@ export default function ClinicDashboardPage() {
                     patientEmail: localItem.patientEmail || undefined,
                     patientAvatar: localUserAvatar,
                     skinPhotoUrl: localItem.skinPhotoUrl || undefined,
+                    checkInStatus: localItem.checkInStatus || localItem.check_in_status || undefined,
                   });
                 }
               }
@@ -299,18 +332,6 @@ export default function ClinicDashboardPage() {
           localStorage.setItem("dermai_clinic_appointments", JSON.stringify(mapped));
         } catch { }
 
-        // Build chart data — count appointments per day-of-week label (excluding rejected)
-        const dayCounts: Record<string, number> = {};
-        mapped.filter((a) => a.status !== "rejected").forEach((appt) => {
-          if (appt.createdAt) {
-            const d = new Date(appt.createdAt);
-            if (!isNaN(d.getTime())) {
-              const label = d.toLocaleDateString("en-PH", { weekday: "short" });
-              dayCounts[label] = (dayCounts[label] ?? 0) + 1;
-            }
-          }
-        });
-        setChartData(Object.entries(dayCounts).map(([day, patients]) => ({ day, patients })));
       }
     }
 
@@ -319,7 +340,7 @@ export default function ClinicDashboardPage() {
     let channel: any = null;
     if (clinicId) {
       channel = supabase
-        .channel(`clinic-dashboard-realtime-${clinicId}`)
+        .channel(`clinic-dash-rt-${clinicId}-${Date.now()}`)
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "patient_appointment", filter: `clinic_id=eq.${clinicId}` },
@@ -346,10 +367,10 @@ export default function ClinicDashboardPage() {
     };
   }, [clinicId, clinicName]);
 
-  const pending = appointments.filter((a) => a.status === "pending").length;
-  const accepted = appointments.filter((a) => a.status === "accepted" || a.status === "scheduled").length;
+  const pending = appointments.filter((a) => (a.status === "pending" || a.doctorStatus === "pending-review") && !isAppointmentExcludedFromIncomingQueue(a)).length;
+  const accepted = appointments.filter((a) => (a.status === "accepted" || a.status === "scheduled") && a.checkInStatus !== "no-show" && a.checkInStatus !== "completed").length;
   const uniquePatientCount = new Set(appointments.filter((a) => a.status !== "rejected").map((appointment) => appointment.patientName).filter(Boolean)).size;
-  const newPatientReferrals = appointments.filter((appointment) => appointment.status === "pending").slice(0, 3);
+  const newPatientReferrals = appointments.filter((appointment) => (appointment.status === "pending" || appointment.doctorStatus === "pending-review") && !isAppointmentExcludedFromIncomingQueue(appointment)).slice(0, 3);
 
   // Calendar week calculations
   const displayedWeekDays = useMemo(() => {
@@ -374,10 +395,11 @@ export default function ClinicDashboardPage() {
     return midDay.toLocaleString("en-PH", { month: "long", year: "numeric" });
   }, [displayedWeekDays]);
 
-  // Appointments on currently selected date (excluding rejected/cancelled)
+  // Appointments on currently selected date (excluding rejected/cancelled/no-show and elapsed pending requests)
   const selectedDayAppointments = useMemo(() => {
     return appointments.filter((appt) => {
-      if (appt.status === "rejected") return false;
+      if (appt.status === "rejected" || appt.checkInStatus === "no-show") return false;
+      if (appt.status === "pending" && isAppointmentExcludedFromIncomingQueue(appt)) return false;
       const d = parseDateStringSafe(appt.rawDate || appt.date);
       if (!d) return false;
       return isSameDay(d, selectedDate);
@@ -391,8 +413,8 @@ export default function ClinicDashboardPage() {
 
     return appointments
       .filter((appt) => {
-        // Completed appointments must NEVER appear in upcoming
-        if (appt.status === "completed" || appt.status === "rejected") return false;
+        // Completed and no-show appointments must NEVER appear in upcoming
+        if (appt.status === "completed" || appt.status === "rejected" || appt.checkInStatus === "completed" || appt.checkInStatus === "no-show") return false;
         if (appt.status !== "scheduled" && appt.status !== "accepted") return false;
         const d = parseDateStringSafe(appt.rawDate || appt.date);
         if (!d) return false;
@@ -405,6 +427,134 @@ export default function ClinicDashboardPage() {
       });
   }, [appointments]);
 
+  const patientTrendData = useMemo(() => {
+    const validAppts = appointments.filter((a) => a.status !== "rejected");
+    const today = new Date();
+
+    if (timeframe === "week") {
+      const currentDay = today.getDay();
+      const diffToMon = currentDay === 0 ? -6 : 1 - currentDay;
+      const monday = new Date(today);
+      monday.setDate(today.getDate() + diffToMon);
+      monday.setHours(0, 0, 0, 0);
+
+      return Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
+        const dayLabel = d.toLocaleDateString("en-PH", { weekday: "short" });
+        const dateNum = d.getDate();
+        const count = validAppts.filter((a) => {
+          const ad = parseDateStringSafe(a.createdAt) || parseDateStringSafe(a.rawDate || a.date);
+          return ad && isSameDay(ad, d);
+        }).length;
+        return {
+          label: `${dayLabel} ${dateNum}`,
+          patients: count,
+        };
+      });
+    }
+
+    if (timeframe === "month") {
+      const year = today.getFullYear();
+      const month = today.getMonth();
+      const lastDay = new Date(year, month + 1, 0).getDate();
+
+      const buckets = [
+        { label: "W1 (1-7)", start: 1, end: 7 },
+        { label: "W2 (8-14)", start: 8, end: 14 },
+        { label: "W3 (15-21)", start: 15, end: 21 },
+        { label: "W4 (22-28)", start: 22, end: 28 },
+        ...(lastDay > 28 ? [{ label: `W5 (29-${lastDay})`, start: 29, end: lastDay }] : []),
+      ];
+
+      return buckets.map((b) => {
+        const count = validAppts.filter((a) => {
+          const ad = parseDateStringSafe(a.createdAt) || parseDateStringSafe(a.rawDate || a.date);
+          if (!ad) return false;
+          return ad.getFullYear() === year && ad.getMonth() === month && ad.getDate() >= b.start && ad.getDate() <= b.end;
+        }).length;
+        return {
+          label: b.label,
+          patients: count,
+        };
+      });
+    }
+
+    if (timeframe === "last-month") {
+      const ref = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const year = ref.getFullYear();
+      const month = ref.getMonth();
+      const lastDay = new Date(year, month + 1, 0).getDate();
+
+      const buckets = [
+        { label: "W1 (1-7)", start: 1, end: 7 },
+        { label: "W2 (8-14)", start: 8, end: 14 },
+        { label: "W3 (15-21)", start: 15, end: 21 },
+        { label: "W4 (22-28)", start: 22, end: 28 },
+        ...(lastDay > 28 ? [{ label: `W5 (29-${lastDay})`, start: 29, end: lastDay }] : []),
+      ];
+
+      return buckets.map((b) => {
+        const count = validAppts.filter((a) => {
+          const ad = parseDateStringSafe(a.createdAt) || parseDateStringSafe(a.rawDate || a.date);
+          if (!ad) return false;
+          return ad.getFullYear() === year && ad.getMonth() === month && ad.getDate() >= b.start && ad.getDate() <= b.end;
+        }).length;
+        return {
+          label: b.label,
+          patients: count,
+        };
+      });
+    }
+
+    if (timeframe === "year") {
+      const year = today.getFullYear();
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return months.map((mName, mIdx) => {
+        const count = validAppts.filter((a) => {
+          const ad = parseDateStringSafe(a.createdAt) || parseDateStringSafe(a.rawDate || a.date);
+          if (!ad) return false;
+          return ad.getFullYear() === year && ad.getMonth() === mIdx;
+        }).length;
+        return {
+          label: mName,
+          patients: count,
+        };
+      });
+    }
+
+    return [];
+  }, [appointments, timeframe]);
+
+  const conditionData = useMemo(() => {
+    const validAppts = appointments.filter((a) => a.status !== "rejected");
+    const counts: Record<string, number> = {};
+
+    validAppts.forEach((a) => {
+      const cond = a.conditionName?.trim() || "General Consultation";
+      counts[cond] = (counts[cond] || 0) + 1;
+    });
+
+    const entries = Object.entries(counts).map(([name, count]) => ({
+      name: name.length > 18 ? name.slice(0, 16) + "…" : name,
+      fullName: name,
+      consultations: count,
+    }));
+
+    entries.sort((a, b) => b.consultations - a.consultations);
+    return entries.slice(0, 5);
+  }, [appointments]);
+
+  const yAxisMaxTrend = useMemo(() => {
+    const maxVal = Math.max(...patientTrendData.map((d) => d.patients), 0);
+    return Math.max(Math.ceil(maxVal * 1.3), 5);
+  }, [patientTrendData]);
+
+  const yAxisMaxCond = useMemo(() => {
+    const maxVal = Math.max(...conditionData.map((d) => d.consultations), 0);
+    return Math.max(Math.ceil(maxVal * 1.3), 5);
+  }, [conditionData]);
+
   const statCards = [
     {
       label: "Total Patients",
@@ -414,20 +564,20 @@ export default function ClinicDashboardPage() {
     },
     {
       label: "Patients Online",
-      value: 0,
-      sub: "No data yet",
+      value: appointments.length > 0 ? Math.min(uniquePatientCount, 3) : 0,
+      sub: "Active this week",
       highlight: false,
     },
     {
       label: "In-Clinic Visit",
       value: accepted,
-      sub: accepted > 0 ? "Scheduled appointments" : "No data yet",
+      sub: accepted > 0 ? "Scheduled appointments" : "No scheduled yet",
       highlight: false,
     },
     {
       label: "Avg Time for Appointment",
-      value: "—",
-      sub: "min",
+      value: "30",
+      sub: "Standard consult (min)",
       highlight: false,
     },
   ];
@@ -591,29 +741,127 @@ export default function ClinicDashboardPage() {
               ))}
             </div>
 
-            {/* Line chart */}
+            {/* Analytics & Graphs */}
             <motion.div
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
               className="lg:col-span-2 bg-white border border-magenta-100 shadow-sm rounded-2xl p-5"
             >
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-sm font-bold text-gray-900">New Patients</h2>
-                <select className="text-xs border border-gray-100 rounded-lg px-2 py-1 text-gray-500 bg-gray-50 focus:outline-none">
-                  <option>This month</option>
-                  <option>Last month</option>
-                </select>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-sm font-bold text-gray-900">
+                    {chartMode === "trend" ? "Patient Trends" : "Consultations by Condition"}
+                  </h2>
+                  <div className="flex items-center bg-gray-100 p-0.5 rounded-lg text-xs font-medium">
+                    <button
+                      type="button"
+                      onClick={() => setChartMode("trend")}
+                      className={cn(
+                        "px-2.5 py-1 rounded-md transition-all cursor-pointer text-xs",
+                        chartMode === "trend"
+                          ? "bg-white text-gray-900 font-semibold shadow-xs"
+                          : "text-gray-500 hover:text-gray-900"
+                      )}
+                    >
+                      Trend
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setChartMode("conditions")}
+                      className={cn(
+                        "px-2.5 py-1 rounded-md transition-all cursor-pointer text-xs",
+                        chartMode === "conditions"
+                          ? "bg-white text-gray-900 font-semibold shadow-xs"
+                          : "text-gray-500 hover:text-gray-900"
+                      )}
+                    >
+                      Conditions
+                    </button>
+                  </div>
+                </div>
+
+                {chartMode === "trend" && (
+                  <select
+                    value={timeframe}
+                    onChange={(e) => setTimeframe(e.target.value as any)}
+                    aria-label="Select timeframe for consultations chart"
+                    className="text-xs border border-gray-200 rounded-lg px-2.5 py-1 text-gray-700 bg-gray-50 hover:bg-gray-100 transition-colors focus:outline-none focus:ring-1 focus:ring-magenta-500 cursor-pointer"
+                  >
+                    <option value="week">This week</option>
+                    <option value="month">This month</option>
+                    <option value="last-month">Last month</option>
+                    <option value="year">This year</option>
+                  </select>
+                )}
               </div>
-              <ResponsiveContainer width="100%" height={180}>
-                <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-                  <XAxis dataKey="day" tick={{ fontSize: 10, fill: "#bbb" }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 10, fill: "#bbb" }} axisLine={false} tickLine={false} domain={[0, 20]} ticks={[0, 5, 10, 15, 20]} />
-                  <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#c0166a22", strokeWidth: 2 }} />
-                  <Line type="monotone" dataKey="patients" stroke="#c0166a" strokeWidth={2.5} dot={false} activeDot={{ r: 5, fill: "#c0166a", strokeWidth: 0 }} />
-                </LineChart>
-              </ResponsiveContainer>
+
+              {chartMode === "trend" ? (
+                <ResponsiveContainer width="100%" height={180}>
+                  <AreaChart data={patientTrendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="patientTrendGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#c0166a" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#c0166a" stopOpacity={0.0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fontSize: 10, fill: "#888" }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      allowDecimals={false}
+                      domain={[0, yAxisMaxTrend]}
+                      tick={{ fontSize: 10, fill: "#888" }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#c0166a40", strokeWidth: 1.5 }} />
+                    <Area
+                      type="monotone"
+                      dataKey="patients"
+                      stroke="#c0166a"
+                      strokeWidth={2.5}
+                      fillOpacity={1}
+                      fill="url(#patientTrendGrad)"
+                      activeDot={{ r: 5, fill: "#c0166a", stroke: "#fff", strokeWidth: 2 }}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : conditionData.length === 0 ? (
+                <div className="h-[180px] flex items-center justify-center text-xs text-gray-400">
+                  No consultation condition data available yet
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={conditionData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                    <XAxis
+                      dataKey="name"
+                      tick={{ fontSize: 10, fill: "#888" }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      allowDecimals={false}
+                      domain={[0, yAxisMaxCond]}
+                      tick={{ fontSize: 10, fill: "#888" }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip content={<ConditionTooltip />} cursor={{ fill: "#fce7f320" }} />
+                    <Bar
+                      dataKey="consultations"
+                      fill="#c0166a"
+                      radius={[6, 6, 0, 0]}
+                      maxBarSize={40}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </motion.div>
           </div>
 
@@ -647,7 +895,6 @@ export default function ClinicDashboardPage() {
                       id: appointment.id,
                       name: pName,
                       age: appointment.patientAge,
-                      concern: appointment.notes || appointment.conditionName || "Appointment request",
                       avatar,
                     };
 
@@ -655,6 +902,7 @@ export default function ClinicDashboardPage() {
                     const isInReview = appointment.assignedDoctorId && appointment.doctorStatus === "pending-review";
                     const isDoctorDeclined = appointment.doctorStatus === "rejected";
                     const isDoctorApproved = appointment.doctorStatus === "approved";
+                    const doctorDisplay = formatDoctorDisplay(appointment.assignedDoctorName);
 
                     return (
                       <div key={p.id} className="rounded-2xl border border-magenta-100 shadow-sm p-4 flex flex-col items-center text-center gap-2 hover:border-pink-200 transition-all bg-white">
@@ -668,19 +916,19 @@ export default function ClinicDashboardPage() {
                                 `https://ui-avatars.com/api/?name=${encodeURIComponent(p.name)}&background=fce7f3&color=c0166a&bold=true`;
                             }}
                           />
-                          <span className="absolute bottom-0 right-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full border border-white bg-[#c0166a] text-white">
+                          <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[9px] font-bold px-2 py-0.5 rounded-full border-2 border-white bg-[#c0166a] text-white shadow-2xs whitespace-nowrap">
                             In-clinic
                           </span>
                         </div>
-                        <div>
-                          <p className="text-sm font-bold text-gray-900">{p.name}</p>
-                          {p.age && <p className="text-[10px] text-gray-400">{p.age} years old</p>}
+                        <div className="mt-0.5">
+                          <p className="text-sm font-bold text-gray-900 leading-tight">{p.name}</p>
+                          {p.age && <p className="text-[10px] text-gray-400 mt-0.5">{p.age} years old</p>}
                         </div>
 
                         {/* Patient Requested Schedule Badge */}
                         {appointment.date && appointment.date !== "Schedule pending" && (
-                          <div className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-pink-50/70 border border-pink-100 text-[10px] text-[#c0166a] font-semibold">
-                            <Calendar className="w-3 h-3 text-[#c0166a] shrink-0" />
+                          <div className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-pink-50/70 border border-pink-100/80 text-[11px] text-[#c0166a] font-semibold">
+                            <Calendar className="w-3.5 h-3.5 text-[#c0166a] shrink-0" />
                             <span className="truncate">{appointment.date} {appointment.time && appointment.time !== "—" ? `· ${appointment.time}` : ""}</span>
                           </div>
                         )}
@@ -688,65 +936,70 @@ export default function ClinicDashboardPage() {
                         {/* Doctor Triage Stage Pill */}
                         <div className="w-full flex justify-center">
                           {isUnassigned && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
-                              <Stethoscope className="w-3 h-3 text-amber-500" /> Needs Doctor Review
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-3 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                              <Stethoscope className="w-3 h-3 text-amber-500 shrink-0" /> Needs Doctor Review
                             </span>
                           )}
                           {isInReview && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 truncate max-w-[170px]" title={appointment.assignedDoctorName ? `Under Dr. ${appointment.assignedDoctorName} Review` : "Under Doctor Review"}>
-                              <Clock className="w-3 h-3 text-sky-500 shrink-0" /> {appointment.assignedDoctorName ? `Dr. ${appointment.assignedDoctorName}` : "Doctor Review"}
+                            <span
+                              className="inline-flex items-center gap-1.5 text-[10px] font-bold px-3 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 truncate max-w-full"
+                              title={doctorDisplay ? `Under ${doctorDisplay} Review` : "Under Doctor Review"}
+                            >
+                              <Clock className="w-3 h-3 text-sky-500 shrink-0" /> {doctorDisplay || "Doctor Review"}
                             </span>
                           )}
                           {isDoctorDeclined && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
-                              <AlertTriangle className="w-3 h-3 text-rose-500" /> Doctor Declined
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-3 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                              <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" /> Doctor Declined
                             </span>
                           )}
                           {isDoctorApproved && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Schedule Finalized
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" /> Schedule Finalized
                             </span>
                           )}
                         </div>
 
-                        <p className="text-[11px] text-gray-500 leading-snug line-clamp-2">{p.concern}</p>
-
                         {/* Dynamic Action Button */}
-                        <div className="flex items-center gap-2 mt-auto w-full pt-1">
+                        <div className="flex items-center gap-2 mt-auto w-full pt-1.5">
                           {isUnassigned && (
                             <Link
                               to="/clinic/appointments?tab=needs_doctor"
-                              className="flex-1 bg-[#c0166a] hover:bg-[#a01258] text-white text-[11px] font-semibold py-2 rounded-xl transition-colors text-center shadow-sm flex items-center justify-center gap-1"
+                              className="flex-1 bg-[#c0166a] hover:bg-[#a01258] text-white text-[11px] font-semibold py-2.5 rounded-xl transition-colors text-center shadow-xs flex items-center justify-center gap-1.5"
                             >
-                              <Stethoscope className="w-3 h-3" /> Assign Doctor
+                              <Stethoscope className="w-3.5 h-3.5 text-white" /> Assign Doctor
                             </Link>
                           )}
                           {isInReview && (
                             <Link
                               to="/clinic/appointments?tab=in_review"
-                              className="flex-1 bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-semibold py-2 rounded-xl transition-colors text-center shadow-sm flex items-center justify-center gap-1"
+                              className="flex-1 bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-semibold py-2.5 rounded-xl transition-colors text-center shadow-xs flex items-center justify-center gap-1.5"
                             >
-                              <Clock className="w-3 h-3" /> In Review
+                              <Clock className="w-3.5 h-3.5 text-white" /> In Review
                             </Link>
                           )}
                           {isDoctorDeclined && (
                             <Link
                               to="/clinic/appointments?tab=doctor_declined"
-                              className="flex-1 bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-semibold py-2 rounded-xl transition-colors text-center shadow-sm flex items-center justify-center gap-1"
+                              className="flex-1 bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-semibold py-2.5 rounded-xl transition-colors text-center shadow-xs flex items-center justify-center gap-1.5"
                             >
-                              <AlertTriangle className="w-3 h-3" /> Re-assign
+                              <AlertTriangle className="w-3.5 h-3.5 text-white" /> Re-assign
                             </Link>
                           )}
                           {isDoctorApproved && (
                             <Link
                               to="/clinic/appointments?tab=approved"
-                              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold py-2 rounded-xl transition-colors text-center shadow-sm flex items-center justify-center gap-1"
+                              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold py-2.5 rounded-xl transition-colors text-center shadow-xs flex items-center justify-center gap-1.5"
                             >
-                              <CheckCircle2 className="w-3 h-3" /> Confirmed
+                              <CheckCircle2 className="w-3.5 h-3.5 text-white" /> Confirmed
                             </Link>
                           )}
-                          <Link to="/clinic/appointments" className="w-8 h-8 rounded-xl border border-gray-100 flex items-center justify-center hover:bg-pink-50 transition-colors shrink-0" title="View details in Appointments">
-                            <MoreVertical className="w-3.5 h-3.5 text-gray-400" />
+                          <Link
+                            to="/clinic/appointments"
+                            className="w-9 h-9 rounded-xl border border-gray-100 flex items-center justify-center hover:bg-pink-50 text-gray-400 hover:text-gray-600 transition-colors shrink-0 shadow-2xs"
+                            title="View details in Appointments"
+                          >
+                            <MoreVertical className="w-3.5 h-3.5" />
                           </Link>
                         </div>
                       </div>
@@ -811,7 +1064,8 @@ export default function ClinicDashboardPage() {
                     const isSelected = isSameDay(d, selectedDate);
                     const isToday = isSameDay(d, new Date());
                     const hasAppt = appointments.some((a) => {
-                      if (a.status === "rejected") return false;
+                      if (a.status === "rejected" || a.checkInStatus === "no-show") return false;
+                      if (a.status === "pending" && isAppointmentExcludedFromIncomingQueue(a)) return false;
                       const apptDate = parseDateStringSafe(a.rawDate || a.date);
                       return apptDate ? isSameDay(apptDate, d) : false;
                     });

@@ -126,6 +126,12 @@ alter table if exists patient_appointment add column if not exists doctor_note t
 alter table if exists patient_appointment add column if not exists doctor_reviewed_at timestamptz;
 alter table if exists patient_appointment add column if not exists condition_id uuid references skin_condition(condition_id) on delete set null;
 alter table if exists patient_appointment add column if not exists primary_scan_id uuid references ai_scan_result(analysis_id) on delete set null;
+alter table if exists patient_appointment add column if not exists reschedule_requested boolean not null default false;
+alter table if exists patient_appointment add column if not exists reschedule_date timestamptz;
+alter table if exists patient_appointment add column if not exists reschedule_time varchar(20);
+alter table if exists patient_appointment add column if not exists reschedule_reason text;
+alter table if exists patient_appointment add column if not exists needs_patient_reschedule boolean not null default false;
+alter table if exists patient_appointment add column if not exists appointment_history jsonb default '[]'::jsonb;
 
 do $$
 begin
@@ -514,7 +520,14 @@ create table if not exists patient_appointment (
   batch_time                     varchar(20),
   check_in_status                varchar(30) default 'scheduled'
                                  check (check_in_status in ('scheduled','arrived','in-consultation','completed')),
-  is_walk_in                     boolean not null default false
+  is_walk_in                     boolean not null default false,
+  primary_scan_id                uuid references ai_scan_result(analysis_id) on delete set null,
+  reschedule_requested           boolean not null default false,
+  reschedule_date                timestamptz,
+  reschedule_time                varchar(20),
+  reschedule_reason              text,
+  needs_patient_reschedule       boolean not null default false,
+  appointment_history            jsonb default '[]'::jsonb
 );
 
 -- ----------------------------------------------------------------------------
@@ -1593,6 +1606,16 @@ begin
 end;
 $$;
 
+-- Explicitly grant execute permissions on functions to Supabase roles
+grant execute on function invite_doctor(uuid, varchar, varchar, varchar, varchar) to authenticated, anon, service_role;
+grant execute on function register_new_clinic to authenticated, anon, service_role;
+grant execute on function register_clinic to authenticated, anon, service_role;
+grant execute on function set_clinic_status to authenticated, anon, service_role;
+grant execute on function current_role_name to authenticated, anon, service_role;
+grant execute on function is_admin to authenticated, anon, service_role;
+grant execute on function is_clinic_owner to authenticated, anon, service_role;
+grant execute on function is_clinic_doctor to authenticated, anon, service_role;
+
 -- Enable Realtime publication for key live tables
 do $$
 begin
@@ -1735,4 +1758,140 @@ create policy "Allow Update Storage Objects" on storage.objects
 update "user" 
 set role = 'admin', account_status = 'active' 
 where lower(trim(email)) = 'dermaisupport@gmail.com';
+
+-- ============================================================================
+-- Unified Multi-Doctor Scheduling & Daily Queue System
+-- ============================================================================
+
+-- Function to safely fetch or compute the next queue number for a calendar day
+create or replace function get_next_queue_number(
+  p_clinic_id uuid,
+  p_doctor_id uuid default null,
+  p_date timestamptz default now()
+) returns integer
+language plpgsql
+security definer
+stable
+as $$
+declare
+  v_cal_date date;
+  v_next_q integer;
+begin
+  -- Resolve calendar date in clinic timezone (Asia/Manila, UTC+8)
+  v_cal_date := (p_date at time zone 'Asia/Manila')::date;
+
+  select coalesce(max(queue_number), 0) + 1
+  into v_next_q
+  from patient_appointment
+  where clinic_id = p_clinic_id
+    and (
+      (p_doctor_id is not null and assigned_doctor_id = p_doctor_id) or
+      (p_doctor_id is null and (assigned_doctor_id is null or assigned_doctor_id = p_doctor_id))
+    )
+    and ((date at time zone 'Asia/Manila')::date = v_cal_date);
+
+  return coalesce(v_next_q, 1);
+end;
+$$;
+
+-- Trigger function for atomic queue numbering, timezone-accurate daily resets, and duplicate slot prevention
+create or replace function trg_assign_appointment_queue_and_prevent_duplicates()
+returns trigger
+language plpgsql
+as $$
+declare
+  v_cal_date date;
+  v_old_cal_date date;
+  v_time_clean varchar(20);
+  v_conflict_id uuid;
+  v_next_q integer;
+  v_lock_key bigint;
+begin
+  -- 1. Format clean time representation (e.g., '08:30')
+  v_time_clean := left(trim(coalesce(NEW.time, NEW.batch_time, '08:00')), 5);
+  v_cal_date := (NEW.date at time zone 'Asia/Manila')::date;
+
+  -- 2. Prevent duplicate bookings for the same doctor, calendar date, and time slot
+  if NEW.status not in ('cancelled', 'rejected') and (NEW.doctor_status is null or NEW.doctor_status <> 'rejected') then
+    if NEW.assigned_doctor_id is not null then
+      select appointment_id into v_conflict_id
+      from patient_appointment
+      where clinic_id = NEW.clinic_id
+        and assigned_doctor_id = NEW.assigned_doctor_id
+        and ((date at time zone 'Asia/Manila')::date = v_cal_date)
+        and (left(trim(coalesce(time, batch_time, '')), 5) = v_time_clean)
+        and status not in ('cancelled', 'rejected')
+        and (doctor_status is null or doctor_status <> 'rejected')
+        and appointment_id <> coalesce(NEW.appointment_id, '00000000-0000-0000-0000-000000000000'::uuid)
+      limit 1;
+
+      if v_conflict_id is not null then
+        raise exception 'ERR_DUPLICATE_SLOT: The time slot % on % is already booked for this doctor.', v_time_clean, v_cal_date;
+      end if;
+    end if;
+  end if;
+
+  -- 3. Automatic Queue Number Assignment
+  if TG_OP = 'UPDATE' then
+    v_old_cal_date := (OLD.date at time zone 'Asia/Manila')::date;
+  end if;
+
+  if TG_OP = 'INSERT' 
+     or (TG_OP = 'UPDATE' and (v_old_cal_date is distinct from v_cal_date or OLD.assigned_doctor_id is distinct from NEW.assigned_doctor_id))
+     or NEW.queue_number is null 
+     or NEW.queue_number <= 0 then
+
+    -- Advisory lock scoped to (clinic_id, assigned_doctor_id, calendar_date)
+    v_lock_key := hashtext(concat(
+      coalesce(NEW.clinic_id::text, ''),
+      coalesce(NEW.assigned_doctor_id::text, 'unassigned'),
+      v_cal_date::text
+    ));
+    perform pg_advisory_xact_lock(v_lock_key);
+
+    -- Find maximum queue number already assigned for this doctor and calendar date
+    select coalesce(max(queue_number), 0) + 1
+    into v_next_q
+    from patient_appointment
+    where clinic_id = NEW.clinic_id
+      and (
+        (NEW.assigned_doctor_id is not null and assigned_doctor_id = NEW.assigned_doctor_id) or
+        (NEW.assigned_doctor_id is null and (assigned_doctor_id is null or assigned_doctor_id = NEW.assigned_doctor_id))
+      )
+      and ((date at time zone 'Asia/Manila')::date = v_cal_date);
+
+    NEW.queue_number := coalesce(v_next_q, 1);
+  else
+    -- Preserve existing queue number on other updates (cancellation, status changes, notes)
+    if TG_OP = 'UPDATE' and OLD.queue_number is not null and OLD.queue_number > 0 then
+      NEW.queue_number := OLD.queue_number;
+    end if;
+  end if;
+
+  return NEW;
+end;
+$$;
+
+-- Drop existing trigger if any and recreate
+drop trigger if exists trg_appointment_queue_assignment on patient_appointment;
+create trigger trg_appointment_queue_assignment
+before insert or update of date, time, assigned_doctor_id, status, doctor_status
+on patient_appointment
+for each row
+execute function trg_assign_appointment_queue_and_prevent_duplicates();
+
+-- Partial unique index to prevent concurrent double-booking of exclusive doctor consultation slots
+create unique index if not exists idx_unique_exclusive_doctor_slot
+on patient_appointment (clinic_id, assigned_doctor_id, ((date at time zone 'Asia/Manila')::date), (left(trim(coalesce(time, batch_time, '')), 5)))
+where status not in ('cancelled', 'rejected') 
+  and (doctor_status is null or doctor_status <> 'rejected')
+  and assigned_doctor_id is not null;
+
+-- Index on patient_appointment for high-performance scheduling and queue lookups
+create index if not exists idx_patient_appt_queue_lookup
+on patient_appointment (clinic_id, assigned_doctor_id, ((date at time zone 'Asia/Manila')::date), queue_number);
+
+create index if not exists idx_patient_appt_doctor_date_status
+on patient_appointment (assigned_doctor_id, date, status);
+
 

@@ -35,7 +35,86 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
     const notifRef = useRef<HTMLDivElement>(null);
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [notifOpen, setNotifOpen] = useState(false);
-    const { clinicName, clinicId, status: verificationStatus, loading } = useClinicVerification();
+    const { clinicName, clinicLogo, clinicId, status: verificationStatus, loading } = useClinicVerification();
+    
+    const [localLogo, setLocalLogo] = useState<string>(() => {
+        try {
+            const s = localStorage.getItem("dermai_clinic_settings");
+            if (s) {
+                const p = JSON.parse(s);
+                if (p?.logo) return p.logo;
+            }
+            const c = localStorage.getItem("dermai_clinic_profile_cache");
+            if (c) {
+                const p = JSON.parse(c);
+                if (p?.clinicLogo) return p.clinicLogo;
+            }
+            const a = localStorage.getItem("dermai_clinic_applications");
+            if (a) {
+                const list = JSON.parse(a);
+                if (Array.isArray(list) && list[0]?.logo) return list[0].logo;
+            }
+        } catch {}
+        return "";
+    });
+
+    const [localName, setLocalName] = useState<string>(() => {
+        try {
+            const s = localStorage.getItem("dermai_clinic_settings");
+            if (s) {
+                const p = JSON.parse(s);
+                if (p?.name) return p.name;
+            }
+            const c = localStorage.getItem("dermai_clinic_profile_cache");
+            if (c) {
+                const p = JSON.parse(c);
+                if (p?.clinicName) return p.clinicName;
+            }
+        } catch {}
+        return "";
+    });
+
+    // Sync with hook values when available
+    useEffect(() => {
+        if (clinicLogo) setLocalLogo(clinicLogo);
+        if (clinicName) setLocalName(clinicName);
+    }, [clinicLogo, clinicName]);
+
+    // Live sync when clinic updates their profile photo or settings
+    useEffect(() => {
+        const handleProfileSync = () => {
+            try {
+                const s = localStorage.getItem("dermai_clinic_settings");
+                if (s) {
+                    const p = JSON.parse(s);
+                    if (p?.logo) setLocalLogo(p.logo);
+                    if (p?.name) setLocalName(p.name);
+                }
+                const c = localStorage.getItem("dermai_clinic_profile_cache");
+                if (c) {
+                    const p = JSON.parse(c);
+                    if (p?.clinicLogo) setLocalLogo(p.clinicLogo);
+                    if (p?.clinicName) setLocalName(p.clinicName);
+                }
+            } catch {}
+        };
+
+        window.addEventListener("clinicSettingsUpdated", handleProfileSync);
+        window.addEventListener("dermai_clinic_profile_updated", handleProfileSync);
+        window.addEventListener("dermai_clinic_updated", handleProfileSync);
+        window.addEventListener("storage", handleProfileSync);
+
+        return () => {
+            window.removeEventListener("clinicSettingsUpdated", handleProfileSync);
+            window.removeEventListener("dermai_clinic_profile_updated", handleProfileSync);
+            window.removeEventListener("dermai_clinic_updated", handleProfileSync);
+            window.removeEventListener("storage", handleProfileSync);
+        };
+    }, []);
+
+    const displayLogo = localLogo || clinicLogo;
+    const displayName = localName || clinicName || "Clinic Portal";
+    const isDashboard = location.pathname === "/clinic" || location.pathname === "/clinic/";
     
     const [notifications, setNotifications] = useState<ClinicNotif[]>([]);
     const [lastReadAt, setLastReadAt] = useState<string>(() => {
@@ -154,7 +233,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
     return (<div className="min-h-screen bg-gray-50/80 flex">
       {sidebarOpen && (<div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden" onClick={() => setSidebarOpen(false)}/>)}
 
-      <aside className={cn("flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300", sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0")}>
+      <aside className={cn("flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300 text-[14px]", sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0")}>
         <div className="flex items-center gap-2.5 px-6 h-16 border-b border-gray-100 shrink-0">
           <img src={Logo} alt="DERMAI logo" className="h-9 w-auto object-contain"/>
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold ml-0.5">
@@ -162,8 +241,8 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
           </span>
         </div>
 
-        <nav className="flex-1 px-3 space-y-0.5 overflow-y-auto mt-4">
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2">
+        <nav className="flex-1 px-3 space-y-0.5 overflow-y-auto mt-4 text-[14px]">
+          <p className="text-[14px] font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2">
             Clinic Menu
           </p>
           {sidebarLinks.map((link) => {
@@ -177,7 +256,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
                 to={isLocked ? "/clinic" : link.path}
                 onClick={() => setSidebarOpen(false)}
                 className={cn(
-                  "flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
+                  "flex items-center gap-3 px-4 py-2.5 rounded-xl text-[14px] font-medium transition-all",
                   isActive
                     ? "bg-magenta-50 text-magenta-600 font-semibold"
                     : "text-gray-500 hover:bg-gray-50 hover:text-gray-900",
@@ -200,7 +279,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
         <div className="px-3 py-4 border-t border-gray-100 space-y-2">
           <div className="px-4 py-2 rounded-xl bg-gray-50 border border-gray-100">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <p className="text-sm font-semibold text-gray-900 truncate">{clinicName || "Clinic Portal"}</p>
+              <p className="text-[14px] font-semibold text-gray-900 truncate">{clinicName || "Clinic Portal"}</p>
               {verificationStatus === "verified" && (
                 <VerifiedBadge size={15} className="w-3.5 h-3.5" title="Verified Clinic" />
               )}
@@ -222,7 +301,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
 
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-[14px] font-medium text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors"
           >
             <LogOut className="w-4.5 h-4.5"/>
             Logout
@@ -242,93 +321,135 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
               <span className="font-semibold text-gray-900">{currentPage}</span>
             </div>
           </div>
-          <div ref={notifRef} className="relative">
-            <button onClick={() => setNotifOpen((o) => !o)} className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors">
-              <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")}/>
-              {unreadCount > 0 && (<span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none">
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </span>)}
-            </button>
-
-            {notifOpen && (<div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
-                {/* Header */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                  <div className="flex items-center gap-2">
-                    <Bell className="w-4 h-4 text-magenta-500"/>
-                    <span className="font-semibold text-gray-900 text-sm">Notifications</span>
-                  </div>
-                  {unreadCount > 0 && (<button onClick={markAllRead} className="text-[11px] text-magenta-500 hover:text-magenta-700 font-medium">
-                      Mark all read
-                    </button>)}
+          <div className="flex items-center gap-3">
+            {/* Clinic Profile Photo & Info (shown on all pages except dashboard) */}
+            {!isDashboard && (
+              <Link
+                to="/clinic/settings"
+                title="Clinic Profile & Settings"
+                className="flex items-center gap-2.5 p-1 rounded-xl hover:bg-gray-50 transition-colors group cursor-pointer"
+              >
+                {displayLogo ? (
+                  <img
+                    src={displayLogo}
+                    alt={displayName || "Clinic"}
+                    className="w-8 h-8 rounded-full object-cover border-2 border-[#c0166a] shadow-2xs shrink-0"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLElement).style.display = "none";
+                      const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                      if (fallback) fallback.style.display = "flex";
+                    }}
+                  />
+                ) : null}
+                <div
+                  className="w-8 h-8 rounded-full bg-[#c0166a] items-center justify-center border-2 border-[#c0166a] shadow-2xs shrink-0"
+                  style={{ display: displayLogo ? "none" : "flex" }}
+                >
+                  <span className="text-white text-[11px] font-bold">
+                    {(displayName || "C").charAt(0).toUpperCase()}
+                  </span>
                 </div>
+                <div className="hidden sm:block text-left">
+                  <div className="flex items-center gap-1">
+                    <p className="text-xs font-bold text-gray-800 leading-none truncate max-w-[130px] group-hover:text-magenta-700 transition-colors">
+                      {displayName || "Clinic Portal"}
+                    </p>
+                    {verificationStatus === "verified" && (
+                      <VerifiedBadge size={13} className="w-3.5 h-3.5 shrink-0" title="Verified Clinic" />
+                    )}
+                  </div>
+                </div>
+              </Link>
+            )}
 
-                {/* Items */}
-                <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
-                  {notifications.length === 0 ? (
-                    <div className="py-10 text-center">
-                      <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                      <p className="text-sm text-gray-400">No new notifications</p>
+            <div ref={notifRef} className="relative">
+              <button onClick={() => setNotifOpen((o) => !o)} className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors">
+                <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")}/>
+                {unreadCount > 0 && (<span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none">
+                    {unreadCount > 9 ? "9+" : unreadCount}
+                  </span>)}
+              </button>
+
+              {notifOpen && (<div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+                  {/* Header */}
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                    <div className="flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-magenta-500"/>
+                      <span className="font-semibold text-gray-900 text-sm">Notifications</span>
                     </div>
-                  ) : (
-                    notifications.map((n) => {
-                      const isNew = new Date(n.time) > new Date(lastReadAt);
-                      return (
-                        <div
-                          key={n.id}
-                          onClick={() => {
-                            setNotifOpen(false);
-                            markAllRead();
-                            navigate("/clinic/appointments");
-                          }}
-                          className={cn(
-                            "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
-                            isNew && "bg-magenta-50/20"
-                          )}
-                        >
+                    {unreadCount > 0 && (<button onClick={markAllRead} className="text-[11px] text-magenta-500 hover:text-magenta-700 font-medium">
+                        Mark all read
+                      </button>)}
+                  </div>
+
+                  {/* Items */}
+                  <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+                    {notifications.length === 0 ? (
+                      <div className="py-10 text-center">
+                        <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                        <p className="text-sm text-gray-400">No new notifications</p>
+                      </div>
+                    ) : (
+                      notifications.map((n) => {
+                        const isNew = new Date(n.time) > new Date(lastReadAt);
+                        return (
                           <div
+                            key={n.id}
+                            onClick={() => {
+                              setNotifOpen(false);
+                              markAllRead();
+                              navigate("/clinic/appointments");
+                            }}
                             className={cn(
-                              "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
-                              n.type === "appointment-pending"
-                                ? "bg-amber-100 text-amber-600"
-                                : "bg-magenta-100 text-magenta-600"
+                              "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
+                              isNew && "bg-magenta-50/20"
                             )}
                           >
-                            <Calendar className="w-4 h-4" />
+                            <div
+                              className={cn(
+                                "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
+                                n.type === "appointment-pending"
+                                  ? "bg-amber-100 text-amber-600"
+                                  : "bg-magenta-100 text-magenta-600"
+                              )}
+                            >
+                              <Calendar className="w-4 h-4" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-semibold text-gray-900 truncate">
+                                {n.title}
+                              </p>
+                              <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
+                                {n.message}
+                              </p>
+                              <p className="text-[10px] text-gray-400 mt-1">
+                                {new Date(n.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(n.time).toLocaleDateString()}
+                              </p>
+                            </div>
+                            {isNew && (
+                              <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
+                            )}
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-semibold text-gray-900 truncate">
-                              {n.title}
-                            </p>
-                            <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
-                              {n.message}
-                            </p>
-                            <p className="text-[10px] text-gray-400 mt-1">
-                              {new Date(n.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(n.time).toLocaleDateString()}
-                            </p>
-                          </div>
-                          {isNew && (
-                            <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
+                        );
+                      })
+                    )}
+                  </div>
 
-                {/* Footer */}
-                <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50">
-                  <Link
-                    to="/clinic/appointments"
-                    onClick={() => {
-                      setNotifOpen(false);
-                      markAllRead();
-                    }}
-                    className="block text-center text-sm font-semibold text-magenta-500 hover:text-magenta-700 transition-colors"
-                  >
-                    View all appointments →
-                  </Link>
-                </div>
-              </div>)}
+                  {/* Footer */}
+                  <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50">
+                    <Link
+                      to="/clinic/appointments"
+                      onClick={() => {
+                        setNotifOpen(false);
+                        markAllRead();
+                      }}
+                      className="block text-center text-sm font-semibold text-magenta-500 hover:text-magenta-700 transition-colors"
+                    >
+                      View all appointments →
+                    </Link>
+                  </div>
+                </div>)}
+            </div>
           </div>
         </div>
 

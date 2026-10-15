@@ -1386,14 +1386,6 @@ export default function ScanSkinPage() {
                       Return to the appointment booking page to attach this scan as your Primary AI Skin Scan.
                     </p>
                   </div>
-                  <Link
-                    to={returnAppointmentUrl}
-                    onClick={handleScanBookingContext}
-                    className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full bg-magenta-600 text-white font-semibold text-sm hover:bg-magenta-700 transition-colors shadow-md shadow-magenta-600/20 active:scale-95 whitespace-nowrap self-start sm:self-auto"
-                  >
-                    <span>Continue Booking</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </Link>
                 </div>
               )}
 

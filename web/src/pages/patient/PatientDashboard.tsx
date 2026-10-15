@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { skinConditions } from "../public/SkinLibrary";
 import { supabase } from "@/lib/supabaseClient";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
@@ -484,7 +484,22 @@ export default function PatientDashboard() {
     return fallbackImage;
   };
 
-  const firstName = profile.fullName ? profile.fullName.split(" ")[0] : "there";
+  const displayName = useMemo(() => {
+    if (!profile.fullName) return "";
+    const clean = profile.fullName.trim();
+    if (!clean) return "";
+
+    // If formatted as "LastName, FirstName" (e.g. "Oledan, Juliana")
+    if (clean.includes(",")) {
+      const parts = clean.split(",");
+      const first = parts[1]?.trim().split(" ")[0]?.trim();
+      if (first) return first;
+      return parts[0].trim().replace(/,/g, "");
+    }
+
+    // Standard "FirstName LastName" format
+    return clean.split(" ")[0]?.trim().replace(/,/g, "") || clean;
+  }, [profile.fullName]);
 
   return (
     <div className="w-full">
@@ -492,7 +507,7 @@ export default function PatientDashboard() {
         {/* Welcome */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
           <h1 className="text-2xl sm:text-3xl font-display font-bold text-gray-900">
-            Good morning, {firstName}!
+            Hello{displayName ? `, ${displayName}` : ""}!
           </h1>
           <p className="text-gray-500 text-sm mt-1">
             Here's your skin health overview — stay informed, stay healthy.

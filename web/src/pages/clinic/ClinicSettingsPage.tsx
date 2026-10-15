@@ -12,9 +12,7 @@ import {
   ChevronDown,
   ChevronUp,
   Send,
-  Stethoscope,
   ArrowUpRight,
-  UserCheck,
 } from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
@@ -85,6 +83,8 @@ type ClinicSettings = {
   latitude: number | null;
   longitude: number | null;
   status: "pending" | "verified" | "rejected";
+  slotIntervalMinutes?: number;
+  maxPatientsPerDay?: number;
 };
 
 const DEFAULT_SETTINGS: ClinicSettings = {
@@ -104,6 +104,8 @@ const DEFAULT_SETTINGS: ClinicSettings = {
   latitude: null,
   longitude: null,
   status: "pending",
+  slotIntervalMinutes: 20,
+  maxPatientsPerDay: 20,
 };
 
 const TIME_SLOT_OPTIONS = [
@@ -157,23 +159,76 @@ function formatTime12h(timeStr?: string): string {
 }
 
 function getInitialSettings(): ClinicSettings {
+  let result: Partial<ClinicSettings> = {};
+
+  // 1. Try dermai_clinic_settings from localStorage
   try {
     const savedRaw = localStorage.getItem("dermai_clinic_settings");
     if (savedRaw) {
       const parsed = JSON.parse(savedRaw);
       if (parsed && typeof parsed === "object") {
-        return {
-          ...DEFAULT_SETTINGS,
-          ...parsed,
-          consultationFee: parsed.consultationFee != null ? String(parsed.consultationFee) : "",
-          doctors: Array.isArray(parsed.doctors) ? parsed.doctors : [],
-          latitude: parsed.latitude != null ? Number(parsed.latitude) : null,
-          longitude: parsed.longitude != null ? Number(parsed.longitude) : null,
-        };
+        result = { ...parsed };
       }
     }
   } catch {}
-  return DEFAULT_SETTINGS;
+
+  // 2. Try dermai_clinic_applications if name or essential details are missing
+  if (!result.name?.trim() || !result.email?.trim() || !result.phone?.trim()) {
+    try {
+      const appsRaw = localStorage.getItem("dermai_clinic_applications");
+      if (appsRaw) {
+        const apps = JSON.parse(appsRaw);
+        if (Array.isArray(apps) && apps.length > 0) {
+          const app = apps[0];
+          result = {
+            ...result,
+            name: result.name?.trim() || app.name || "",
+            address: result.address?.trim() || app.address || "",
+            location: result.location?.trim() || app.location || app.district || app.address || "",
+            email: result.email?.trim() || app.email || "",
+            phone: result.phone?.trim() || app.phone || "",
+            logo: result.logo || app.logo || "",
+            consultationFee: result.consultationFee || (app.consultationFee != null ? String(app.consultationFee) : ""),
+            description: result.description || app.description || "",
+            latitude: result.latitude != null ? result.latitude : (app.latitude != null ? Number(app.latitude) : null),
+            longitude: result.longitude != null ? result.longitude : (app.longitude != null ? Number(app.longitude) : null),
+            operatingDays: result.operatingDays || app.operatingDays || "Monday - Saturday",
+            openTime: result.openTime || app.openTime || "08:00",
+            closeTime: result.closeTime || app.closeTime || "17:00",
+            servicesOffered: result.servicesOffered || app.servicesOffered || "",
+          };
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Fallback to dermai_clinic_profile_cache for clinic name / logo
+  try {
+    const cacheRaw = localStorage.getItem("dermai_clinic_profile_cache");
+    if (cacheRaw) {
+      const profile = JSON.parse(cacheRaw);
+      if (profile) {
+        if (!result.name?.trim() && profile.clinicName && profile.clinicName !== "Clinic Portal") {
+          result.name = profile.clinicName;
+        }
+        if (!result.logo && profile.clinicLogo) {
+          result.logo = profile.clinicLogo;
+        }
+        if (profile.status === "verified") {
+          result.status = "verified";
+        }
+      }
+    }
+  } catch {}
+
+  return {
+    ...DEFAULT_SETTINGS,
+    ...result,
+    consultationFee: result.consultationFee != null ? String(result.consultationFee) : "",
+    doctors: Array.isArray(result.doctors) ? result.doctors : [],
+    latitude: result.latitude != null ? Number(result.latitude) : null,
+    longitude: result.longitude != null ? Number(result.longitude) : null,
+  };
 }
 
 export default function ClinicSettingsPage() {
@@ -181,9 +236,21 @@ export default function ClinicSettingsPage() {
   const [saved, setSaved] = useState(false);
   const [selectedServices, setSelectedServices] = useState<string[]>(() => {
     const initial = getInitialSettings();
-    return initial.servicesOffered
-      ? parseServices(initial.servicesOffered)
-      : parseServices(DEFAULT_SETTINGS.servicesOffered);
+    if (initial.servicesOffered) {
+      const svcs = parseServices(initial.servicesOffered);
+      if (svcs.length > 0) return svcs;
+    }
+    try {
+      const appsRaw = localStorage.getItem("dermai_clinic_applications");
+      if (appsRaw) {
+        const apps = JSON.parse(appsRaw);
+        if (Array.isArray(apps) && apps[0]?.servicesOffered) {
+          const svcs = parseServices(apps[0].servicesOffered);
+          if (svcs.length > 0) return svcs;
+        }
+      }
+    } catch {}
+    return parseServices(DEFAULT_SETTINGS.servicesOffered);
   });
   const [customServiceInput, setCustomServiceInput] = useState("");
 
@@ -195,10 +262,20 @@ export default function ClinicSettingsPage() {
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
-  const { status: verificationStatus, clinicId, loading } = useClinicVerification();
+  const { status: verificationStatus, clinicId, clinicName, clinicLogo, loading } = useClinicVerification();
   const [dbClinicId, setDbClinicId] = useState<string | null>(null);
   // UI Mode: Always allow editing so the clinic can test and customize their UI
   const isPending = false;
+
+  // Live-sync with clinic verification profile hook
+  useEffect(() => {
+    if (clinicName && clinicName !== "Clinic Portal") {
+      setSettings((prev) => (!prev.name ? { ...prev, name: clinicName } : prev));
+    }
+    if (clinicLogo) {
+      setSettings((prev) => (!prev.logo ? { ...prev, logo: clinicLogo } : prev));
+    }
+  }, [clinicName, clinicLogo]);
 
   // Load latest clinic settings from Supabase in background
   useEffect(() => {
@@ -206,102 +283,275 @@ export default function ClinicSettingsPage() {
 
     async function loadData() {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        // 1. Resolve session with auto-refresh fallback
+        let session = (await supabase.auth.getSession()).data.session;
+        if (!session) {
+          try {
+            const { data: userData } = await supabase.auth.getUser();
+            if (userData?.user) {
+              session = (await supabase.auth.getSession()).data.session;
+            }
+          } catch {}
+        }
+
         const userId = session?.user?.id;
         const userEmail = session?.user?.email?.toLowerCase().trim();
 
-        if (!userId && !userEmail) return;
-
-        // Fetch clinic, operating hours, and doctors in parallel
-        const clinicQuery = clinicId
-          ? supabase
-              .from("clinic")
-              .select(`
-                clinic_id, name, district, address, phone, email, consultation_fee, description, status, logo_url,
-                latitude, longitude,
-                clinic_service_offered ( service_name ),
-                clinic_operating_hours ( day_of_week, open_time, close_time )
-              `)
-              .eq("clinic_id", clinicId)
-              .maybeSingle()
-          : supabase
-              .from("clinic")
-              .select(`
-                clinic_id, name, district, address, phone, email, consultation_fee, description, status, logo_url,
-                latitude, longitude,
-                clinic_service_offered ( service_name ),
-                clinic_operating_hours ( day_of_week, open_time, close_time )
-              `)
-              .or(`owner_user_id.eq.${userId}${userEmail ? `,email.ilike.${userEmail}` : ""}`)
-              .maybeSingle();
-
-        const { data: dbClinic, error: clinicErr } = await clinicQuery;
-        if (cancelled || clinicErr || !dbClinic) return;
-
-        if (dbClinic.clinic_id) {
-          setDbClinicId(dbClinic.clinic_id);
+        // 2. Resolve clinic ID from hook, cache, settings, or application snapshot
+        let resolvedClinicId = clinicId;
+        if (!resolvedClinicId) {
+          try {
+            const cache = localStorage.getItem("dermai_clinic_profile_cache");
+            if (cache) {
+              const parsed = JSON.parse(cache);
+              if (parsed.clinicId) resolvedClinicId = parsed.clinicId;
+            }
+          } catch {}
+        }
+        if (!resolvedClinicId) {
+          try {
+            const sett = localStorage.getItem("dermai_clinic_settings");
+            if (sett) {
+              const parsed = JSON.parse(sett);
+              if (parsed.id) resolvedClinicId = parsed.id;
+            }
+          } catch {}
+        }
+        if (!resolvedClinicId) {
+          try {
+            const apps = localStorage.getItem("dermai_clinic_applications");
+            if (apps) {
+              const parsed = JSON.parse(apps);
+              if (Array.isArray(parsed) && parsed[0]?.id && !parsed[0].id.startsWith("temp_")) {
+                resolvedClinicId = parsed[0].id;
+              }
+            }
+          } catch {}
         }
 
-        let loadedDoctors: ClinicDoctorSummary[] = [];
-        if (dbClinic.clinic_id) {
-          const { data: docList } = await supabase
-            .from("clinic_doctor")
-            .select("doctor_id, doctor_name, email, status, specialization")
-            .eq("clinic_id", dbClinic.clinic_id)
-            .neq("status", "Inactive");
+        let dbClinic: any = null;
 
-          if (docList && docList.length > 0) {
-            loadedDoctors = docList.map((d: any) => ({
-              id: d.doctor_id,
-              name: d.doctor_name,
-              specialization: d.specialization || "General Dermatology",
-            }));
+        // Query Strategy 1: Look up by resolvedClinicId directly
+        if (resolvedClinicId && !resolvedClinicId.startsWith("temp_")) {
+          try {
+            const { data, error } = await supabase
+              .from("clinic")
+              .select(`
+                clinic_id, name, district, address, phone, email, consultation_fee, description, status, verified, logo_url,
+                latitude, longitude,
+                clinic_service_offered ( service_name ),
+                clinic_operating_hours ( day_of_week, open_time, close_time )
+              `)
+              .eq("clinic_id", resolvedClinicId)
+              .maybeSingle();
+
+            if (data && !error) {
+              dbClinic = data;
+            }
+          } catch (err) {
+            console.warn("Could not query clinic by clinic_id:", err);
+          }
+        }
+
+        // Query Strategy 2: If not found, look up by owner_user_id
+        if (!dbClinic && userId) {
+          try {
+            const { data, error } = await supabase
+              .from("clinic")
+              .select(`
+                clinic_id, name, district, address, phone, email, consultation_fee, description, status, verified, logo_url,
+                latitude, longitude,
+                clinic_service_offered ( service_name ),
+                clinic_operating_hours ( day_of_week, open_time, close_time )
+              `)
+              .eq("owner_user_id", userId)
+              .maybeSingle();
+
+            if (data && !error) {
+              dbClinic = data;
+            }
+          } catch (err) {
+            console.warn("Could not query clinic by owner_user_id:", err);
+          }
+        }
+
+        // Query Strategy 3: If not found, look up by user email
+        if (!dbClinic && userEmail) {
+          try {
+            const { data, error } = await supabase
+              .from("clinic")
+              .select(`
+                clinic_id, name, district, address, phone, email, consultation_fee, description, status, verified, logo_url,
+                latitude, longitude,
+                clinic_service_offered ( service_name ),
+                clinic_operating_hours ( day_of_week, open_time, close_time )
+              `)
+              .ilike("email", userEmail)
+              .maybeSingle();
+
+            if (data && !error) {
+              dbClinic = data;
+            }
+          } catch (err) {
+            console.warn("Could not query clinic by email:", err);
+          }
+        }
+
+        // Query Strategy 4: If not found, look up by cached clinic name
+        if (!dbClinic) {
+          let nameHint = "";
+          try {
+            const cache = localStorage.getItem("dermai_clinic_profile_cache");
+            if (cache) nameHint = JSON.parse(cache)?.clinicName || "";
+            if (!nameHint) {
+              const apps = localStorage.getItem("dermai_clinic_applications");
+              if (apps) nameHint = JSON.parse(apps)?.[0]?.name || "";
+            }
+          } catch {}
+
+          if (nameHint && nameHint !== "Clinic Portal") {
+            try {
+              const { data, error } = await supabase
+                .from("clinic")
+                .select(`
+                  clinic_id, name, district, address, phone, email, consultation_fee, description, status, verified, logo_url,
+                  latitude, longitude,
+                  clinic_service_offered ( service_name ),
+                  clinic_operating_hours ( day_of_week, open_time, close_time )
+                `)
+                .ilike("name", nameHint)
+                .maybeSingle();
+
+              if (data && !error) {
+                dbClinic = data;
+              }
+            } catch (err) {
+              console.warn("Could not query clinic by name:", err);
+            }
           }
         }
 
         if (cancelled) return;
 
-        setSettings((prev) => {
-          let loadedOperatingDays = prev.operatingDays;
-          let loadedOpenTime = prev.openTime;
-          let loadedCloseTime = prev.closeTime;
-
-          if (Array.isArray(dbClinic.clinic_operating_hours) && dbClinic.clinic_operating_hours.length > 0) {
-            const h = dbClinic.clinic_operating_hours[0];
-            if (h.day_of_week) loadedOperatingDays = h.day_of_week;
-            if (h.open_time) loadedOpenTime = h.open_time.slice(0, 5);
-            if (h.close_time) loadedCloseTime = h.close_time.slice(0, 5);
+        if (dbClinic) {
+          if (dbClinic.clinic_id) {
+            setDbClinicId(dbClinic.clinic_id);
           }
 
-          const next: ClinicSettings = {
-            ...prev,
-            name: dbClinic.name || prev.name,
-            address: dbClinic.address || prev.address || "",
-            location: dbClinic.district || prev.location || "",
-            phone: dbClinic.phone || prev.phone || "",
-            email: dbClinic.email || prev.email || "",
-            logo: dbClinic.logo_url || prev.logo || "",
-            consultationFee: dbClinic.consultation_fee != null ? String(dbClinic.consultation_fee) : (prev.consultationFee || ""),
-            description: dbClinic.description || prev.description || "",
-            latitude: dbClinic.latitude != null ? Number(dbClinic.latitude) : prev.latitude,
-            longitude: dbClinic.longitude != null ? Number(dbClinic.longitude) : prev.longitude,
-            status: (dbClinic.status === "approved" ? "verified" : dbClinic.status) as any || prev.status,
-            operatingDays: loadedOperatingDays,
-            openTime: loadedOpenTime,
-            closeTime: loadedCloseTime,
-            doctors: loadedDoctors.length > 0 ? loadedDoctors : prev.doctors,
-          };
+          let loadedDoctors: ClinicDoctorSummary[] = [];
+          if (dbClinic.clinic_id) {
+            const { data: docList } = await supabase
+              .from("clinic_doctor")
+              .select("doctor_id, doctor_name, email, status, specialization")
+              .eq("clinic_id", dbClinic.clinic_id)
+              .neq("status", "Inactive");
+
+            if (docList && docList.length > 0) {
+              loadedDoctors = docList.map((d: any) => ({
+                id: d.doctor_id,
+                name: d.doctor_name,
+                specialization: d.specialization || "General Dermatology",
+              }));
+            }
+          }
+
+          if (cancelled) return;
+
+          setSettings((prev) => {
+            let loadedOperatingDays = prev.operatingDays;
+            let loadedOpenTime = prev.openTime;
+            let loadedCloseTime = prev.closeTime;
+
+            if (Array.isArray(dbClinic.clinic_operating_hours) && dbClinic.clinic_operating_hours.length > 0) {
+              const h = dbClinic.clinic_operating_hours[0];
+              if (h.day_of_week) loadedOperatingDays = h.day_of_week;
+              if (h.open_time) loadedOpenTime = h.open_time.slice(0, 5);
+              if (h.close_time) loadedCloseTime = h.close_time.slice(0, 5);
+            }
+
+            const isClinicVerified =
+              dbClinic.verified === true ||
+              dbClinic.status === "approved" ||
+              dbClinic.status === "verified";
+
+            const mappedStatus = isClinicVerified ? "verified" : (dbClinic.status || prev.status);
+
+            let loadedSlotInterval = prev.slotIntervalMinutes || 20;
+            let loadedMaxPatients = prev.maxPatientsPerDay || 20;
+            try {
+              const cachedSett = localStorage.getItem("dermai_clinic_settings");
+              if (cachedSett) {
+                const parsed = JSON.parse(cachedSett);
+                if (parsed.slotIntervalMinutes) loadedSlotInterval = Number(parsed.slotIntervalMinutes);
+                if (parsed.maxPatientsPerDay) loadedMaxPatients = Number(parsed.maxPatientsPerDay);
+              }
+            } catch {}
+
+            const next: ClinicSettings = {
+              ...prev,
+              name: dbClinic.name || prev.name || "",
+              address: dbClinic.address || prev.address || "",
+              location: dbClinic.district || dbClinic.address || prev.location || "",
+              phone: dbClinic.phone || prev.phone || "",
+              email: dbClinic.email || prev.email || "",
+              logo: dbClinic.logo_url || prev.logo || "",
+              consultationFee: dbClinic.consultation_fee != null ? String(dbClinic.consultation_fee) : (prev.consultationFee || ""),
+              description: dbClinic.description || prev.description || "",
+              latitude: dbClinic.latitude != null ? Number(dbClinic.latitude) : prev.latitude,
+              longitude: dbClinic.longitude != null ? Number(dbClinic.longitude) : prev.longitude,
+              status: mappedStatus as any,
+              operatingDays: loadedOperatingDays,
+              openTime: loadedOpenTime,
+              closeTime: loadedCloseTime,
+              doctors: loadedDoctors.length > 0 ? loadedDoctors : prev.doctors,
+              slotIntervalMinutes: loadedSlotInterval,
+              maxPatientsPerDay: loadedMaxPatients,
+            };
+
+            try {
+              localStorage.setItem("dermai_clinic_settings", JSON.stringify(next));
+            } catch {}
+
+            return next;
+          });
+
+          if (dbClinic.clinic_service_offered && dbClinic.clinic_service_offered.length > 0) {
+            const dbSvcs = dbClinic.clinic_service_offered.map((s: any) => s.service_name).filter(Boolean);
+            if (dbSvcs.length > 0) {
+              setSelectedServices(dbSvcs);
+            }
+          }
+        } else {
+          // If Supabase clinic row could not be found, fall back to local applications cache
           try {
-            localStorage.setItem("dermai_clinic_settings", JSON.stringify(next));
+            const appsRaw = localStorage.getItem("dermai_clinic_applications");
+            if (appsRaw) {
+              const apps = JSON.parse(appsRaw);
+              if (Array.isArray(apps) && apps.length > 0) {
+                const app = apps[0];
+                setSettings((prev) => ({
+                  ...prev,
+                  name: prev.name || app.name || "",
+                  address: prev.address || app.address || "",
+                  location: prev.location || app.location || app.district || app.address || "",
+                  phone: prev.phone || app.phone || "",
+                  email: prev.email || app.email || "",
+                  logo: prev.logo || app.logo || "",
+                  consultationFee: prev.consultationFee || (app.consultationFee != null ? String(app.consultationFee) : ""),
+                  description: prev.description || app.description || "",
+                  latitude: prev.latitude != null ? prev.latitude : (app.latitude != null ? Number(app.latitude) : null),
+                  longitude: prev.longitude != null ? prev.longitude : (app.longitude != null ? Number(app.longitude) : null),
+                  operatingDays: prev.operatingDays || app.operatingDays || "Monday - Saturday",
+                  openTime: prev.openTime || app.openTime || "08:00",
+                  closeTime: prev.closeTime || app.closeTime || "17:00",
+                }));
+                if (app.servicesOffered) {
+                  const svcs = parseServices(app.servicesOffered);
+                  if (svcs.length > 0) setSelectedServices(svcs);
+                }
+              }
+            }
           } catch {}
-          return next;
-        });
-
-        if (dbClinic.clinic_service_offered && dbClinic.clinic_service_offered.length > 0) {
-          const dbSvcs = dbClinic.clinic_service_offered.map((s: any) => s.service_name).filter(Boolean);
-          if (dbSvcs.length > 0) {
-            setSelectedServices(dbSvcs);
-          }
         }
       } catch (err) {
         console.error("Error loading clinic settings:", err);
@@ -309,21 +559,39 @@ export default function ClinicSettingsPage() {
     }
 
     loadData();
-    return () => { cancelled = true; };
-  }, [clinicId]);
+
+    // Listen to profile / settings update events
+    const handleSync = () => {
+      loadData();
+    };
+    window.addEventListener("dermai_clinic_profile_updated", handleSync);
+    window.addEventListener("dermai_clinic_updated", handleSync);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("dermai_clinic_profile_updated", handleSync);
+      window.removeEventListener("dermai_clinic_updated", handleSync);
+    };
+  }, [clinicId, loading]);
 
   const onSave = async () => {
     const targetClinicId = clinicId || dbClinicId;
+    const isCurrentlyVerified =
+      verificationStatus === "verified" ||
+      settings.status === "verified";
 
     // 1. Save settings to localStorage for instant 0ms synchronization
     const settingsToSave = {
       ...settings,
+      status: isCurrentlyVerified ? "verified" : settings.status,
       id: targetClinicId || undefined,
       consultationFee: settings.consultationFee || "",
       servicesOffered: JSON.stringify(selectedServices),
       hours: `${settings.operatingDays || "Monday - Saturday"}: ${formatTime12h(settings.openTime || "08:00")} – ${formatTime12h(settings.closeTime || "17:00")}`,
+      slotIntervalMinutes: settings.slotIntervalMinutes || 30,
     };
     localStorage.setItem("dermai_clinic_settings", JSON.stringify(settingsToSave));
+    window.dispatchEvent(new Event("storage"));
 
     // Also update matching clinic application cache for search and booking
     try {
@@ -339,6 +607,7 @@ export default function ClinicSettingsPage() {
             ) {
               return {
                 ...app,
+                status: isCurrentlyVerified ? "verified" : app.status,
                 name: settings.name || app.name,
                 address: settings.address || app.address,
                 district: settings.location || app.district,
@@ -350,6 +619,7 @@ export default function ClinicSettingsPage() {
                 openTime: settings.openTime,
                 closeTime: settings.closeTime,
                 hours: `${settings.operatingDays || "Monday - Saturday"}: ${formatTime12h(settings.openTime || "08:00")} – ${formatTime12h(settings.closeTime || "17:00")}`,
+                slotIntervalMinutes: settings.slotIntervalMinutes || 30,
                 services: selectedServices,
                 servicesOffered: JSON.stringify(selectedServices),
                 latitude: settings.latitude,
@@ -376,7 +646,7 @@ export default function ClinicSettingsPage() {
       const userId = session?.user?.id;
       const feeNumber = settings.consultationFee.trim() !== "" ? parseFloat(settings.consultationFee) : null;
 
-      if (targetClinicId || userId) {
+      if (targetClinicId || userId || settings.email) {
         const payload: Record<string, any> = {
           name: settings.name,
           address: settings.address,
@@ -388,8 +658,15 @@ export default function ClinicSettingsPage() {
           latitude: settings.latitude,
           longitude: settings.longitude,
         };
+        if (settings.logo) {
+          payload.logo_url = settings.logo;
+        }
         if (userId) {
           payload.owner_user_id = userId;
+        }
+        if (isCurrentlyVerified) {
+          payload.verified = true;
+          payload.status = "approved";
         }
 
         let query = supabase.from("clinic").update(payload);
@@ -398,6 +675,8 @@ export default function ClinicSettingsPage() {
           query = query.eq("clinic_id", targetClinicId);
         } else if (userId) {
           query = query.eq("owner_user_id", userId);
+        } else if (settings.email) {
+          query = query.ilike("email", settings.email);
         }
         const { data: updatedClinic } = await query.select("clinic_id").maybeSingle();
         const effectiveClinicId = targetClinicId || updatedClinic?.clinic_id;
@@ -681,49 +960,6 @@ export default function ClinicSettingsPage() {
           </div>
         </div>
 
-        {/* Attending Doctors & Medical Staff Summary */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-between border-b pb-2">
-            <div>
-              <h2 className="text-lg font-bold text-gray-900">Attending Doctors & Medical Staff</h2>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Doctors, licenses, PRC credentials, and specializations are managed in the Doctors portal.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-2xl bg-pink-50/50 border border-pink-100">
-            <div className="flex items-center gap-3.5">
-              <div className="w-11 h-11 rounded-2xl bg-[#c0166a] text-white flex items-center justify-center shrink-0 shadow-sm">
-                <Stethoscope className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                  <span>{settings.doctors.length === 1 ? "1 Attending Doctor Registered" : `${settings.doctors.length} Attending Doctors Registered`}</span>
-                  {settings.doctors.length > 0 && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-full">
-                      <UserCheck className="w-3 h-3" /> Active Roster
-                    </span>
-                  )}
-                </p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  {settings.doctors.length > 0
-                    ? `Attending: ${settings.doctors.map((d) => d.name).join(", ")}`
-                    : "Add licensed doctors to assign appointments and showcase to patients."}
-                </p>
-              </div>
-            </div>
-
-            <Link
-              to="/clinic/doctors"
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-all shrink-0 shadow-sm"
-            >
-              <span>Manage Doctors & Licenses</span>
-              <ArrowUpRight className="w-3.5 h-3.5" />
-            </Link>
-          </div>
-        </div>
-
         {/* Services & Conditions Treated */}
         <div className="space-y-4">
           <div className="border-b pb-2">
@@ -832,7 +1068,22 @@ export default function ClinicSettingsPage() {
 
         {/* Schedule */}
         <div className="space-y-4">
-          <h2 className="text-lg font-bold text-gray-900 border-b pb-2">Schedule</h2>
+          <div className="border-b pb-2 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Schedule & Patient Capacity</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Set clinic-wide operating hours, consultation slot duration, and booking limits.
+              </p>
+            </div>
+            <Link
+              to="/clinic/doctors"
+              className="text-xs font-semibold text-magenta-600 hover:text-magenta-700 flex items-center gap-1 hover:underline"
+            >
+              <span>Doctor Shifts</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-semibold text-gray-500 mb-1">Operating Days</label>
@@ -876,11 +1127,53 @@ export default function ClinicSettingsPage() {
               </select>
             </div>
           </div>
+
+          {/* Slot Interval and Operating Settings */}
+          <div className="p-4 rounded-2xl bg-pink-50/40 border border-pink-200/90 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-[#c0166a]" />
+                Default Appointment Slot Interval
+              </span>
+            </div>
+
+            <div className="max-w-md">
+              <label className="block text-xs font-bold text-gray-800 mb-1.5">
+                Default Appointment Slot Interval (Clinic Default)
+              </label>
+              <div className="relative">
+                <select
+                  disabled={isPending}
+                  value={settings.slotIntervalMinutes || 30}
+                  onChange={(e) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      slotIntervalMinutes: Number(e.target.value),
+                    }))
+                  }
+                  className="w-full px-3 py-2 pr-8 rounded-xl border border-gray-200 bg-white text-xs font-semibold text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 disabled:bg-gray-50 disabled:text-gray-500 cursor-pointer appearance-none"
+                >
+                  <option value={10}>10 minutes</option>
+                  <option value={15}>15 minutes</option>
+                  <option value={20}>20 minutes</option>
+                  <option value={30}>30 minutes</option>
+                  <option value={45}>45 minutes</option>
+                  <option value={60}>60 minutes</option>
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+              <p className="text-[11px] text-gray-500 mt-1">
+                Baseline duration for each appointment slot ({Math.floor(60 / (settings.slotIntervalMinutes || 30))} slots/hour). Doctors inherit this unless customized in their duty roster.
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="rounded-xl bg-magenta-50 border border-magenta-100 p-3 text-xs text-magenta-700 inline-flex items-center gap-2">
-          <Clock className="w-4 h-4 text-magenta-500" />
-          Keep schedules realistic to avoid overbooking and delayed consultations.
+          <Clock className="w-4 h-4 text-magenta-500 shrink-0" />
+          <span>
+            These settings establish clinic-wide default consultation rules. Appointment availability is calculated dynamically from clinic operating hours, slot interval duration, and attending doctors' active duty shifts.
+          </span>
         </div>
 
         <div className="flex items-center gap-3 pt-4">

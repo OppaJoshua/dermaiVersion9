@@ -2,8 +2,8 @@ import { useState, useMemo, useEffect } from "react";
 import {
   Users,
   Search,
-  UserCheck,
-  Clock,
+  CheckCircle2,
+  Calendar,
   X,
   User,
   Phone,
@@ -14,6 +14,10 @@ import {
   ClipboardList,
   FileText,
   Stethoscope,
+  Eye,
+  RotateCcw,
+  Clock,
+  AlertCircle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -21,20 +25,21 @@ import { supabase } from "@/lib/supabaseClient";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
+import { isAppointmentPastScheduled } from "@/lib/schedulingService";
 
-export type ClinicPatient = {
+/* ── Types ────────────────────────────────────────────────────────── */
+
+export type PatientAppointment = {
   id: string;
-  name: string;
-  age?: number;
-  gender?: string;
-  birthdate?: string;
-  email: string;
-  phone?: string;
-  address?: string;
-  emergencyContactName?: string;
-  emergencyContactPhone?: string;
-  emergencyRelationship?: string;
-  condition?: string;
+  dateStr: string;
+  rawDate?: string;
+  timeStr: string;
+  status: "pending" | "scheduled" | "confirmed" | "accepted" | "completed" | "cancelled" | "rejected" | string;
+  checkInStatus?: "scheduled" | "arrived" | "in-consultation" | "completed" | "no-show";
+  doctorStatus?: "pending-review" | "approved" | "rejected";
+  assignedDoctorId?: string;
+  assignedDoctorName?: string;
+  conditionName?: string;
   confidence?: number;
   skinPhotoUrl?: string;
   questionnaireAnswers?: Array<{
@@ -43,21 +48,41 @@ export type ClinicPatient = {
     severity?: number;
     points?: number;
   }>;
-  assignedDoctor?: string;
-  lastVisit?: string;
-  totalVisits: number;
-  status: "active" | "completed" | "pending" | "cancelled";
   notes?: string;
   clinicNote?: string;
   doctorNote?: string;
-  createdAt?: string;
+  doctorReviewedAt?: string;
+  createdAt: string;
+  queueNumber?: number;
 };
 
-const statusBadges: Record<string, string> = {
-  active: "bg-blue-50 text-blue-700 border-blue-200",
-  completed: "bg-green-50 text-green-700 border-green-200",
-  pending: "bg-amber-50 text-amber-700 border-amber-200",
+export type ClinicPatient = {
+  id: string; // Unique deduplicated key (user_id or normalized email)
+  userId?: string;
+  name: string;
+  email: string;
+  phone?: string;
+  address?: string;
+  gender?: string;
+  birthdate?: string;
+  age?: number;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  emergencyRelationship?: string;
+  totalAppointments: number;
+  lastAppointment?: PatientAppointment;
+  appointments: PatientAppointment[];
+  assignedDoctors: Array<{ id?: string; name: string }>;
 };
+
+export type RegisteredDoctor = {
+  id: string;
+  name: string;
+  email?: string;
+  photoUrl?: string;
+};
+
+/* ── Helper Functions ─────────────────────────────────────────────── */
 
 function calculateAge(birthdateStr?: string): number | undefined {
   if (!birthdateStr) return undefined;
@@ -72,7 +97,9 @@ function calculateAge(birthdateStr?: string): number | undefined {
   return age >= 0 ? age : undefined;
 }
 
-function parseQuestionnaireAnswers(raw: any): Array<{ question: string; answer: string; severity?: number; points?: number }> {
+function parseQuestionnaireAnswers(
+  raw: any
+): Array<{ question: string; answer: string; severity?: number; points?: number }> {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw;
   if (typeof raw === "string") {
@@ -86,43 +113,112 @@ function parseQuestionnaireAnswers(raw: any): Array<{ question: string; answer: 
   return [];
 }
 
+function formatApptDate(dateInput?: string | null): string {
+  if (!dateInput) return "—";
+  try {
+    const clean = dateInput.split("T")[0];
+    const match = clean.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      const year = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10) - 1;
+      const day = parseInt(match[3], 10);
+      const d = new Date(year, month, day);
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    }
+    const d = new Date(dateInput);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    }
+    return dateInput;
+  } catch {
+    return dateInput || "—";
+  }
+}
+
+function formatApptTime(timeInput?: string | null, batchTime?: string | null): string {
+  if (batchTime && batchTime !== "—") {
+    return batchTime.toLowerCase().includes("batch") ? batchTime : `${batchTime} Batch`;
+  }
+  if (timeInput && timeInput !== "—") return timeInput;
+  return "Schedule pending";
+}
+
+function formatDoctorName(name?: string): string {
+  if (!name) return "Unassigned";
+  const clean = name.trim();
+  if (clean.toLowerCase().startsWith("dr.")) return clean;
+  return `Dr. ${clean}`;
+}
+
+/* ── Main Component ───────────────────────────────────────────────── */
+
 export default function ClinicPatientsPage() {
-  const { clinicId } = useClinicVerification();
+  const { clinicId, clinicName } = useClinicVerification();
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "upcoming" | "completed" | "cancelled">("all");
+  const [selectedDoctorId, setSelectedDoctorId] = useState<string>("all");
   const [selectedPatient, setSelectedPatient] = useState<ClinicPatient | null>(null);
-  const [patients, setPatients] = useState<ClinicPatient[]>([]);
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
 
+  const [patients, setPatients] = useState<ClinicPatient[]>([]);
+  const [allAppointments, setAllAppointments] = useState<PatientAppointment[]>([]);
+  const [registeredDoctors, setRegisteredDoctors] = useState<RegisteredDoctor[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // 1. Fetch real Supabase clinic data & deduplicate unique patients
   useEffect(() => {
-    async function loadPatients() {
+    let isCancelled = false;
+
+    async function loadPatientDirectory() {
+      setLoading(true);
       try {
+        // Resolve clinic identity
         let resolvedClinicId = clinicId;
-        if (!resolvedClinicId) {
+        let resolvedClinicName = clinicName;
+        if (!resolvedClinicId || !resolvedClinicName) {
           try {
             const cache = localStorage.getItem("dermai_clinic_profile_cache");
             if (cache) {
               const parsed = JSON.parse(cache);
-              if (parsed.clinicId) resolvedClinicId = parsed.clinicId;
+              if (parsed.clinicId && !resolvedClinicId) resolvedClinicId = parsed.clinicId;
+              if (parsed.clinicName && !resolvedClinicName) resolvedClinicName = parsed.clinicName;
             }
           } catch { }
         }
 
-        // 1. Fetch clinic doctors to map assigned_doctor_id to real doctor name
+        // 1. Fetch registered clinic doctors
         const docMap = new Map<string, string>();
+        const doctorsList: RegisteredDoctor[] = [];
+
         if (resolvedClinicId) {
-          const { data: docRows } = await supabase
-            .from("clinic_doctor")
-            .select("doctor_id, doctor_name")
-            .eq("clinic_id", resolvedClinicId);
-          if (docRows) {
-            docRows.forEach((d: any) => {
-              if (d.doctor_id && d.doctor_name) {
-                docMap.set(String(d.doctor_id), d.doctor_name);
-              }
-            });
+          try {
+            const { data: docRows } = await supabase
+              .from("clinic_doctor")
+              .select("doctor_id, doctor_name, email, photo_url, status")
+              .eq("clinic_id", resolvedClinicId);
+
+            if (docRows && docRows.length > 0) {
+              docRows.forEach((d: any) => {
+                if (d.doctor_id && d.doctor_name) {
+                  const formatted = formatDoctorName(d.doctor_name);
+                  docMap.set(String(d.doctor_id), formatted);
+                  if (String(d.status || "").toLowerCase() !== "inactive") {
+                    doctorsList.push({
+                      id: String(d.doctor_id),
+                      name: formatted,
+                      email: d.email || undefined,
+                      photoUrl: d.photo_url || undefined,
+                    });
+                  }
+                }
+              });
+            }
+          } catch (docErr) {
+            console.warn("[ClinicPatientsPage] Failed to fetch clinic_doctor:", docErr);
           }
         }
+
+        // Merge doctors from local storage cache if available
         try {
           const rawDocs = localStorage.getItem("dermai_clinic_doctors");
           if (rawDocs) {
@@ -130,182 +226,15 @@ export default function ClinicPatientsPage() {
             if (Array.isArray(parsedDocs)) {
               parsedDocs.forEach((d: any) => {
                 if (d.id && d.name) {
-                  docMap.set(String(d.id), d.name);
-                }
-              });
-            }
-          }
-        } catch { }
-
-        // 2. Fetch patient appointments
-        let query = supabase
-          .from("patient_appointment")
-          .select("*")
-          .order("created_at", { ascending: false });
-
-        if (resolvedClinicId) {
-          query = query.eq("clinic_id", resolvedClinicId);
-        }
-
-        const { data } = await query;
-        const patientMap = new Map<string, ClinicPatient>();
-
-        if (data && data.length > 0) {
-          data.forEach((row) => {
-            const email = row.patient_email || `patient_${(row.appointment_id || "").slice(0, 6)}@dermai.local`;
-            const name = row.patient_name || email.split("@")[0];
-            const phone = row.patient_contact || "";
-            const address = row.patient_address || "";
-            const gender = row.patient_gender || "";
-            const birthdate = row.patient_birthdate || "";
-            const age = calculateAge(birthdate);
-            const isCompleted = row.status === "completed";
-            const isPending = row.status === "pending";
-            const isCancelled = row.status === "cancelled" || row.status === "rejected";
-            const isScheduled = row.status === "scheduled" || row.status === "confirmed";
-            const confidence = row.ai_confidence ? Number(row.ai_confidence) : undefined;
-            const questionnaireAnswers = parseQuestionnaireAnswers(row.questionnaire_answers);
-
-            // Resolve real doctor name
-            const rawDocName =
-              row.assigned_doctor_name ||
-              (row.assigned_doctor_id ? docMap.get(String(row.assigned_doctor_id)) : "") ||
-              "";
-            const formattedDoc = rawDocName
-              ? rawDocName.toLowerCase().startsWith("dr.")
-                ? rawDocName
-                : `Dr. ${rawDocName}`
-              : "Unassigned";
-
-            let patientStatus: ClinicPatient["status"] = "active";
-            if (isCompleted) patientStatus = "completed";
-            else if (isPending) patientStatus = "pending";
-            else if (isCancelled) patientStatus = "cancelled";
-            else if (isScheduled) patientStatus = "active";
-            else patientStatus = "active";
-
-            if (!patientMap.has(email)) {
-              patientMap.set(email, {
-                id: row.user_id || row.appointment_id,
-                name,
-                email,
-                phone,
-                address,
-                gender,
-                birthdate,
-                age,
-                emergencyContactName: row.emergency_contact_name || undefined,
-                emergencyContactPhone: row.emergency_contact_phone || undefined,
-                emergencyRelationship: row.emergency_contact_relationship || undefined,
-                condition: row.ai_condition_name || "General Dermatology",
-                confidence,
-                skinPhotoUrl: row.skin_photo_url || undefined,
-                questionnaireAnswers: questionnaireAnswers.length > 0 ? questionnaireAnswers : undefined,
-                assignedDoctor: formattedDoc,
-                lastVisit: row.date ? new Date(row.date).toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" }) : "—",
-                totalVisits: 1,
-                status: patientStatus,
-                notes: row.notes || (row.ai_condition_name ? `Noted Condition: ${row.ai_condition_name}` : ""),
-                clinicNote: row.clinic_note || undefined,
-                doctorNote: row.doctor_note || undefined,
-                createdAt: row.created_at,
-              });
-            } else {
-              const existing = patientMap.get(email)!;
-              existing.totalVisits += 1;
-              if (phone && !existing.phone) existing.phone = phone;
-              if (address && !existing.address) existing.address = address;
-              if (gender && !existing.gender) existing.gender = gender;
-              if (birthdate && !existing.birthdate) {
-                existing.birthdate = birthdate;
-                existing.age = age;
-              }
-              if (formattedDoc !== "Unassigned") existing.assignedDoctor = formattedDoc;
-              if (!existing.skinPhotoUrl && row.skin_photo_url) existing.skinPhotoUrl = row.skin_photo_url;
-              if (!existing.questionnaireAnswers && questionnaireAnswers.length > 0) existing.questionnaireAnswers = questionnaireAnswers;
-              if (isCompleted) existing.status = "completed";
-              else if (isScheduled && existing.status !== "completed") existing.status = "active";
-            }
-          });
-        }
-
-        // Merge local storage appointments strictly matching this specific clinic_id
-        try {
-          const raw = localStorage.getItem("dermai_clinic_appointments");
-          if (raw && resolvedClinicId) {
-            const localList = JSON.parse(raw);
-            if (Array.isArray(localList)) {
-              localList.forEach((localItem: any) => {
-                const isMatch = Boolean(localItem.clinicId && String(localItem.clinicId) === String(resolvedClinicId));
-                if (isMatch) {
-                  const email = localItem.patientEmail || `patient_${String(localItem.id).slice(-4)}@dermai.local`;
-                  const name = localItem.patientName || "Patient";
-                  const phone = localItem.patientContact || "";
-                  const address = localItem.patientAddress || "";
-                  const gender = localItem.patientGender || localItem.patient_gender || "";
-                  const birthdate = localItem.patientBirthdate || localItem.patient_birthdate || "";
-                  const age = localItem.patientAge || calculateAge(birthdate);
-                  const isCompleted = localItem.status === "completed";
-                  const isPending = localItem.status === "pending";
-                  const isCancelled = localItem.status === "cancelled" || localItem.status === "rejected";
-                  const isScheduled = localItem.status === "scheduled";
-                  const confidence = localItem.aiConfidence ? Number(localItem.aiConfidence) : undefined;
-                  const questionnaireAnswers = parseQuestionnaireAnswers(localItem.questionnaireAnswers || localItem.questionnaire_answers);
-
-                  const rawDocName =
-                    localItem.assignedDoctorName ||
-                    (localItem.assignedDoctorId ? docMap.get(String(localItem.assignedDoctorId)) : "") ||
-                    "";
-                  const formattedDoc = rawDocName
-                    ? rawDocName.toLowerCase().startsWith("dr.")
-                      ? rawDocName
-                      : `Dr. ${rawDocName}`
-                    : "Unassigned";
-
-                  let patientStatus: ClinicPatient["status"] = "active";
-                  if (isCompleted) patientStatus = "completed";
-                  else if (isPending) patientStatus = "pending";
-                  else if (isCancelled) patientStatus = "cancelled";
-                  else if (isScheduled) patientStatus = "active";
-                  else patientStatus = "active";
-
-                  if (!patientMap.has(email)) {
-                    patientMap.set(email, {
-                      id: localItem.id,
-                      name,
-                      email,
-                      phone,
-                      address,
-                      gender,
-                      birthdate,
-                      age,
-                      condition: localItem.aiConditionName || localItem.conditionName || "General Dermatology",
-                      confidence,
-                      skinPhotoUrl: localItem.skinPhotoUrl || undefined,
-                      questionnaireAnswers: questionnaireAnswers.length > 0 ? questionnaireAnswers : undefined,
-                      assignedDoctor: formattedDoc,
-                      lastVisit: localItem.date ? new Date(localItem.date).toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" }) : "—",
-                      totalVisits: 1,
-                      status: patientStatus,
-                      notes: localItem.notes || (localItem.aiConditionName ? `Noted Condition: ${localItem.aiConditionName}` : ""),
-                      clinicNote: localItem.clinicNote || undefined,
-                      doctorNote: localItem.doctorNote || undefined,
-                      createdAt: localItem.createdAt,
+                  const formatted = formatDoctorName(d.name);
+                  docMap.set(String(d.id), formatted);
+                  if (!doctorsList.some((doc) => doc.id === String(d.id))) {
+                    doctorsList.push({
+                      id: String(d.id),
+                      name: formatted,
+                      email: d.email || undefined,
+                      photoUrl: d.photo || d.photo_url || undefined,
                     });
-                  } else {
-                    const existing = patientMap.get(email)!;
-                    existing.totalVisits += 1;
-                    if (phone && !existing.phone) existing.phone = phone;
-                    if (address && !existing.address) existing.address = address;
-                    if (gender && !existing.gender) existing.gender = gender;
-                    if (birthdate && !existing.birthdate) {
-                      existing.birthdate = birthdate;
-                      existing.age = age;
-                    }
-                    if (formattedDoc !== "Unassigned") existing.assignedDoctor = formattedDoc;
-                    if (isCompleted) existing.status = "completed";
-                    else if (isCancelled && existing.status !== "completed") existing.status = "cancelled";
-                    else if (isScheduled && existing.status !== "completed" && existing.status !== "cancelled") existing.status = "active";
                   }
                 }
               });
@@ -313,201 +242,669 @@ export default function ClinicPatientsPage() {
           }
         } catch { }
 
-        setPatients(Array.from(patientMap.values()));
+        if (!isCancelled) {
+          setRegisteredDoctors(doctorsList);
+        }
+
+        // 2. Fetch appointments from patient_appointment table in Supabase
+        let dbAppts: any[] = [];
+        if (resolvedClinicId) {
+          const { data: apptRows, error: apptErr } = await supabase
+            .from("patient_appointment")
+            .select("*")
+            .eq("clinic_id", resolvedClinicId)
+            .order("created_at", { ascending: false });
+
+          if (!apptErr && apptRows && apptRows.length > 0) {
+            dbAppts = apptRows;
+          } else {
+            // Fallback: in case of string-vs-uuid mismatch, fetch and filter client-side
+            const { data: allRows } = await supabase
+              .from("patient_appointment")
+              .select("*")
+              .order("created_at", { ascending: false })
+              .limit(300);
+
+            if (allRows && allRows.length > 0) {
+              dbAppts = allRows.filter(
+                (r: any) => r.clinic_id && String(r.clinic_id) === String(resolvedClinicId)
+              );
+            }
+          }
+        }
+
+        // Merge with local appointments cache for this clinic
+        try {
+          const raw = localStorage.getItem("dermai_clinic_appointments");
+          if (raw) {
+            const localList = JSON.parse(raw);
+            if (Array.isArray(localList)) {
+              localList.forEach((localItem: any) => {
+                const isMatch = Boolean(
+                  (resolvedClinicId && localItem.clinicId && String(localItem.clinicId) === String(resolvedClinicId)) ||
+                  (resolvedClinicName && localItem.clinicName && localItem.clinicName.toLowerCase().trim() === resolvedClinicName.toLowerCase().trim()) ||
+                  (!resolvedClinicId && !resolvedClinicName)
+                );
+                if (isMatch) {
+                  const alreadyInDb = dbAppts.some((d) => String(d.appointment_id) === String(localItem.id));
+                  if (!alreadyInDb) {
+                    dbAppts.push({
+                      appointment_id: localItem.id,
+                      clinic_id: resolvedClinicId || localItem.clinicId,
+                      date: localItem.rawDate || localItem.date,
+                      time: localItem.time,
+                      batch_time: localItem.batchTime || localItem.batch_time,
+                      status: localItem.status,
+                      patient_name: localItem.patientName,
+                      patient_email: localItem.patientEmail,
+                      patient_contact: localItem.patientContact,
+                      patient_address: localItem.patientAddress,
+                      patient_gender: localItem.patientGender,
+                      patient_birthdate: localItem.patientBirthdate,
+                      emergency_contact_name: localItem.emergencyContactName,
+                      emergency_contact_phone: localItem.emergencyContactPhone,
+                      emergency_contact_relationship: localItem.emergencyRelationship,
+                      notes: localItem.notes,
+                      clinic_note: localItem.clinicNote,
+                      skin_photo_url: localItem.skinPhotoUrl,
+                      ai_condition_name: localItem.aiConditionName || localItem.conditionName,
+                      ai_confidence: localItem.aiConfidence,
+                      questionnaire_answers: localItem.questionnaireAnswers,
+                      created_at: localItem.createdAt || new Date().toISOString(),
+                      assigned_doctor_id: localItem.assignedDoctorId,
+                      assigned_doctor_name: localItem.assignedDoctorName,
+                      doctor_status: localItem.doctorStatus,
+                      doctor_note: localItem.doctorNote,
+                      doctor_reviewed_at: localItem.doctorReviewedAt,
+                      user_id: localItem.userId,
+                      queue_number: localItem.queueNumber,
+                      check_in_status: localItem.checkInStatus || localItem.check_in_status,
+                    });
+                  }
+                }
+              });
+            }
+          }
+        } catch { }
+
+        // 3. Deduplicate unique patients and organize appointment history
+        const patientMap = new Map<string, ClinicPatient>();
+        const apptList: PatientAppointment[] = [];
+
+        dbAppts.forEach((row: any) => {
+          // Normalize patient identifier
+          const rawUserId = row.user_id ? String(row.user_id).trim() : "";
+          const rawEmail = row.patient_email ? String(row.patient_email).toLowerCase().trim() : "";
+          const rawPhone = row.patient_contact ? String(row.patient_contact).replace(/\D/g, "") : "";
+          const rawName = row.patient_name ? String(row.patient_name).trim() : "Patient";
+
+          let dedupeKey = "";
+          if (rawUserId) {
+            dedupeKey = `user:${rawUserId}`;
+          } else if (rawEmail) {
+            dedupeKey = `email:${rawEmail}`;
+          } else if (rawPhone) {
+            dedupeKey = `phone:${rawPhone}`;
+          } else {
+            dedupeKey = `name:${rawName.toLowerCase()}`;
+          }
+
+          // Resolve doctor display name
+          const assignedDocId = row.assigned_doctor_id ? String(row.assigned_doctor_id) : undefined;
+          let assignedDocName = "";
+          if (row.assigned_doctor_name) {
+            assignedDocName = formatDoctorName(row.assigned_doctor_name);
+          } else if (assignedDocId && docMap.has(assignedDocId)) {
+            assignedDocName = docMap.get(assignedDocId)!;
+          } else if (row.clinic_note) {
+            const match = row.clinic_note.match(/(?:Assigned to|Re-assigned to)\s+(?:Dr\.\s*)?([A-Za-z\s]+?)(?:\s+for|\s+accepted|\s+declined|\.|$)/i);
+            if (match && match[1] && match[1].trim().toLowerCase() !== "dr") {
+              assignedDocName = formatDoctorName(match[1]);
+            }
+          }
+          if (!assignedDocName && assignedDocId) {
+            assignedDocName = "Assigned Doctor";
+          }
+
+          const dateStr = formatApptDate(row.date);
+          const timeStr = formatApptTime(row.time, row.batch_time);
+
+          const appointmentObj: PatientAppointment = {
+            id: String(row.appointment_id || dedupeKey),
+            dateStr,
+            rawDate: row.date,
+            timeStr,
+            status: row.status || "pending",
+            checkInStatus: row.check_in_status || undefined,
+            doctorStatus: row.doctor_status || undefined,
+            assignedDoctorId: assignedDocId,
+            assignedDoctorName: assignedDocName || "Unassigned",
+            conditionName: row.ai_condition_name || undefined,
+            confidence: row.ai_confidence ? Number(row.ai_confidence) : undefined,
+            skinPhotoUrl: row.skin_photo_url || undefined,
+            questionnaireAnswers: parseQuestionnaireAnswers(row.questionnaire_answers),
+            notes: row.notes || undefined,
+            clinicNote: row.clinic_note || undefined,
+            doctorNote: row.doctor_note || undefined,
+            doctorReviewedAt: row.doctor_reviewed_at || undefined,
+            createdAt: row.created_at || new Date().toISOString(),
+            queueNumber: row.queue_number,
+          };
+
+          apptList.push(appointmentObj);
+
+          // Build or update unique patient record
+          if (!patientMap.has(dedupeKey)) {
+            const birthdate = row.patient_birthdate || undefined;
+            const age = calculateAge(birthdate);
+
+            const initialPatient: ClinicPatient = {
+              id: dedupeKey,
+              userId: rawUserId || undefined,
+              name: rawName,
+              email: rawEmail || "No email on record",
+              phone: row.patient_contact || undefined,
+              address: row.patient_address || undefined,
+              gender: row.patient_gender || undefined,
+              birthdate,
+              age,
+              emergencyContactName: row.emergency_contact_name || undefined,
+              emergencyContactPhone: row.emergency_contact_phone || undefined,
+              emergencyRelationship: row.emergency_contact_relationship || undefined,
+              totalAppointments: 1,
+              appointments: [appointmentObj],
+              assignedDoctors: assignedDocName && assignedDocName !== "Unassigned"
+                ? [{ id: assignedDocId, name: assignedDocName }]
+                : [],
+            };
+
+            patientMap.set(dedupeKey, initialPatient);
+          } else {
+            const existing = patientMap.get(dedupeKey)!;
+            existing.totalAppointments += 1;
+            existing.appointments.push(appointmentObj);
+
+            // Update contact details if newly available
+            if (!existing.phone && row.patient_contact) existing.phone = row.patient_contact;
+            if (!existing.address && row.patient_address) existing.address = row.patient_address;
+            if (!existing.gender && row.patient_gender) existing.gender = row.patient_gender;
+            if (!existing.birthdate && row.patient_birthdate) {
+              existing.birthdate = row.patient_birthdate;
+              existing.age = calculateAge(row.patient_birthdate);
+            }
+            if (!existing.emergencyContactName && row.emergency_contact_name) {
+              existing.emergencyContactName = row.emergency_contact_name;
+              existing.emergencyContactPhone = row.emergency_contact_phone;
+              existing.emergencyRelationship = row.emergency_contact_relationship;
+            }
+
+            // Track assigned doctor
+            if (
+              assignedDocName &&
+              assignedDocName !== "Unassigned" &&
+              !existing.assignedDoctors.some((d) => d.name.toLowerCase() === assignedDocName.toLowerCase())
+            ) {
+              existing.assignedDoctors.push({ id: assignedDocId, name: assignedDocName });
+            }
+          }
+        });
+
+        // Finalize patient appointment sorting (chronological descending: most recent first)
+        const finalizedPatients = Array.from(patientMap.values()).map((p) => {
+          p.appointments.sort((a, b) => {
+            const timeA = new Date(a.rawDate || a.createdAt || 0).getTime();
+            const timeB = new Date(b.rawDate || b.createdAt || 0).getTime();
+            return timeB - timeA;
+          });
+          p.lastAppointment = p.appointments[0];
+          return p;
+        });
+
+        // Sort patients by most recent appointment date descending
+        finalizedPatients.sort((a, b) => {
+          const timeA = a.lastAppointment ? new Date(a.lastAppointment.rawDate || a.lastAppointment.createdAt || 0).getTime() : 0;
+          const timeB = b.lastAppointment ? new Date(b.lastAppointment.rawDate || b.lastAppointment.createdAt || 0).getTime() : 0;
+          return timeB - timeA;
+        });
+
+        if (!isCancelled) {
+          setPatients(finalizedPatients);
+          setAllAppointments(apptList);
+          setLoading(false);
+        }
       } catch (err) {
-        console.error("Error loading clinic patients:", err);
+        console.error("[ClinicPatientsPage] Error loading patient directory:", err);
+        if (!isCancelled) {
+          setLoading(false);
+        }
       }
     }
-    loadPatients();
 
-    const handleSync = () => loadPatients();
+    loadPatientDirectory();
+
+    // Event & storage listeners for live updates
+    const handleSync = () => loadPatientDirectory();
     window.addEventListener("dermai_appointments_updated", handleSync);
     window.addEventListener("appointmentCreated", handleSync);
     window.addEventListener("storage", handleSync);
     window.addEventListener("focus", handleSync);
 
+    // Supabase Realtime for live updates
+    let channel: any = null;
+    if (clinicId) {
+      channel = supabase
+        .channel(`clinic-patients-realtime-${clinicId}`)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "patient_appointment" },
+          () => {
+            loadPatientDirectory();
+          }
+        )
+        .subscribe();
+    }
+
     return () => {
+      isCancelled = true;
+      if (channel) supabase.removeChannel(channel);
       window.removeEventListener("dermai_appointments_updated", handleSync);
       window.removeEventListener("appointmentCreated", handleSync);
       window.removeEventListener("storage", handleSync);
       window.removeEventListener("focus", handleSync);
     };
-  }, [clinicId]);
+  }, [clinicId, clinicName]);
 
+  // 2. Summary statistics calculations
+  const totalPatientsCount = patients.length;
+  const totalAppointmentsCount = allAppointments.length;
+  const completedAppointmentsCount = allAppointments.filter(
+    (a) => a.status === "completed" || a.checkInStatus === "completed"
+  ).length;
+
+  // 3. Multi-dimensional search and filters
   const filteredPatients = useMemo(() => {
-    return patients.filter((p) => {
-      const matchesSearch =
-        !search ||
-        p.name.toLowerCase().includes(search.toLowerCase()) ||
-        p.email.toLowerCase().includes(search.toLowerCase()) ||
-        (p.condition && p.condition.toLowerCase().includes(search.toLowerCase())) ||
-        (p.assignedDoctor && p.assignedDoctor.toLowerCase().includes(search.toLowerCase()));
+    return patients.filter((patient) => {
+      // 1. Search Query: Patient name, Email, Phone number, or Assigned doctor name
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        const matchesName = patient.name.toLowerCase().includes(q);
+        const matchesEmail = patient.email.toLowerCase().includes(q);
+        const matchesPhone = Boolean(patient.phone && patient.phone.toLowerCase().includes(q));
+        const matchesDoctor = patient.assignedDoctors.some((d) => d.name.toLowerCase().includes(q));
 
-      const matchesStatus = statusFilter === "all" || p.status === statusFilter;
-      return matchesSearch && matchesStatus;
+        if (!matchesName && !matchesEmail && !matchesPhone && !matchesDoctor) {
+          return false;
+        }
+      }
+
+      // 2. Doctor Filter: list of clinic registered doctors
+      if (selectedDoctorId !== "all") {
+        const matchesDoctor = patient.appointments.some((appt) => {
+          if (appt.assignedDoctorId && String(appt.assignedDoctorId) === String(selectedDoctorId)) {
+            return true;
+          }
+          const matchedDocObj = registeredDoctors.find((d) => String(d.id) === String(selectedDoctorId));
+          if (matchedDocObj && appt.assignedDoctorName) {
+            return appt.assignedDoctorName.toLowerCase().trim() === matchedDocObj.name.toLowerCase().trim();
+          }
+          return false;
+        });
+
+        if (!matchesDoctor) {
+          return false;
+        }
+      }
+
+      // 3. Status Filter: All, Upcoming, Completed, Cancelled
+      if (statusFilter === "upcoming") {
+        // Patient has at least one active, upcoming appointment that has not elapsed
+        const hasUpcoming = patient.appointments.some((appt) => {
+          const isNotPast = !isAppointmentPastScheduled({
+            date: appt.rawDate || appt.dateStr,
+            time: appt.timeStr,
+          });
+          const isActiveStatus =
+            appt.status === "scheduled" ||
+            appt.status === "confirmed" ||
+            appt.status === "accepted" ||
+            appt.status === "pending";
+          const isNotCancelledOrDone =
+            appt.status !== "cancelled" &&
+            appt.status !== "rejected" &&
+            appt.status !== "completed" &&
+            appt.checkInStatus !== "completed" &&
+            appt.checkInStatus !== "no-show";
+
+          return isNotPast && isActiveStatus && isNotCancelledOrDone;
+        });
+        if (!hasUpcoming) return false;
+      } else if (statusFilter === "completed") {
+        // Patient has at least one completed appointment
+        const hasCompleted = patient.appointments.some(
+          (appt) => appt.status === "completed" || appt.checkInStatus === "completed"
+        );
+        if (!hasCompleted) return false;
+      } else if (statusFilter === "cancelled") {
+        // Patient has at least one cancelled, rejected, or no-show appointment
+        const hasCancelled = patient.appointments.some(
+          (appt) =>
+            appt.status === "cancelled" ||
+            appt.status === "rejected" ||
+            appt.checkInStatus === "no-show" ||
+            appt.doctorStatus === "rejected"
+        );
+        if (!hasCancelled) return false;
+      }
+
+      return true;
     });
-  }, [patients, search, statusFilter]);
+  }, [patients, search, statusFilter, selectedDoctorId, registeredDoctors]);
 
-  const activeCount = patients.filter((p) => p.status === "active").length;
-  const completedCount = patients.filter((p) => p.status === "completed").length;
+  const hasActiveFilters = search.trim() !== "" || statusFilter !== "all" || selectedDoctorId !== "all";
+
+  const resetFilters = () => {
+    setSearch("");
+    setStatusFilter("all");
+    setSelectedDoctorId("all");
+  };
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* ── 1. Page Header ─────────────────────────────────────────── */}
       <div>
         <h1 className="text-2xl font-display font-bold text-gray-900">Patient Records</h1>
         <p className="text-sm text-gray-400 mt-0.5">
-          View and manage patient history, consultation status, and clinic visits.
+          View patient details and appointment history from your clinic.
         </p>
       </div>
 
-      {/* Stats Cards */}
+      {/* ── 2. Fixed Summary Cards (Total Patients, Total Appointments, Completed Appointments) ─ */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Total Patients */}
         <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-xs">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Patients</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{patients.length}</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{totalPatientsCount}</p>
+              <p className="text-[11px] text-gray-400 mt-0.5">Unique patients registered at clinic</p>
             </div>
-            <div className="w-10 h-10 rounded-xl bg-magenta-50 flex items-center justify-center text-magenta-600">
-              <Users className="w-5 h-5" />
-            </div>
+            <Users className="w-6 h-6 text-magenta-600 shrink-0" />
           </div>
         </div>
 
+        {/* Total Appointments */}
         <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-xs">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Active Treatments</p>
-              <p className="text-2xl font-bold text-blue-600 mt-1">{activeCount}</p>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Appointments</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{totalAppointmentsCount}</p>
+              <p className="text-[11px] text-gray-400 mt-0.5">Total bookings across all statuses</p>
             </div>
-            <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
-              <Clock className="w-5 h-5" />
-            </div>
+            <Calendar className="w-6 h-6 text-blue-600 shrink-0" />
           </div>
         </div>
 
+        {/* Completed Appointments */}
         <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-xs">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Completed Cases</p>
-              <p className="text-2xl font-bold text-green-600 mt-1">{completedCount}</p>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Completed Appointments</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{completedAppointmentsCount}</p>
+              <p className="text-[11px] text-gray-400 mt-0.5">Successfully concluded consultations</p>
             </div>
-            <div className="w-10 h-10 rounded-xl bg-green-50 flex items-center justify-center text-green-600">
-              <UserCheck className="w-5 h-5" />
-            </div>
+            <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
           </div>
         </div>
       </div>
 
-      {/* Filter and Search */}
-      <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs flex flex-col sm:flex-row items-center gap-3">
-        <div className="relative flex-1 w-full">
-          <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search patients by name, email, condition, or doctor..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 text-sm rounded-xl bg-gray-50 border border-gray-100 outline-none focus:border-magenta-500 focus:bg-white transition-all"
-          />
+      {/* ── 3. Search and Multi-Dimensional Filters ──────────────────── */}
+      <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs space-y-3">
+        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
+          {/* Search by Name, Email, Phone, or Assigned Doctor */}
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search by patient name, email, phone, or assigned doctor..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 text-sm rounded-xl bg-gray-50 border border-gray-100 outline-none focus:border-magenta-500 focus:bg-white transition-all text-gray-900 placeholder:text-gray-400"
+            />
+          </div>
+
+          {/* Doctor Filter Dropdown */}
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-[210px]">
+              <Stethoscope className="w-4 h-4 text-magenta-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <select
+                value={selectedDoctorId}
+                onChange={(e) => setSelectedDoctorId(e.target.value)}
+                className="w-full pl-9 pr-8 py-2 text-xs font-semibold rounded-xl bg-gray-50 border border-gray-100 outline-none focus:border-magenta-500 focus:bg-white transition-all text-gray-800 appearance-none cursor-pointer"
+                title="Filter by assigned doctor"
+              >
+                <option value="all">All Doctors ({registeredDoctors.length})</option>
+                {registeredDoctors.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Reset Filters button */}
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="px-3 py-2 rounded-xl text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer"
+                title="Reset all filters"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset</span>
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          {["all", "active", "completed", "pending", "cancelled"].map((status) => (
+        {/* Status Filter Pills: All Patients, Upcoming, Completed, Cancelled */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs no-scrollbar">
+          <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider shrink-0 mr-1">
+            Status:
+          </span>
+          {[
+            { key: "all", label: "All Patients" },
+            { key: "upcoming", label: "Upcoming" },
+            { key: "completed", label: "Completed" },
+            { key: "cancelled", label: "Cancelled" },
+          ].map((tab) => (
             <button
-              key={status}
-              onClick={() => setStatusFilter(status)}
+              key={tab.key}
+              type="button"
+              onClick={() => setStatusFilter(tab.key as any)}
               className={cn(
-                "px-3.5 py-2 rounded-xl text-xs font-semibold capitalize transition-all",
-                statusFilter === status
-                  ? "bg-magenta-500 text-white shadow-xs"
+                "px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer shrink-0",
+                statusFilter === tab.key
+                  ? "bg-magenta-600 text-white shadow-xs"
                   : "bg-gray-50 text-gray-600 hover:bg-gray-100"
               )}
             >
-              {status === "cancelled" ? "Declined" : status}
+              {tab.label}
             </button>
           ))}
+
+          {/* Active Filter Indicators */}
+          {hasActiveFilters && (
+            <span className="text-[11px] text-gray-400 ml-auto shrink-0">
+              Showing {filteredPatients.length} of {patients.length} patients
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Patients Table */}
+      {/* ── 4. Patient Records Table ─────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/50">
                 <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Patient</th>
-                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Condition</th>
                 <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Assigned Doctor</th>
-                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Last Visit</th>
-                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Visits</th>
-                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Status</th>
+                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Last Appointment</th>
+                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Total Appointments</th>
+                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {filteredPatients.length === 0 ? (
+              {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-16 text-center">
+                  <td colSpan={5} className="px-6 py-16 text-center">
+                    <div className="w-8 h-8 border-2 border-magenta-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                    <p className="text-xs text-gray-500 font-medium">Loading patient directory...</p>
+                  </td>
+                </tr>
+              ) : filteredPatients.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-16 text-center">
                     <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center mx-auto mb-3 text-gray-300">
                       <Users className="w-6 h-6" />
                     </div>
-                    <p className="text-sm font-semibold text-gray-900">No patients found</p>
+                    <p className="text-sm font-semibold text-gray-900">
+                      No patients found
+                    </p>
                     <p className="text-xs text-gray-400 mt-1 max-w-sm mx-auto">
                       Patients who schedule appointments or consultations with your clinic will appear here.
                     </p>
+                    {hasActiveFilters && (
+                      <button
+                        type="button"
+                        onClick={resetFilters}
+                        className="mt-3 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-pink-50 text-[#c0166a] border border-pink-200 hover:bg-pink-100 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" /> Reset Filters
+                      </button>
+                    )}
                   </td>
                 </tr>
               ) : (
-                filteredPatients.map((patient) => (
-                  <tr
-                    key={patient.id}
-                    onClick={() => setSelectedPatient(patient)}
-                    className="hover:bg-gray-50/60 transition-colors cursor-pointer"
-                  >
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-pink-100 text-[#c0166a] flex items-center justify-center font-bold text-sm">
-                          {patient.name.charAt(0).toUpperCase()}
+                filteredPatients.map((patient) => {
+                  const mostRecentDoctor = patient.lastAppointment?.assignedDoctorName || "Unassigned";
+                  const otherDoctors = patient.assignedDoctors.filter(
+                    (d) => d.name.toLowerCase() !== mostRecentDoctor.toLowerCase() && d.name !== "Unassigned"
+                  );
+                  const otherDoctorsCount = otherDoctors.length;
+
+                  return (
+                    <tr
+                      key={patient.id}
+                      className="hover:bg-gray-50/60 transition-colors"
+                    >
+                      {/* Column 1: Patient Details */}
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-pink-100 text-[#c0166a] flex items-center justify-center font-bold text-sm shrink-0">
+                            {patient.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-gray-900 truncate">{patient.name}</p>
+                            <div className="flex items-center gap-2 text-xs text-gray-400 truncate mt-0.5">
+                              {patient.email && <span className="truncate">{patient.email}</span>}
+                              {patient.phone && (
+                                <>
+                                  <span>•</span>
+                                  <span className="shrink-0">{patient.phone}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm font-semibold text-gray-900">{patient.name}</p>
-                          <p className="text-xs text-gray-400">{patient.email}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-700 font-medium">{patient.condition || "—"}</td>
-                    <td className="px-6 py-4 text-sm text-gray-700">
-                      {patient.assignedDoctor && patient.assignedDoctor !== "Unassigned" ? (
-                        <span className="inline-flex items-center gap-1 font-semibold text-magenta-900 bg-pink-50 px-2.5 py-1 rounded-lg border border-pink-100 text-xs">
-                          <Stethoscope className="w-3 h-3 text-[#c0166a]" />
-                          {patient.assignedDoctor}
-                        </span>
-                      ) : (
-                        <span className="text-gray-400 italic text-xs">Unassigned</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-xs text-gray-500">{patient.lastVisit || "—"}</td>
-                    <td className="px-6 py-4 text-sm font-semibold text-gray-700">{patient.totalVisits}</td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={cn(
-                          "text-xs px-2.5 py-1 rounded-full font-semibold capitalize border",
-                          statusBadges[patient.status] || "bg-gray-100 text-gray-600"
+                      </td>
+
+                      {/* Column 2: Assigned Doctor (with indicator if multiple doctors involved) */}
+                      <td className="px-6 py-4 text-sm text-gray-700">
+                        {mostRecentDoctor !== "Unassigned" ? (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 font-semibold text-magenta-900 bg-pink-50 px-2.5 py-1 rounded-lg border border-pink-100 text-xs">
+                              <Stethoscope className="w-3 h-3 text-[#c0166a]" />
+                              {mostRecentDoctor}
+                            </span>
+                            {otherDoctorsCount > 0 && (
+                              <span
+                                className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-600 border border-gray-200 cursor-help"
+                                title={`Also consulted with: ${otherDoctors.map((d) => d.name).join(", ")}`}
+                              >
+                                +{otherDoctorsCount} other{otherDoctorsCount > 1 ? "s" : ""}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 italic text-xs">Unassigned</span>
                         )}
-                      >
-                        {patient.status === "cancelled" ? "Declined" : patient.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+
+                      {/* Column 3: Last Appointment (date & status; does not imply attendance unless completed) */}
+                      <td className="px-6 py-4 text-xs">
+                        {patient.lastAppointment ? (
+                          <div className="space-y-1">
+                            <p className="font-semibold text-gray-900">
+                              {patient.lastAppointment.dateStr}
+                            </p>
+                            <div className="flex items-center gap-1">
+                              {patient.lastAppointment.checkInStatus === "no-show" ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                  No-Show
+                                </span>
+                              ) : patient.lastAppointment.status === "completed" || patient.lastAppointment.checkInStatus === "completed" ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  Completed
+                                </span>
+                              ) : patient.lastAppointment.status === "cancelled" || patient.lastAppointment.status === "rejected" || patient.lastAppointment.doctorStatus === "rejected" ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-gray-100 text-gray-600 border border-gray-200">
+                                  Cancelled
+                                </span>
+                              ) : patient.lastAppointment.status === "scheduled" || patient.lastAppointment.status === "confirmed" ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                  Scheduled
+                                </span>
+                              ) : (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                  Pending Review
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 italic">—</span>
+                        )}
+                      </td>
+
+                      {/* Column 4: Total Appointments */}
+                      <td className="px-6 py-4 text-sm">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-gray-50 text-gray-700 border border-gray-200">
+                          {patient.totalAppointments} {patient.totalAppointments === 1 ? "appointment" : "appointments"}
+                        </span>
+                      </td>
+
+                      {/* Column 5: Action (View Details) */}
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPatient(patient)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-pink-200 text-[#c0166a] hover:bg-pink-50 text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>View Details</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Patient Detail Modal */}
+      {/* ── 5. Patient Details & Complete Appointment History Modal ─────── */}
       <AnimatePresence>
         {selectedPatient && (
           <motion.div
@@ -522,9 +919,9 @@ export default function ClinicPatientsPage() {
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 10 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[90vh] overflow-hidden text-left"
+              className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden text-left"
             >
-              {/* Header */}
+              {/* Modal Header */}
               <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
                 <div className="flex items-center gap-3.5">
                   <div className="w-12 h-12 rounded-full bg-pink-100 text-[#c0166a] flex items-center justify-center text-lg font-bold border-2 border-pink-200 shrink-0">
@@ -533,11 +930,11 @@ export default function ClinicPatientsPage() {
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-base font-bold text-gray-900">{selectedPatient.name}</h3>
-                      <span className={cn("text-[10px] px-2.5 py-0.5 rounded-full font-bold border capitalize", statusBadges[selectedPatient.status])}>
-                        {selectedPatient.status === "cancelled" ? "Declined" : selectedPatient.status}
+                      <span className="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-pink-50 text-[#c0166a] border border-pink-200">
+                        {selectedPatient.totalAppointments} Consultation{selectedPatient.totalAppointments > 1 ? "s" : ""} on Record
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                    <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
                       {selectedPatient.gender && (
                         <span className="font-semibold text-gray-700 bg-gray-100 px-2 py-0.5 rounded-md text-[11px]">
                           {selectedPatient.gender}
@@ -563,13 +960,13 @@ export default function ClinicPatientsPage() {
                 </button>
               </div>
 
-              {/* Scrollable Body */}
-              <div className="p-6 space-y-5 overflow-y-auto flex-1">
-                {/* Personal & Contact Details */}
+              {/* Scrollable Modal Content */}
+              <div className="p-6 space-y-6 overflow-y-auto flex-1">
+                {/* 1. Patient Profile and Available Contact Details */}
                 <div className="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 space-y-3">
                   <div className="flex items-center justify-between border-b border-gray-200/60 pb-2">
                     <span className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5 text-magenta-600" /> Personal &amp; Contact Details
+                      <User className="w-3.5 h-3.5 text-magenta-600" /> Patient Profile &amp; Contact Details
                     </span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
@@ -635,183 +1032,213 @@ export default function ClinicPatientsPage() {
                       <div className="sm:col-span-2 pt-2 border-t border-gray-200/50">
                         <span className="font-semibold text-rose-500 block text-[10px] uppercase">Emergency Contact</span>
                         <span className="text-gray-900 font-medium">
-                          {selectedPatient.emergencyContactName} {selectedPatient.emergencyRelationship ? `(${selectedPatient.emergencyRelationship})` : ""} • {selectedPatient.emergencyContactPhone || "No phone"}
+                          {selectedPatient.emergencyContactName}{" "}
+                          {selectedPatient.emergencyRelationship ? `(${selectedPatient.emergencyRelationship})` : ""}{" "}
+                          • {selectedPatient.emergencyContactPhone || "No phone"}
                         </span>
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* AI Scan & Clinical Diagnosis */}
-                <div className="rounded-2xl border border-magenta-100 bg-white p-4 space-y-3 shadow-xs">
-                  <div className="flex items-center justify-between border-b border-pink-100 pb-2">
-                    <span className="text-xs font-bold text-magenta-900 uppercase tracking-wider flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-magenta-600" /> AI Scan &amp; Clinical Diagnosis
+                {/* 2. Chronological Appointment History at This Clinic */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+                    <span className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <Calendar className="w-4 h-4 text-[#c0166a]" />
+                      Appointment History at Current Clinic ({selectedPatient.appointments.length})
                     </span>
-                    {selectedPatient.confidence !== undefined && (
-                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-magenta-100 text-magenta-800">
-                        {selectedPatient.confidence}% AI Confidence
-                      </span>
-                    )}
+                    <span className="text-[11px] text-gray-400">Ordered by date (most recent first)</span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
-                    <div>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Noted Condition</p>
-                      <p className="text-sm font-bold text-gray-900">
-                        {selectedPatient.condition || "General Dermatology Consultation"}
-                      </p>
-                      {selectedPatient.confidence !== undefined && (
-                        <div className="mt-2 space-y-1">
-                          <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${
-                                selectedPatient.confidence >= 85
-                                  ? "bg-green-500"
-                                  : selectedPatient.confidence >= 60
-                                  ? "bg-amber-500"
-                                  : "bg-magenta-500"
-                              }`}
-                              style={{ width: `${Math.min(100, selectedPatient.confidence)}%` }}
-                            />
-                          </div>
-                          <p className="text-[10px] text-gray-400">Pre-screened with DermAI neural diagnostic engine.</p>
-                        </div>
-                      )}
-                    </div>
+                  <div className="space-y-4">
+                    {selectedPatient.appointments.map((appt, idx) => {
+                      const isNoShow = appt.checkInStatus === "no-show";
+                      const isCompleted = appt.status === "completed" || appt.checkInStatus === "completed";
+                      const isCancelled = appt.status === "cancelled" || appt.status === "rejected" || appt.doctorStatus === "rejected";
+                      const isScheduled = appt.status === "scheduled" || appt.status === "confirmed";
 
-                    {/* Skin Photo */}
-                    <div>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center justify-between">
-                        <span>Uploaded Skin Photo</span>
-                        {selectedPatient.skinPhotoUrl && (
-                          <span
-                            className="text-[10px] text-magenta-600 font-semibold cursor-pointer hover:underline"
-                            onClick={async () => {
-                              const url = await getSignedSkinPhotoUrl(selectedPatient.skinPhotoUrl);
-                              if (url) setLightboxPhoto(url);
-                            }}
-                          >
-                            Click to enlarge
-                          </span>
-                        )}
-                      </p>
-                      {selectedPatient.skinPhotoUrl ? (
+                      return (
                         <div
-                          onClick={async () => {
-                            const url = await getSignedSkinPhotoUrl(selectedPatient.skinPhotoUrl);
-                            if (url) setLightboxPhoto(url);
-                          }}
-                          className="relative group rounded-2xl border border-gray-200 overflow-hidden bg-gray-50 cursor-pointer aspect-video flex items-center justify-center hover:border-magenta-400 transition-all"
+                          key={appt.id}
+                          className="rounded-2xl border border-gray-100 bg-white p-4 shadow-xs space-y-3 hover:border-pink-200 transition-all"
                         >
-                          <LazySkinPhoto
-                            pathOrUrl={selectedPatient.skinPhotoUrl}
-                            alt="Patient skin condition"
-                            className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-200"
-                          />
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-white text-xs font-semibold">
-                            <Maximize2 className="w-4 h-4" /> Expand Photo
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/50 p-6 text-center text-xs text-gray-400 italic">
-                          No skin photo on file.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                          {/* Card Top: Appointment Date, Batch Time, Status Badge */}
+                          <div className="flex items-start justify-between gap-3 flex-wrap">
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-pink-100 text-[#c0166a]">
+                                  Visit #{selectedPatient.appointments.length - idx}
+                                </span>
+                                <h4 className="text-sm font-bold text-gray-900">{appt.dateStr}</h4>
+                              </div>
+                              <p className="text-xs text-gray-500 flex items-center gap-1">
+                                <Clock className="w-3.5 h-3.5 text-gray-400" />
+                                <span>Scheduled: {appt.timeStr}</span>
+                              </p>
+                            </div>
 
-                {/* Questionnaire Responses */}
-                {selectedPatient.questionnaireAnswers && selectedPatient.questionnaireAnswers.length > 0 && (
-                  <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden shadow-xs">
-                    <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <ClipboardList className="w-4 h-4 text-magenta-600" />
-                        <span className="text-xs font-bold text-gray-900 uppercase tracking-wide">
-                          Patient Pre-Screening Questionnaire
-                        </span>
-                      </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-pink-100 text-[#c0166a]">
-                        {selectedPatient.questionnaireAnswers.length} responses
-                      </span>
-                    </div>
-                    <div className="p-4 space-y-2.5 max-h-56 overflow-y-auto">
-                      {selectedPatient.questionnaireAnswers.map((qa, idx) => (
-                        <div key={idx} className="p-2.5 rounded-xl bg-gray-50/80 border border-gray-100 text-xs space-y-1">
-                          <p className="font-semibold text-gray-800">
-                            {idx + 1}. {qa.question}
-                          </p>
-                          <div className="flex items-center justify-between gap-2 flex-wrap pt-0.5">
-                            <span className="text-magenta-700 font-semibold bg-pink-50 px-2.5 py-0.5 rounded-md border border-pink-100">
-                              {qa.answer}
+                            {/* Status Pill */}
+                            <div>
+                              {isNoShow ? (
+                                <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-rose-50 text-rose-700 border border-rose-200 inline-flex items-center gap-1">
+                                  <AlertCircle className="w-3.5 h-3.5" /> No-Show
+                                </span>
+                              ) : isCompleted ? (
+                                <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 inline-flex items-center gap-1">
+                                  <CheckCircle2 className="w-3.5 h-3.5" /> Completed Consultation
+                                </span>
+                              ) : isCancelled ? (
+                                <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-gray-100 text-gray-600 border border-gray-200 inline-flex items-center gap-1">
+                                  <X className="w-3.5 h-3.5" /> Cancelled / Declined
+                                </span>
+                              ) : isScheduled ? (
+                                <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-blue-50 text-blue-700 border border-blue-200 inline-flex items-center gap-1">
+                                  <Calendar className="w-3.5 h-3.5" /> Scheduled Visit
+                                </span>
+                              ) : (
+                                <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-amber-50 text-amber-700 border border-amber-200 inline-flex items-center gap-1">
+                                  <Clock className="w-3.5 h-3.5" /> Pending Review
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Assigned Doctor */}
+                          <div className="flex items-center gap-1.5 text-xs text-gray-700 bg-gray-50/70 px-3 py-2 rounded-xl border border-gray-100">
+                            <Stethoscope className="w-3.5 h-3.5 text-[#c0166a] shrink-0" />
+                            <span className="font-semibold text-gray-500">Attending Doctor:</span>
+                            <span className="font-bold text-gray-900">
+                              {appt.assignedDoctorName && appt.assignedDoctorName !== "Unassigned"
+                                ? appt.assignedDoctorName
+                                : "Pending Doctor Assignment"}
                             </span>
-                            {qa.severity !== undefined && qa.severity !== null && (
-                              <span
-                                className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                                  qa.severity >= 3
-                                    ? "bg-red-100 text-red-700"
-                                    : qa.severity >= 2
-                                    ? "bg-amber-100 text-amber-700"
-                                    : qa.severity >= 1
-                                    ? "bg-blue-100 text-blue-700"
-                                    : "bg-gray-100 text-gray-600"
-                                }`}
-                              >
-                                Severity Level {qa.severity}
+                            {appt.doctorStatus && (
+                              <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-gray-200 capitalize">
+                                Doctor Review: {appt.doctorStatus === "approved" ? "Approved" : appt.doctorStatus === "rejected" ? "Declined" : "Pending"}
                               </span>
                             )}
                           </div>
+
+                          {/* AI Condition Scan & Uploaded Photo if present */}
+                          {(appt.conditionName || appt.skinPhotoUrl) && (
+                            <div className="rounded-xl border border-magenta-100 bg-pink-50/20 p-3 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold text-magenta-900 flex items-center gap-1.5 uppercase tracking-wide">
+                                  <Sparkles className="w-3.5 h-3.5 text-magenta-600" />
+                                  DermAI Scan &amp; Pre-Consultation Assessment
+                                </span>
+                                {appt.confidence !== undefined && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-magenta-100 text-magenta-800">
+                                    {appt.confidence}% Confidence
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center pt-1">
+                                <div>
+                                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Condition Assessed</p>
+                                  <p className="text-xs font-bold text-gray-900 mt-0.5">
+                                    {appt.conditionName || "General Dermatology Consultation"}
+                                  </p>
+                                </div>
+
+                                {appt.skinPhotoUrl && (
+                                  <div>
+                                    <div className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                                      <span>Skin Photo</span>
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          const url = await getSignedSkinPhotoUrl(appt.skinPhotoUrl!);
+                                          if (url) setLightboxPhoto(url);
+                                        }}
+                                        className="text-magenta-600 hover:underline cursor-pointer lowercase"
+                                      >
+                                        enlarge
+                                      </button>
+                                    </div>
+                                    <div
+                                      onClick={async () => {
+                                        const url = await getSignedSkinPhotoUrl(appt.skinPhotoUrl!);
+                                        if (url) setLightboxPhoto(url);
+                                      }}
+                                      className="relative group rounded-xl border border-gray-200 overflow-hidden bg-gray-50 cursor-pointer h-20 w-32 flex items-center justify-center hover:border-magenta-400 transition-all"
+                                    >
+                                      <LazySkinPhoto
+                                        pathOrUrl={appt.skinPhotoUrl}
+                                        alt="Patient skin condition"
+                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                      />
+                                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-[10px] font-semibold">
+                                        <Maximize2 className="w-3 h-3" /> Expand
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Pre-Screening Questionnaire Responses if present */}
+                          {appt.questionnaireAnswers && appt.questionnaireAnswers.length > 0 && (
+                            <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 space-y-2">
+                              <span className="text-[11px] font-bold text-gray-800 uppercase tracking-wide flex items-center gap-1.5">
+                                <ClipboardList className="w-3.5 h-3.5 text-magenta-600" />
+                                Pre-Screening Questionnaire ({appt.questionnaireAnswers.length} responses)
+                              </span>
+                              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                                {appt.questionnaireAnswers.map((qa, qIdx) => (
+                                  <div key={qIdx} className="text-xs bg-white p-2 rounded-lg border border-gray-100 space-y-0.5">
+                                    <p className="font-semibold text-gray-800 text-[11px]">{qa.question}</p>
+                                    <div className="flex items-center gap-2 pt-0.5">
+                                      <span className="text-magenta-700 font-medium bg-pink-50 px-2 py-0.5 rounded text-[11px]">
+                                        {qa.answer}
+                                      </span>
+                                      {qa.severity !== undefined && qa.severity !== null && (
+                                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                                          Severity {qa.severity}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Patient Symptoms / Notes */}
+                          {appt.notes && (
+                            <div className="text-xs bg-gray-50 p-2.5 rounded-xl border border-gray-100 space-y-1">
+                              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                                <FileText className="w-3 h-3" /> Patient Symptoms &amp; Notes
+                              </span>
+                              <p className="text-gray-800 leading-relaxed">{appt.notes}</p>
+                            </div>
+                          )}
+
+                          {/* Clinic Scheduling or Decline Note */}
+                          {appt.clinicNote && (
+                            <div className="text-xs bg-pink-50/60 p-2.5 rounded-xl border border-pink-100 space-y-1">
+                              <span className="text-[10px] font-bold text-magenta-700 uppercase tracking-wider block">
+                                Clinic Scheduling Note:
+                              </span>
+                              <p className="text-gray-900 font-medium leading-relaxed">{appt.clinicNote}</p>
+                            </div>
+                          )}
+
+                          {/* Doctor Attending Diagnosis / Notes */}
+                          {appt.doctorNote && (
+                            <div className="text-xs bg-blue-50/60 p-2.5 rounded-xl border border-blue-100 space-y-1">
+                              <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
+                                Attending Doctor Clinical Notes:
+                              </span>
+                              <p className="text-gray-900 font-medium leading-relaxed">{appt.doctorNote}</p>
+                            </div>
+                          )}
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Patient Notes */}
-                {selectedPatient.notes && (
-                  <div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                      <FileText className="w-3 h-3" /> Patient Symptoms &amp; Notes
-                    </p>
-                    <div className="text-xs text-gray-800 bg-gray-50 border border-gray-100 rounded-2xl p-3.5 leading-relaxed">
-                      {selectedPatient.notes}
-                    </div>
-                  </div>
-                )}
-
-                {/* Clinic Decline Note if present */}
-                {selectedPatient.clinicNote && (
-                  <div className="rounded-2xl border border-red-200 bg-red-50/70 p-4 space-y-1 text-xs">
-                    <span className="font-bold text-red-700 uppercase tracking-wider block text-[10px]">
-                      Clinic Scheduling / Decline Note:
-                    </span>
-                    <p className="text-red-900 font-medium">{selectedPatient.clinicNote}</p>
-                  </div>
-                )}
-
-                {/* Consultation & Visit Overview */}
-                <div className="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 space-y-2 text-xs">
-                  <span className="font-bold text-gray-900 uppercase tracking-wider flex items-center gap-1.5 border-b border-gray-200/60 pb-2">
-                    <Stethoscope className="w-3.5 h-3.5 text-blue-600" /> Clinic Consultation Overview
-                  </span>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-                    <div>
-                      <span className="text-gray-400 font-semibold block text-[10px] uppercase">Assigned Doctor</span>
-                      <span className="text-gray-900 font-medium">
-                        {selectedPatient.assignedDoctor && selectedPatient.assignedDoctor !== "Unassigned"
-                          ? selectedPatient.assignedDoctor
-                          : "Not yet assigned"}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-400 font-semibold block text-[10px] uppercase">Last Visit Date</span>
-                      <span className="text-gray-900 font-medium">{selectedPatient.lastVisit || "—"}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-400 font-semibold block text-[10px] uppercase">Total Clinic Visits</span>
-                      <span className="text-gray-900 font-bold">{selectedPatient.totalVisits} visit(s)</span>
-                    </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -819,8 +1246,9 @@ export default function ClinicPatientsPage() {
               {/* Modal Footer */}
               <div className="px-6 py-4 border-t border-gray-100 bg-white">
                 <button
+                  type="button"
                   onClick={() => setSelectedPatient(null)}
-                  className="w-full py-3 rounded-full font-semibold text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors cursor-pointer"
+                  className="w-full py-2.5 rounded-full font-semibold text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors cursor-pointer"
                 >
                   Close
                 </button>
@@ -830,7 +1258,7 @@ export default function ClinicPatientsPage() {
         )}
       </AnimatePresence>
 
-      {/* ── Fullscreen Skin Photo Lightbox Modal ─────────────────── */}
+      {/* ── 6. Fullscreen Skin Photo Lightbox Modal ──────────────────── */}
       <AnimatePresence>
         {lightboxPhoto && (
           <motion.div

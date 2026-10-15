@@ -306,6 +306,7 @@ export default function AdminClinicManagement() {
         }),
         supabase.from("clinic").update({
           status: "approved",
+          verified: true,
           ...(target.logo ? { logo_url: target.logo } : {})
         }).eq("clinic_id", id),
         target.email

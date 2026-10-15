@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
+import { isAppointmentExcludedFromIncomingQueue } from "@/lib/schedulingService";
 
 
 
@@ -97,6 +98,7 @@ export default function DoctorDashboardPage() {
     return allAppointments.filter(
       (a) =>
         (a.status === "pending" || String(a.status) === "awaiting_review") &&
+        !isAppointmentExcludedFromIncomingQueue(a) &&
         a.doctorStatus !== "approved" &&
         a.doctorStatus !== "rejected"
     );
@@ -323,7 +325,7 @@ export default function DoctorDashboardPage() {
                 {pendingReview.length}
               </span>
               <p className="text-sm sm:text-[13px] text-slate-400 mt-2 font-medium tracking-tight truncate">
-                In triage queue
+                Pending review
               </p>
             </div>
           </Link>
@@ -479,9 +481,7 @@ export default function DoctorDashboardPage() {
                             year: "numeric",
                           });
 
-                      const caseRef = appt.queueNumber
-                        ? `#Q-${String(appt.queueNumber).padStart(3, "0")}`
-                        : `#${appt.id.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+                      const caseRef = `#${appt.id.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
 
                       const ageText = appt.patientAge ? `${appt.patientAge} Years` : "Adult";
                       const genderText = appt.patientGender || "Patient";

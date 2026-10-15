@@ -3,10 +3,23 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
-import { CheckCircle2, Clock, Calendar, Stethoscope, AlertTriangle, X } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock,
+  Calendar,
+  Stethoscope,
+  AlertTriangle,
+  X,
+  History,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
+} from "lucide-react";
+import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 
 interface Appointment {
   id: string;
+  clinicId?: string | number;
   clinicName: string;
   doctor: string;
   assignedDoctorName?: string;
@@ -25,6 +38,15 @@ interface Appointment {
   doctorDiagnosis?: string;
   rejectionReason?: string;
   createdAt?: string;
+  userId?: string;
+  patientEmail?: string;
+  primaryScanId?: string;
+  rescheduleRequested?: boolean;
+  rescheduleDate?: string;
+  rescheduleTime?: string;
+  rescheduleReason?: string;
+  needsPatientReschedule?: boolean;
+  appointmentHistory?: AppointmentHistoryEntry[];
 }
 
 const STEPS = ["Request Sent", "Doctor Review", "Scheduled", "Completed"];
@@ -36,11 +58,56 @@ function getStepIndex(app: Appointment): number {
   return 0;
 }
 
+function formatHistoryAction(entry: AppointmentHistoryEntry): string {
+  switch (entry.action) {
+    case "created":
+      return "Consultation request initially created.";
+    case "doctor_assigned":
+      return `Doctor assigned: ${entry.newDoctorName || "Attending Dermatologist"}.`;
+    case "doctor_reassigned":
+      return `Doctor reassigned from ${entry.previousDoctorName || "Previous Doctor"} to ${entry.newDoctorName || "Replacement Doctor"}.`;
+    case "doctor_approved":
+      return "Attending doctor approved and finalized schedule.";
+    case "doctor_rejected":
+      return "Doctor declined case. Clinic reassignment initiated.";
+    case "patient_reschedule_needed":
+      return `Clinic requested patient to choose a new schedule: "${entry.reason || "Doctor unavailable at original slot"}".`;
+    case "reschedule_requested":
+      return `Patient submitted reschedule request for ${entry.requestedDate || "new date"} at ${entry.requestedTime || "new time"}.`;
+    case "reschedule_accepted":
+      return `Clinic approved reschedule to ${entry.newDate} at ${entry.newTime}.`;
+    case "reschedule_declined":
+      return "Clinic declined reschedule request. Original schedule maintained.";
+    case "reschedule_withdrawn":
+      return "Patient withdrew pending reschedule request.";
+    case "cancelled":
+      return "Appointment cancelled.";
+    case "completed":
+      return "Consultation completed.";
+    default:
+      return "Appointment record updated.";
+  }
+}
+
 function StatusBadge({ app }: { app: Appointment }) {
   if (app.status === "Completed") {
     return (
       <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-green-100 text-green-700 border border-green-200">
         Completed
+      </span>
+    );
+  }
+  if (app.needsPatientReschedule) {
+    return (
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300 animate-pulse">
+        Action Required: Choose New Schedule
+      </span>
+    );
+  }
+  if (app.rescheduleRequested) {
+    return (
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-200">
+        Reschedule Under Review
       </span>
     );
   }
@@ -89,6 +156,7 @@ function StatusBadge({ app }: { app: Appointment }) {
 }
 
 function StatusTracker({ app }: { app: Appointment }) {
+  const [showHistory, setShowHistory] = useState(false);
   const isCancelled = app.status === "Cancelled" || app.status === "Rejected";
   const activeStep = isCancelled ? -1 : getStepIndex(app);
 
@@ -196,21 +264,68 @@ function StatusTracker({ app }: { app: Appointment }) {
           </div>
 
           {/* Dynamic Workflow Prompt Banners */}
-          <div className="space-y-2">
-            {Boolean(app.queueNumber || isConfirmedScheduled) && (
+          <div className="space-y-2.5">
+            {/* Rule 4: Action Required Banner if clinic/doctor needs patient to pick a new schedule */}
+            {app.needsPatientReschedule && (
+              <div className="rounded-2xl border-2 border-amber-300 bg-amber-50/90 p-4 shadow-xs space-y-2">
+                <div className="flex items-center gap-2 text-amber-900 font-bold text-xs uppercase tracking-wider">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Schedule Adjustment Requested by Clinic</span>
+                </div>
+                <p className="text-xs text-amber-900 leading-relaxed">
+                  The clinic has requested that you choose an alternate consultation date and time. Your current appointment slot remains active until you select a replacement schedule.
+                </p>
+                {app.clinicNote && (
+                  <div className="p-2.5 rounded-xl bg-white border border-amber-200 text-xs text-amber-950 font-medium">
+                    <span className="text-amber-700 font-bold text-[10px] uppercase block mb-0.5">Clinic Message:</span>
+                    "{app.clinicNote}"
+                  </div>
+                )}
+                <div className="text-[11px] text-amber-800 font-semibold pt-0.5 flex items-center gap-1.5">
+                  <span>👉 Please click <strong>"Choose New Schedule"</strong> below to select an available slot.</span>
+                </div>
+              </div>
+            )}
+
+            {/* Rule 1: Reschedule Request Pending Clinic Review Banner */}
+            {app.rescheduleRequested && (
+              <div className="rounded-2xl border border-purple-200 bg-purple-50/80 p-4 shadow-xs space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2 text-purple-900 font-bold text-xs uppercase tracking-wider">
+                    <Clock className="w-4 h-4 text-purple-600 shrink-0" />
+                    <span>Reschedule Request Under Clinic Review</span>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full bg-purple-200 text-purple-900 font-bold text-[10px] uppercase">
+                    Awaiting Clinic Review
+                  </span>
+                </div>
+                <div className="text-xs text-purple-900 space-y-1">
+                  <p>
+                    Requested New Slot: <strong className="text-purple-950">{app.rescheduleDate}</strong> at <strong className="text-purple-950">{app.rescheduleTime}</strong>
+                  </p>
+                  {app.rescheduleReason && (
+                    <p className="text-[11px] text-purple-800 italic">
+                      Reason: "{app.rescheduleReason}"
+                    </p>
+                  )}
+                </div>
+                <div className="p-2.5 rounded-xl bg-white/90 border border-purple-100 text-[11px] text-purple-800 leading-relaxed">
+                  🔒 <strong>Current Slot Protected:</strong> Your appointment for <strong className="text-purple-950">{app.date} at {app.time}</strong> remains reserved and will not be changed unless the clinic approves this requested slot.
+                </div>
+              </div>
+            )}
+
+            {Boolean(isConfirmedScheduled || app.time || app.batchTime) && (
               <div className="rounded-2xl border border-magenta-200/90 bg-white p-3.5 shadow-2xs space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-magenta-800">
-                    Consultation Queue
-                  </span>
-                  <span className="px-2.5 py-0.5 rounded-full bg-magenta-600 text-white font-bold text-xs shadow-2xs">
-                    Queue #{app.queueNumber || 1}
+                    Consultation Schedule
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500 font-medium">Batch Window:</span>
+                  <span className="text-gray-500 font-medium">Scheduled Time:</span>
                   <strong className="text-gray-900 font-bold">
-                    {app.batchTime ? `${app.batchTime} Batch` : app.time}
+                    {app.time || (app.batchTime ? `${app.batchTime} Batch` : "Pending")}
                   </strong>
                 </div>
 
@@ -224,7 +339,7 @@ function StatusTracker({ app }: { app: Appointment }) {
                           Checked in at Clinic Lobby
                         </p>
                         <p className="text-[10px] text-sky-700">
-                          You are <strong>Queue #{app.queueNumber || 1}</strong>. Please wait in the lobby — the clinic will call your turn when the doctor is ready.
+                          Please wait in the lobby — the clinic will call you when the doctor is ready.
                         </p>
                       </div>
                     </div>
@@ -237,7 +352,7 @@ function StatusTracker({ app }: { app: Appointment }) {
                         </p>
                       </div>
                       <p className="text-[11px] text-rose-700 leading-relaxed pl-6">
-                        You did not arrive during your scheduled batch window ({app.batchTime ? `${app.batchTime} Batch` : app.time}). Please rebook or coordinate with the clinic front desk.
+                        You did not arrive during your scheduled time ({app.time || (app.batchTime ? `${app.batchTime} Batch` : "")}). Please rebook or coordinate with the clinic front desk.
                       </p>
                     </div>
                   ) : (
@@ -245,7 +360,7 @@ function StatusTracker({ app }: { app: Appointment }) {
                       <div className="flex items-center gap-2">
                         <Clock className="w-3.5 h-3.5 text-magenta-500 shrink-0" />
                         <p className="text-[11px] text-gray-600">
-                          Expected Arrival: <strong className="text-gray-900">{app.batchTime ? `${app.batchTime} Batch` : app.time}</strong>. Please check in with the clinic receptionist upon arrival.
+                          Expected Arrival: <strong className="text-gray-900">{app.time || (app.batchTime ? `${app.batchTime} Batch` : "")}</strong>. Please check in with the clinic receptionist upon arrival.
                         </p>
                       </div>
                       <p className="text-[10px] text-emerald-700 font-semibold pl-5.5">
@@ -257,7 +372,7 @@ function StatusTracker({ app }: { app: Appointment }) {
                   <div className="p-2.5 rounded-xl bg-amber-50/80 border border-amber-200 text-amber-900 flex items-center gap-2">
                     <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                     <p className="text-[11px] text-amber-800">
-                      Slot reserved for <strong>Queue #{app.queueNumber || 1}</strong>. Awaiting doctor's review &amp; confirmation.
+                      Appointment requested. Awaiting doctor's review &amp; confirmation.
                     </p>
                   </div>
                 )}
@@ -328,9 +443,60 @@ function StatusTracker({ app }: { app: Appointment }) {
               </div>
             )}
 
-            {app.clinicNote && !isCancelled && (
+            {app.clinicNote && !isCancelled && !app.needsPatientReschedule && (
               <div className="text-[11px] text-gray-600 bg-white border border-gray-200/80 rounded-xl px-3 py-2">
                 <strong className="text-gray-700">Clinic Note:</strong> {app.clinicNote}
+              </div>
+            )}
+
+            {/* Rule 5: Traceable Appointment History Audit Trail */}
+            {app.appointmentHistory && app.appointmentHistory.length > 0 && (
+              <div className="pt-2 border-t border-gray-200/60">
+                <button
+                  type="button"
+                  onClick={() => setShowHistory((prev) => !prev)}
+                  className="flex items-center justify-between w-full text-left text-[11px] font-semibold text-gray-500 hover:text-gray-800 transition py-1 cursor-pointer"
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5 text-magenta-500" />
+                    <span>Appointment History ({app.appointmentHistory.length} event{app.appointmentHistory.length > 1 ? "s" : ""})</span>
+                  </span>
+                  {showHistory ? (
+                    <ChevronUp className="w-3.5 h-3.5 text-gray-400" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
+                  )}
+                </button>
+
+                {showHistory && (
+                  <div className="mt-2 space-y-1.5 pl-2.5 border-l-2 border-magenta-300">
+                    {app.appointmentHistory.map((item, idx) => (
+                      <div key={idx} className="p-2 rounded-xl bg-white border border-gray-100 text-[11px] text-gray-600 shadow-2xs">
+                        <div className="flex items-center justify-between text-[10px] text-gray-400 font-medium mb-0.5">
+                          <span className="uppercase font-bold text-gray-500 tracking-wider">
+                            {item.actor === "patient" ? "Patient" : item.actor === "clinic" ? "Clinic" : item.actor === "doctor" ? "Doctor" : "System"}
+                          </span>
+                          <span>
+                            {new Date(item.timestamp).toLocaleString("en-PH", {
+                              timeZone: "Asia/Manila",
+                              month: "short",
+                              day: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                              hour12: true,
+                            })}
+                          </span>
+                        </div>
+                        <p className="text-gray-900 font-medium">{formatHistoryAction(item)}</p>
+                        {item.reason && (
+                          <p className="text-[10px] text-gray-500 italic mt-0.5">
+                            Note: "{item.reason}"
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -340,11 +506,24 @@ function StatusTracker({ app }: { app: Appointment }) {
   );
 }
 
-function AppointmentCard({ app, onCancel }: { app: Appointment; onCancel?: (app: Appointment) => void }) {
+function AppointmentCard({
+  app,
+  onCancel,
+  onReschedule,
+  onWithdrawReschedule,
+}: {
+  app: Appointment;
+  onCancel?: (app: Appointment) => void;
+  onReschedule?: (app: Appointment, isClinicRequested: boolean) => void;
+  onWithdrawReschedule?: (app: Appointment) => void;
+}) {
   const isFinalized = app.status === "Scheduled" || app.doctorStatus === "approved" || app.status === "Completed";
   const isConfirmed = app.status === "Scheduled" || app.status === "Completed";
-  // Once the schedule is finalized, there is no cancel option for the patient
+  const isTerminal = app.status === "Completed" || app.status === "Cancelled" || app.status === "Rejected";
+  // Pending appointments can be cancelled
   const canCancel = app.status === "Pending" && !isFinalized;
+  // Patient can request reschedule as long as consultation is active (Rule 1)
+  const canRequestReschedule = !isTerminal && app.checkInStatus !== "no-show";
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-white shadow-xs hover:border-gray-200 transition-all duration-200 overflow-hidden">
@@ -377,29 +556,62 @@ function AppointmentCard({ app, onCancel }: { app: Appointment; onCancel?: (app:
 
         <StatusTracker app={app} />
 
-        {canCancel && (
-          <div className="mt-4 flex justify-end">
+        {/* Action Controls */}
+        <div className="mt-4 pt-3 border-t border-gray-100 flex flex-wrap items-center justify-between gap-2.5">
+          {/* Rule 4: Action Required for patient to select schedule */}
+          {app.needsPatientReschedule ? (
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => onReschedule && onReschedule(app, true)}
+                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-bold transition shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                <span>Choose New Schedule</span>
+              </button>
+            </div>
+          ) : app.rescheduleRequested ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => onWithdrawReschedule && onWithdrawReschedule(app)}
+                className="text-xs font-semibold text-rose-600 hover:text-rose-700 px-3 py-1.5 rounded-xl border border-rose-200 hover:bg-rose-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Withdraw Reschedule Request</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onReschedule && onReschedule(app, false)}
+                className="text-xs font-semibold text-purple-700 hover:text-purple-800 px-3 py-1.5 rounded-xl border border-purple-200 hover:bg-purple-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>Change Requested Slot</span>
+              </button>
+            </div>
+          ) : canRequestReschedule ? (
+            <button
+              type="button"
+              onClick={() => onReschedule && onReschedule(app, false)}
+              className="text-xs font-semibold text-magenta-700 hover:text-magenta-800 px-3.5 py-1.5 rounded-xl border border-magenta-200 hover:bg-magenta-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            >
+              <Calendar className="w-3.5 h-3.5 text-magenta-600" />
+              <span>Request Reschedule</span>
+            </button>
+          ) : (
+            <div />
+          )}
+
+          {canCancel && (
             <button
               type="button"
               onClick={() => onCancel && onCancel(app)}
-              className="text-xs font-semibold text-rose-600 hover:text-rose-700 px-3.5 py-1.5 rounded-xl border border-rose-200 hover:bg-rose-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              className="text-xs font-semibold text-rose-600 hover:text-rose-700 px-3.5 py-1.5 rounded-xl border border-rose-200 hover:bg-rose-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs ml-auto"
             >
               <span>Cancel Request</span>
             </button>
-          </div>
-        )}
-
-        {isFinalized && app.status !== "Completed" && (
-          <div className="mt-4 pt-3 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-xs text-gray-500">
-            <span className="flex items-center gap-1.5 text-emerald-700 font-semibold text-[11px] bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 w-fit">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Schedule Finalized (Non-cancellable)</span>
-            </span>
-            <span className="text-[10px] text-gray-400">
-              For any urgent schedule adjustments, please contact the clinic directly.
-            </span>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
@@ -413,17 +625,32 @@ const AppointmentStatusPage: React.FC = () => {
   const [cancelLoading, setCancelLoading] = useState(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
 
+  // Reschedule Modal State
+  const [rescheduleModalAppt, setRescheduleModalAppt] = useState<Appointment | null>(null);
+  const [isRespondingToClinicRequest, setIsRespondingToClinicRequest] = useState(false);
+  const [rescheduleDate, setRescheduleDate] = useState("");
+  const [rescheduleTime, setRescheduleTime] = useState("");
+  const [rescheduleReason, setRescheduleReason] = useState("");
+  const [rescheduleSaving, setRescheduleSaving] = useState(false);
+  const [rescheduleError, setRescheduleError] = useState("");
+
+  // Withdraw Reschedule Modal State
+  const [withdrawModalAppt, setWithdrawModalAppt] = useState<Appointment | null>(null);
+  const [withdrawSaving, setWithdrawSaving] = useState(false);
+
   const fetchAppointments = useCallback(async () => {
     setLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userId = user?.id || session?.user?.id;
-      if (!userId) {
+      const userEmail = user?.email || session?.user?.email;
+      if (!userId && !userEmail) {
         setLoading(false);
         return;
       }
 
-      const { data, error } = await supabase
+      // Query patient_appointment using safe columns that exist in Supabase
+      let query = supabase
         .from("patient_appointment")
         .select(`
           appointment_id,
@@ -438,11 +665,55 @@ const AppointmentStatusPage: React.FC = () => {
           queue_number,
           batch_time,
           check_in_status,
-          is_walk_in,
+          clinic_id,
+          patient_email,
+          user_id,
+          primary_scan_id,
+          reschedule_requested,
+          reschedule_date,
+          reschedule_time,
+          reschedule_reason,
+          needs_patient_reschedule,
+          appointment_history,
+          questionnaire_answers,
           clinic:clinic_id ( name )
         `)
-        .eq("user_id", userId)
         .order("created_at", { ascending: false });
+
+      if (userId && userEmail) {
+        query = query.or(`user_id.eq.${userId},patient_email.ilike.${userEmail}`);
+      } else if (userId) {
+        query = query.eq("user_id", userId);
+      } else if (userEmail) {
+        query = query.ilike("patient_email", userEmail);
+      }
+
+      let { data, error } = await query;
+
+      // Resilient fallback query if nested relation or specific column had an issue
+      if (error) {
+        console.warn("[AppointmentStatusPage] Primary fetch warning, retrying with direct query:", error.message);
+        let fallbackQuery = supabase
+          .from("patient_appointment")
+          .select("*")
+          .order("created_at", { ascending: false });
+
+        if (userId && userEmail) {
+          fallbackQuery = fallbackQuery.or(`user_id.eq.${userId},patient_email.ilike.${userEmail}`);
+        } else if (userId) {
+          fallbackQuery = fallbackQuery.eq("user_id", userId);
+        } else if (userEmail) {
+          fallbackQuery = fallbackQuery.ilike("patient_email", userEmail);
+        }
+
+        const fallbackRes = await fallbackQuery;
+        if (!fallbackRes.error && fallbackRes.data) {
+          data = fallbackRes.data;
+          error = null;
+        } else {
+          console.error("[AppointmentStatusPage] Fallback fetch error:", fallbackRes.error?.message);
+        }
+      }
 
       if (!error && data) {
         const docIds = data.map((a: any) => a.assigned_doctor_id).filter(Boolean);
@@ -459,6 +730,21 @@ const AppointmentStatusPage: React.FC = () => {
           } catch { }
         }
 
+        // Batch-resolve clinic names in case nested clinic join was missing
+        const clinicIds = Array.from(new Set(data.map((a: any) => a.clinic_id).filter(Boolean)));
+        const clinicNameMap = new Map<string, string>();
+        if (clinicIds.length > 0) {
+          try {
+            const { data: clinicRows } = await supabase
+              .from("clinic")
+              .select("clinic_id, name")
+              .in("clinic_id", clinicIds);
+            if (clinicRows) {
+              clinicRows.forEach((c: any) => clinicNameMap.set(String(c.clinic_id), c.name));
+            }
+          } catch {}
+        }
+
         const mapped: Appointment[] = data.map((a: any) => {
           const apptDate = a.date ? new Date(a.date) : null;
           const isValidDate = apptDate && !isNaN(apptDate.getTime());
@@ -470,6 +756,7 @@ const AppointmentStatusPage: React.FC = () => {
             : "Time pending";
 
           const rawStatus = (a.status || "").toLowerCase();
+          const checkIn = (a.check_in_status || "").toLowerCase();
           let displayStatus: Appointment["status"] = "Pending";
           if (rawStatus === "confirmed" || rawStatus === "scheduled") {
             displayStatus = isValidDate ? "Scheduled" : "Pending";
@@ -479,9 +766,12 @@ const AppointmentStatusPage: React.FC = () => {
             displayStatus = "Cancelled";
           } else if (rawStatus === "rejected") {
             displayStatus = "Rejected";
+          } else if (rawStatus === "no-show" || checkIn === "no-show") {
+            displayStatus = "Cancelled";
           }
 
           const clinicObj: any = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
+          const resolvedClinicName = clinicObj?.name || clinicNameMap.get(String(a.clinic_id)) || "Skin Clinic";
           const isDocRejected = a.doctor_status === "rejected";
           const docName = (a.assigned_doctor_id && !isDocRejected && docNameMap.has(a.assigned_doctor_id))
             ? `Dr. ${docNameMap.get(a.assigned_doctor_id)!.replace(/^dr\.\s*/i, "")}`
@@ -501,9 +791,21 @@ const AppointmentStatusPage: React.FC = () => {
             }
           }
 
+          const qAnswers = typeof a.questionnaire_answers === "object" && a.questionnaire_answers !== null ? a.questionnaire_answers : {};
+          const rescheduleRequested = Boolean(a.reschedule_requested ?? qAnswers.reschedule_requested);
+          const rDate = a.reschedule_date || qAnswers.reschedule_date || undefined;
+          const rTime = a.reschedule_time || qAnswers.reschedule_time || undefined;
+          const rReason = a.reschedule_reason || qAnswers.reschedule_reason || undefined;
+          const needsPatientReschedule = Boolean(a.needs_patient_reschedule ?? qAnswers.needs_patient_reschedule);
+          const appointmentHistory = Array.isArray(a.appointment_history)
+            ? a.appointment_history
+            : (Array.isArray(qAnswers.appointment_history) ? qAnswers.appointment_history : []);
+          const primaryScanId = a.primary_scan_id || qAnswers.primary_scan_id || undefined;
+
           return {
             id: a.appointment_id,
-            clinicName: clinicObj?.name ?? "Clinic",
+            clinicId: a.clinic_id,
+            clinicName: resolvedClinicName,
             doctor: docName,
             assignedDoctorName: a.assigned_doctor_id && !isDocRejected && docNameMap.has(a.assigned_doctor_id)
               ? docNameMap.get(a.assigned_doctor_id)
@@ -515,7 +817,7 @@ const AppointmentStatusPage: React.FC = () => {
             time: timeStr,
             batchTime: a.batch_time || undefined,
             queueNumber: a.queue_number || 1,
-            checkInStatus: a.check_in_status || "scheduled",
+            checkInStatus: (a.check_in_status || "scheduled") as any,
             isWalkIn: Boolean(a.is_walk_in),
             status: displayStatus,
             clinicNote: a.clinic_note || undefined,
@@ -523,6 +825,15 @@ const AppointmentStatusPage: React.FC = () => {
             doctorDiagnosis: docDiagnosis || undefined,
             rejectionReason: a.clinic_note || undefined,
             createdAt: a.created_at,
+            userId: a.user_id || undefined,
+            patientEmail: a.patient_email || undefined,
+            primaryScanId,
+            rescheduleRequested,
+            rescheduleDate: rDate,
+            rescheduleTime: rTime,
+            rescheduleReason: rReason,
+            needsPatientReschedule,
+            appointmentHistory,
           };
         });
 
@@ -561,6 +872,7 @@ const AppointmentStatusPage: React.FC = () => {
 
                   mapped.push({
                     id: localItem.id,
+                    clinicId: localItem.clinicId,
                     clinicName: localItem.clinicName || "Clinic",
                     doctor: localItem.assignedDoctorName ? `Dr. ${localItem.assignedDoctorName.replace(/^dr\.\s*/i, "")}` : "To be assigned",
                     assignedDoctorName: localItem.assignedDoctorName,
@@ -576,6 +888,15 @@ const AppointmentStatusPage: React.FC = () => {
                     doctorNote: localItem.doctorNote,
                     doctorDiagnosis: localItem.conditionName || localItem.aiConditionName,
                     createdAt: localItem.createdAt || new Date().toISOString(),
+                    userId: localItem.userId,
+                    patientEmail: localItem.patientEmail,
+                    primaryScanId: localItem.primaryScanId,
+                    rescheduleRequested: Boolean(localItem.rescheduleRequested || localItem.reschedule_requested),
+                    rescheduleDate: localItem.rescheduleDate || localItem.reschedule_date,
+                    rescheduleTime: localItem.rescheduleTime || localItem.reschedule_time,
+                    rescheduleReason: localItem.rescheduleReason || localItem.reschedule_reason,
+                    needsPatientReschedule: Boolean(localItem.needsPatientReschedule || localItem.needs_patient_reschedule),
+                    appointmentHistory: localItem.appointmentHistory || localItem.appointment_history || [],
                   });
                 }
               });
@@ -622,6 +943,231 @@ const AppointmentStatusPage: React.FC = () => {
       window.removeEventListener("focus", handleSync);
     };
   }, [fetchAppointments, user?.id]);
+
+  const handleOpenRescheduleModal = (app: Appointment, isClinicReq: boolean) => {
+    setRescheduleModalAppt(app);
+    setIsRespondingToClinicRequest(isClinicReq);
+    const tomorrow = new Date(Date.now() + 86400000);
+    const dStr = tomorrow.toISOString().split("T")[0];
+    setRescheduleDate(app.rescheduleDate || dStr);
+    setRescheduleTime(app.rescheduleTime || "09:00");
+    setRescheduleReason(app.rescheduleReason || (isClinicReq ? "Selecting new preferred consultation schedule as requested by clinic." : ""));
+    setRescheduleError("");
+  };
+
+  // Rule 1: Patient Reschedule Request (Never silently alter scheduled date or time)
+  const handleConfirmPatientReschedule = async () => {
+    if (!rescheduleModalAppt) return;
+    if (!rescheduleDate) {
+      setRescheduleError("Please select a date for your consultation.");
+      return;
+    }
+    if (!rescheduleTime) {
+      setRescheduleError("Please select a preferred time slot.");
+      return;
+    }
+
+    setRescheduleSaving(true);
+    setRescheduleError("");
+
+    try {
+      const historyEntry: AppointmentHistoryEntry = {
+        action: "reschedule_requested",
+        actor: "patient",
+        timestamp: new Date().toISOString(),
+        previousDate: rescheduleModalAppt.date,
+        previousTime: rescheduleModalAppt.time,
+        requestedDate: rescheduleDate,
+        requestedTime: rescheduleTime,
+        reason: rescheduleReason.trim() || (isRespondingToClinicRequest ? "Patient selected alternate schedule requested by clinic." : "Patient requested schedule adjustment."),
+      };
+
+      const updatedHistory = [...(rescheduleModalAppt.appointmentHistory || []), historyEntry];
+
+      const updatePayload: Record<string, any> = {
+        reschedule_requested: true,
+        reschedule_date: rescheduleDate,
+        reschedule_time: rescheduleTime,
+        reschedule_reason: rescheduleReason.trim() || "Patient requested alternate schedule.",
+        needs_patient_reschedule: false,
+        appointment_history: updatedHistory,
+      };
+
+      const { error: updateErr } = await supabase
+        .from("patient_appointment")
+        .update(updatePayload)
+        .eq("appointment_id", rescheduleModalAppt.id);
+
+      if (updateErr) {
+        console.warn("[AppointmentStatusPage] Fallback mirror on reschedule request:", updateErr.message);
+        await supabase
+          .from("patient_appointment")
+          .update({
+            questionnaire_answers: {
+              reschedule_requested: true,
+              reschedule_date: rescheduleDate,
+              reschedule_time: rescheduleTime,
+              reschedule_reason: rescheduleReason.trim() || "Patient requested alternate schedule.",
+              needs_patient_reschedule: false,
+              appointment_history: updatedHistory,
+            },
+          })
+          .eq("appointment_id", rescheduleModalAppt.id);
+      }
+
+      // Synchronize local cache
+      try {
+        const rawLocal = localStorage.getItem("dermai_clinic_appointments");
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          if (Array.isArray(parsed)) {
+            const next = parsed.map((item: any) =>
+              item.id === rescheduleModalAppt.id || item.appointment_id === rescheduleModalAppt.id
+                ? {
+                    ...item,
+                    rescheduleRequested: true,
+                    rescheduleDate,
+                    rescheduleTime,
+                    rescheduleReason: rescheduleReason.trim(),
+                    needsPatientReschedule: false,
+                    appointmentHistory: updatedHistory,
+                  }
+                : item
+            );
+            localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
+          }
+        }
+      } catch (e) {
+        console.error("Local storage sync error:", e);
+      }
+
+      // Update in-memory state
+      setAllAppointments((prev) =>
+        prev.map((a) =>
+          a.id === rescheduleModalAppt.id
+            ? {
+                ...a,
+                rescheduleRequested: true,
+                rescheduleDate,
+                rescheduleTime,
+                rescheduleReason: rescheduleReason.trim(),
+                needsPatientReschedule: false,
+                appointmentHistory: updatedHistory,
+              }
+            : a
+        )
+      );
+
+      window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+      window.dispatchEvent(new Event("storage"));
+
+      setRescheduleModalAppt(null);
+      setSuccessToast(
+        `Reschedule request submitted to ${rescheduleModalAppt.clinicName}. Your current schedule (${rescheduleModalAppt.date} at ${rescheduleModalAppt.time}) remains safely reserved while the clinic reviews your request.`
+      );
+      setTimeout(() => setSuccessToast(null), 7000);
+    } catch (err: any) {
+      console.error("Error submitting reschedule request:", err);
+      setRescheduleError(err?.message || "Failed to submit reschedule request. Please try again.");
+    } finally {
+      setRescheduleSaving(false);
+    }
+  };
+
+  const executeWithdrawReschedule = async (target: Appointment) => {
+    setWithdrawSaving(true);
+    try {
+      const historyEntry: AppointmentHistoryEntry = {
+        action: "reschedule_withdrawn",
+        actor: "patient",
+        timestamp: new Date().toISOString(),
+        previousDate: target.rescheduleDate,
+        previousTime: target.rescheduleTime,
+        reason: "Patient cancelled pending reschedule request.",
+      };
+      const updatedHistory = [...(target.appointmentHistory || []), historyEntry];
+
+      const updatePayload: Record<string, any> = {
+        reschedule_requested: false,
+        reschedule_date: null,
+        reschedule_time: null,
+        reschedule_reason: null,
+        appointment_history: updatedHistory,
+      };
+
+      const { error } = await supabase
+        .from("patient_appointment")
+        .update(updatePayload)
+        .eq("appointment_id", target.id);
+
+      if (error) {
+        console.warn("[AppointmentStatusPage] Fallback mirror on withdraw:", error.message);
+        await supabase
+          .from("patient_appointment")
+          .update({
+            questionnaire_answers: {
+              reschedule_requested: false,
+              reschedule_date: null,
+              reschedule_time: null,
+              reschedule_reason: null,
+              appointment_history: updatedHistory,
+            },
+          })
+          .eq("appointment_id", target.id);
+      }
+
+      // Synchronize local cache
+      try {
+        const rawLocal = localStorage.getItem("dermai_clinic_appointments");
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          if (Array.isArray(parsed)) {
+            const next = parsed.map((item: any) =>
+              item.id === target.id || item.appointment_id === target.id
+                ? {
+                    ...item,
+                    rescheduleRequested: false,
+                    rescheduleDate: undefined,
+                    rescheduleTime: undefined,
+                    rescheduleReason: undefined,
+                    appointmentHistory: updatedHistory,
+                  }
+                : item
+            );
+            localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
+          }
+        }
+      } catch (e) {
+        console.error("Local storage sync error:", e);
+      }
+
+      setAllAppointments((prev) =>
+        prev.map((a) =>
+          a.id === target.id
+            ? {
+                ...a,
+                rescheduleRequested: false,
+                rescheduleDate: undefined,
+                rescheduleTime: undefined,
+                rescheduleReason: undefined,
+                appointmentHistory: updatedHistory,
+              }
+            : a
+        )
+      );
+
+      window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
+      window.dispatchEvent(new Event("storage"));
+
+      setWithdrawModalAppt(null);
+      setSuccessToast(`Reschedule request withdrawn. Your confirmed schedule (${target.date} at ${target.time}) remains active.`);
+      setTimeout(() => setSuccessToast(null), 5000);
+    } catch (err) {
+      console.error("Error withdrawing reschedule request:", err);
+    } finally {
+      setWithdrawSaving(false);
+    }
+  };
 
   const executeCancel = async (target: Appointment) => {
     if (target.status === "Scheduled" || target.doctorStatus === "approved" || target.status === "Completed") {
@@ -688,8 +1234,13 @@ const AppointmentStatusPage: React.FC = () => {
   now.setHours(0, 0, 0, 0);
 
   const upcomingAppointments = allAppointments.filter((a) => {
+    // Past or terminal states never go in Upcoming
+    if (a.status === "Completed" || a.status === "Rejected" || a.status === "Cancelled") return false;
+    if (a.checkInStatus === "no-show") return false;
+
     // Always show Pending in Upcoming (no date constraint — awaiting clinic action / doctor review)
     if (a.status === "Pending") return true;
+
     // Scheduled = Upcoming only if the date is today or future
     if (a.status === "Scheduled") {
       const parsed = new Date(a.date);
@@ -700,8 +1251,8 @@ const AppointmentStatusPage: React.FC = () => {
   });
 
   const pastAppointments = allAppointments.filter((a) => {
-    if (a.status === "Rejected" || a.status === "Cancelled") return true;
-    if (a.status === "Completed") return true;
+    if (a.status === "Rejected" || a.status === "Cancelled" || a.status === "Completed") return true;
+    if (a.checkInStatus === "no-show") return true;
     if (a.status === "Scheduled") {
       const parsed = new Date(a.date);
       if (!isNaN(parsed.getTime())) return parsed.getTime() < now.getTime();
@@ -734,7 +1285,13 @@ const AppointmentStatusPage: React.FC = () => {
     return (
       <div className="space-y-4">
         {apps.map((app) => (
-          <AppointmentCard key={app.id} app={app} onCancel={(item) => setCancellingAppt(item)} />
+          <AppointmentCard
+            key={app.id}
+            app={app}
+            onCancel={(item) => setCancellingAppt(item)}
+            onReschedule={(item, isClinicReq) => handleOpenRescheduleModal(item, isClinicReq)}
+            onWithdrawReschedule={(item) => setWithdrawModalAppt(item)}
+          />
         ))}
       </div>
     );
@@ -793,6 +1350,241 @@ const AppointmentStatusPage: React.FC = () => {
         </Tabs>
       </div>
 
+      {/* Patient Reschedule Request Modal */}
+      {rescheduleModalAppt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-gray-100 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-magenta-50 text-magenta-600 flex items-center justify-center">
+                  <Calendar className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-gray-900">
+                    {isRespondingToClinicRequest ? "Select Alternate Schedule" : "Request Appointment Reschedule"}
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    Clinic: <strong className="text-gray-800">{rescheduleModalAppt.clinicName}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRescheduleModalAppt(null)}
+                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Current Schedule Info Box */}
+            <div className="mt-4 p-3 rounded-2xl bg-slate-50 border border-gray-200/80 text-xs text-gray-700 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block mb-0.5">Current Schedule</span>
+                <span className="font-semibold text-gray-900">{rescheduleModalAppt.date} at {rescheduleModalAppt.time}</span>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                Reserved
+              </span>
+            </div>
+
+            {/* Rule 1 & Rule 2 Protection Guarantee */}
+            <div className="mt-3 p-3 rounded-2xl bg-purple-50/80 border border-purple-200/70 text-purple-900 text-[11px] leading-relaxed">
+              🔒 <strong>Patient Protection:</strong> Submitting this request does not alter your existing scheduled date or time without mutual clinic agreement. Your slot remains reserved until the clinic reviews and approves your requested slot.
+            </div>
+
+            {rescheduleError && (
+              <div className="mt-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                {rescheduleError}
+              </div>
+            )}
+
+            {/* Date Picker */}
+            <div className="mt-4">
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                New Preferred Date <span className="text-magenta-600">*</span>
+              </label>
+              <input
+                type="date"
+                value={rescheduleDate}
+                min={new Date(Date.now() + 86400000).toISOString().split("T")[0]}
+                onChange={(e) => {
+                  setRescheduleDate(e.target.value);
+                  setRescheduleError("");
+                }}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 font-semibold focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 outline-none bg-white"
+              />
+            </div>
+
+            {/* Preferred Time Slot Grid */}
+            <div className="mt-4">
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                New Preferred Time <span className="text-magenta-600">*</span>
+              </label>
+              <div className="grid grid-cols-4 sm:grid-cols-4 gap-2">
+                {[
+                  { value: "08:30", label: "8:30 AM" },
+                  { value: "09:00", label: "9:00 AM" },
+                  { value: "09:30", label: "9:30 AM" },
+                  { value: "10:00", label: "10:00 AM" },
+                  { value: "10:30", label: "10:30 AM" },
+                  { value: "11:00", label: "11:00 AM" },
+                  { value: "11:30", label: "11:30 AM" },
+                  { value: "13:00", label: "1:00 PM" },
+                  { value: "13:30", label: "1:30 PM" },
+                  { value: "14:00", label: "2:00 PM" },
+                  { value: "14:30", label: "2:30 PM" },
+                  { value: "15:00", label: "3:00 PM" },
+                  { value: "15:30", label: "3:30 PM" },
+                  { value: "16:00", label: "4:00 PM" },
+                  { value: "16:30", label: "4:30 PM" },
+                  { value: "17:00", label: "5:00 PM" },
+                ].map((slot) => {
+                  const isSelected = rescheduleTime === slot.value;
+                  return (
+                    <button
+                      key={slot.value}
+                      type="button"
+                      onClick={() => {
+                        setRescheduleTime(slot.value);
+                        setRescheduleError("");
+                      }}
+                      className={`py-2 px-1 text-center rounded-xl text-xs font-semibold transition border cursor-pointer ${
+                        isSelected
+                          ? "bg-magenta-600 border-magenta-600 text-white shadow-2xs"
+                          : "bg-gray-50 border-gray-200 text-gray-700 hover:bg-magenta-50 hover:border-magenta-200"
+                      }`}
+                    >
+                      {slot.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Quick Reason Presets */}
+            <div className="mt-4">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                Quick Reason Suggestions
+              </label>
+              <div className="space-y-1">
+                {[
+                  "Schedule or work conflict",
+                  "Personal or family emergency",
+                  "Transportation or distance constraint",
+                  "Responding to clinic schedule adjustment request",
+                ].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      setRescheduleReason(preset);
+                      setRescheduleError("");
+                    }}
+                    className={`w-full text-left px-3 py-1.5 rounded-xl text-xs transition border cursor-pointer ${
+                      rescheduleReason === preset
+                        ? "bg-magenta-50 border-magenta-200 text-magenta-800 font-semibold"
+                        : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
+                    }`}
+                  >
+                    • {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Reason Textarea */}
+            <div className="mt-3">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                Note for Clinic (Optional)
+              </label>
+              <textarea
+                value={rescheduleReason}
+                onChange={(e) => {
+                  setRescheduleReason(e.target.value);
+                  setRescheduleError("");
+                }}
+                rows={2}
+                placeholder="Add any specific context or time flexibility for the clinic triage team..."
+                className="w-full px-3.5 py-2 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 bg-white"
+              />
+            </div>
+
+            {/* Action Buttons */}
+            <div className="mt-6 flex items-center gap-3">
+              <button
+                type="button"
+                disabled={rescheduleSaving}
+                onClick={() => setRescheduleModalAppt(null)}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition cursor-pointer"
+              >
+                Keep Current Schedule
+              </button>
+              <button
+                type="button"
+                disabled={rescheduleSaving || !rescheduleDate || !rescheduleTime}
+                onClick={handleConfirmPatientReschedule}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {rescheduleSaving ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                    <span>Submitting...</span>
+                  </>
+                ) : (
+                  <span>Send Reschedule Request</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Withdraw Reschedule Request Modal */}
+      {withdrawModalAppt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 mb-4 mx-auto">
+              <RotateCcw className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-gray-900 text-center">
+              Withdraw Reschedule Request?
+            </h3>
+            <p className="text-xs text-gray-600 text-center mt-2 leading-relaxed">
+              Are you sure you want to withdraw your request to reschedule your consultation with <strong className="text-gray-900">{withdrawModalAppt.clinicName}</strong>?
+            </p>
+            <div className="mt-4 p-3 bg-slate-50 rounded-xl border border-gray-200 text-gray-700 text-[11px] leading-relaxed">
+              ✅ Your confirmed schedule (<strong className="text-gray-900">{withdrawModalAppt.date} at {withdrawModalAppt.time}</strong>) will remain completely active and unaffected.
+            </div>
+            <div className="mt-6 flex items-center gap-3">
+              <button
+                type="button"
+                disabled={withdrawSaving}
+                onClick={() => setWithdrawModalAppt(null)}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition cursor-pointer"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                disabled={withdrawSaving}
+                onClick={() => executeWithdrawReschedule(withdrawModalAppt)}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {withdrawSaving ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                    <span>Withdrawing...</span>
+                  </>
+                ) : (
+                  <span>Yes, Withdraw Request</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Cancellation Confirmation Modal */}
       {cancellingAppt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
@@ -807,7 +1599,7 @@ const AppointmentStatusPage: React.FC = () => {
               Are you sure you want to cancel your consultation with <strong className="text-gray-900">{cancellingAppt.clinicName}</strong> on <strong className="text-gray-900">{cancellingAppt.date}</strong> at <strong className="text-gray-900">{cancellingAppt.time}</strong>?
             </p>
             <div className="mt-4 p-3 bg-amber-50 rounded-xl border border-amber-200/70 text-amber-900 text-[11px] leading-relaxed">
-              ⚠️ This action cannot be undone. Your reserved queue slot will be released for other patients.
+              ⚠️ This action cannot be undone. Your reserved appointment slot will be released.
             </div>
             <div className="mt-6 flex items-center gap-3">
               <button

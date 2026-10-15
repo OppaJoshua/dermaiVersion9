@@ -28,3 +28,6 @@ __pycache__/
 
 # AI model files (shared via Google Drive)
 ai-backend/models/
+
+# Scratch and debug files
+scratch/
