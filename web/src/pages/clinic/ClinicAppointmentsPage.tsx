@@ -17,9 +17,9 @@ import {
   Send,
   History,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Link, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
@@ -32,6 +32,16 @@ import {
   isAppointmentExcludedFromIncomingQueue,
   type AppointmentHistoryEntry,
 } from "@/lib/schedulingService";
+
+function isMorningTime(timeStr?: string): boolean {
+  if (!timeStr) return true;
+  if (/am/i.test(timeStr)) {
+    const hour = parseInt(timeStr, 10);
+    return hour < 10 || hour === 12;
+  }
+  const hour = parseInt(timeStr, 10);
+  return !isNaN(hour) && hour < 10;
+}
 
 type AppointmentRecord = {
   id: string;
@@ -239,7 +249,6 @@ function isAppointmentPastDue(appt: {
 
 export default function ClinicAppointmentsPage() {
   const { status: verificationStatus, clinicName: verifiedClinicName, clinicId, loading } = useClinicVerification();
-  const fallbackConditionImage = skinConditions[0]?.image;
   let clinicName = verifiedClinicName || "";
   if (!clinicName) {
     try {
@@ -398,6 +407,9 @@ export default function ClinicAppointmentsPage() {
           hour12: false,
         });
         timeStr = tFormatter.format(apptDate);
+      }
+      if (a.time) {
+        timeStr = a.time;
       }
 
       let displayStatus: AppointmentRecord["status"] = "pending";
@@ -638,11 +650,11 @@ export default function ClinicAppointmentsPage() {
     return DEFAULT_SETTINGS;
   });
 
-  // Queue tab filter: all | needs_doctor | in_review | approved | doctor_declined | reschedule_requests
+  // Queue tab filter: all | needs_doctor | in_review | approved | reschedule_requests
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get("tab");
-  const validTabs = ["all", "needs_doctor", "in_review", "approved", "doctor_declined", "reschedule_requests"] as const;
-  const [queueFilter, setQueueFilter] = useState<"all" | "needs_doctor" | "in_review" | "approved" | "doctor_declined" | "reschedule_requests">(
+  const validTabs = ["all", "needs_doctor", "in_review", "approved", "reschedule_requests"] as const;
+  const [queueFilter, setQueueFilter] = useState<"all" | "needs_doctor" | "in_review" | "approved" | "reschedule_requests">(
     initialTab && (validTabs as readonly string[]).includes(initialTab) ? (initialTab as any) : "all"
   );
 
@@ -779,10 +791,7 @@ export default function ClinicAppointmentsPage() {
     () => incomingQueue.filter((a) => a.assignedDoctorId && a.doctorStatus === "pending-review"),
     [incomingQueue]
   );
-  const doctorDeclinedQueue = useMemo(
-    () => incomingQueue.filter((a) => a.doctorStatus === "rejected"),
-    [incomingQueue]
-  );
+
   const approvedQueue = useMemo(
     () =>
       appointments.filter(
@@ -810,10 +819,16 @@ export default function ClinicAppointmentsPage() {
     if (queueFilter === "needs_doctor") return needsDoctorQueue;
     if (queueFilter === "in_review") return inReviewQueue;
     if (queueFilter === "approved") return approvedQueue;
-    if (queueFilter === "doctor_declined") return doctorDeclinedQueue;
     if (queueFilter === "reschedule_requests") return rescheduleRequestsQueue;
     return incomingQueue;
-  }, [queueFilter, incomingQueue, needsDoctorQueue, inReviewQueue, approvedQueue, doctorDeclinedQueue, rescheduleRequestsQueue]);
+  }, [queueFilter, incomingQueue, needsDoctorQueue, inReviewQueue, approvedQueue, rescheduleRequestsQueue]);
+
+  const handleGoToToday = () => {
+    const now = new Date();
+    setCurrentMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    setSelectedDate(todayKey);
+  };
 
   const selectedDayAppointments = sortAppointmentsByDailyQueue(
     appointmentsByDate[selectedDate] || []
@@ -823,16 +838,6 @@ export default function ClinicAppointmentsPage() {
     month: "long",
     year: "numeric",
   });
-
-  const scheduledCount = appointments.filter(
-    (a) =>
-      !!a.date &&
-      (a.status === "scheduled" || a.status === "accepted" || a.status === "confirmed") &&
-      a.doctorStatus !== "rejected" &&
-      a.checkInStatus !== "completed" &&
-      a.checkInStatus !== "no-show"
-  ).length;
-  const rejectedCount = appointments.filter((a) => a.status === "rejected").length;
 
   const rejectRequest = async (id: string, reason?: string) => {
     const rejectionReason = reason?.trim() || "Request declined by clinic scheduling.";
@@ -903,18 +908,6 @@ export default function ClinicAppointmentsPage() {
     });
   };
 
-  const handleMarkNoShow = (idOrAppt: string | AppointmentRecord) => {
-    const record =
-      typeof idOrAppt === "string"
-        ? appointments.find((a) => a.id === idOrAppt) || null
-        : idOrAppt;
-    if (record) {
-      setNoShowConfirmModal(record);
-      setNoShowError("");
-      setNoShowSuccess("");
-    }
-  };
-
   const handleConfirmNoShow = async () => {
     if (!noShowConfirmModal) return;
     setMarkingNoShow(true);
@@ -927,7 +920,7 @@ export default function ClinicAppointmentsPage() {
       // 1. Concurrency verification: verify persisted status in Supabase before changing
       const { data: latestRow, error: checkErr } = await supabase
         .from("patient_appointment")
-        .select("appointment_id, status, check_in_status, clinic_id")
+        .select("appointment_id, status, check_in_status, clinic_id, user_id, questionnaire_answers")
         .eq("appointment_id", targetId)
         .maybeSingle();
 
@@ -956,13 +949,34 @@ export default function ClinicAppointmentsPage() {
         }
       }
 
-      // 2. Persist status update to Supabase
+      const patientUserId = noShowConfirmModal.userId || latestRow?.user_id;
+
+      // 2. Persist status update to Supabase with audit history
       const noteText = `Marked as No-Show: Patient did not attend scheduled consultation (${noShowConfirmModal.date} ${noShowConfirmModal.time || ""}).`;
+
+      const historyEntry: AppointmentHistoryEntry = {
+        action: "cancelled",
+        actor: "clinic",
+        timestamp: new Date().toISOString(),
+        previousDate: noShowConfirmModal.date,
+        previousTime: noShowConfirmModal.time,
+        reason: noteText,
+      };
+      const updatedHistory = [...(noShowConfirmModal.appointmentHistory || []), historyEntry];
+
+      const currentQa = latestRow?.questionnaire_answers || (noShowConfirmModal as any)?.questionnaireAnswers || (noShowConfirmModal as any)?.questionnaire_answers;
+      const nextQa: Record<string, any> = (currentQa && typeof currentQa === "object" && !Array.isArray(currentQa))
+        ? { ...currentQa }
+        : (Array.isArray(currentQa) ? { answers: currentQa } : {});
+      nextQa.appointment_history = updatedHistory;
+      nextQa.marked_no_show_at = new Date().toISOString();
+
       const { error: updateError } = await supabase
         .from("patient_appointment")
         .update({
           check_in_status: "no-show",
           clinic_note: noteText,
+          questionnaire_answers: nextQa,
         })
         .eq("appointment_id", targetId);
 
@@ -971,10 +985,10 @@ export default function ClinicAppointmentsPage() {
       }
 
       // 3. Notify patient if linked
-      if (noShowConfirmModal.userId) {
+      if (patientUserId) {
         try {
           await createPatientNotification({
-            userId: noShowConfirmModal.userId,
+            userId: patientUserId,
             type: "system",
             subtype: "no-show",
             title: "Appointment Marked as Missed / No-Show",
@@ -989,7 +1003,7 @@ export default function ClinicAppointmentsPage() {
       setAppointments((prev) => {
         const next = prev.map((a) =>
           a.id === targetId
-            ? { ...a, checkInStatus: "no-show" as const, clinicNote: noteText }
+            ? { ...a, checkInStatus: "no-show" as const, clinicNote: noteText, appointmentHistory: updatedHistory }
             : a
         );
         try {
@@ -1184,21 +1198,22 @@ export default function ClinicAppointmentsPage() {
     const updatedHistory = [...(targetAppt?.appointmentHistory || []), historyEntry];
 
     // Rule 5: Doctor reassignment must retain original appointment date, time, and primary_scan_id
+    const currentQa = (targetAppt as any)?.questionnaire_answers || (targetAppt as any)?.questionnaireAnswers;
+    const nextQa: Record<string, any> = (currentQa && typeof currentQa === "object" && !Array.isArray(currentQa))
+      ? { ...currentQa }
+      : (Array.isArray(currentQa) ? { answers: currentQa } : {});
+    nextQa.primary_scan_id = targetAppt?.primaryScanId;
+    nextQa.appointment_history = updatedHistory;
+    nextQa.needs_patient_reschedule = false;
+
     const updatePayload: Record<string, any> = {
       assigned_doctor_id: targetDoctorId,
       doctor_status: "pending-review",
       doctor_note: null,
       doctor_reviewed_at: null,
       clinic_note: clinicNoteMsg,
-      needs_patient_reschedule: false,
       primary_scan_id: targetAppt?.primaryScanId || null,
-      appointment_history: updatedHistory,
-      questionnaire_answers: {
-        ...((targetAppt as any)?.questionnaire_answers || {}),
-        primary_scan_id: targetAppt?.primaryScanId,
-        appointment_history: updatedHistory,
-        needs_patient_reschedule: false,
-      },
+      questionnaire_answers: nextQa,
     };
 
     try {
@@ -1285,12 +1300,18 @@ export default function ClinicAppointmentsPage() {
       const updatedHistory = [...(targetAppt.appointmentHistory || []), historyEntry];
       const noteText = `Doctor declined schedule. No replacement doctor available for ${targetAppt.date} at ${formatAppointmentTime(targetAppt.time)}. Patient notified to select new schedule.`;
 
+      const currentQa2 = (targetAppt as any)?.questionnaire_answers || (targetAppt as any)?.questionnaireAnswers;
+      const nextQa2: Record<string, any> = (currentQa2 && typeof currentQa2 === "object" && !Array.isArray(currentQa2))
+        ? { ...currentQa2 }
+        : (Array.isArray(currentQa2) ? { answers: currentQa2 } : {});
+      nextQa2.needs_patient_reschedule = true;
+      nextQa2.appointment_history = updatedHistory;
+
       await supabase
         .from("patient_appointment")
         .update({
-          needs_patient_reschedule: true,
           clinic_note: noteText,
-          appointment_history: updatedHistory,
+          questionnaire_answers: nextQa2,
         })
         .eq("appointment_id", targetAppt.id);
 
@@ -1355,17 +1376,23 @@ export default function ClinicAppointmentsPage() {
       };
       const updatedHistory = [...(appointment.appointmentHistory || []), historyEntry];
 
+      const currentQa3 = (appointment as any)?.questionnaireAnswers || (appointment as any)?.questionnaire_answers;
+      const nextQa3: Record<string, any> = (currentQa3 && typeof currentQa3 === "object" && !Array.isArray(currentQa3))
+        ? { ...currentQa3 }
+        : (Array.isArray(currentQa3) ? { answers: currentQa3 } : {});
+      nextQa3.reschedule_requested = false;
+      nextQa3.reschedule_date = null;
+      nextQa3.reschedule_time = null;
+      nextQa3.reschedule_reason = null;
+      nextQa3.needs_patient_reschedule = false;
+      nextQa3.appointment_history = updatedHistory;
+
       const updatePayload: Record<string, any> = {
         date: fullIsoDate,
         time: newTimeStr,
         queue_number: destQueueNumber,
-        reschedule_requested: false,
-        reschedule_date: null,
-        reschedule_time: null,
-        reschedule_reason: null,
-        needs_patient_reschedule: false,
         clinic_note: `Reschedule request accepted by clinic for ${newDateStr} at ${formatAppointmentTime(newTimeStr)}.`,
-        appointment_history: updatedHistory,
+        questionnaire_answers: nextQa3,
       };
 
       const { error: updateErr } = await supabase
@@ -1374,23 +1401,7 @@ export default function ClinicAppointmentsPage() {
         .eq("appointment_id", appointment.id);
 
       if (updateErr) {
-        console.warn("Retrying accept reschedule with fallback mirror:", updateErr.message);
-        await supabase
-          .from("patient_appointment")
-          .update({
-            date: fullIsoDate,
-            queue_number: destQueueNumber,
-            clinic_note: `Reschedule request accepted by clinic for ${newDateStr} at ${formatAppointmentTime(newTimeStr)}.`,
-            questionnaire_answers: {
-              reschedule_requested: false,
-              reschedule_date: null,
-              reschedule_time: null,
-              reschedule_reason: null,
-              needs_patient_reschedule: false,
-              appointment_history: updatedHistory,
-            },
-          })
-          .eq("appointment_id", appointment.id);
+        console.error("Failed to accept reschedule in Supabase:", updateErr.message);
       }
 
       if (appointment.userId) {
@@ -1451,13 +1462,19 @@ export default function ClinicAppointmentsPage() {
       };
       const updatedHistory = [...(appt?.appointmentHistory || []), historyEntry];
 
+      const currentQa4 = (appt as any)?.questionnaireAnswers || (appt as any)?.questionnaire_answers;
+      const nextQa4: Record<string, any> = (currentQa4 && typeof currentQa4 === "object" && !Array.isArray(currentQa4))
+        ? { ...currentQa4 }
+        : (Array.isArray(currentQa4) ? { answers: currentQa4 } : {});
+      nextQa4.reschedule_requested = false;
+      nextQa4.reschedule_date = null;
+      nextQa4.reschedule_time = null;
+      nextQa4.reschedule_reason = null;
+      nextQa4.appointment_history = updatedHistory;
+
       const updatePayload: Record<string, any> = {
-        reschedule_requested: false,
-        reschedule_date: null,
-        reschedule_time: null,
-        reschedule_reason: null,
         clinic_note: `Reschedule request declined: ${reasonText}. Original schedule (${declinePatientRescheduleModal.currentDate} at ${formatAppointmentTime(declinePatientRescheduleModal.currentTime)}) remains active.`,
-        appointment_history: updatedHistory,
+        questionnaire_answers: nextQa4,
       };
 
       const { error: updateErr } = await supabase
@@ -1466,20 +1483,7 @@ export default function ClinicAppointmentsPage() {
         .eq("appointment_id", declinePatientRescheduleModal.appointmentId);
 
       if (updateErr) {
-        console.warn("Retrying decline reschedule with fallback mirror:", updateErr.message);
-        await supabase
-          .from("patient_appointment")
-          .update({
-            clinic_note: `Reschedule request declined: ${reasonText}. Original schedule active.`,
-            questionnaire_answers: {
-              reschedule_requested: false,
-              reschedule_date: null,
-              reschedule_time: null,
-              reschedule_reason: null,
-              appointment_history: updatedHistory,
-            },
-          })
-          .eq("appointment_id", declinePatientRescheduleModal.appointmentId);
+        console.error("Failed to decline reschedule in Supabase:", updateErr.message);
       }
 
       if (declinePatientRescheduleModal.userId) {
@@ -1545,10 +1549,16 @@ export default function ClinicAppointmentsPage() {
       const updatedHistory = [...(appt?.appointmentHistory || []), historyEntry];
       const noteText = `Clinic requested patient reschedule: ${reasonText}`;
 
+      const currentQa5 = (appt as any)?.questionnaireAnswers || (appt as any)?.questionnaire_answers;
+      const nextQa5: Record<string, any> = (currentQa5 && typeof currentQa5 === "object" && !Array.isArray(currentQa5))
+        ? { ...currentQa5 }
+        : (Array.isArray(currentQa5) ? { answers: currentQa5 } : {});
+      nextQa5.needs_patient_reschedule = true;
+      nextQa5.appointment_history = updatedHistory;
+
       const updatePayload: Record<string, any> = {
-        needs_patient_reschedule: true,
         clinic_note: noteText,
-        appointment_history: updatedHistory,
+        questionnaire_answers: nextQa5,
       };
 
       const { error: updateErr } = await supabase
@@ -1557,17 +1567,7 @@ export default function ClinicAppointmentsPage() {
         .eq("appointment_id", requestPatientRescheduleModal.appointmentId);
 
       if (updateErr) {
-        console.warn("Retrying request patient reschedule with fallback mirror:", updateErr.message);
-        await supabase
-          .from("patient_appointment")
-          .update({
-            clinic_note: noteText,
-            questionnaire_answers: {
-              needs_patient_reschedule: true,
-              appointment_history: updatedHistory,
-            },
-          })
-          .eq("appointment_id", requestPatientRescheduleModal.appointmentId);
+        console.error("Failed to request patient reschedule in Supabase:", updateErr.message);
       }
 
       if (requestPatientRescheduleModal.userId) {
@@ -1697,23 +1697,6 @@ export default function ClinicAppointmentsPage() {
     setScheduleError("");
   };
 
-  const sendScheduleToDoctor = async (appointmentId: string) => {
-    try {
-      await supabase
-        .from("patient_appointment")
-        .update({ schedule_sent_to_doctor: true })
-        .eq("appointment_id", appointmentId);
-    } catch (err: any) {
-      console.error("Failed to update scheduleSentToDoctor in Supabase:", err.message);
-    }
-
-    setAppointments((prev) =>
-      prev.map((a) =>
-        a.id === appointmentId ? { ...a, scheduleSentToDoctor: true } : a
-      )
-    );
-  };
-
   if (loading && verificationStatus !== "verified") {
     return (
       <div className="space-y-6 animate-pulse">
@@ -1772,34 +1755,6 @@ export default function ClinicAppointmentsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-        {[
-          { label: "Total Requests", value: appointments.length, icon: Calendar },
-          { label: "Pending Requests", value: incomingQueue.length, icon: Clock },
-          { label: "Scheduled", value: scheduledCount, icon: CheckCircle2 },
-          { label: "Rejected", value: rejectedCount, icon: XCircle },
-        ].map((item, index) => {
-          const Icon = item.icon;
-          return (
-            <motion.div
-              key={item.label}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.04 }}
-              className="bg-white p-4 rounded-2xl border border-magenta-100 shadow-sm"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <Icon className="w-5 h-5 text-magenta-500" />
-                <ChevronRight className="w-5 h-5 text-gray-400" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-gray-900">{item.value}</p>
-                <p className="text-xs text-gray-500">{item.label}</p>
-              </div>
-            </motion.div>
-          );
-        })}
-      </div>
 
       {assignError && (
         <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -1808,152 +1763,258 @@ export default function ClinicAppointmentsPage() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-7 xl:col-span-6 bg-white border border-gray-100 rounded-2xl p-4 sm:p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-display font-bold text-gray-900 inline-flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-magenta-500" /> {monthLabel}
-            </h2>
-            <div className="inline-flex items-center gap-1">
+        {/* ── Left Column: Calendar + Scheduled on [Date] + Legend ── */}
+        <div className="lg:col-span-7 xl:col-span-6 bg-white border border-gray-100 rounded-3xl p-5 shadow-xs">
+          {/* Calendar Header */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2.5">
+              <Calendar className="w-5 h-5 text-[#c0166a]" />
+              <h2 className="font-display font-bold text-gray-900 text-base">
+                {monthLabel}
+              </h2>
+            </div>
+            <div className="flex items-center gap-1.5">
               <button
+                type="button"
                 onClick={() =>
                   setCurrentMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))
                 }
-                className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
+                className="p-1.5 rounded-xl border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
+                title="Previous month"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <button
+                type="button"
                 onClick={() =>
                   setCurrentMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
                 }
-                className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
+                className="p-1.5 rounded-xl border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
+                title="Next month"
               >
                 <ChevronRight className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={handleGoToToday}
+                className="px-3 py-1 rounded-xl border border-gray-200 text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 transition-colors cursor-pointer shadow-2xs"
+              >
+                Today
               </button>
             </div>
           </div>
 
-
-          <div className="grid grid-cols-7 gap-2 text-center text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2 px-1">
+          {/* Day of Week Headers */}
+          <div className="grid grid-cols-7 gap-1.5 text-center text-[11px] font-semibold text-gray-400 mb-1.5 px-1">
             {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
               <p key={day}>{day}</p>
             ))}
           </div>
 
-          <div className="grid grid-cols-7 gap-2">
+          {/* Calendar Cells Grid */}
+          <div className="grid grid-cols-7 gap-1.5">
             {calendarCells.map((cell) => {
               const isSelected = selectedDate === cell.key;
               const dayAppointments = appointmentsByDate[cell.key] || [];
+              const hasAppointment = dayAppointments.some(
+                (a) => a.status !== "cancelled" && a.status !== "rejected"
+              );
 
               return (
                 <div
                   key={cell.key}
-                  onClick={() => {
-                    setSelectedDate(cell.key);
-                    setDayDetailDate(cell.key);
-                  }}
-                  className={`min-h-[106px] rounded-xl border p-2 text-left transition-colors cursor-pointer ${isSelected
-                    ? "border-magenta-300 bg-magenta-50"
-                    : cell.inCurrentMonth
-                      ? "border-gray-100 bg-white hover:bg-gray-50"
-                      : "border-gray-100 bg-gray-50 text-gray-300"
-                    }`}
+                  onClick={() => setSelectedDate(cell.key)}
+                  className={cn(
+                    "min-h-[54px] sm:min-h-[58px] rounded-xl p-1.5 sm:p-2 text-left transition-all cursor-pointer flex flex-col justify-between border",
+                    !cell.inCurrentMonth
+                      ? "bg-gray-50/50 border-gray-200/60 text-gray-300"
+                      : isSelected
+                      ? "bg-gradient-to-b from-rose-50/90 to-pink-50/50 border-rose-300 shadow-2xs"
+                      : "bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/50"
+                  )}
                 >
                   <p
-                    className={`text-sm font-semibold ${cell.inCurrentMonth ? "text-gray-900" : "text-gray-300"
-                      }`}
+                    className={cn(
+                      "text-[11px] sm:text-xs font-semibold",
+                      !cell.inCurrentMonth
+                        ? "text-gray-300"
+                        : isSelected
+                        ? "text-[#c0166a] font-bold"
+                        : "text-gray-800"
+                    )}
                   >
                     {cell.date.getDate()}
                   </p>
 
-                  <div className="mt-2 space-y-1">
-                    {dayAppointments.some((a) => (a.status === "scheduled" || a.status === "accepted" || a.status === "confirmed") && a.doctorStatus !== "rejected" && a.checkInStatus !== "completed" && a.checkInStatus !== "no-show") && (
-                      <div className="h-1.5 rounded-full bg-green-400" />
-                    )}
-                    {dayAppointments.some((a) => a.status === "pending") && (
-                      <div className="h-1.5 rounded-full bg-amber-400" />
-                    )}
+                  {/* Status Indicator Line */}
+                  <div className="flex items-center justify-center min-h-[10px] mt-1">
+                    {hasAppointment ? (
+                      <span className="w-5 sm:w-6 h-1 rounded-full bg-[#c0166a]" />
+                    ) : null}
                   </div>
                 </div>
               );
             })}
           </div>
 
-          <div className="mt-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-2">Scheduled on {selectedDate}</h3>
-            {selectedDayAppointments.length === 0 && (
-              <div className="border border-dashed border-gray-200 rounded-xl p-3 text-xs text-gray-500">
-                No scheduled patients yet.
-              </div>
-            )}
-            <div className="space-y-2">
-              {selectedDayAppointments.map((appointment, i) => (
-                <motion.div
-                  key={appointment.id}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.04 }}
-                  className="rounded-xl border border-gray-100 p-3"
-                >
-                  <div className="flex items-start gap-3">
-                    <img
-                      src={
-                        appointment.patientAvatar ||
-                        (appointment.patientName
-                          ? `https://ui-avatars.com/api/?name=${encodeURIComponent(appointment.patientName)}&background=fdf2f8&color=be185d`
-                          : fallbackConditionImage)
-                      }
-                      alt={appointment.patientName || "Patient"}
-                      className="w-12 h-12 rounded-lg object-cover border border-gray-200"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 min-w-0 pr-2">
-                          <p className="text-xs font-semibold text-gray-900 truncate">
-                            {appointment.patientName || appointment.id}
-                          </p>
-                        </div>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border shrink-0 ${appointment.checkInStatus === "no-show"
-                            ? "bg-rose-50 text-rose-700 border-rose-200"
-                            : appointment.status === "completed" || appointment.checkInStatus === "completed"
-                              ? "bg-amber-50 text-amber-700 border-amber-200"
-                              : "bg-green-50 text-green-700 border-green-200"
-                          }`}>
-                          {appointment.checkInStatus === "no-show" ? "no-show" : appointment.status === "completed" || appointment.checkInStatus === "completed" ? "completed" : appointment.time || "time pending"}
-                        </span>
-                      </div>
-                      {appointment.patientAge && (
-                        <p className="text-[10px] text-gray-400 mt-0.5">{appointment.patientAge} years old</p>
-                      )}
-                      <p className="text-[11px] text-magenta-600 mt-0.5">
-                        {appointment.conditionName || "Skin concern"}
-                      </p>
-                      <p className="text-[11px] text-gray-500 mt-1">{appointment.notes || "No patient notes"}</p>
-                      {appointment.assignedDoctorName && (
-                        <p className="text-[10px] text-blue-600 mt-0.5 flex items-center gap-1">
-                          <Stethoscope className="w-3 h-3" /> {appointment.assignedDoctorName}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  {appointment.scheduleSentToDoctor ? (
-                    <div className="mt-2 pt-2 border-t border-gray-100">
-                      <span className="text-[10px] text-blue-600 flex items-center gap-1 font-semibold">
-                        <CheckCircle2 className="w-3 h-3" /> Schedule sent to doctor
-                      </span>
-                    </div>
-                  ) : appointment.assignedDoctorId && appointment.date ? (
-                    <div className="mt-2 pt-2 border-t border-gray-100">
-                      <button
-                        onClick={() => sendScheduleToDoctor(appointment.id)}
-                        className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-[10px] font-semibold hover:bg-blue-100 transition-colors"
+          {/* ── Scheduled on [selectedDate] Section ── */}
+          <div className="mt-6">
+            <h3 className="text-sm font-bold text-gray-900 mb-3">
+              Scheduled on {selectedDate}
+            </h3>
+
+            <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-2xs">
+              {selectedDayAppointments.length === 0 ? (
+                <p className="py-6 text-center text-xs text-gray-400">
+                  No scheduled appointments for this date.
+                </p>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {selectedDayAppointments.map((appointment) => {
+                    const initials = getPatientInitials(appointment.patientName);
+                    const isEarly = isMorningTime(appointment.time);
+                    const isPast = isAppointmentPastDue(appointment);
+                    const isNoShow = appointment.checkInStatus === "no-show";
+                    const isCompleted = appointment.status === "completed" || appointment.checkInStatus === "completed";
+                    const isArrived = appointment.checkInStatus === "arrived";
+
+                    return (
+                      <motion.div
+                        key={appointment.id}
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        onClick={() => setViewingPatient(appointment)}
+                        className={cn(
+                          "py-3.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer group hover:bg-gray-50/80 rounded-2xl px-2.5 transition-all border border-transparent",
+                          isPast && !isNoShow && !isCompleted && "bg-rose-50/30 hover:bg-rose-50/60 border-rose-100/80 shadow-2xs",
+                          isNoShow && "bg-gray-50/40 opacity-80"
+                        )}
                       >
-                        <Stethoscope className="w-3 h-3" /> Send Schedule to Doctor
-                      </button>
-                    </div>
-                  ) : null}
-                </motion.div>
-              ))}
+                        {/* Left: Avatar with Initials & Details */}
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div
+                            className={cn(
+                              "w-10 h-10 sm:w-11 sm:h-11 rounded-full font-bold text-xs sm:text-sm flex items-center justify-center shrink-0 border transition-all",
+                              isNoShow
+                                ? "bg-rose-100 text-rose-700 border-rose-200"
+                                : isPast && !isCompleted
+                                ? "bg-rose-100/70 text-rose-700 border-rose-200/90"
+                                : "bg-pink-50 text-[#c0166a] border-pink-100/80"
+                            )}
+                          >
+                            {initials}
+                          </div>
+
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-xs sm:text-sm font-bold text-gray-900 truncate group-hover:text-[#c0166a] transition-colors">
+                                {appointment.patientName || "Patient"}
+                              </p>
+
+                              {/* Status Badges */}
+                              {isNoShow ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+                                  <AlertTriangle className="w-3 h-3 text-rose-600" />
+                                  Absent / No-Show
+                                </span>
+                              ) : isCompleted ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  Completed
+                                </span>
+                              ) : isArrived ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-sky-500 inline-block animate-pulse" />
+                                  In Lobby
+                                </span>
+                              ) : isPast ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200">
+                                  <Clock className="w-3 h-3 text-rose-600" />
+                                  Time Passed · Needs Action
+                                </span>
+                              ) : null}
+                            </div>
+
+                            <p className="text-[11px] text-gray-400 mt-0.5">
+                              {appointment.patientAge ? `${appointment.patientAge} years old` : "Age not specified"}
+                            </p>
+                            <p className="text-[11px] text-[#c0166a] font-medium mt-0.5 truncate">
+                              {appointment.conditionName || appointment.aiConditionName || "Skin Concern"}
+                            </p>
+                            <div className="flex items-center gap-1.5 text-[11px] text-gray-500 mt-0.5 truncate">
+                              <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                              <span className="truncate">
+                                {appointment.assignedDoctorName
+                                  ? formatDoctorDisplay(appointment.assignedDoctorName)
+                                  : "Doctor unassigned"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Right: Actions, Time badge + Chevron */}
+                        <div className="flex items-center gap-2 shrink-0 justify-between sm:justify-end pt-1 sm:pt-0">
+                          {isPast && !isNoShow && !isCompleted && (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setNoShowConfirmModal(appointment);
+                                  setNoShowError("");
+                                  setNoShowSuccess("");
+                                }}
+                                className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                                title="Mark patient as absent / no-show"
+                              >
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                <span>Mark as No-Show</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleMarkArrived(appointment.id);
+                                }}
+                                className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 font-semibold text-xs border border-emerald-200 transition-colors cursor-pointer"
+                                title="Patient arrived"
+                              >
+                                Arrived
+                              </button>
+                            </div>
+                          )}
+
+                          <span
+                            className={cn(
+                              "px-2.5 sm:px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap",
+                              isPast && !isCompleted && !isNoShow
+                                ? "bg-rose-50 text-rose-700 border-rose-200"
+                                : isEarly
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200/80"
+                                : "bg-blue-50 text-blue-700 border-blue-200/80"
+                            )}
+                          >
+                            {formatAppointmentTime(appointment.time)}
+                          </span>
+                          <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors" />
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Legend ── */}
+          <div className="flex items-center gap-6 text-xs text-gray-500 pt-5 mt-6 border-t border-gray-100 flex-wrap px-1">
+            <div className="flex items-center gap-2">
+              <span className="w-5 h-1 sm:h-1.5 rounded-full bg-[#c0166a]" />
+              <span className="text-[11px] text-gray-600 font-medium">Appointment</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-5 h-1 sm:h-1.5 rounded-full bg-gray-200" />
+              <span className="text-[11px] text-gray-500 font-medium">No appointment</span>
             </div>
           </div>
         </div>
@@ -1974,7 +2035,6 @@ export default function ClinicAppointmentsPage() {
               { key: "all", label: "All", count: incomingQueue.length },
               { key: "needs_doctor", label: "Needs Doctor", count: needsDoctorQueue.length, alert: needsDoctorQueue.length > 0 },
               { key: "in_review", label: "In Review", count: inReviewQueue.length },
-              { key: "doctor_declined", label: "Declined", count: doctorDeclinedQueue.length, warn: doctorDeclinedQueue.length > 0 },
               { key: "reschedule_requests", label: "Reschedules", count: rescheduleRequestsQueue.length, alert: rescheduleRequestsQueue.length > 0 },
               { key: "approved", label: "Confirmed", count: approvedQueue.length, highlight: approvedQueue.length > 0 },
             ].map((tab) => (
@@ -1986,11 +2046,9 @@ export default function ClinicAppointmentsPage() {
                     ? "bg-magenta-600 text-white shadow-xs"
                     : tab.highlight
                       ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
-                      : tab.warn
-                        ? "bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
-                        : tab.alert
-                          ? "bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
-                          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      : tab.alert
+                        ? "bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
+                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                   }`}
               >
                 <span>{tab.label}</span>
@@ -2012,11 +2070,9 @@ export default function ClinicAppointmentsPage() {
                     ? "All consultation requests have been assigned to doctors for review."
                     : queueFilter === "approved"
                       ? "No approved or confirmed appointments yet."
-                      : queueFilter === "doctor_declined"
-                        ? "No doctor rejections requiring re-assignment."
-                        : queueFilter === "reschedule_requests"
-                          ? "No pending patient reschedule requests to review."
-                          : "Incoming consultation requests will appear here."}
+                      : queueFilter === "reschedule_requests"
+                        ? "No pending patient reschedule requests to review."
+                        : "Incoming consultation requests will appear here."}
                 </p>
               </div>
             )}
@@ -2133,25 +2189,7 @@ export default function ClinicAppointmentsPage() {
                           <span className="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[9px]">
                             Absent / No-Show
                           </span>
-                        ) : (
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => handleMarkArrived(appointment.id)}
-                              className="px-2 py-0.5 rounded-full bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-[10px] border border-emerald-200 transition-colors cursor-pointer"
-                            >
-                              ✓ Mark Arrived
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleMarkNoShow(appointment.id)}
-                              className="px-1.5 py-0.5 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] border border-rose-200 transition-colors cursor-pointer"
-                              title="Mark patient as absent / no-show"
-                            >
-                              No-Show
-                            </button>
-                          </div>
-                        )
+                        ) : null
                       )}
                     </div>
                   </div>
@@ -2325,31 +2363,13 @@ export default function ClinicAppointmentsPage() {
                         >
                           <User className="w-3.5 h-3.5" /> View Details
                         </button>
-                        {appointment.rescheduleRequested ? (
+                        {appointment.rescheduleRequested && (
                           <button
                             type="button"
                             onClick={() => setQueueFilter("reschedule_requests")}
                             className="py-2.5 px-3.5 rounded-xl border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
                           >
                             Review Reschedule
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRequestPatientRescheduleModal({
-                                appointmentId: appointment.id,
-                                patientName: appointment.patientName || "Patient",
-                                currentDate: appointment.date,
-                                currentTime: appointment.time,
-                                userId: appointment.userId,
-                              });
-                              setReschedulePromptReason("");
-                              setReschedulePromptError("");
-                            }}
-                            className="py-2.5 px-3.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
-                          >
-                            Request Reschedule
                           </button>
                         )}
                       </div>
@@ -2904,6 +2924,22 @@ export default function ClinicAppointmentsPage() {
                       </div>
                     </div>
                   )}
+                  {viewingPatient.checkInStatus === "no-show" ? (
+                    <div className="mt-2.5 p-2.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center gap-2 text-rose-800 text-xs font-bold">
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>Recorded as Absent / No-Show</span>
+                    </div>
+                  ) : isAppointmentPastDue(viewingPatient) && viewingPatient.status !== "completed" && viewingPatient.checkInStatus !== "completed" ? (
+                    <div className="mt-2.5 p-2.5 rounded-xl bg-rose-50/90 border border-rose-200 flex items-start gap-2.5 text-xs text-rose-900">
+                      <Clock className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold">Consultation Date &amp; Time Has Passed</p>
+                        <p className="text-[11px] text-rose-700 mt-0.5">
+                          Patient did not attend during the scheduled time window. You can mark this appointment as No-Show to notify the patient and update records.
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -3071,79 +3107,60 @@ export default function ClinicAppointmentsPage() {
 
             {/* Contextual Footer actions */}
             <div className="px-6 pb-5 pt-3 border-t border-gray-100 bg-white">
-              {viewingPatient.status === "scheduled" ? (
-                <div className="grid grid-cols-2 gap-3">
+              {viewingPatient.checkInStatus === "no-show" ? (
+                <button
+                  type="button"
+                  onClick={() => setViewingPatient(null)}
+                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
+              ) : viewingPatient.status === "scheduled" ? (
+                <div className="flex flex-col sm:flex-row gap-2.5">
                   <button
                     type="button"
                     onClick={() => setViewingPatient(null)}
-                    className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                    className="flex-1 py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
                   >
                     Close
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const appt = viewingPatient;
-                      setViewingPatient(null);
-                      if (appt.rescheduleRequested) {
+                  {isAppointmentPastDue(viewingPatient) && viewingPatient.checkInStatus !== "completed" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = viewingPatient;
+                        setViewingPatient(null);
+                        setNoShowConfirmModal(target);
+                        setNoShowError("");
+                        setNoShowSuccess("");
+                      }}
+                      className="flex-1 py-3 rounded-full bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      <span>Mark as No-Show</span>
+                    </button>
+                  )}
+                  {viewingPatient.rescheduleRequested && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setViewingPatient(null);
                         setQueueFilter("reschedule_requests");
-                      } else {
-                        setRequestPatientRescheduleModal({
-                          appointmentId: appt.id,
-                          patientName: appt.patientName || "Patient",
-                          currentDate: appt.date,
-                          currentTime: appt.time,
-                          userId: appt.userId,
-                        });
-                        setReschedulePromptReason("");
-                        setReschedulePromptError("");
-                      }
-                    }}
-                    className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
-                  >
-                    {viewingPatient.rescheduleRequested ? "Review Reschedule" : "Request Reschedule"}
-                  </button>
+                      }}
+                      className="flex-1 py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                    >
+                      Review Reschedule
+                    </button>
+                  )}
                 </div>
               ) : viewingPatient.doctorStatus === "approved" ? (
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRejectModal({
-                        appointmentId: viewingPatient.id,
-                        patientName: viewingPatient.patientName || "Patient",
-                        clinicName: viewingPatient.clinicName || clinicName,
-                        patientEmail: viewingPatient.patientEmail,
-                      });
-                      setRejectReason("");
-                      setSelectedPresetReason("");
-                      setRejectError("");
-                      setViewingPatient(null);
-                    }}
-                    className="py-3 rounded-full border border-red-200 bg-red-50 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors cursor-pointer"
-                  >
-                    Decline Request
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const apptToFinalize = viewingPatient;
-                      setViewingPatient(null);
-                      setFinalizeScheduleModal({
-                        appointmentId: apptToFinalize.id,
-                        patientName: apptToFinalize.patientName || "Patient",
-                        assignedDoctorId: apptToFinalize.assignedDoctorId,
-                        assignedDoctorName: apptToFinalize.assignedDoctorName,
-                        date: apptToFinalize.date || selectedDate,
-                        time: apptToFinalize.time || clinicSettings.openTime,
-                      });
-                      setScheduleError("");
-                    }}
-                    className="py-3 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
-                  >
-                    Finalize Schedule
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewingPatient(null)}
+                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
               ) : viewingPatient.doctorStatus === "rejected" ? (
                 <div className="grid grid-cols-2 gap-3">
                   <button

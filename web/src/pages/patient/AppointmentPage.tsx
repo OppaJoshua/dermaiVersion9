@@ -403,7 +403,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return "";
   });
   const [submitted, setSubmitted] = useState(false);
-  const [confirmedQueueNumber, setConfirmedQueueNumber] = useState<number>(1);
 
   const selectedScan = useMemo(() => {
     return patientScans.find((s) => s.id === selectedScanId) || null;
@@ -1925,8 +1924,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
         window.dispatchEvent(new Event("appointmentCreated"));
       } catch { }
-
-      setConfirmedQueueNumber(assignedQueueNum);
       setSubmitted(true);
       try {
         sessionStorage.removeItem("dermai_appointment_draft");

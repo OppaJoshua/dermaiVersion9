@@ -349,13 +349,20 @@ export function useDoctorAppointments() {
               const resolvedBirthdate = row.patient_birthdate || userProf?.birthdate || undefined;
               const calculatedAge = calculateAgeFromBirthdate(resolvedBirthdate);
 
-              // Parse questionnaire answers if JSON string or array
+              // Parse questionnaire answers if JSON string or array or object
               let qAnswers: any[] | undefined = undefined;
               if (Array.isArray(row.questionnaire_answers)) {
                 qAnswers = row.questionnaire_answers;
+              } else if (row.questionnaire_answers && typeof row.questionnaire_answers === "object" && Array.isArray(row.questionnaire_answers.answers)) {
+                qAnswers = row.questionnaire_answers.answers;
               } else if (typeof row.questionnaire_answers === "string") {
                 try {
-                  qAnswers = JSON.parse(row.questionnaire_answers);
+                  const parsed = JSON.parse(row.questionnaire_answers);
+                  if (Array.isArray(parsed)) {
+                    qAnswers = parsed;
+                  } else if (parsed && typeof parsed === "object" && Array.isArray(parsed.answers)) {
+                    qAnswers = parsed.answers;
+                  }
                 } catch {}
               }
 
@@ -435,7 +442,18 @@ export function useDoctorAppointments() {
                 batchTime: row.batch_time || undefined,
                 checkInStatus: row.check_in_status || undefined,
                 isWalkIn: Boolean(row.is_walk_in),
-                appointmentHistory: Array.isArray(row.appointment_history) ? row.appointment_history : (Array.isArray(row.questionnaire_answers?.appointment_history) ? row.questionnaire_answers.appointment_history : []),
+                appointmentHistory: Array.isArray(row.appointment_history)
+                  ? row.appointment_history
+                  : (Array.isArray(row.questionnaire_answers?.appointment_history)
+                    ? row.questionnaire_answers.appointment_history
+                    : (typeof row.questionnaire_answers === "string" && (() => {
+                        try {
+                          const p = JSON.parse(row.questionnaire_answers);
+                          return Array.isArray(p?.appointment_history) ? p.appointment_history : [];
+                        } catch {
+                          return [];
+                        }
+                      })()) || []),
               });
             }
           }
@@ -653,7 +671,30 @@ export function useDoctorAppointments() {
         ? existingAppt.appointmentHistory
         : [];
       const updatedHistory = [...prevHistory, historyEntry];
-      updatePayload.appointment_history = updatedHistory;
+
+      // Retrieve existing questionnaire_answers to preserve all data
+      let existingQa: any = null;
+      try {
+        const { data: qData } = await supabase
+          .from("patient_appointment")
+          .select("questionnaire_answers")
+          .eq("appointment_id", appointmentId)
+          .maybeSingle();
+        existingQa = qData?.questionnaire_answers;
+      } catch {}
+
+      let nextQa: Record<string, any> = {};
+      if (existingQa && typeof existingQa === "object" && !Array.isArray(existingQa)) {
+        nextQa = { ...existingQa, appointment_history: updatedHistory };
+      } else if (Array.isArray(existingQa)) {
+        nextQa = { answers: existingQa, appointment_history: updatedHistory };
+      } else if (existingAppt?.questionnaireAnswers) {
+        nextQa = { answers: existingAppt.questionnaireAnswers, appointment_history: updatedHistory };
+      } else {
+        nextQa = { appointment_history: updatedHistory };
+      }
+
+      updatePayload.questionnaire_answers = nextQa;
 
       if (isApproved) {
         updatePayload.status = "confirmed";
@@ -674,10 +715,27 @@ export function useDoctorAppointments() {
         updatePayload.clinic_note = `Doctor declined schedule: ${note || "Case declined"}. Clinic reassignment required.`;
       }
 
-      const { error } = await supabase
+      let { error } = await supabase
         .from("patient_appointment")
         .update(updatePayload)
         .eq("appointment_id", appointmentId);
+
+      // Resilient fallback if any optional column triggers a schema cache error
+      if (error && (error.message.includes("schema cache") || error.code === "PGRST204")) {
+        console.warn("[useDoctorAppointments] Supabase column missing error, retrying without optional fields:", error.message);
+        const stripped: Record<string, any> = {
+          doctor_status: decision,
+          doctor_note: formattedNote,
+          doctor_reviewed_at: updatePayload.doctor_reviewed_at,
+          status: updatePayload.status,
+          questionnaire_answers: nextQa,
+        };
+        const retry = await supabase
+          .from("patient_appointment")
+          .update(stripped)
+          .eq("appointment_id", appointmentId);
+        error = retry.error;
+      }
 
       if (error) {
         console.error("[useDoctorAppointments] Supabase update error:", error.message);
@@ -692,7 +750,7 @@ export function useDoctorAppointments() {
           const parsed = JSON.parse(stored);
           if (Array.isArray(parsed)) {
             const next = parsed.map((a: any) =>
-              a.id === appointmentId
+              a.id === appointmentId || a.appointment_id === appointmentId
                 ? {
                     ...a,
                     status: isApproved ? "confirmed" : "pending",
@@ -702,6 +760,7 @@ export function useDoctorAppointments() {
                     doctorReviewedAt: new Date().toISOString(),
                     clinicNote: updatePayload.clinic_note,
                     scheduleSentToDoctor: isApproved,
+                    appointmentHistory: updatedHistory,
                   }
                 : a
             );

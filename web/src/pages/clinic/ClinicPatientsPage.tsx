@@ -161,7 +161,6 @@ export default function ClinicPatientsPage() {
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
 
   const [patients, setPatients] = useState<ClinicPatient[]>([]);
-  const [allAppointments, setAllAppointments] = useState<PatientAppointment[]>([]);
   const [registeredDoctors, setRegisteredDoctors] = useState<RegisteredDoctor[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -469,7 +468,6 @@ export default function ClinicPatientsPage() {
 
         if (!isCancelled) {
           setPatients(finalizedPatients);
-          setAllAppointments(apptList);
           setLoading(false);
         }
       } catch (err) {
@@ -514,14 +512,7 @@ export default function ClinicPatientsPage() {
     };
   }, [clinicId, clinicName]);
 
-  // 2. Summary statistics calculations
-  const totalPatientsCount = patients.length;
-  const totalAppointmentsCount = allAppointments.length;
-  const completedAppointmentsCount = allAppointments.filter(
-    (a) => a.status === "completed" || a.checkInStatus === "completed"
-  ).length;
-
-  // 3. Multi-dimensional search and filters
+  // 2. Multi-dimensional search and filters
   const filteredPatients = useMemo(() => {
     return patients.filter((patient) => {
       // 1. Search Query: Patient name, Email, Phone number, or Assigned doctor name
@@ -618,46 +609,7 @@ export default function ClinicPatientsPage() {
         </p>
       </div>
 
-      {/* ── 2. Fixed Summary Cards (Total Patients, Total Appointments, Completed Appointments) ─ */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {/* Total Patients */}
-        <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-xs">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Patients</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{totalPatientsCount}</p>
-              <p className="text-[11px] text-gray-400 mt-0.5">Unique patients registered at clinic</p>
-            </div>
-            <Users className="w-6 h-6 text-magenta-600 shrink-0" />
-          </div>
-        </div>
-
-        {/* Total Appointments */}
-        <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-xs">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Appointments</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{totalAppointmentsCount}</p>
-              <p className="text-[11px] text-gray-400 mt-0.5">Total bookings across all statuses</p>
-            </div>
-            <Calendar className="w-6 h-6 text-blue-600 shrink-0" />
-          </div>
-        </div>
-
-        {/* Completed Appointments */}
-        <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-xs">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Completed Appointments</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{completedAppointmentsCount}</p>
-              <p className="text-[11px] text-gray-400 mt-0.5">Successfully concluded consultations</p>
-            </div>
-            <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
-          </div>
-        </div>
-      </div>
-
-      {/* ── 3. Search and Multi-Dimensional Filters ──────────────────── */}
+      {/* ── 2. Search and Multi-Dimensional Filters ──────────────────── */}
       <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs space-y-3">
         <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
           {/* Search by Name, Email, Phone, or Assigned Doctor */}

@@ -71,7 +71,7 @@ function formatHistoryAction(entry: AppointmentHistoryEntry): string {
     case "doctor_rejected":
       return "Doctor declined case. Clinic reassignment initiated.";
     case "patient_reschedule_needed":
-      return `Clinic requested patient to choose a new schedule: "${entry.reason || "Doctor unavailable at original slot"}".`;
+      return entry.reason ? `Schedule note: ${entry.reason}` : "Schedule update noted.";
     case "reschedule_requested":
       return `Patient submitted reschedule request for ${entry.requestedDate || "new date"} at ${entry.requestedTime || "new time"}.`;
     case "reschedule_accepted":
@@ -90,6 +90,14 @@ function formatHistoryAction(entry: AppointmentHistoryEntry): string {
 }
 
 function StatusBadge({ app }: { app: Appointment }) {
+  if (app.checkInStatus === "no-show") {
+    return (
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-300">
+        Missed / No-Show
+      </span>
+    );
+  }
+
   if (app.status === "Completed") {
     return (
       <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-green-100 text-green-700 border border-green-200">
@@ -97,13 +105,7 @@ function StatusBadge({ app }: { app: Appointment }) {
       </span>
     );
   }
-  if (app.needsPatientReschedule) {
-    return (
-      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300 animate-pulse">
-        Action Required: Choose New Schedule
-      </span>
-    );
-  }
+
   if (app.rescheduleRequested) {
     return (
       <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-200">
@@ -157,7 +159,7 @@ function StatusBadge({ app }: { app: Appointment }) {
 
 function StatusTracker({ app }: { app: Appointment }) {
   const [showHistory, setShowHistory] = useState(false);
-  const isCancelled = app.status === "Cancelled" || app.status === "Rejected";
+  const isCancelled = app.status === "Cancelled" || app.status === "Rejected" || app.checkInStatus === "no-show";
   const activeStep = isCancelled ? -1 : getStepIndex(app);
 
   const isConfirmedScheduled = app.status === "Scheduled" || app.doctorStatus === "approved";
@@ -178,10 +180,14 @@ function StatusTracker({ app }: { app: Appointment }) {
           </svg>
           <div className="flex-1 min-w-0">
             <p className="text-xs font-bold text-red-800">
-              Appointment {app.status === "Rejected" ? "Declined" : "Cancelled"}
+              {app.checkInStatus === "no-show"
+                ? "Appointment Marked as Missed / No-Show"
+                : `Appointment ${app.status === "Rejected" ? "Declined" : "Cancelled"}`}
             </p>
             <p className="text-xs text-red-600 mt-0.5 leading-relaxed">
-              {app.status === "Rejected"
+              {app.checkInStatus === "no-show"
+                ? <span>You did not attend this scheduled consultation with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> on {app.date} at {app.time || "scheduled time"}. Please contact the clinic or schedule a new appointment.</span>
+                : app.status === "Rejected"
                 ? <span>Your appointment request with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> was declined.</span>
                 : <span>This appointment with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> was cancelled.</span>}
             </p>
@@ -265,27 +271,7 @@ function StatusTracker({ app }: { app: Appointment }) {
 
           {/* Dynamic Workflow Prompt Banners */}
           <div className="space-y-2.5">
-            {/* Rule 4: Action Required Banner if clinic/doctor needs patient to pick a new schedule */}
-            {app.needsPatientReschedule && (
-              <div className="rounded-2xl border-2 border-amber-300 bg-amber-50/90 p-4 shadow-xs space-y-2">
-                <div className="flex items-center gap-2 text-amber-900 font-bold text-xs uppercase tracking-wider">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Schedule Adjustment Requested by Clinic</span>
-                </div>
-                <p className="text-xs text-amber-900 leading-relaxed">
-                  The clinic has requested that you choose an alternate consultation date and time. Your current appointment slot remains active until you select a replacement schedule.
-                </p>
-                {app.clinicNote && (
-                  <div className="p-2.5 rounded-xl bg-white border border-amber-200 text-xs text-amber-950 font-medium">
-                    <span className="text-amber-700 font-bold text-[10px] uppercase block mb-0.5">Clinic Message:</span>
-                    "{app.clinicNote}"
-                  </div>
-                )}
-                <div className="text-[11px] text-amber-800 font-semibold pt-0.5 flex items-center gap-1.5">
-                  <span>👉 Please click <strong>"Choose New Schedule"</strong> below to select an available slot.</span>
-                </div>
-              </div>
-            )}
+
 
             {/* Rule 1: Reschedule Request Pending Clinic Review Banner */}
             {app.rescheduleRequested && (
@@ -443,7 +429,7 @@ function StatusTracker({ app }: { app: Appointment }) {
               </div>
             )}
 
-            {app.clinicNote && !isCancelled && !app.needsPatientReschedule && (
+            {app.clinicNote && !isCancelled && (
               <div className="text-[11px] text-gray-600 bg-white border border-gray-200/80 rounded-xl px-3 py-2">
                 <strong className="text-gray-700">Clinic Note:</strong> {app.clinicNote}
               </div>
@@ -514,7 +500,7 @@ function AppointmentCard({
 }: {
   app: Appointment;
   onCancel?: (app: Appointment) => void;
-  onReschedule?: (app: Appointment, isClinicRequested: boolean) => void;
+  onReschedule?: (app: Appointment) => void;
   onWithdrawReschedule?: (app: Appointment) => void;
 }) {
   const isFinalized = app.status === "Scheduled" || app.doctorStatus === "approved" || app.status === "Completed";
@@ -558,19 +544,7 @@ function AppointmentCard({
 
         {/* Action Controls */}
         <div className="mt-4 pt-3 border-t border-gray-100 flex flex-wrap items-center justify-between gap-2.5">
-          {/* Rule 4: Action Required for patient to select schedule */}
-          {app.needsPatientReschedule ? (
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <button
-                type="button"
-                onClick={() => onReschedule && onReschedule(app, true)}
-                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-bold transition shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Calendar className="w-3.5 h-3.5" />
-                <span>Choose New Schedule</span>
-              </button>
-            </div>
-          ) : app.rescheduleRequested ? (
+          {app.rescheduleRequested ? (
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
@@ -582,7 +556,7 @@ function AppointmentCard({
               </button>
               <button
                 type="button"
-                onClick={() => onReschedule && onReschedule(app, false)}
+                onClick={() => onReschedule && onReschedule(app)}
                 className="text-xs font-semibold text-purple-700 hover:text-purple-800 px-3 py-1.5 rounded-xl border border-purple-200 hover:bg-purple-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
               >
                 <Clock className="w-3.5 h-3.5" />
@@ -592,7 +566,7 @@ function AppointmentCard({
           ) : canRequestReschedule ? (
             <button
               type="button"
-              onClick={() => onReschedule && onReschedule(app, false)}
+              onClick={() => onReschedule && onReschedule(app)}
               className="text-xs font-semibold text-magenta-700 hover:text-magenta-800 px-3.5 py-1.5 rounded-xl border border-magenta-200 hover:bg-magenta-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
             >
               <Calendar className="w-3.5 h-3.5 text-magenta-600" />
@@ -627,7 +601,6 @@ const AppointmentStatusPage: React.FC = () => {
 
   // Reschedule Modal State
   const [rescheduleModalAppt, setRescheduleModalAppt] = useState<Appointment | null>(null);
-  const [isRespondingToClinicRequest, setIsRespondingToClinicRequest] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
   const [rescheduleReason, setRescheduleReason] = useState("");
@@ -669,12 +642,6 @@ const AppointmentStatusPage: React.FC = () => {
           patient_email,
           user_id,
           primary_scan_id,
-          reschedule_requested,
-          reschedule_date,
-          reschedule_time,
-          reschedule_reason,
-          needs_patient_reschedule,
-          appointment_history,
           questionnaire_answers,
           clinic:clinic_id ( name )
         `)
@@ -944,14 +911,13 @@ const AppointmentStatusPage: React.FC = () => {
     };
   }, [fetchAppointments, user?.id]);
 
-  const handleOpenRescheduleModal = (app: Appointment, isClinicReq: boolean) => {
+  const handleOpenRescheduleModal = (app: Appointment) => {
     setRescheduleModalAppt(app);
-    setIsRespondingToClinicRequest(isClinicReq);
     const tomorrow = new Date(Date.now() + 86400000);
     const dStr = tomorrow.toISOString().split("T")[0];
     setRescheduleDate(app.rescheduleDate || dStr);
     setRescheduleTime(app.rescheduleTime || "09:00");
-    setRescheduleReason(app.rescheduleReason || (isClinicReq ? "Selecting new preferred consultation schedule as requested by clinic." : ""));
+    setRescheduleReason(app.rescheduleReason || "");
     setRescheduleError("");
   };
 
@@ -979,40 +945,31 @@ const AppointmentStatusPage: React.FC = () => {
         previousTime: rescheduleModalAppt.time,
         requestedDate: rescheduleDate,
         requestedTime: rescheduleTime,
-        reason: rescheduleReason.trim() || (isRespondingToClinicRequest ? "Patient selected alternate schedule requested by clinic." : "Patient requested schedule adjustment."),
+        reason: rescheduleReason.trim() || "Patient requested schedule adjustment.",
       };
 
       const updatedHistory = [...(rescheduleModalAppt.appointmentHistory || []), historyEntry];
 
-      const updatePayload: Record<string, any> = {
-        reschedule_requested: true,
-        reschedule_date: rescheduleDate,
-        reschedule_time: rescheduleTime,
-        reschedule_reason: rescheduleReason.trim() || "Patient requested alternate schedule.",
-        needs_patient_reschedule: false,
-        appointment_history: updatedHistory,
-      };
+      const currentQa = (rescheduleModalAppt as any)?.questionnaireAnswers || (rescheduleModalAppt as any)?.questionnaire_answers;
+      const nextQa: Record<string, any> = (currentQa && typeof currentQa === "object" && !Array.isArray(currentQa))
+        ? { ...currentQa }
+        : (Array.isArray(currentQa) ? { answers: currentQa } : {});
+      nextQa.reschedule_requested = true;
+      nextQa.reschedule_date = rescheduleDate;
+      nextQa.reschedule_time = rescheduleTime;
+      nextQa.reschedule_reason = rescheduleReason.trim() || "Patient requested alternate schedule.";
+      nextQa.needs_patient_reschedule = false;
+      nextQa.appointment_history = updatedHistory;
 
       const { error: updateErr } = await supabase
         .from("patient_appointment")
-        .update(updatePayload)
+        .update({
+          questionnaire_answers: nextQa,
+        })
         .eq("appointment_id", rescheduleModalAppt.id);
 
       if (updateErr) {
-        console.warn("[AppointmentStatusPage] Fallback mirror on reschedule request:", updateErr.message);
-        await supabase
-          .from("patient_appointment")
-          .update({
-            questionnaire_answers: {
-              reschedule_requested: true,
-              reschedule_date: rescheduleDate,
-              reschedule_time: rescheduleTime,
-              reschedule_reason: rescheduleReason.trim() || "Patient requested alternate schedule.",
-              needs_patient_reschedule: false,
-              appointment_history: updatedHistory,
-            },
-          })
-          .eq("appointment_id", rescheduleModalAppt.id);
+        console.error("[AppointmentStatusPage] Error updating reschedule request:", updateErr.message);
       }
 
       // Synchronize local cache
@@ -1087,33 +1044,25 @@ const AppointmentStatusPage: React.FC = () => {
       };
       const updatedHistory = [...(target.appointmentHistory || []), historyEntry];
 
-      const updatePayload: Record<string, any> = {
-        reschedule_requested: false,
-        reschedule_date: null,
-        reschedule_time: null,
-        reschedule_reason: null,
-        appointment_history: updatedHistory,
-      };
+      const currentQa = (target as any)?.questionnaireAnswers || (target as any)?.questionnaire_answers;
+      const nextQa: Record<string, any> = (currentQa && typeof currentQa === "object" && !Array.isArray(currentQa))
+        ? { ...currentQa }
+        : (Array.isArray(currentQa) ? { answers: currentQa } : {});
+      nextQa.reschedule_requested = false;
+      nextQa.reschedule_date = null;
+      nextQa.reschedule_time = null;
+      nextQa.reschedule_reason = null;
+      nextQa.appointment_history = updatedHistory;
 
       const { error } = await supabase
         .from("patient_appointment")
-        .update(updatePayload)
+        .update({
+          questionnaire_answers: nextQa,
+        })
         .eq("appointment_id", target.id);
 
       if (error) {
-        console.warn("[AppointmentStatusPage] Fallback mirror on withdraw:", error.message);
-        await supabase
-          .from("patient_appointment")
-          .update({
-            questionnaire_answers: {
-              reschedule_requested: false,
-              reschedule_date: null,
-              reschedule_time: null,
-              reschedule_reason: null,
-              appointment_history: updatedHistory,
-            },
-          })
-          .eq("appointment_id", target.id);
+        console.error("[AppointmentStatusPage] Error withdrawing reschedule request:", error.message);
       }
 
       // Synchronize local cache
@@ -1289,7 +1238,7 @@ const AppointmentStatusPage: React.FC = () => {
             key={app.id}
             app={app}
             onCancel={(item) => setCancellingAppt(item)}
-            onReschedule={(item, isClinicReq) => handleOpenRescheduleModal(item, isClinicReq)}
+            onReschedule={(item) => handleOpenRescheduleModal(item)}
             onWithdrawReschedule={(item) => setWithdrawModalAppt(item)}
           />
         ))}
@@ -1361,7 +1310,7 @@ const AppointmentStatusPage: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-gray-900">
-                    {isRespondingToClinicRequest ? "Select Alternate Schedule" : "Request Appointment Reschedule"}
+                    Request Appointment Reschedule
                   </h3>
                   <p className="text-xs text-gray-500">
                     Clinic: <strong className="text-gray-800">{rescheduleModalAppt.clinicName}</strong>
@@ -1472,7 +1421,7 @@ const AppointmentStatusPage: React.FC = () => {
                   "Schedule or work conflict",
                   "Personal or family emergency",
                   "Transportation or distance constraint",
-                  "Responding to clinic schedule adjustment request",
+                  "Doctor availability preference",
                 ].map((preset) => (
                   <button
                     key={preset}

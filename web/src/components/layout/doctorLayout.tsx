@@ -10,7 +10,6 @@ import {
   History,
   User,
   Settings,
-  Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";

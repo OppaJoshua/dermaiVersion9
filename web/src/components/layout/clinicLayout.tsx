@@ -5,14 +5,14 @@ import { useState, useEffect, useRef, useCallback, type ReactNode } from "react"
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import Logo from "@/assets/logo2.png";
 interface ClinicLayoutProps {
-    children: ReactNode;
+  children: ReactNode;
 }
 const sidebarLinks = [
-    { label: "Dashboard", path: "/clinic", icon: LayoutDashboard, requiresVerified: false },
-    { label: "Appointments", path: "/clinic/appointments", icon: Calendar, requiresVerified: true },
-    { label: "Patients", path: "/clinic/patients", icon: Users, requiresVerified: true },
-    { label: "Doctors", path: "/clinic/doctors", icon: Stethoscope, requiresVerified: true },
-    { label: "Clinic Settings", path: "/clinic/settings", icon: Settings, requiresVerified: false },
+  { label: "Dashboard", path: "/clinic", icon: LayoutDashboard, requiresVerified: false },
+  { label: "Appointments", path: "/clinic/appointments", icon: Calendar, requiresVerified: true },
+  { label: "Patients", path: "/clinic/patients", icon: Users, requiresVerified: true },
+  { label: "Doctors", path: "/clinic/doctors", icon: Stethoscope, requiresVerified: true },
+  { label: "Clinic Settings", path: "/clinic/settings", icon: Settings, requiresVerified: false },
 ];
 import { useAuth } from "@/context/AuthContext";
 import { useNavigate } from "react-router-dom";
@@ -29,431 +29,420 @@ type ClinicNotif = {
 };
 
 export default function ClinicLayout({ children }: ClinicLayoutProps) {
-    const { signOut, user } = useAuth();
-    const navigate = useNavigate();
-    const location = useLocation();
-    const notifRef = useRef<HTMLDivElement>(null);
-    const [sidebarOpen, setSidebarOpen] = useState(false);
-    const [notifOpen, setNotifOpen] = useState(false);
-    const { clinicName, clinicLogo, clinicId, status: verificationStatus, loading } = useClinicVerification();
-    
-    const [localLogo, setLocalLogo] = useState<string>(() => {
-        try {
-            const s = localStorage.getItem("dermai_clinic_settings");
-            if (s) {
-                const p = JSON.parse(s);
-                if (p?.logo) return p.logo;
-            }
-            const c = localStorage.getItem("dermai_clinic_profile_cache");
-            if (c) {
-                const p = JSON.parse(c);
-                if (p?.clinicLogo) return p.clinicLogo;
-            }
-            const a = localStorage.getItem("dermai_clinic_applications");
-            if (a) {
-                const list = JSON.parse(a);
-                if (Array.isArray(list) && list[0]?.logo) return list[0].logo;
-            }
-        } catch {}
-        return "";
-    });
+  const { signOut, user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const notifRef = useRef<HTMLDivElement>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const { clinicName, clinicLogo, clinicId, status: verificationStatus, loading } = useClinicVerification();
 
-    const [localName, setLocalName] = useState<string>(() => {
-        try {
-            const s = localStorage.getItem("dermai_clinic_settings");
-            if (s) {
-                const p = JSON.parse(s);
-                if (p?.name) return p.name;
-            }
-            const c = localStorage.getItem("dermai_clinic_profile_cache");
-            if (c) {
-                const p = JSON.parse(c);
-                if (p?.clinicName) return p.clinicName;
-            }
-        } catch {}
-        return "";
-    });
+  const [localLogo, setLocalLogo] = useState<string>(() => {
+    try {
+      const s = localStorage.getItem("dermai_clinic_settings");
+      if (s) {
+        const p = JSON.parse(s);
+        if (p?.logo) return p.logo;
+      }
+      const c = localStorage.getItem("dermai_clinic_profile_cache");
+      if (c) {
+        const p = JSON.parse(c);
+        if (p?.clinicLogo) return p.clinicLogo;
+      }
+      const a = localStorage.getItem("dermai_clinic_applications");
+      if (a) {
+        const list = JSON.parse(a);
+        if (Array.isArray(list) && list[0]?.logo) return list[0].logo;
+      }
+    } catch { }
+    return "";
+  });
 
-    // Sync with hook values when available
-    useEffect(() => {
-        if (clinicLogo) setLocalLogo(clinicLogo);
-        if (clinicName) setLocalName(clinicName);
-    }, [clinicLogo, clinicName]);
+  const [localName, setLocalName] = useState<string>(() => {
+    try {
+      const s = localStorage.getItem("dermai_clinic_settings");
+      if (s) {
+        const p = JSON.parse(s);
+        if (p?.name) return p.name;
+      }
+      const c = localStorage.getItem("dermai_clinic_profile_cache");
+      if (c) {
+        const p = JSON.parse(c);
+        if (p?.clinicName) return p.clinicName;
+      }
+    } catch { }
+    return "";
+  });
 
-    // Live sync when clinic updates their profile photo or settings
-    useEffect(() => {
-        const handleProfileSync = () => {
-            try {
-                const s = localStorage.getItem("dermai_clinic_settings");
-                if (s) {
-                    const p = JSON.parse(s);
-                    if (p?.logo) setLocalLogo(p.logo);
-                    if (p?.name) setLocalName(p.name);
-                }
-                const c = localStorage.getItem("dermai_clinic_profile_cache");
-                if (c) {
-                    const p = JSON.parse(c);
-                    if (p?.clinicLogo) setLocalLogo(p.clinicLogo);
-                    if (p?.clinicName) setLocalName(p.clinicName);
-                }
-            } catch {}
-        };
+  // Sync with hook values when available
+  useEffect(() => {
+    if (clinicLogo) setLocalLogo(clinicLogo);
+    if (clinicName) setLocalName(clinicName);
+  }, [clinicLogo, clinicName]);
 
-        window.addEventListener("clinicSettingsUpdated", handleProfileSync);
-        window.addEventListener("dermai_clinic_profile_updated", handleProfileSync);
-        window.addEventListener("dermai_clinic_updated", handleProfileSync);
-        window.addEventListener("storage", handleProfileSync);
-
-        return () => {
-            window.removeEventListener("clinicSettingsUpdated", handleProfileSync);
-            window.removeEventListener("dermai_clinic_profile_updated", handleProfileSync);
-            window.removeEventListener("dermai_clinic_updated", handleProfileSync);
-            window.removeEventListener("storage", handleProfileSync);
-        };
-    }, []);
-
-    const displayLogo = localLogo || clinicLogo;
-    const displayName = localName || clinicName || "Clinic Portal";
-    const isDashboard = location.pathname === "/clinic" || location.pathname === "/clinic/";
-    
-    const [notifications, setNotifications] = useState<ClinicNotif[]>([]);
-    const [lastReadAt, setLastReadAt] = useState<string>(() => {
-        try {
-            return localStorage.getItem("dermai_clinic_last_read_notifs") || new Date(0).toISOString();
-        } catch {
-            return new Date(0).toISOString();
+  // Live sync when clinic updates their profile photo or settings
+  useEffect(() => {
+    const handleProfileSync = () => {
+      try {
+        const s = localStorage.getItem("dermai_clinic_settings");
+        if (s) {
+          const p = JSON.parse(s);
+          if (p?.logo) setLocalLogo(p.logo);
+          if (p?.name) setLocalName(p.name);
         }
-    });
-
-    const loadClinicNotifications = useCallback(async () => {
-        if (!clinicId) return;
-        try {
-            const list: ClinicNotif[] = [];
-
-            // 1. Pending incoming appointments
-            const { data: pendingApps } = await supabase
-                .from("patient_appointment")
-                .select("appointment_id, patient_name, ai_condition_name, created_at, status")
-                .eq("clinic_id", clinicId)
-                .eq("status", "pending")
-                .order("created_at", { ascending: false })
-                .limit(10);
-
-            if (pendingApps) {
-                pendingApps.forEach((a: any) => {
-                    list.push({
-                        id: `app-${a.appointment_id}`,
-                        type: "appointment-pending",
-                        title: "New Appointment Request",
-                        message: `${a.patient_name || "A patient"} requested an appointment${a.ai_condition_name ? ` for ${a.ai_condition_name}` : ""}.`,
-                        time: a.created_at,
-                    });
-                });
-            }
-
-            // 2. User notifications
-            if (user?.id) {
-                const { data: userNotifs } = await supabase
-                    .from("user_notification")
-                    .select("notif_id, type, title, body, created_at")
-                    .eq("user_id", user.id)
-                    .order("created_at", { ascending: false })
-                    .limit(10);
-
-                if (userNotifs) {
-                    userNotifs.forEach((n: any) => {
-                        list.push({
-                            id: n.notif_id,
-                            type: "broadcast",
-                            title: n.title,
-                            message: n.body || "",
-                            time: n.created_at,
-                        });
-                    });
-                }
-            }
-
-            list.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
-            setNotifications(list);
-        } catch {
-            /* ignore */
+        const c = localStorage.getItem("dermai_clinic_profile_cache");
+        if (c) {
+          const p = JSON.parse(c);
+          if (p?.clinicLogo) setLocalLogo(p.clinicLogo);
+          if (p?.clinicName) setLocalName(p.clinicName);
         }
-    }, [clinicId, user?.id]);
-
-    useEffect(() => {
-        loadClinicNotifications();
-
-        let channel: any = null;
-        if (clinicId) {
-            channel = supabase
-                .channel(`clinic-layout-notifs-${clinicId}`)
-                .on(
-                    "postgres_changes",
-                    { event: "*", schema: "public", table: "patient_appointment", filter: `clinic_id=eq.${clinicId}` },
-                    () => loadClinicNotifications()
-                )
-                .subscribe();
-        }
-
-        return () => {
-            if (channel) supabase.removeChannel(channel);
-        };
-    }, [clinicId, loadClinicNotifications]);
-
-    const unreadCount = notifications.filter(
-        (n) => new Date(n.time) > new Date(lastReadAt)
-    ).length;
-
-    const handleLogout = async () => {
-        try {
-            localStorage.removeItem("dermai_clinic_profile_cache");
-        } catch {}
-        await signOut();
-        navigate("/", { replace: true });
+      } catch { }
     };
 
-    useEffect(() => {
-        const handler = (e: MouseEvent) => {
-            if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
-                setNotifOpen(false);
-            }
-        };
-        document.addEventListener("mousedown", handler);
-        return () => document.removeEventListener("mousedown", handler);
-    }, []);
+    window.addEventListener("clinicSettingsUpdated", handleProfileSync);
+    window.addEventListener("dermai_clinic_profile_updated", handleProfileSync);
+    window.addEventListener("dermai_clinic_updated", handleProfileSync);
+    window.addEventListener("storage", handleProfileSync);
 
-    const markAllRead = () => {
-        const now = new Date().toISOString();
-        setLastReadAt(now);
-        try {
-            localStorage.setItem("dermai_clinic_last_read_notifs", now);
-        } catch {}
+    return () => {
+      window.removeEventListener("clinicSettingsUpdated", handleProfileSync);
+      window.removeEventListener("dermai_clinic_profile_updated", handleProfileSync);
+      window.removeEventListener("dermai_clinic_updated", handleProfileSync);
+      window.removeEventListener("storage", handleProfileSync);
     };
-    const currentPage = sidebarLinks.find((l) => l.path === location.pathname)?.label || "Dashboard";
-    return (<div className="min-h-screen bg-gray-50/80 flex">
-      {sidebarOpen && (<div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden" onClick={() => setSidebarOpen(false)}/>)}
+  }, []);
 
-      <aside className={cn("flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300 text-[14px]", sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0")}>
-        <div className="flex items-center gap-2.5 px-6 h-16 border-b border-gray-100 shrink-0">
-          <img src={Logo} alt="DERMAI logo" className="h-9 w-auto object-contain"/>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold ml-0.5">
-            Clinic
-          </span>
-        </div>
+  const displayLogo = localLogo || clinicLogo;
+  const displayName = localName || clinicName || "Clinic Portal";
 
-        <nav className="flex-1 px-3 space-y-0.5 overflow-y-auto mt-4 text-[14px]">
-          <p className="text-[14px] font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2">
-            Clinic Menu
-          </p>
-          {sidebarLinks.map((link) => {
-            const Icon = link.icon;
-            const isActive = location.pathname === link.path;
-            const isLocked = !loading && link.requiresVerified && verificationStatus !== "verified";
+  const [notifications, setNotifications] = useState<ClinicNotif[]>([]);
+  const [lastReadAt, setLastReadAt] = useState<string>(() => {
+    try {
+      return localStorage.getItem("dermai_clinic_last_read_notifs") || new Date(0).toISOString();
+    } catch {
+      return new Date(0).toISOString();
+    }
+  });
 
-            return (
-              <Link
-                key={link.path}
-                to={isLocked ? "/clinic" : link.path}
-                onClick={() => setSidebarOpen(false)}
-                className={cn(
-                  "flex items-center gap-3 px-4 py-2.5 rounded-xl text-[14px] font-medium transition-all",
-                  isActive
-                    ? "bg-magenta-50 text-magenta-600 font-semibold"
-                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900",
-                  isLocked && "opacity-60 cursor-not-allowed"
-                )}
-              >
-                <Icon className={cn("w-4.5 h-4.5", isActive ? "text-magenta-500" : "text-gray-400")} />
-                <span className="flex-1">{link.label}</span>
-                {isLocked && (
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-bold">
-                    Locked
-                  </span>
-                )}
-                {isActive && !isLocked && <div className="w-1.5 h-1.5 rounded-full bg-magenta-500" />}
-              </Link>
-            );
-          })}
-        </nav>
+  const loadClinicNotifications = useCallback(async () => {
+    if (!clinicId) return;
+    try {
+      const list: ClinicNotif[] = [];
 
-        <div className="px-3 py-4 border-t border-gray-100 space-y-2">
-          <div className="px-4 py-2 rounded-xl bg-gray-50 border border-gray-100">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <p className="text-[14px] font-semibold text-gray-900 truncate">{clinicName || "Clinic Portal"}</p>
-              {verificationStatus === "verified" && (
-                <VerifiedBadge size={15} className="w-3.5 h-3.5" title="Verified Clinic" />
-              )}
-            </div>
-            <div className="mt-1">
-              {loading ? (
-                <div className="h-4 w-20 bg-gray-200 animate-pulse rounded-full" />
-              ) : verificationStatus === "verified" ? (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
-                  <CheckCircle2 className="w-3 h-3" /> Active Clinic
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold border border-amber-200">
-                  <Clock className="w-3 h-3" /> Pending Review
-                </span>
-              )}
-            </div>
-          </div>
+      // 1. Pending incoming appointments
+      const { data: pendingApps } = await supabase
+        .from("patient_appointment")
+        .select("appointment_id, patient_name, ai_condition_name, created_at, status")
+        .eq("clinic_id", clinicId)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(10);
+      if (pendingApps) {
+        pendingApps.forEach((a: any) => {
+          list.push({
+            id: `app-${a.appointment_id}`,
+            type: "appointment-pending",
+            title: "New Appointment Request",
+            message: `${a.patient_name || "A patient"} requested an appointment${a.ai_condition_name ? ` for ${a.ai_condition_name}` : ""}.`,
+            time: a.created_at,
+          });
+        });
+      }
 
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-[14px] font-medium text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors"
+      // 2. User notifications
+      if (user?.id) {
+        const { data: userNotifs } = await supabase
+          .from("user_notification")
+          .select("notif_id, type, title, body, created_at")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(10);
+
+        if (userNotifs) {
+          userNotifs.forEach((n: any) => {
+            list.push({
+              id: n.notif_id,
+              type: "broadcast",
+              title: n.title,
+              message: n.body || "",
+              time: n.created_at,
+            });
+          });
+        }
+      }
+
+      list.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+      setNotifications(list);
+    } catch {
+      /* ignore */
+    }
+  }, [clinicId, user?.id]);
+
+  useEffect(() => {
+    loadClinicNotifications();
+
+    let channel: any = null;
+    if (clinicId) {
+      channel = supabase
+        .channel(`clinic-layout-notifs-${clinicId}`)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "patient_appointment", filter: `clinic_id=eq.${clinicId}` },
+          () => loadClinicNotifications()
+        )
+        .subscribe();
+    }
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [clinicId, loadClinicNotifications]);
+
+  const unreadCount = notifications.filter(
+    (n) => new Date(n.time) > new Date(lastReadAt)
+  ).length;
+
+  const handleLogout = async () => {
+    try {
+      localStorage.removeItem("dermai_clinic_profile_cache");
+    } catch { }
+    await signOut();
+    navigate("/", { replace: true });
+  };
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setNotifOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const markAllRead = () => {
+    const now = new Date().toISOString();
+    setLastReadAt(now);
+    try {
+      localStorage.setItem("dermai_clinic_last_read_notifs", now);
+    } catch { }
+  };
+  const currentPage = sidebarLinks.find((l) => l.path === location.pathname)?.label || "Dashboard";
+  return (<div className="min-h-screen bg-gray-50/80 flex">
+    {sidebarOpen && (<div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />)}
+
+    <aside className={cn("flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300 text-[14px]", sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0")}>
+      <div className="flex items-center gap-2.5 px-6 h-14 border-b border-gray-100 shrink-0">
+        <img src={Logo} alt="DERMAI logo" className="h-8 w-auto object-contain" />
+        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200 ml-0.5">
+          Clinic
+        </span>
+      </div>
+
+      {/* Upper Sidebar: Clinic Logo, Name & Verified Badge */}
+      <div className="px-3.5 py-3 border-b border-gray-100 shrink-0">
+        <Link
+          to="/clinic/settings"
+          title="Clinic Profile & Settings"
+          className="flex items-center gap-3 p-2 rounded-2xl hover:bg-gray-50/80 transition-all group cursor-pointer"
+        >
+          {displayLogo ? (
+            <img
+              src={displayLogo}
+              alt={displayName || "Clinic"}
+              className="w-10 h-10 rounded-full object-cover border-2 border-[#c0166a] shadow-2xs shrink-0"
+              onError={(e) => {
+                (e.currentTarget as HTMLElement).style.display = "none";
+                const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                if (fallback) fallback.style.display = "flex";
+              }}
+            />
+          ) : null}
+          <div
+            className="w-10 h-10 rounded-full bg-[#c0166a] items-center justify-center border-2 border-[#c0166a] shadow-2xs shrink-0"
+            style={{ display: displayLogo ? "none" : "flex" }}
           >
-            <LogOut className="w-4.5 h-4.5"/>
-            Logout
+            <span className="text-white text-xs font-bold">
+              {(displayName || "C").charAt(0).toUpperCase()}
+            </span>
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <p className="text-sm font-bold text-gray-900 truncate group-hover:text-[#c0166a] transition-colors leading-tight">
+                {displayName || "Clinic Portal"}
+              </p>
+              {verificationStatus === "verified" && (
+                <VerifiedBadge size={14} className="w-3.5 h-3.5 shrink-0" title="Verified Clinic" />
+              )}
+            </div>
+            <p className="text-xs text-gray-400 mt-0.5 truncate leading-tight">Dermatology Clinic</p>
+          </div>
+        </Link>
+      </div>
+
+      <nav className="flex-1 px-3 space-y-0.5 overflow-y-auto mt-4 text-[14px]">
+        {sidebarLinks.map((link) => {
+          const Icon = link.icon;
+          const isActive = location.pathname === link.path;
+          const isLocked = !loading && link.requiresVerified && verificationStatus !== "verified";
+
+          return (
+            <Link
+              key={link.path}
+              to={isLocked ? "/clinic" : link.path}
+              onClick={() => setSidebarOpen(false)}
+              className={cn(
+                "flex items-center gap-3 px-4 py-2.5 rounded-xl text-[14px] font-medium transition-all",
+                isActive
+                  ? "bg-magenta-50 text-magenta-600 font-semibold"
+                  : "text-gray-500 hover:bg-gray-50 hover:text-gray-900",
+                isLocked && "opacity-60 cursor-not-allowed"
+              )}
+            >
+              <Icon className={cn("w-4.5 h-4.5", isActive ? "text-magenta-500" : "text-gray-400")} />
+              <span className="flex-1">{link.label}</span>
+              {isLocked && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-bold">
+                  Locked
+                </span>
+              )}
+              {isActive && !isLocked && <div className="w-1.5 h-1.5 rounded-full bg-magenta-500" />}
+            </Link>
+          );
+        })}
+      </nav>
+
+      <div className="px-3 py-4 border-t border-gray-100 space-y-2">
+        {verificationStatus === "verified" && (
+          <div className="px-3 py-1.5 rounded-xl bg-emerald-50/70 border border-emerald-200/60 flex items-center gap-1.5 text-emerald-700 text-xs font-bold">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>Active Clinic</span>
+          </div>
+        )}
+        {verificationStatus === "pending" && (
+          <div className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 flex items-center gap-1.5 text-amber-700 text-xs font-bold">
+            <Clock className="w-3.5 h-3.5" />
+            <span>Pending Review</span>
+          </div>
+        )}
+
+        <button
+          onClick={handleLogout}
+          className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-[14px] font-medium text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors cursor-pointer"
+        >
+          <LogOut className="w-4.5 h-4.5" />
+          Logout
+        </button>
+      </div>
+    </aside>
+
+    <main className="flex-1 lg:ml-65 min-h-screen">
+      <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
+        <div className="flex items-center gap-3">
+          <button className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500" onClick={() => setSidebarOpen(true)}>
+            <Menu className="w-5 h-5" />
           </button>
+          <div className="flex items-center gap-1.5 text-sm">
+            <span className="text-gray-400">Clinic</span>
+            <ChevronRight className="w-3.5 h-3.5 text-gray-300" />
+            <span className="font-semibold text-gray-900">{currentPage}</span>
+          </div>
         </div>
-      </aside>
+        <div className="flex items-center gap-3">
 
-      <main className="flex-1 lg:ml-65 min-h-screen">
-        <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
-          <div className="flex items-center gap-3">
-            <button className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500" onClick={() => setSidebarOpen(true)}>
-              <Menu className="w-5 h-5"/>
+          <div ref={notifRef} className="relative">
+            <button onClick={() => setNotifOpen((o) => !o)} className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors">
+              <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")} />
+              {unreadCount > 0 && (<span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none">
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>)}
             </button>
-            <div className="flex items-center gap-1.5 text-sm">
-              <span className="text-gray-400">Clinic</span>
-              <ChevronRight className="w-3.5 h-3.5 text-gray-300"/>
-              <span className="font-semibold text-gray-900">{currentPage}</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {/* Clinic Profile Photo & Info (shown on all pages except dashboard) */}
-            {!isDashboard && (
-              <Link
-                to="/clinic/settings"
-                title="Clinic Profile & Settings"
-                className="flex items-center gap-2.5 p-1 rounded-xl hover:bg-gray-50 transition-colors group cursor-pointer"
-              >
-                {displayLogo ? (
-                  <img
-                    src={displayLogo}
-                    alt={displayName || "Clinic"}
-                    className="w-8 h-8 rounded-full object-cover border-2 border-[#c0166a] shadow-2xs shrink-0"
-                    onError={(e) => {
-                      (e.currentTarget as HTMLElement).style.display = "none";
-                      const fallback = e.currentTarget.nextElementSibling as HTMLElement;
-                      if (fallback) fallback.style.display = "flex";
-                    }}
-                  />
-                ) : null}
-                <div
-                  className="w-8 h-8 rounded-full bg-[#c0166a] items-center justify-center border-2 border-[#c0166a] shadow-2xs shrink-0"
-                  style={{ display: displayLogo ? "none" : "flex" }}
-                >
-                  <span className="text-white text-[11px] font-bold">
-                    {(displayName || "C").charAt(0).toUpperCase()}
-                  </span>
+
+            {notifOpen && (<div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-magenta-500" />
+                  <span className="font-semibold text-gray-900 text-sm">Notifications</span>
                 </div>
-                <div className="hidden sm:block text-left">
-                  <div className="flex items-center gap-1">
-                    <p className="text-xs font-bold text-gray-800 leading-none truncate max-w-[130px] group-hover:text-magenta-700 transition-colors">
-                      {displayName || "Clinic Portal"}
-                    </p>
-                    {verificationStatus === "verified" && (
-                      <VerifiedBadge size={13} className="w-3.5 h-3.5 shrink-0" title="Verified Clinic" />
-                    )}
+                {unreadCount > 0 && (<button onClick={markAllRead} className="text-[11px] text-magenta-500 hover:text-magenta-700 font-medium">
+                  Mark all read
+                </button>)}
+              </div>
+
+              {/* Items */}
+              <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+                {notifications.length === 0 ? (
+                  <div className="py-10 text-center">
+                    <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                    <p className="text-sm text-gray-400">No new notifications</p>
                   </div>
-                </div>
-              </Link>
-            )}
-
-            <div ref={notifRef} className="relative">
-              <button onClick={() => setNotifOpen((o) => !o)} className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors">
-                <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")}/>
-                {unreadCount > 0 && (<span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none">
-                    {unreadCount > 9 ? "9+" : unreadCount}
-                  </span>)}
-              </button>
-
-              {notifOpen && (<div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
-                  {/* Header */}
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                    <div className="flex items-center gap-2">
-                      <Bell className="w-4 h-4 text-magenta-500"/>
-                      <span className="font-semibold text-gray-900 text-sm">Notifications</span>
-                    </div>
-                    {unreadCount > 0 && (<button onClick={markAllRead} className="text-[11px] text-magenta-500 hover:text-magenta-700 font-medium">
-                        Mark all read
-                      </button>)}
-                  </div>
-
-                  {/* Items */}
-                  <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
-                    {notifications.length === 0 ? (
-                      <div className="py-10 text-center">
-                        <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                        <p className="text-sm text-gray-400">No new notifications</p>
+                ) : (
+                  notifications.map((n) => {
+                    const isNew = new Date(n.time) > new Date(lastReadAt);
+                    return (
+                      <div
+                        key={n.id}
+                        onClick={() => {
+                          setNotifOpen(false);
+                          markAllRead();
+                          navigate("/clinic/appointments");
+                        }}
+                        className={cn(
+                          "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
+                          isNew && "bg-magenta-50/20"
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
+                            n.type === "appointment-pending"
+                              ? "bg-amber-100 text-amber-600"
+                              : "bg-magenta-100 text-magenta-600"
+                          )}
+                        >
+                          <Calendar className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-gray-900 truncate">
+                            {n.title}
+                          </p>
+                          <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
+                            {n.message}
+                          </p>
+                          <p className="text-[10px] text-gray-400 mt-1">
+                            {new Date(n.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(n.time).toLocaleDateString()}
+                          </p>
+                        </div>
+                        {isNew && (
+                          <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
+                        )}
                       </div>
-                    ) : (
-                      notifications.map((n) => {
-                        const isNew = new Date(n.time) > new Date(lastReadAt);
-                        return (
-                          <div
-                            key={n.id}
-                            onClick={() => {
-                              setNotifOpen(false);
-                              markAllRead();
-                              navigate("/clinic/appointments");
-                            }}
-                            className={cn(
-                              "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
-                              isNew && "bg-magenta-50/20"
-                            )}
-                          >
-                            <div
-                              className={cn(
-                                "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
-                                n.type === "appointment-pending"
-                                  ? "bg-amber-100 text-amber-600"
-                                  : "bg-magenta-100 text-magenta-600"
-                              )}
-                            >
-                              <Calendar className="w-4 h-4" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-semibold text-gray-900 truncate">
-                                {n.title}
-                              </p>
-                              <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
-                                {n.message}
-                              </p>
-                              <p className="text-[10px] text-gray-400 mt-1">
-                                {new Date(n.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(n.time).toLocaleDateString()}
-                              </p>
-                            </div>
-                            {isNew && (
-                              <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
+                    );
+                  })
+                )}
+              </div>
 
-                  {/* Footer */}
-                  <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50">
-                    <Link
-                      to="/clinic/appointments"
-                      onClick={() => {
-                        setNotifOpen(false);
-                        markAllRead();
-                      }}
-                      className="block text-center text-sm font-semibold text-magenta-500 hover:text-magenta-700 transition-colors"
-                    >
-                      View all appointments →
-                    </Link>
-                  </div>
-                </div>)}
-            </div>
+              {/* Footer */}
+              <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50">
+                <Link
+                  to="/clinic/appointments"
+                  onClick={() => {
+                    setNotifOpen(false);
+                    markAllRead();
+                  }}
+                  className="block text-center text-sm font-semibold text-magenta-500 hover:text-magenta-700 transition-colors"
+                >
+                  View all appointments →
+                </Link>
+              </div>
+            </div>)}
           </div>
         </div>
+      </div>
 
-        <div className="p-4 sm:p-6 lg:p-8">{children}</div>
-      </main>
-    </div>);
+      <div className="p-4 sm:p-6 lg:p-8">{children}</div>
+    </main>
+  </div>);
 }

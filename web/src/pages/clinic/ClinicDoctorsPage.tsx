@@ -17,6 +17,7 @@ import {
   ChevronDown,
   User,
   Info,
+  HelpCircle,
   Plus,
   Copy,
 } from "lucide-react";
@@ -177,6 +178,7 @@ function ModernTimeSelect({
   placeholder = "Select time",
   disabled = false,
   options,
+  compact = false,
 }: {
   value: string;
   onChange: (val: string) => void;
@@ -184,6 +186,7 @@ function ModernTimeSelect({
   placeholder?: string;
   disabled?: boolean;
   options?: { value: string; label: string }[];
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -212,19 +215,20 @@ function ModernTimeSelect({
         type="button"
         disabled={disabled}
         onClick={() => setOpen((prev) => !prev)}
-        className={`w-full flex items-center justify-between px-3.5 py-2 rounded-xl border bg-white text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${open
-          ? "border-[#c0166a] ring-2 ring-magenta-500/10 shadow-xs"
-          : "border-gray-200 hover:border-gray-300 hover:bg-gray-50/60"
+        className={`w-full flex items-center justify-between ${compact ? "h-8 px-2 rounded-lg" : "px-3.5 py-2 rounded-xl"
+          } border bg-white text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${open
+            ? "border-[#c0166a] ring-2 ring-magenta-500/10 shadow-xs"
+            : "border-gray-200 hover:border-gray-300 hover:bg-gray-50/60"
           }`}
       >
-        <div className="flex items-center gap-2 text-gray-900 truncate">
-          <Clock className="w-3.5 h-3.5 text-[#c0166a] shrink-0" />
-          <span className="font-bold">
+        <div className="flex items-center gap-1.5 text-gray-900 truncate">
+          <Clock className={`${compact ? "w-3 h-3" : "w-3.5 h-3.5"} text-[#c0166a] shrink-0`} />
+          <span className="font-bold text-xs truncate">
             {selectedOpt ? selectedOpt.label : value ? formatTime12h(value) : placeholder}
           </span>
         </div>
         <ChevronDown
-          className={`w-3.5 h-3.5 text-gray-400 shrink-0 transition-transform ${open ? "rotate-180 text-[#c0166a]" : ""
+          className={`${compact ? "w-3 h-3" : "w-3.5 h-3.5"} text-gray-400 shrink-0 transition-transform ${open ? "rotate-180 text-[#c0166a]" : ""
             }`}
         />
       </button>
@@ -236,7 +240,7 @@ function ModernTimeSelect({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12 }}
-            className="absolute left-0 right-0 top-full mt-1.5 max-h-52 overflow-y-auto rounded-xl border border-gray-100 bg-white shadow-xl z-50 p-1 divide-y divide-gray-50/80"
+            className="absolute left-0 min-w-[130px] w-full top-full mt-1 max-h-52 overflow-y-auto rounded-xl border border-gray-100 bg-white shadow-xl z-50 p-1 divide-y divide-gray-50/80"
           >
             {effectiveOptions.map((opt) => {
               const isSelected = opt.value === value;
@@ -320,23 +324,19 @@ function DoctorSelectDropdown({
               <span className="font-bold text-gray-900 text-xs sm:text-sm block truncate">
                 {selectedDoc.name}
               </span>
-              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                {selectedDoc.specializations.length > 0 ? (
-                  <span className="inline-block text-[10px] px-2 py-0.5 rounded-md bg-magenta-50 text-magenta-700 font-semibold border border-magenta-100">
-                    {selectedDoc.specializations[0].name}
-                  </span>
+              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                {selectedDoc.specializations && selectedDoc.specializations.length > 0 ? (
+                  selectedDoc.specializations.map((spec) => (
+                    <span
+                      key={spec.id}
+                      className="inline-block text-[10px] px-2 py-0.5 rounded-md bg-magenta-50 text-magenta-700 font-semibold border border-magenta-100"
+                    >
+                      {spec.name}
+                    </span>
+                  ))
                 ) : (
                   <span className="inline-block text-[10px] px-2 py-0.5 rounded-md bg-magenta-50 text-magenta-700 font-semibold border border-magenta-100">
-                    General Dermatology
-                  </span>
-                )}
-                {selectedDoc.dutyDays && selectedDoc.dutyDays.length > 0 ? (
-                  <span className="inline-block text-[10px] px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-semibold border border-emerald-100">
-                    {selectedDoc.dutyDays.length} days • {formatTime12h(selectedDoc.dutyStartTime || "08:00")}–{formatTime12h(selectedDoc.dutyEndTime || "17:00")} • {selectedDoc.slotIntervalMinutes || 20}m • Max {selectedDoc.maxPatientsPerDay || 20}/shift
-                  </span>
-                ) : (
-                  <span className="inline-block text-[10px] px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 font-medium border border-amber-100">
-                    No Duty Schedule Yet
+                    {selectedDoc.specialization || "General Dermatology"}
                   </span>
                 )}
               </div>
@@ -393,7 +393,11 @@ function DoctorSelectDropdown({
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-gray-900 truncate">{doc.name}</p>
                       <div className="flex items-center gap-1.5 text-[10px] text-gray-500 flex-wrap">
-                        <span>{doc.specializations[0]?.name || "Dermatology"}</span>
+                        <span className="font-medium text-gray-700">
+                          {doc.specializations && doc.specializations.length > 0
+                            ? doc.specializations.map((s) => s.name).join(", ")
+                            : doc.specialization || "General Dermatology"}
+                        </span>
                         {doc.dutyDays && doc.dutyDays.length > 0 ? (
                           <span className="text-emerald-700 font-semibold">• {doc.dutyDays.length} days ({doc.slotIntervalMinutes || 20}m, Max {doc.maxPatientsPerDay || 20}/shift)</span>
                         ) : (
@@ -479,6 +483,7 @@ export default function ClinicDoctorsPage() {
   } | null>(null);
 
   /* ── Modals State ───────────────────────────────────────────────── */
+  const [showInstructionsModal, setShowInstructionsModal] = useState(false);
   const [selectedDoctorForDetails, setSelectedDoctorForDetails] = useState<DoctorAccount | null>(null);
   const [statusConfirmDoctor, setStatusConfirmDoctor] = useState<DoctorAccount | null>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
@@ -1888,799 +1893,839 @@ export default function ClinicDoctorsPage() {
           /* ══════════════════════════════════════════════════════════
              TAB B: SCHEDULE DUTY HOURS (Reference Image 1)
              ══════════════════════════════════════════════════════════ */
-          <div className="bg-white rounded-2xl border border-gray-200/80 p-5 sm:p-6 shadow-xs space-y-5">
-            <div className="border-b border-gray-100 pb-3">
-              <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                <Clock className="w-4 h-4 text-[#c0166a]" />
-                <span>Schedule Doctor Duty Hours</span>
-              </h2>
-            </div>
-
-            {/* Doctor Selection Field */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-bold text-gray-900">
-                  Select Doctor for Scheduling *
-                </label>
-                {selectedDoctor && (
-                  <span className="text-[11px] text-gray-500">
-                    Currently Editing: <strong className="text-gray-900">{selectedDoctor.name}</strong>
-                  </span>
-                )}
-              </div>
-              <DoctorSelectDropdown
-                doctors={allDoctors}
-                selectedDoctorId={selectedDoctor?.id || ""}
-                onSelect={(id) => handleSelectDoctor(id)}
-                disabled={loadingDoctors || savingSchedule}
-              />
-            </div>
-
-            {/* Weekly Duty Days Selector */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-[#c0166a]" />
-                  Select Weekly Duty Days *
-                </label>
-                <div className="flex items-center gap-2 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      applyDutyDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
-                    }
-                    className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
-                  >
-                    Mon–Fri
-                  </button>
-                  <span className="text-gray-300">•</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      applyDutyDays([
-                        "Monday",
-                        "Tuesday",
-                        "Wednesday",
-                        "Thursday",
-                        "Friday",
-                        "Saturday",
-                      ])
-                    }
-                    className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
-                  >
-                    Mon–Sat
-                  </button>
-                  <span className="text-gray-300">•</span>
-                  <button
-                    type="button"
-                    onClick={() => applyDutyDays([...ALL_DAYS_OF_WEEK])}
-                    className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
-                  >
-                    All Week
-                  </button>
-                  {scheduleForm.dutyDays.length > 0 && (
-                    <>
-                      <span className="text-gray-300">•</span>
-                      <button
-                        type="button"
-                        onClick={() => setScheduleForm((p) => ({ ...p, dutyDays: [] }))}
-                        className="text-rose-600 hover:text-rose-700 font-semibold hover:underline cursor-pointer"
-                      >
-                        Clear
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* 7 Clean Day Cards */}
-              <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
-                {ALL_DAYS_OF_WEEK.map((day) => {
-                  const isSelected = scheduleForm.dutyDays.includes(day);
-                  const shifts = scheduleForm.weeklyShifts[day] || [];
-                  const shiftCount = shifts.length;
-
-                  return (
-                    <button
-                      key={day}
-                      type="button"
-                      onClick={() => toggleDutyDay(day)}
-                      className={`p-2.5 rounded-xl border transition-all text-center flex flex-col items-center justify-center cursor-pointer ${isSelected
-                        ? "bg-magenta-50/80 border-magenta-300 ring-2 ring-magenta-500/20 shadow-xs"
-                        : "bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/50"
-                        }`}
-                    >
-                      <span
-                        className={`text-xs font-bold ${isSelected ? "text-magenta-900" : "text-gray-700"
-                          }`}
-                      >
-                        {day.slice(0, 3)}
-                      </span>
-                      <span
-                        className={`text-[9px] mt-1 font-semibold truncate ${isSelected
-                          ? "text-magenta-700"
-                          : "text-gray-400"
-                          }`}
-                      >
-                        {isSelected
-                          ? `${shiftCount} shift${shiftCount > 1 ? "s" : ""}`
-                          : "Off"}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* ── Section B: Weekly Duty Schedule & Multi-Shift Manager ─ */}
-            <div className="space-y-3.5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-[#c0166a]" />
-                    <span>Doctor's Daily Schedule</span>
-                  </label>
-                  <p className="text-[11px] text-gray-500 mt-0.5">
-                    Clinic Operating Hours ({clinicOperatingDays}):{" "}
-                    <strong className="text-gray-800">
-                      {formatTime12h(clinicOpenTime)} – {formatTime12h(clinicCloseTime)}
-                    </strong>
-                  </p>
-                </div>
-
-                <span className="text-[11px] text-gray-400">
-                  Multiple independent shifts supported (e.g. Morning &amp; Afternoon)
+          <div className="space-y-4">
+            {/* ── Separate Card: Compact Step-by-Step Scheduling Guide ────── */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-3.5 sm:p-4 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] font-semibold text-gray-700 flex-wrap py-0.5">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-pink-50 border border-pink-200/90 text-[#c0166a] font-bold shadow-2xs shrink-0">
+                  <span className="w-4 h-4 rounded-full bg-[#c0166a] text-white text-[9px] flex items-center justify-center font-bold">1</span>
+                  Select Doctor
+                </span>
+                <span className="text-gray-400 font-bold">→</span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gray-50 border border-gray-200 text-gray-700 font-medium shadow-2xs shrink-0">
+                  <span className="w-4 h-4 rounded-full bg-gray-200 text-gray-700 text-[9px] flex items-center justify-center font-bold">2</span>
+                  Select Weekly Duty Days
+                </span>
+                <span className="text-gray-400 font-bold">→</span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gray-50 border border-gray-200 text-gray-700 font-medium shadow-2xs shrink-0">
+                  <span className="w-4 h-4 rounded-full bg-gray-200 text-gray-700 text-[9px] flex items-center justify-center font-bold">3</span>
+                  Set Appointment Intervals
+                </span>
+                <span className="text-gray-400 font-bold">→</span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gray-50 border border-gray-200 text-gray-700 font-medium shadow-2xs shrink-0">
+                  <span className="w-4 h-4 rounded-full bg-gray-200 text-gray-700 text-[9px] flex items-center justify-center font-bold">4</span>
+                  Configure Duty Hours
+                </span>
+                <span className="text-gray-400 font-bold">→</span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gray-50 border border-gray-200 text-gray-700 font-medium shadow-2xs shrink-0">
+                  <span className="w-4 h-4 rounded-full bg-gray-200 text-gray-700 text-[9px] flex items-center justify-center font-bold">5</span>
+                  Review Slots
+                </span>
+                <span className="text-gray-400 font-bold">→</span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gray-50 border border-gray-200 text-gray-700 font-medium shadow-2xs shrink-0">
+                  <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[9px] flex items-center justify-center font-bold">6</span>
+                  Save Schedule
                 </span>
               </div>
 
-              {scheduleForm.dutyDays.length === 0 ? (
-                <div className="p-8 rounded-2xl bg-white border border-dashed border-gray-200 text-center space-y-1">
-                  <p className="text-xs font-bold text-gray-700">No duty days selected</p>
-                  <p className="text-[11px] text-gray-400">
-                    Select the working days for {selectedDoctor?.name || "this doctor"} above, then set their duty hours for each day.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {scheduleForm.dutyDays.map((day) => {
-                    const shifts = scheduleForm.weeklyShifts[day] || [];
-                    const dayErrors = validateDoctorShifts(
-                      shifts,
-                      day,
-                      clinicOpenTime,
-                      clinicCloseTime
-                    );
+              <button
+                type="button"
+                onClick={() => setShowInstructionsModal(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-pink-50 text-[#c0166a] hover:text-[#a01258] border border-pink-200 text-xs font-bold transition-all shadow-2xs hover:shadow-xs shrink-0 cursor-pointer"
+              >
+                <HelpCircle className="w-3.5 h-3.5" />
+                <span>View Instructions</span>
+              </button>
+            </div>
 
-                    return (
-                      <div
-                        key={day}
-                        className="p-3.5 sm:p-4 rounded-2xl bg-white border border-gray-200/90 shadow-2xs space-y-3"
-                      >
-                        {/* Day Card Header */}
-                        <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-gray-900">{day}</span>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-magenta-50 text-magenta-700 font-semibold border border-magenta-100">
-                              {shifts.length} {shifts.length === 1 ? "Shift" : "Shifts"}
-                            </span>
-                            {dayErrors.length > 0 && (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-semibold border border-amber-200 flex items-center gap-1">
-                                <AlertTriangle className="w-3 h-3" />
-                                Conflict
-                              </span>
-                            )}
-                          </div>
+            {/* ── Main Schedule Duty Hours Card ── */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 sm:p-6 shadow-xs space-y-5">
+              {/* ── Two-Column Layout for Doctor Scheduling Configuration ── */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                {/* Left Column: Doctor Select, Weekly Duty Days, Appointment Scheduling Settings */}
+                <div className="lg:col-span-6 space-y-4">
+                  {/* Doctor Selection Field */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                        <Stethoscope className="w-3.5 h-3.5 text-[#c0166a]" />
+                        <span>Select Doctor for Scheduling *</span>
+                      </label>
+                      {selectedDoctor && (
+                        <span className="text-[11px] text-gray-500">
+                          Currently Editing: <strong className="text-gray-900">{selectedDoctor.name}</strong>
+                        </span>
+                      )}
+                    </div>
+                    <DoctorSelectDropdown
+                      doctors={allDoctors}
+                      selectedDoctorId={selectedDoctor?.id || ""}
+                      onSelect={(id) => handleSelectDoctor(id)}
+                      disabled={loadingDoctors || savingSchedule}
+                    />
+                  </div>
 
-                          <div className="flex items-center gap-1.5">
-                            {shifts.length > 0 && scheduleForm.dutyDays.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={() => copyShiftsToAllSelectedDays(day)}
-                                title={`Copy ${day}'s shifts to other selected days`}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-colors cursor-pointer"
-                              >
-                                <Copy className="w-3 h-3 text-gray-500" />
-                                <span>Copy to all days</span>
-                              </button>
-                            )}
+                  {/* Weekly Duty Days Selector */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-[#c0166a]" />
+                        Select Weekly Duty Days *
+                      </label>
+                      <div className="flex items-center gap-2 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            applyDutyDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+                          }
+                          className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
+                        >
+                          Mon–Fri
+                        </button>
+                        <span className="text-gray-300">•</span>
 
+                        <button
+                          type="button"
+                          onClick={() => applyDutyDays([...ALL_DAYS_OF_WEEK])}
+                          className="text-magenta-700 hover:text-magenta-800 font-semibold hover:underline cursor-pointer"
+                        >
+                          All Week
+                        </button>
+                        {scheduleForm.dutyDays.length > 0 && (
+                          <>
+                            <span className="text-gray-300">•</span>
                             <button
                               type="button"
-                              onClick={() => addShiftToDay(day)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-magenta-700 bg-magenta-50 hover:bg-magenta-100/80 border border-magenta-200 transition-colors cursor-pointer"
+                              onClick={() => setScheduleForm((p) => ({ ...p, dutyDays: [] }))}
+                              className="text-rose-600 hover:text-rose-700 font-semibold hover:underline cursor-pointer"
                             >
-                              <Plus className="w-3 h-3" />
-                              <span>Add Shift</span>
+                              Clear
                             </button>
-                          </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 7 Clean Day Cards */}
+                    <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+                      {ALL_DAYS_OF_WEEK.map((day) => {
+                        const isSelected = scheduleForm.dutyDays.includes(day);
+                        const shifts = scheduleForm.weeklyShifts[day] || [];
+                        const shiftCount = shifts.length;
+
+                        return (
+                          <button
+                            key={day}
+                            type="button"
+                            onClick={() => toggleDutyDay(day)}
+                            className={`p-2.5 rounded-xl border transition-all text-center flex flex-col items-center justify-center cursor-pointer ${isSelected
+                              ? "bg-magenta-50/80 border-magenta-300 ring-2 ring-magenta-500/20 shadow-xs"
+                              : "bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/50"
+                              }`}
+                          >
+                            <span
+                              className={`text-xs font-bold ${isSelected ? "text-magenta-900" : "text-gray-700"
+                                }`}
+                            >
+                              {day.slice(0, 3)}
+                            </span>
+                            <span
+                              className={`text-[9px] mt-1 font-semibold truncate ${isSelected
+                                ? "text-magenta-700"
+                                : "text-gray-400"
+                                }`}
+                            >
+                              {isSelected
+                                ? `${shiftCount} shift${shiftCount > 1 ? "s" : ""}`
+                                : "Off"}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* ── Section C: Scheduling Defaults & Doctor Preferences ─────── */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-pink-50/40 border border-pink-200/90 space-y-3.5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                          <User className="w-3.5 h-3.5 text-[#c0166a]" />
+                          <span>Appointment Scheduling Settings</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3">
+                      {/* 1. Doctor-Level Interval Preference */}
+                      <div className="p-3.5 rounded-xl bg-white border border-gray-200/80 shadow-2xs space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-gray-900">
+                            Doctor's Default Appointment Interval
+                          </label>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${scheduleForm.doctorSlotInterval === null
+                              ? "bg-gray-100 text-gray-600 border-gray-200"
+                              : "bg-blue-50 text-blue-700 border-blue-200"
+                              }`}
+                          >
+                            {scheduleForm.doctorSlotInterval === null
+                              ? `Using clinic default: ${clinicDefaultInterval} mins`
+                              : `Doctor preference: ${scheduleForm.doctorSlotInterval} mins`}
+                          </span>
                         </div>
 
-                        {/* Shifts List for this day */}
-                        <div className="space-y-2.5">
-                          {shifts.map((shift, idx) => {
-                            const duration = getShiftDurationHours(shift.startTime, shift.endTime);
-                            const effectiveSettings = getEffectiveShiftSettings(
-                              shift,
-                              {
-                                weeklyShifts: scheduleForm.weeklyShifts,
-                                slotIntervalMinutes: scheduleForm.doctorSlotInterval ?? undefined,
-                              },
-                              {
-                                defaultSlotIntervalMinutes: clinicDefaultInterval,
-                                openTime: clinicOpenTime,
-                                closeTime: clinicCloseTime,
-                              }
-                            );
-                            const { interval: effectiveInterval, intervalSource, possibleSlots } = effectiveSettings;
+                        <div className="relative">
+                          <select
+                            disabled={savingSchedule}
+                            value={scheduleForm.doctorSlotInterval === null ? "default" : scheduleForm.doctorSlotInterval}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setScheduleForm((prev) => ({
+                                ...prev,
+                                doctorSlotInterval: val === "default" ? null : Number(val),
+                              }));
+                            }}
+                            className="w-full h-9 px-3.5 pr-8 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-900 appearance-none focus:outline-none focus:border-magenta-500 hover:border-gray-300 transition-colors cursor-pointer"
+                          >
+                            <option value="default">Inherit Clinic Default ({clinicDefaultInterval} minutes)</option>
+                            {APPOINTMENT_INTERVAL_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        </div>
+                      </div>
 
-                            const fallbackSourceLabel = scheduleForm.doctorSlotInterval
-                              ? `Doctor: ${scheduleForm.doctorSlotInterval}m`
-                              : `Clinic: ${clinicDefaultInterval}m`;
+                      {/* 2. Clinic-Wide Baseline Default */}
+                      <div className="p-3.5 rounded-xl bg-white border border-gray-200/80 shadow-2xs space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-gray-900">
+                            Clinic Default Interval
+                          </label>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            Clinic Default
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between h-9 px-3.5 bg-gray-50/70 border border-gray-200/80 rounded-xl text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-gray-900">{clinicDefaultInterval} minutes</span>
+                            <span className="text-[11px] text-gray-400">· Clinic operating default</span>
+                          </div>
+                          <span className="text-[11px] font-semibold text-gray-600 bg-white px-2 py-0.5 rounded-md border border-gray-200/60 shadow-2xs">
+                            ~{Math.round(60 / clinicDefaultInterval)} slots / hr
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── Section D: Shift Capacity Preview ───────────────────── */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-white border border-gray-200/90 shadow-2xs space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                          <Info className="w-3.5 h-3.5 text-[#c0166a]" />
+                          <span>Shift Capacity &amp; Slot Count Preview</span>
+                        </h4>
+                        <p className="text-[11px] text-gray-500 mt-0.5">
+                          Appointment Slot Summary — {selectedDoctor?.name || "doctor"}'s shifts
+                        </p>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="text-xs font-bold text-magenta-700">
+                          {estimatedCapacityBreakdown.summaryText}
+                        </span>
+                      </div>
+                    </div>
+
+                    {shiftSummaries.length === 0 ? (
+                      <div className="p-4 rounded-xl bg-gray-50/70 border border-dashed border-gray-200 text-center text-xs text-gray-400">
+                        Set the doctor's working days and hours above to see the available appointment slots.
+                      </div>
+                    ) : (
+                      <div className="max-h-[340px] overflow-y-auto pr-1.5 space-y-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          {shiftSummaries.map(({ day, shift, effective }, sIdx) => {
+                            const duration = getShiftDurationHours(shift.startTime, shift.endTime);
 
                             return (
                               <div
-                                key={shift.id || idx}
-                                className="p-3 rounded-xl bg-gray-50/70 border border-gray-200/80 flex flex-wrap items-center justify-between gap-2.5 text-xs"
+                                key={sIdx}
+                                className="p-3 rounded-xl bg-gray-50/80 border border-gray-200/80 space-y-1.5 text-xs"
                               >
-                                {/* Shift Identity & Label */}
-                                <div className="flex items-center gap-2 min-w-[130px]">
-                                  <span className="w-5 h-5 rounded-md bg-white border border-gray-200 text-gray-500 font-bold text-[10px] flex items-center justify-center shrink-0">
-                                    {idx + 1}
+                                <div className="flex items-center justify-between">
+                                  <span className="font-bold text-gray-900">
+                                    {day}: {shift.label}
                                   </span>
-                                  <input
-                                    type="text"
-                                    value={shift.label}
-                                    onChange={(e) =>
-                                      updateShiftInDay(day, shift.id, "label", e.target.value)
-                                    }
-                                    placeholder={idx === 0 ? "Morning Shift" : "Afternoon Shift"}
-                                    className="w-28 sm:w-32 px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 focus:outline-none focus:border-magenta-500"
-                                  />
+                                  <span className="text-[10px] text-gray-500 font-mono">
+                                    {duration}h active
+                                  </span>
                                 </div>
 
-                                {/* Shift Time Selectors (Bounded to clinicTimeOptions) */}
-                                <div className="flex items-center gap-1.5 min-w-[200px] flex-1 max-w-xs">
-                                  <div className="flex-1">
-                                    <ModernTimeSelect
-                                      value={shift.startTime}
-                                      options={clinicTimeOptions}
-                                      onChange={(val) =>
-                                        updateShiftInDay(day, shift.id, "startTime", val)
-                                      }
-                                    />
-                                  </div>
-                                  <span className="text-gray-400 font-medium shrink-0 text-[11px]">to</span>
-                                  <div className="flex-1">
-                                    <ModernTimeSelect
-                                      value={shift.endTime}
-                                      options={clinicTimeOptions}
-                                      onChange={(val) =>
-                                        updateShiftInDay(day, shift.id, "endTime", val)
-                                      }
-                                    />
-                                  </div>
+                                <div className="text-[11px] text-gray-600 flex items-center justify-between">
+                                  <span>Hours:</span>
+                                  <strong className="text-gray-800">
+                                    {formatTime12h(shift.startTime)} – {formatTime12h(shift.endTime)}
+                                  </strong>
                                 </div>
 
-                                {/* Per-Shift Appointment Slot Interval Dropdown */}
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                  <div className="relative">
-                                    <select
-                                      disabled={savingSchedule}
-                                      value={
-                                        shift.slotIntervalMinutes !== undefined && shift.slotIntervalMinutes !== null
-                                          ? shift.slotIntervalMinutes
-                                          : "default"
-                                      }
-                                      onChange={(e) => {
-                                        const val = e.target.value;
-                                        updateShiftInDay(
-                                          day,
-                                          shift.id,
-                                          "slotIntervalMinutes",
-                                          val === "default" ? undefined : Number(val)
-                                        );
-                                      }}
-                                      className="h-8.5 pl-2.5 pr-7 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 appearance-none focus:outline-none focus:border-magenta-500 hover:border-gray-300 transition-colors cursor-pointer"
-                                      title="Appointment Slot Interval for this shift"
-                                    >
-                                      <option value="default">
-                                        Default ({fallbackSourceLabel})
-                                      </option>
-                                      {APPOINTMENT_INTERVAL_OPTIONS.map((opt) => (
-                                        <option key={opt.value} value={opt.value}>
-                                          {opt.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-                                  </div>
+                                <div className="text-[11px] text-gray-600 flex items-center justify-between">
+                                  <span>Available slots ({effective.interval}m):</span>
+                                  <strong className="text-magenta-700">
+                                    {effective.possibleSlots} slots
+                                  </strong>
                                 </div>
 
-                                {/* Duration, Slots Count & Interval Source Indicator */}
-                                <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
-                                  <span className="px-2 py-1 rounded-lg bg-white border border-gray-200 text-gray-700 font-medium text-[11px]" title="Calculated shift duration">
-                                    {duration > 0 ? `${duration} hrs` : "0 hrs"}
+                                <div className="pt-1 border-t border-gray-200/60 flex items-center justify-between text-[11px]">
+                                  <span className="text-gray-500">Interval source:</span>
+                                  <span className={`font-semibold capitalize ${effective.intervalSource === "doctor"
+                                      ? "text-blue-700 font-bold"
+                                      : effective.intervalSource === "shift"
+                                        ? "text-magenta-700 font-bold"
+                                        : "text-gray-700"
+                                    }`}>
+                                    {effective.intervalSource === "shift"
+                                      ? "Shift Override"
+                                      : effective.intervalSource === "doctor"
+                                        ? "Doctor Default"
+                                        : "Clinic Default"}
                                   </span>
-                                  <span className="px-2.5 py-1 rounded-lg bg-pink-50 border border-pink-200/70 text-magenta-700 font-semibold text-[11px]" title="Available appointment slots based on shift window & interval">
-                                    {possibleSlots} {possibleSlots === 1 ? "slot" : "slots"} ({effectiveInterval}m)
+                                </div>
+
+                                <div className="pt-1 border-t border-gray-200/60 flex items-center justify-between font-bold text-[11px]">
+                                  <span className="text-gray-700">Bookable Slots:</span>
+                                  <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                                    {effective.possibleSlots} slots max
                                   </span>
-
-                                  {/* Interval Source Indicator Badge */}
-                                  {intervalSource === "shift" ? (
-                                    <span
-                                      className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-magenta-50 text-magenta-700 border border-magenta-200 shrink-0"
-                                      title="Configured specifically for this shift"
-                                    >
-                                      <span className="w-1.5 h-1.5 rounded-full bg-magenta-600"></span>
-                                      Shift Override
-                                    </span>
-                                  ) : intervalSource === "doctor" ? (
-                                    <span
-                                      className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 shrink-0"
-                                      title="Inheriting doctor's default interval preference"
-                                    >
-                                      <span className="w-1.5 h-1.5 rounded-full bg-purple-600"></span>
-                                      Doctor's Default
-                                    </span>
-                                  ) : (
-                                    <span
-                                      className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 shrink-0"
-                                      title="Inheriting clinic default interval"
-                                    >
-                                      <span className="w-1.5 h-1.5 rounded-full bg-gray-400"></span>
-                                      Clinic Default
-                                    </span>
-                                  )}
-
-                                  {/* Delete Shift Button */}
-                                  <button
-                                    type="button"
-                                    onClick={() => removeShiftFromDay(day, shift.id)}
-                                    title="Remove this shift"
-                                    className="p-1.5 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
                                 </div>
                               </div>
                             );
                           })}
                         </div>
-
-                        {/* Shift Errors display if any */}
-                        {dayErrors.length > 0 && (
-                          <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] space-y-1">
-                            {dayErrors.map((err, errIdx) => (
-                              <p key={errIdx} className="flex items-center gap-1.5">
-                                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                                <span>{err.message}</span>
-                              </p>
-                            ))}
-                          </div>
-                        )}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* ── Section C: Scheduling Defaults & Doctor Preferences ─────── */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-pink-50/40 border border-pink-200/90 space-y-3.5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5 text-[#c0166a]" />
-                    <span>Appointment Scheduling Settings</span>
-                  </label>
-                  <p className="text-[11px] text-gray-500 mt-0.5">
-                    Configuration Priority: Shift-specific interval → Doctor preference default → Clinic-wide default ({clinicDefaultInterval}m baseline)
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                {/* 1. Doctor-Level Interval Preference */}
-                <div className="p-3.5 rounded-xl bg-white border border-gray-200/80 shadow-2xs space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-gray-900">
-                      Doctor's Default Appointment Interval
-                    </label>
-                    <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${scheduleForm.doctorSlotInterval === null
-                        ? "bg-gray-100 text-gray-600 border-gray-200"
-                        : "bg-purple-50 text-purple-700 border-purple-200"
-                        }`}
-                    >
-                      {scheduleForm.doctorSlotInterval === null
-                        ? `Using clinic default: ${clinicDefaultInterval} mins`
-                        : `Doctor preference: ${scheduleForm.doctorSlotInterval} mins`}
-                    </span>
-                  </div>
-
-                  <div className="relative">
-                    <select
-                      disabled={savingSchedule}
-                      value={scheduleForm.doctorSlotInterval === null ? "default" : scheduleForm.doctorSlotInterval}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setScheduleForm((prev) => ({
-                          ...prev,
-                          doctorSlotInterval: val === "default" ? null : Number(val),
-                        }));
-                      }}
-                      className="w-full h-9 px-3.5 pr-8 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-900 appearance-none focus:outline-none focus:border-magenta-500 hover:border-gray-300 transition-colors cursor-pointer"
-                    >
-                      <option value="default">Inherit Clinic Default ({clinicDefaultInterval} minutes)</option>
-                      {APPOINTMENT_INTERVAL_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    )}
                   </div>
                 </div>
 
-                {/* 2. Clinic-Wide Baseline Default */}
-                <div className="p-3.5 rounded-xl bg-white border border-gray-200/80 shadow-2xs space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-gray-900">
-                      Clinic Default Interval
-                    </label>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      Clinic Default
-                    </span>
-                  </div>
+                {/* Right Column: Doctor's Daily Schedule */}
+                <div className="lg:col-span-6 space-y-3.5">
+                  {/* ── Section B: Weekly Duty Schedule & Multi-Shift Manager ─ */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <div>
+                        <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-[#c0166a]" />
+                          <span>Doctor's Daily Schedule</span>
+                        </label>
+                        <p className="text-[11px] text-gray-500 mt-0.5">
+                          Clinic Operating Hours ({clinicOperatingDays}):{" "}
+                          <strong className="text-gray-800">
+                            {formatTime12h(clinicOpenTime)} – {formatTime12h(clinicCloseTime)}
+                          </strong>
+                        </p>
+                      </div>
 
-                  <div className="flex items-center justify-between h-9 px-3.5 bg-gray-50/70 border border-gray-200/80 rounded-xl text-xs">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-bold text-gray-900">{clinicDefaultInterval} minutes</span>
-                      <span className="text-[11px] text-gray-400">· Clinic operating default</span>
                     </div>
-                    <span className="text-[11px] font-semibold text-gray-600 bg-white px-2 py-0.5 rounded-md border border-gray-200/60 shadow-2xs">
-                      ~{Math.round(60 / clinicDefaultInterval)} slots / hr
-                    </span>
+
+                    {scheduleForm.dutyDays.length === 0 ? (
+                      <div className="p-8 rounded-2xl bg-white border border-dashed border-gray-200 text-center space-y-1">
+                        <p className="text-xs font-bold text-gray-700">No duty days selected</p>
+                        <p className="text-[11px] text-gray-400">
+                          Select the working days for {selectedDoctor?.name || "this doctor"} on the left, then set their duty hours for each day.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {scheduleForm.dutyDays.map((day) => {
+                          const shifts = scheduleForm.weeklyShifts[day] || [];
+                          const dayErrors = validateDoctorShifts(
+                            shifts,
+                            day,
+                            clinicOpenTime,
+                            clinicCloseTime
+                          );
+
+                          return (
+                            <div
+                              key={day}
+                              className="p-2.5 sm:p-3 rounded-2xl bg-white border border-gray-200/90 shadow-2xs space-y-2"
+                            >
+                              {/* Day Card Header */}
+                              <div className="flex items-center justify-between border-b border-gray-100 pb-1.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-gray-900">{day}</span>
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-magenta-50 text-magenta-700 font-semibold border border-magenta-100">
+                                    {shifts.length} {shifts.length === 1 ? "Shift" : "Shifts"}
+                                  </span>
+                                  {dayErrors.length > 0 && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-semibold border border-amber-200 flex items-center gap-1">
+                                      <AlertTriangle className="w-3 h-3" />
+                                      Conflict
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-1.5">
+                                  {shifts.length > 0 && scheduleForm.dutyDays.length > 1 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => copyShiftsToAllSelectedDays(day)}
+                                      title={`Copy ${day}'s shifts to other selected days`}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-colors cursor-pointer"
+                                    >
+                                      <Copy className="w-3 h-3 text-gray-500" />
+                                      <span>Copy to all days</span>
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={() => addShiftToDay(day)}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold text-magenta-700 bg-magenta-50 hover:bg-magenta-100/80 border border-magenta-200 transition-colors cursor-pointer"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                    <span>Add Shift</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Shifts List for this day */}
+                              <div className="space-y-1.5">
+                                {shifts.map((shift, idx) => {
+                                  const duration = getShiftDurationHours(shift.startTime, shift.endTime);
+                                  const effectiveSettings = getEffectiveShiftSettings(
+                                    shift,
+                                    {
+                                      weeklyShifts: scheduleForm.weeklyShifts,
+                                      slotIntervalMinutes: scheduleForm.doctorSlotInterval ?? undefined,
+                                    },
+                                    {
+                                      defaultSlotIntervalMinutes: clinicDefaultInterval,
+                                      openTime: clinicOpenTime,
+                                      closeTime: clinicCloseTime,
+                                    }
+                                  );
+                                  const { interval: effectiveInterval, intervalSource, possibleSlots } = effectiveSettings;
+
+                                  return (
+                                    <div
+                                      key={shift.id || idx}
+                                      className="p-3 rounded-xl bg-gray-50/80 border border-gray-200/90 text-xs transition-all hover:border-gray-300 space-y-2.5"
+                                    >
+                                      {/* Row 1: Shift #, Name, Time Range (Left) & Delete Button (Right) */}
+                                      <div className="flex items-center justify-between gap-3">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <span className="w-6 h-8 rounded-lg bg-white border border-gray-200 text-gray-700 font-bold text-xs flex items-center justify-center shrink-0 shadow-2xs">
+                                            {idx + 1}
+                                          </span>
+                                          <input
+                                            type="text"
+                                            value={shift.label}
+                                            onChange={(e) =>
+                                              updateShiftInDay(day, shift.id, "label", e.target.value)
+                                            }
+                                            placeholder={idx === 0 ? "Morning Shift" : "Afternoon Shift"}
+                                            className="h-8 w-32 sm:w-40 px-2.5 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 focus:outline-none focus:border-magenta-500 shadow-2xs shrink-0"
+                                          />
+                                          <div className="flex items-center gap-1.5 shrink-0">
+                                            <div className="w-[115px]">
+                                              <ModernTimeSelect
+                                                value={shift.startTime}
+                                                options={clinicTimeOptions}
+                                                compact={true}
+                                                onChange={(val) =>
+                                                  updateShiftInDay(day, shift.id, "startTime", val)
+                                                }
+                                              />
+                                            </div>
+                                            <span className="text-gray-400 font-medium text-xs px-0.5">to</span>
+                                            <div className="w-[115px]">
+                                              <ModernTimeSelect
+                                                value={shift.endTime}
+                                                options={clinicTimeOptions}
+                                                compact={true}
+                                                onChange={(val) =>
+                                                  updateShiftInDay(day, shift.id, "endTime", val)
+                                                }
+                                              />
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {/* Delete Shift Button */}
+                                        <button
+                                          type="button"
+                                          onClick={() => removeShiftFromDay(day, shift.id)}
+                                          title="Remove this shift"
+                                          className="h-8 w-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors cursor-pointer shrink-0"
+                                        >
+                                          <X className="w-4 h-4" />
+                                        </button>
+                                      </div>
+
+                                      {/* Row 2: Slot Interval Dropdown, Duration, Slots, and Source Indicator */}
+                                      <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-gray-200/60">
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <span className="text-[11px] font-semibold text-gray-500">Slot Interval:</span>
+                                          <div className="relative">
+                                            <select
+                                              disabled={savingSchedule}
+                                              value={
+                                                shift.slotIntervalMinutes !== undefined && shift.slotIntervalMinutes !== null
+                                                  ? shift.slotIntervalMinutes
+                                                  : "default"
+                                              }
+                                              onChange={(e) => {
+                                                const val = e.target.value;
+                                                updateShiftInDay(
+                                                  day,
+                                                  shift.id,
+                                                  "slotIntervalMinutes",
+                                                  val === "default" ? undefined : Number(val)
+                                                );
+                                              }}
+                                              className="h-7 pl-2.5 pr-7 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 appearance-none focus:outline-none focus:border-magenta-500 hover:border-gray-300 transition-colors cursor-pointer shadow-2xs"
+                                              title="Appointment Slot Interval for this shift"
+                                            >
+                                              <option value="default">
+                                                Default ({effectiveInterval}m)
+                                              </option>
+                                              {APPOINTMENT_INTERVAL_OPTIONS.map((opt) => (
+                                                <option key={opt.value} value={opt.value}>
+                                                  {opt.label}
+                                                </option>
+                                              ))}
+                                            </select>
+                                            <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                          </div>
+                                        </div>
+
+                                        <span
+                                          className="h-7 px-2.5 rounded-lg bg-white border border-gray-200 text-gray-700 font-medium text-[11px] flex items-center shadow-2xs shrink-0"
+                                          title="Calculated shift duration"
+                                        >
+                                          {duration > 0 ? `${duration} hrs` : "0 hrs"}
+                                        </span>
+
+                                        <span
+                                          className="h-7 px-2.5 rounded-lg bg-pink-50 border border-pink-200/80 text-magenta-700 font-bold text-[11px] flex items-center shrink-0"
+                                          title={`Available appointment slots based on ${effectiveInterval}m interval`}
+                                        >
+                                          {possibleSlots} slots ({effectiveInterval}m)
+                                        </span>
+
+                                        {/* Interval Source Indicator Badge */}
+                                        {intervalSource === "shift" ? (
+                                          <span
+                                            className="h-7 inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 rounded-lg bg-magenta-50 text-magenta-700 border border-magenta-200 shrink-0"
+                                            title="Configured specifically for this shift"
+                                          >
+                                            <span className="w-1.5 h-1.5 rounded-full bg-magenta-600"></span>
+                                            Shift Override
+                                          </span>
+                                        ) : intervalSource === "doctor" ? (
+                                          <span
+                                            className="h-7 inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 shrink-0"
+                                            title="Inheriting doctor's default interval preference"
+                                          >
+                                            <span className="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
+                                            Doctor Default
+                                          </span>
+                                        ) : (
+                                          <span
+                                            className="h-7 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 rounded-lg bg-gray-100 text-gray-600 border border-gray-200 shrink-0"
+                                            title="Inheriting clinic default interval"
+                                          >
+                                            <span className="w-1.5 h-1.5 rounded-full bg-gray-400"></span>
+                                            Clinic Default
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Shift Errors display if any */}
+                              {dayErrors.length > 0 && (
+                                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] space-y-1">
+                                  {dayErrors.map((err, errIdx) => (
+                                    <p key={errIdx} className="flex items-center gap-1.5">
+                                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                      <span>{err.message}</span>
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
-            </div>
 
-            {/* ── Section D: Shift Capacity Preview ───────────────────── */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-white border border-gray-200/90 shadow-2xs space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
-                    <Info className="w-3.5 h-3.5 text-[#c0166a]" />
-                    <span>Shift Capacity &amp; Slot Count Preview</span>
-                  </h4>
-                  <p className="text-[11px] text-gray-500 mt-0.5">
-                    Appointment Slot Summary — {selectedDoctor?.name || "doctor"}'s shifts
-                  </p>
-                </div>
-
-                <div className="text-right">
-                  <span className="text-xs font-bold text-magenta-700">
-                    {estimatedCapacityBreakdown.summaryText}
-                  </span>
-                </div>
-              </div>
-
-              {shiftSummaries.length === 0 ? (
-                <div className="p-4 rounded-xl bg-gray-50/70 border border-dashed border-gray-200 text-center text-xs text-gray-400">
-                  Set the doctor's working days and hours above to see the available appointment slots.
+              {/* Multi-Doctor Roster Co-Working Notice */}
+              {coWorkingDoctors.length > 0 ? (
+                <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-200/80 text-blue-900 text-xs space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold text-blue-800">
+                    <Stethoscope className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                    <span>
+                      Co-Working on Duty: {new Set(coWorkingDoctors.map((c) => c.doctorName)).size} other doctor{new Set(coWorkingDoctors.map((c) => c.doctorName)).size > 1 ? "s" : ""} scheduled on these days ({coWorkingDoctors.length} concurrent shift{coWorkingDoctors.length > 1 ? "s" : ""} active)
+                    </span>
+                  </div>
+                  <div className="space-y-0.5 pl-4 text-[11px] text-blue-700">
+                    {coWorkingDoctors.map((c, idx) => (
+                      <p key={idx}>
+                        • <strong>{c.day}:</strong> {c.doctorName} ({formatTime12h(c.dutyStart)} – {formatTime12h(c.dutyEnd)})
+                      </p>
+                    ))}
+                  </div>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                    {shiftSummaries.map(({ day, shift, effective }, sIdx) => {
-                      const duration = getShiftDurationHours(shift.startTime, shift.endTime);
-
-                      return (
-                        <div
-                          key={sIdx}
-                          className="p-3 rounded-xl bg-gray-50/80 border border-gray-200/80 space-y-1.5 text-xs"
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold text-gray-900">
-                              {day}: {shift.label}
-                            </span>
-                            <span className="text-[10px] text-gray-500 font-mono">
-                              {duration}h active
-                            </span>
-                          </div>
-
-                          <div className="text-[11px] text-gray-600 flex items-center justify-between">
-                            <span>Hours:</span>
-                            <strong className="text-gray-800">
-                              {formatTime12h(shift.startTime)} – {formatTime12h(shift.endTime)}
-                            </strong>
-                          </div>
-
-                          <div className="text-[11px] text-gray-600 flex items-center justify-between">
-                            <span>Available slots ({effective.interval}m):</span>
-                            <strong className="text-magenta-700">
-                              {effective.possibleSlots} slots
-                            </strong>
-                          </div>
-
-                          <div className="pt-1 border-t border-gray-200/60 flex items-center justify-between text-[11px]">
-                            <span className="text-gray-500">Interval source:</span>
-                            <span className="font-semibold text-gray-700 capitalize">
-                              {effective.intervalSource === "shift"
-                                ? "Shift Override"
-                                : effective.intervalSource === "doctor"
-                                  ? "Doctor Default"
-                                  : "Clinic Default"}
-                            </span>
-                          </div>
-
-                          <div className="pt-1 border-t border-gray-200/60 flex items-center justify-between font-bold text-[11px]">
-                            <span className="text-gray-700">Bookable Slots:</span>
-                            <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                              {effective.possibleSlots} slots max
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                <div className="p-3 rounded-xl bg-slate-50 border border-gray-200 text-gray-600 text-xs flex items-center gap-2 font-medium">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Only doctor scheduled on the selected days.</span>
                 </div>
               )}
-            </div>
 
-            {/* Multi-Doctor Roster Co-Working Notice */}
-            {coWorkingDoctors.length > 0 ? (
-              <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-200/80 text-blue-900 text-xs space-y-1">
-                <div className="flex items-center gap-1.5 font-bold text-blue-800">
-                  <Stethoscope className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              {/* Inline Schedule Save Success Notification */}
+              {scheduleSavedFeedback && (
+                <div className="flex items-center gap-2.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-300 rounded-xl px-4 py-3 shadow-xs">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span>
-                    Co-Working on Duty: {new Set(coWorkingDoctors.map((c) => c.doctorName)).size} other doctor{new Set(coWorkingDoctors.map((c) => c.doctorName)).size > 1 ? "s" : ""} scheduled on these days ({coWorkingDoctors.length} concurrent shift{coWorkingDoctors.length > 1 ? "s" : ""} active)
+                    Duty schedule successfully saved for <strong>{scheduleSavedFeedback.doctorName}</strong> ({scheduleSavedFeedback.daysCount} active days, {scheduleSavedFeedback.shiftsCount} shift{scheduleSavedFeedback.shiftsCount > 1 ? "s" : ""} configured).
                   </span>
                 </div>
-                <div className="space-y-0.5 pl-4 text-[11px] text-blue-700">
-                  {coWorkingDoctors.map((c, idx) => (
-                    <p key={idx}>
-                      • <strong>{c.day}:</strong> {c.doctorName} ({formatTime12h(c.dutyStart)} – {formatTime12h(c.dutyEnd)})
-                    </p>
-                  ))}
+              )}
+
+              {scheduleError && (
+                <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+                  <AlertCircle className="w-4 h-4 shrink-0" /> {scheduleError}
                 </div>
-              </div>
-            ) : (
-              <div className="p-3 rounded-xl bg-slate-50 border border-gray-200 text-gray-600 text-xs flex items-center gap-2 font-medium">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Only doctor scheduled on the selected days.</span>
-              </div>
-            )}
+              )}
 
-            {/* Inline Schedule Save Success Notification */}
-            {scheduleSavedFeedback && (
-              <div className="flex items-center gap-2.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-300 rounded-xl px-4 py-3 shadow-xs">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>
-                  Duty schedule successfully saved for <strong>{scheduleSavedFeedback.doctorName}</strong> ({scheduleSavedFeedback.daysCount} active days, {scheduleSavedFeedback.shiftsCount} shift{scheduleSavedFeedback.shiftsCount > 1 ? "s" : ""} configured).
-                </span>
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={resetScheduleForm}
+                  disabled={savingSchedule}
+                  className="px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-xs font-bold hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Reset Form
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveSchedule}
+                  disabled={savingSchedule || !selectedDoctor}
+                  className={`inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-60 shadow-xs cursor-pointer ${scheduleSavedFeedback
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                    : "bg-[#c0166a] hover:bg-[#a01258] text-white"
+                    }`}
+                >
+                  {savingSchedule ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving Schedule...</span>
+                    </>
+                  ) : scheduleSavedFeedback ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                      <span>Schedule Saved!</span>
+                    </>
+                  ) : (
+                    <span>Save Schedule</span>
+                  )}
+                </button>
               </div>
-            )}
-
-            {scheduleError && (
-              <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
-                <AlertCircle className="w-4 h-4 shrink-0" /> {scheduleError}
-              </div>
-            )}
-
-            <div className="flex justify-end gap-2.5 pt-3 border-t border-gray-100">
-              <button
-                type="button"
-                onClick={resetScheduleForm}
-                disabled={savingSchedule}
-                className="px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-xs font-bold hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
-              >
-                Reset Form
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveSchedule}
-                disabled={savingSchedule || !selectedDoctor}
-                className={`inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-60 shadow-xs cursor-pointer ${scheduleSavedFeedback
-                  ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                  : "bg-[#c0166a] hover:bg-[#a01258] text-white"
-                  }`}
-              >
-                {savingSchedule ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Saving Schedule...</span>
-                  </>
-                ) : scheduleSavedFeedback ? (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                    <span>Schedule Saved!</span>
-                  </>
-                ) : (
-                  <span>Save Schedule</span>
-                )}
-              </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* ── Attending Doctors Roster (Clean Single Section) ─────── */}
-      <div className="space-y-3 pt-2">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-gray-900">
-            Attending Doctors Roster ({allDoctors.length})
-          </h3>
-          <span className="text-xs text-gray-400">Synced with patient booking schedule</span>
-        </div>
-
-        {loadingDoctors ? (
-          <div className="bg-white rounded-2xl border border-gray-100 py-16 text-center shadow-xs">
-            <Loader2 className="w-7 h-7 text-[#c0166a] animate-spin mx-auto mb-2" />
-            <p className="text-xs text-gray-400">Loading doctors and duty schedules...</p>
+      {/* ── Attending Doctors Roster (Visible in Register New Doctor tab only) ─────── */}
+      {activeTab === "register" && (
+        <div className="space-y-3 pt-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-gray-900">
+              Attending Doctors Roster ({allDoctors.length})
+            </h3>
+            <span className="text-xs text-gray-400">Synced with patient booking schedule</span>
           </div>
-        ) : allDoctors.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-dashed border-gray-200 py-16 text-center shadow-xs">
-            <Stethoscope className="w-10 h-10 text-gray-200 mx-auto mb-2.5" />
-            <p className="text-sm text-gray-700 font-medium">No doctors registered yet.</p>
-            <p className="text-xs text-gray-400 mt-0.5">
-              Add your attending dermatologists using the Register New Doctor tab above.
-            </p>
-          </div>
-        ) : (
-          allDoctors.map((doc, i) => {
-            return (
-              <motion.div
-                key={doc.id}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.03 }}
-                className="bg-white rounded-2xl border border-gray-200/80 shadow-2xs p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-gray-300 transition-all text-left"
-              >
-                <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-                  {/* Avatar */}
-                  {doc.photo ? (
-                    <img
-                      src={doc.photo}
-                      alt={doc.name}
-                      className="w-12 h-12 rounded-xl object-cover border border-magenta-200 shadow-2xs shrink-0"
-                    />
-                  ) : (
-                    <div className="w-12 h-12 rounded-xl bg-magenta-50 border border-magenta-100 flex items-center justify-center shrink-0 text-[#c0166a] font-bold text-base">
-                      {doc.name.replace("Dr.", "").trim().charAt(0) || "D"}
-                    </div>
-                  )}
 
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-bold text-gray-900 text-sm">
-                        {doc.name}
-                      </h3>
-                      <span className="text-[10px] text-gray-400 font-mono">
-                        PRC: #{doc.prcLicense || "Pending"}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {doc.email}
-                      <span className="mx-1.5 text-gray-300">•</span>
-                      {doc.contactNumber || "No phone"}
-                    </p>
+          {loadingDoctors ? (
+            <div className="bg-white rounded-2xl border border-gray-100 py-16 text-center shadow-xs">
+              <Loader2 className="w-7 h-7 text-[#c0166a] animate-spin mx-auto mb-2" />
+              <p className="text-xs text-gray-400">Loading doctors and duty schedules...</p>
+            </div>
+          ) : allDoctors.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-dashed border-gray-200 py-16 text-center shadow-xs">
+              <Stethoscope className="w-10 h-10 text-gray-200 mx-auto mb-2.5" />
+              <p className="text-sm text-gray-700 font-medium">No doctors registered yet.</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Add your attending dermatologists using the Register New Doctor tab above.
+              </p>
+            </div>
+          ) : (
+            allDoctors.map((doc, i) => {
+              return (
+                <motion.div
+                  key={doc.id}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.03 }}
+                  className="bg-white rounded-2xl border border-gray-200/80 shadow-2xs p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-gray-300 transition-all text-left"
+                >
+                  <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+                    {/* Avatar */}
+                    {doc.photo ? (
+                      <img
+                        src={doc.photo}
+                        alt={doc.name}
+                        className="w-12 h-12 rounded-xl object-cover border border-magenta-200 shadow-2xs shrink-0"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-xl bg-magenta-50 border border-magenta-100 flex items-center justify-center shrink-0 text-[#c0166a] font-bold text-base">
+                        {doc.name.replace("Dr.", "").trim().charAt(0) || "D"}
+                      </div>
+                    )}
 
-                    {/* Specializations */}
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {doc.specializations.length > 0 ? (
-                        doc.specializations.map((spec) => (
-                          <span
-                            key={spec.id}
-                            className="inline-block text-[10px] px-2 py-0.5 rounded-md bg-magenta-50 text-magenta-700 border border-magenta-100 font-semibold"
-                          >
-                            {spec.name}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="text-[10px] text-gray-400 italic">
-                          General Dermatology
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-bold text-gray-900 text-sm">
+                          {doc.name}
+                        </h3>
+                        <span className="text-[10px] text-gray-400 font-mono">
+                          PRC: #{doc.prcLicense || "Pending"}
                         </span>
-                      )}
-                    </div>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {doc.email}
+                        <span className="mx-1.5 text-gray-300">•</span>
+                        {doc.contactNumber || "No phone"}
+                      </p>
 
-                    {/* Shift & Capacity Summary */}
-                    {(() => {
-                      const docSched = parseDoctorSchedule(doc.dutySchedule, doc.dutyDays);
-                      const activeDays = ALL_DAYS_OF_WEEK.filter(
-                        (d) => docSched.weeklyShifts[d] && docSched.weeklyShifts[d].length > 0
-                      );
-                      const totalShiftsCount = activeDays.reduce(
-                        (acc, d) => acc + (docSched.weeklyShifts[d]?.length || 0),
-                        0
-                      );
-                      const avgShiftsPerDay = activeDays.length > 0
-                        ? Math.round(totalShiftsCount / activeDays.length)
-                        : 0;
-                      const firstDay = activeDays[0];
-                      const firstDayShifts = firstDay ? docSched.weeklyShifts[firstDay] || [] : [];
-                      const shiftsSummaryStr = firstDayShifts
-                        .map((s) => `${formatTime12h(s.startTime)}–${formatTime12h(s.endTime)}`)
-                        .join(", ");
-
-                      const distinctIntervals = Array.from(
-                        new Set(
-                          activeDays.flatMap((d) =>
-                            (docSched.weeklyShifts[d] || []).map((s) => {
-                              const eff = getEffectiveShiftSettings(
-                                s,
-                                docSched,
-                                { defaultSlotIntervalMinutes: clinicDefaultInterval }
-                              );
-                              return eff.interval;
-                            })
-                          )
-                        )
-                      );
-                      const intervalDisplayStr =
-                        distinctIntervals.length > 1
-                          ? `${distinctIntervals.join("m, ")}m`
-                          : `${distinctIntervals[0] || doc.slotIntervalMinutes || docSched.slotIntervalMinutes || clinicDefaultInterval}m`;
-
-                      return (
-                        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-                          {activeDays.length > 0 ? (
-                            <>
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 border border-gray-200/80 text-gray-700 font-medium">
-                                <Calendar className="w-3 h-3 text-[#c0166a]" />
-                                {activeDays.map((d) => d.slice(0, 3)).join(", ")}
-                              </span>
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 border border-gray-200/80 text-gray-700 font-medium">
-                                <Clock className="w-3 h-3 text-[#c0166a]" />
-                                {shiftsSummaryStr || `${formatTime12h(doc.dutyStartTime || "08:00")} – ${formatTime12h(doc.dutyEndTime || "17:00")}`}
-                                {avgShiftsPerDay > 1 && (
-                                  <span className="text-[10px] text-magenta-700 font-bold ml-0.5">
-                                    ({avgShiftsPerDay} shifts/day)
-                                  </span>
-                                )}
-                              </span>
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-pink-50 border border-pink-200/70 text-[#c0166a] font-semibold">
-                                <Clock className="w-3 h-3" />
-                                {intervalDisplayStr} consultation slots
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200/60 font-medium">
-                              No duty schedule assigned
+                      {/* Specializations */}
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {doc.specializations.length > 0 ? (
+                          doc.specializations.map((spec) => (
+                            <span
+                              key={spec.id}
+                              className="inline-block text-[10px] px-2 py-0.5 rounded-md bg-magenta-50 text-magenta-700 border border-magenta-100 font-semibold"
+                            >
+                              {spec.name}
                             </span>
-                          )}
-                        </div>
-                      );
-                    })()}
+                          ))
+                        ) : (
+                          <span className="text-[10px] text-gray-400 italic">
+                            General Dermatology
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Shift & Capacity Summary */}
+                      {(() => {
+                        const docSched = parseDoctorSchedule(doc.dutySchedule, doc.dutyDays);
+                        const activeDays = ALL_DAYS_OF_WEEK.filter(
+                          (d) => docSched.weeklyShifts[d] && docSched.weeklyShifts[d].length > 0
+                        );
+                        const totalShiftsCount = activeDays.reduce(
+                          (acc, d) => acc + (docSched.weeklyShifts[d]?.length || 0),
+                          0
+                        );
+                        const avgShiftsPerDay = activeDays.length > 0
+                          ? Math.round(totalShiftsCount / activeDays.length)
+                          : 0;
+                        const firstDay = activeDays[0];
+                        const firstDayShifts = firstDay ? docSched.weeklyShifts[firstDay] || [] : [];
+                        const shiftsSummaryStr = firstDayShifts
+                          .map((s) => `${formatTime12h(s.startTime)}–${formatTime12h(s.endTime)}`)
+                          .join(", ");
+
+                        const distinctIntervals = Array.from(
+                          new Set(
+                            activeDays.flatMap((d) =>
+                              (docSched.weeklyShifts[d] || []).map((s) => {
+                                const eff = getEffectiveShiftSettings(
+                                  s,
+                                  docSched,
+                                  { defaultSlotIntervalMinutes: clinicDefaultInterval }
+                                );
+                                return eff.interval;
+                              })
+                            )
+                          )
+                        );
+                        const intervalDisplayStr =
+                          distinctIntervals.length > 1
+                            ? `${distinctIntervals.join("m, ")}m`
+                            : `${distinctIntervals[0] || doc.slotIntervalMinutes || docSched.slotIntervalMinutes || clinicDefaultInterval}m`;
+
+                        return (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                            {activeDays.length > 0 ? (
+                              <>
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 border border-gray-200/80 text-gray-700 font-medium">
+                                  <Calendar className="w-3 h-3 text-[#c0166a]" />
+                                  {activeDays.map((d) => d.slice(0, 3)).join(", ")}
+                                </span>
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 border border-gray-200/80 text-gray-700 font-medium">
+                                  <Clock className="w-3 h-3 text-[#c0166a]" />
+                                  {shiftsSummaryStr || `${formatTime12h(doc.dutyStartTime || "08:00")} – ${formatTime12h(doc.dutyEndTime || "17:00")}`}
+                                  {avgShiftsPerDay > 1 && (
+                                    <span className="text-[10px] text-magenta-700 font-bold ml-0.5">
+                                      ({avgShiftsPerDay} shifts/day)
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-pink-50 border border-pink-200/70 text-[#c0166a] font-semibold">
+                                  <Clock className="w-3 h-3" />
+                                  {intervalDisplayStr} consultation slots
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200/60 font-medium">
+                                No duty schedule assigned
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </div>
-                </div>
 
-                {/* Card Actions (Matching Reference Exactly) */}
-                <div className="flex items-center gap-2.5 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-gray-100">
-                  <button
-                    type="button"
-                    onClick={() => handleScheduleDoctor(doc)}
-                    className="px-4 py-2 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
-                  >
-                    Schedule Shift
-                  </button>
+                  {/* Card Actions (Matching Reference Exactly) */}
+                  <div className="flex items-center gap-2.5 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => handleScheduleDoctor(doc)}
+                      className="px-4 py-2 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+                    >
+                      Schedule Shift
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setSelectedDoctorForDetails(doc)}
-                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 border border-gray-200 transition-all cursor-pointer"
-                  >
-                    <Eye className="w-3.5 h-3.5 text-gray-500" />
-                    <span>Details</span>
-                  </button>
-                </div>
-              </motion.div>
-            );
-          })
-        )}
-      </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDoctorForDetails(doc)}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 border border-gray-200 transition-all cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-gray-500" />
+                      <span>Details</span>
+                    </button>
+                  </div>
+                </motion.div>
+              );
+            })
+          )}
+        </div>
+      )}
 
       {/* ── Add Doctor Confirmation Modal ────────────────────────── */}
       <AnimatePresence>
@@ -3059,6 +3104,146 @@ export default function ClinicDoctorsPage() {
                 >
                   {deletingDoctor && <Loader2 className="w-3 h-3 animate-spin" />}
                   Yes, Remove
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── How to Set Doctor Duty Hours Instructions Modal ─────── */}
+      <AnimatePresence>
+        {showInstructionsModal && (
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 8 }}
+              className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+            >
+              {/* Header */}
+              <div className="px-6 pt-5 pb-3 flex items-start justify-between border-b border-gray-100 bg-pink-50/40 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-magenta-100 text-[#c0166a] flex items-center justify-center shrink-0">
+                    <HelpCircle className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-900">How to Set Doctor Duty Hours</h3>
+                    <p className="text-[11px] text-gray-500">Step-by-step instructions for scheduling doctors</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowInstructionsModal(false)}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 overflow-y-auto space-y-3.5 text-xs">
+                {/* Step 1 */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-gray-50/70 border border-gray-100">
+                  <div className="w-6 h-6 rounded-lg bg-[#c0166a] text-white flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                    1
+                  </div>
+                  <div className="space-y-0.5">
+                    <h4 className="font-bold text-gray-900">Select Doctor for Scheduling</h4>
+                    <p className="text-gray-600 leading-relaxed text-[11px]">
+                      Choose the doctor from the dropdown roster whose duty schedule you want to configure. You can see their registered photo, all clinical specializations, and current scheduling status.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Step 2 */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-gray-50/70 border border-gray-100">
+                  <div className="w-6 h-6 rounded-lg bg-gray-200 text-gray-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                    2
+                  </div>
+                  <div className="space-y-0.5">
+                    <h4 className="font-bold text-gray-900">Select Weekly Duty Days</h4>
+                    <p className="text-gray-600 leading-relaxed text-[11px]">
+                      Click on the individual day cards (Monday–Sunday) to designate which days the doctor will be available on duty. You can also use quick presets like <strong>Mon–Fri</strong> or <strong>All Week</strong>, or clear duty days anytime.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Step 3 */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-gray-50/70 border border-gray-100">
+                  <div className="w-6 h-6 rounded-lg bg-gray-200 text-gray-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                    3
+                  </div>
+                  <div className="space-y-0.5">
+                    <h4 className="font-bold text-gray-900">Set Appointment Intervals</h4>
+                    <p className="text-gray-600 leading-relaxed text-[11px]">
+                      Under <strong>Appointment Scheduling Settings</strong>, select the doctor's default consultation interval (e.g., 20 mins, 30 mins, 45 mins), or keep it set to inherit the clinic operating default.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Step 4 */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-gray-50/70 border border-gray-100">
+                  <div className="w-6 h-6 rounded-lg bg-gray-200 text-gray-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                    4
+                  </div>
+                  <div className="space-y-0.5">
+                    <h4 className="font-bold text-gray-900">Configure Duty Hours &amp; Shifts</h4>
+                    <p className="text-gray-600 leading-relaxed text-[11px]">
+                      In the <strong>Doctor's Daily Schedule</strong> panel:
+                    </p>
+                    <ul className="list-disc pl-4 space-y-1 text-gray-600 text-[11px] mt-1">
+                      <li>
+                        <strong>Duty Start &amp; End:</strong> Set consultation hours within clinic operating boundaries.
+                      </li>
+                      <li>
+                        <strong>Multiple Shifts (+ Add Shift):</strong> Click <strong>+ Add Shift</strong> to split duty hours (e.g., Morning Shift 7:30 AM – 12:00 PM and Afternoon Shift 1:00 PM – 5:00 PM) for lunch breaks or multi-session days.
+                      </li>
+                      <li>
+                        <strong>Shift Override:</strong> Customize slot duration per individual shift if needed, or leave as Default.
+                      </li>
+                      <li>
+                        <strong>Copy to All Days:</strong> Click <strong>Copy to all days</strong> on any day to replicate configured shifts across the doctor's entire duty week in one click.
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Step 5 */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-gray-50/70 border border-gray-100">
+                  <div className="w-6 h-6 rounded-lg bg-gray-200 text-gray-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                    5
+                  </div>
+                  <div className="space-y-0.5">
+                    <h4 className="font-bold text-gray-900">Review Slots &amp; Capacity</h4>
+                    <p className="text-gray-600 leading-relaxed text-[11px]">
+                      Inspect the <strong>Shift Capacity &amp; Slot Count Preview</strong> card on the left. Verify total bookable appointment slots per shift and review any concurrent doctor shifts in the <strong>Co-Working on Duty</strong> section to prevent clinic room overcrowding.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Step 6 */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-gray-50/70 border border-gray-100">
+                  <div className="w-6 h-6 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                    6
+                  </div>
+                  <div className="space-y-0.5">
+                    <h4 className="font-bold text-gray-900">Save Schedule</h4>
+                    <p className="text-gray-600 leading-relaxed text-[11px]">
+                      Click <strong>Save Duty Schedule</strong> at the bottom right. Once saved, appointment slots are published and immediately available for patient online bookings.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-3 bg-gray-50/80 border-t border-gray-100 flex items-center justify-end shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowInstructionsModal(false)}
+                  className="px-5 py-2 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+                >
+                  Got It
                 </button>
               </div>
             </motion.div>
