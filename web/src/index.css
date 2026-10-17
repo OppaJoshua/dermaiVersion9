@@ -139,3 +139,17 @@ body {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Bento card styles */
+.bento-magenta {
+  background-color: #881337;
+  background-image: linear-gradient(135deg, #9f1239 0%, #881337 100%);
+  color: #ffffff;
+}
+
+.bento-dark {
+  background-color: #881337;
+  background-image: linear-gradient(135deg, #9f1239 0%, #881337 100%);
+  color: #ffffff;
+}
+

@@ -1094,9 +1094,9 @@ export default function ScanSkinPage() {
                 <p className="text-sm font-semibold text-slate-900 mb-2">📸 Photo Guidelines</p>
                 <ul className="space-y-1.5 mb-3">
                   {[
-                    { icon: Sun, text: "Good lighting — use natural light" },
-                    { icon: ZoomIn, text: "Close-up of the affected area" },
-                    { icon: Sparkles, text: "No filters or editing" },
+                    { icon: Sun, text: "Good lighting — use clear, natural light" },
+                    { icon: ZoomIn, text: "Clear close-up — include some surrounding normal skin for context" },
+                    { icon: Sparkles, text: "No filters, makeup, or editing" },
                   ].map((item, i) => (
                     <li key={i} className="flex items-center gap-2 text-xs sm:text-sm text-slate-600">
                       <item.icon className="w-3.5 h-3.5 text-magenta-500 shrink-0" />
@@ -1105,8 +1105,9 @@ export default function ScanSkinPage() {
                   ))}
                 </ul>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Before AI analysis, the system automatically checks photo quality and confirms if human skin
-                  is detected. If validation fails, you will be asked to retake the photo.
+                  Before AI analysis, the system automatically checks photo quality and confirms human skin is detected.
+                  Including a small border of surrounding healthy skin helps the AI accurately recognize skin context.
+                  If validation fails, you will be asked to retake the photo.
                 </p>
               </div>
 

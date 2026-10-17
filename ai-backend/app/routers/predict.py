@@ -151,9 +151,10 @@ async def predict_skin_condition(
                 wide_quality = {"passed": True, "issues": []}
 
             if not wide_quality["passed"]:
+                issue_msgs = [i["message"] if isinstance(i, dict) else str(i) for i in wide_quality.get("issues", [])]
                 supporting_result = {
                     "status": "invalid",
-                    "error": f"Quality issue: {', '.join(wide_quality.get('issues', []))}",
+                    "error": f"Quality issue: {', '.join(issue_msgs)}",
                 }
             else:
                 # 6.3 Skin validation on wide-view

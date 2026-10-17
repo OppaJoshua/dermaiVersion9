@@ -52,12 +52,16 @@ class ImageQualityError(Exception):
 # ANALYSIS FUNCTIONS
 # ============================================
 
-def compute_blur_score(img: Image.Image) -> float:
-    """Compute the variance of the Laplacian (blur metric).
+def compute_blur_score(img: Image.Image, target_max: int = 500) -> float:
+    """Compute the variance of the Laplacian (blur metric) with aspect-ratio preservation.
     Higher = sharper. Lower = blurrier."""
     gray = np.array(img.convert("L"), dtype=np.uint8)
-    gray = cv2.resize(gray, (500, 500), interpolation=cv2.INTER_AREA)
-    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+    h, w = gray.shape[:2]
+    scale = target_max / max(h, w)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    gray_resized = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    laplacian = cv2.Laplacian(gray_resized, cv2.CV_64F)
     return float(laplacian.var())
 
 
