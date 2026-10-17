@@ -561,7 +561,7 @@ export default function UserLayout({
   };
 
   return (
-    <div className="min-h-screen bg-[#f7f2f4] p-0 lg:p-3 flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-white p-0 lg:p-3 flex flex-col lg:flex-row">
       {/* Backdrop Overlay */}
       <div
         className={cn(
@@ -713,176 +713,176 @@ export default function UserLayout({
       {/* Main Content — boxed panel */}
       <main className="flex-1 lg:ml-[17.25rem] min-w-0 flex flex-col w-full">
         <div className="flex-1 flex flex-col bg-white lg:border border-gray-200/80 lg:rounded-3xl lg:min-h-[calc(100vh-1.5rem)] overflow-hidden">
-        {/* Top Header — breadcrumb pill + bell + profile */}
-        <div className="px-4 sm:px-6 py-3 flex items-center justify-between sticky top-0 z-40 bg-white/90 backdrop-blur">
-          <div className="flex items-center gap-3">
-            <button
-              className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500"
-              onClick={() => setSidebarOpen((prev) => !prev)}
-              aria-label="Open sidebar"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
-            <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white border border-gray-200/80 text-xs text-gray-500 font-medium">
-              <span>Patient</span>
-              <ChevronRight className="w-3 h-3 text-gray-300" />
-              <span className="font-semibold text-gray-800">{currentPage}</span>
+          {/* Top Header — breadcrumb pill + bell + profile */}
+          <div className="px-4 sm:px-6 py-3 flex items-center justify-between sticky top-0 z-40 bg-white/90 backdrop-blur">
+            <div className="flex items-center gap-3">
+              <button
+                className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500"
+                onClick={() => setSidebarOpen((prev) => !prev)}
+                aria-label="Open sidebar"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+              <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white border border-gray-200/80 text-xs text-gray-500 font-medium">
+                <span>Patient</span>
+                <ChevronRight className="w-3 h-3 text-gray-300" />
+                <span className="font-semibold text-gray-800">{currentPage}</span>
+              </div>
             </div>
-          </div>
 
-          <div className="flex items-center gap-2 sm:gap-3">
-          <div ref={notifRef} className="relative">
-            <button
-              onClick={() => setNotifOpen((o) => !o)}
-              className="relative w-10 h-10 flex items-center justify-center rounded-full border border-gray-200/80 bg-white hover:bg-magenta-50 transition-colors"
-            >
-              <Bell className={cn("w-[18px] h-[18px]", notifOpen ? "text-magenta-600" : "text-gray-500")} />
-              {unreadCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-600 rounded-full text-white text-[10px] font-bold leading-none">
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </span>
-              )}
-            </button>
-
-            {notifOpen && (
-              <div className="absolute right-0 top-full mt-2 w-80 sm:w-88 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/50">
-                  <div className="flex items-center gap-2">
-                    <Bell className="w-4 h-4 text-magenta-500" />
-                    <span className="font-semibold text-gray-900 text-sm">Notifications</span>
-                  </div>
-                  {unreadCount > 0 ? (
-                    <button
-                      onClick={markAllRead}
-                      className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700"
-                    >
-                      Mark all read
-                    </button>
-                  ) : (
-                    <span className="text-[11px] text-gray-400">All caught up</span>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div ref={notifRef} className="relative">
+                <button
+                  onClick={() => setNotifOpen((o) => !o)}
+                  className="relative w-10 h-10 flex items-center justify-center rounded-full border border-gray-200/80 bg-white hover:bg-magenta-50 transition-colors"
+                >
+                  <Bell className={cn("w-[18px] h-[18px]", notifOpen ? "text-magenta-600" : "text-gray-500")} />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-600 rounded-full text-white text-[10px] font-bold leading-none">
+                      {unreadCount > 9 ? "9+" : unreadCount}
+                    </span>
                   )}
-                </div>
+                </button>
 
-                {notifications.length === 0 ? (
-                  <div className="py-10 text-center">
-                    <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                    <p className="text-sm text-gray-400">No new notifications</p>
-                  </div>
-                ) : (
-                  <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
-                    {notifications.map((n) => {
-                      const isBroadcast = n.type === "broadcast";
-                      const isAppointment = n.type.includes("appointment");
-                      const isScan = n.type.includes("scan");
-
-                      return (
-                        <div
-                          key={n.id}
-                          onClick={() => {
-                            if (!n.isRead) markAsRead(n.id);
-                            setNotifOpen(false);
-                            if (isAppointment) {
-                              navigate("/dashboard/appointment-status");
-                            } else if (isScan) {
-                              navigate("/dashboard/history");
-                            }
-                          }}
-                          className={cn(
-                            "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
-                            !n.isRead && "bg-magenta-50/20"
-                          )}
+                {notifOpen && (
+                  <div className="absolute right-0 top-full mt-2 w-80 sm:w-88 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/50">
+                      <div className="flex items-center gap-2">
+                        <Bell className="w-4 h-4 text-magenta-500" />
+                        <span className="font-semibold text-gray-900 text-sm">Notifications</span>
+                      </div>
+                      {unreadCount > 0 ? (
+                        <button
+                          onClick={markAllRead}
+                          className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700"
                         >
-                          <div
-                            className={cn(
-                              "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
-                              isBroadcast
-                                ? "bg-amber-100 text-amber-600"
-                                : isAppointment
-                                  ? "bg-blue-100 text-blue-600"
-                                  : isScan
-                                    ? "bg-magenta-100 text-magenta-600"
-                                    : "bg-purple-100 text-purple-600"
-                            )}
-                          >
-                            {isBroadcast ? (
-                              <Megaphone className="w-4 h-4" />
-                            ) : isAppointment ? (
-                              <Calendar className="w-4 h-4" />
-                            ) : isScan ? (
-                              <ScanSearch className="w-4 h-4" />
-                            ) : (
-                              <Bell className="w-4 h-4" />
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-semibold text-gray-900 truncate">
-                              {n.title}
-                            </p>
-                            <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
-                              {n.body}
-                            </p>
-                            <p className="text-[10px] text-gray-400 mt-1 flex items-center gap-1.5">
-                              <span>{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                              <span>•</span>
-                              <span>{new Date(n.createdAt).toLocaleDateString()}</span>
-                            </p>
-                          </div>
-                          {!n.isRead && (
-                            <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
-                          )}
-                        </div>
-                      );
-                    })}
+                          Mark all read
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-gray-400">All caught up</span>
+                      )}
+                    </div>
+
+                    {notifications.length === 0 ? (
+                      <div className="py-10 text-center">
+                        <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                        <p className="text-sm text-gray-400">No new notifications</p>
+                      </div>
+                    ) : (
+                      <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+                        {notifications.map((n) => {
+                          const isBroadcast = n.type === "broadcast";
+                          const isAppointment = n.type.includes("appointment");
+                          const isScan = n.type.includes("scan");
+
+                          return (
+                            <div
+                              key={n.id}
+                              onClick={() => {
+                                if (!n.isRead) markAsRead(n.id);
+                                setNotifOpen(false);
+                                if (isAppointment) {
+                                  navigate("/dashboard/appointment-status");
+                                } else if (isScan) {
+                                  navigate("/dashboard/history");
+                                }
+                              }}
+                              className={cn(
+                                "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
+                                !n.isRead && "bg-magenta-50/20"
+                              )}
+                            >
+                              <div
+                                className={cn(
+                                  "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
+                                  isBroadcast
+                                    ? "bg-amber-100 text-amber-600"
+                                    : isAppointment
+                                      ? "bg-blue-100 text-blue-600"
+                                      : isScan
+                                        ? "bg-magenta-100 text-magenta-600"
+                                        : "bg-purple-100 text-purple-600"
+                                )}
+                              >
+                                {isBroadcast ? (
+                                  <Megaphone className="w-4 h-4" />
+                                ) : isAppointment ? (
+                                  <Calendar className="w-4 h-4" />
+                                ) : isScan ? (
+                                  <ScanSearch className="w-4 h-4" />
+                                ) : (
+                                  <Bell className="w-4 h-4" />
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-semibold text-gray-900 truncate">
+                                  {n.title}
+                                </p>
+                                <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
+                                  {n.body}
+                                </p>
+                                <p className="text-[10px] text-gray-400 mt-1 flex items-center gap-1.5">
+                                  <span>{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                  <span>•</span>
+                                  <span>{new Date(n.createdAt).toLocaleDateString()}</span>
+                                </p>
+                              </div>
+                              {!n.isRead && (
+                                <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between text-xs">
+                      <Link
+                        to="/dashboard/history"
+                        onClick={() => setNotifOpen(false)}
+                        className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors inline-flex items-center gap-1"
+                      >
+                        <span>Skin scan history</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </Link>
+                      <Link
+                        to="/dashboard/appointment-status"
+                        onClick={() => setNotifOpen(false)}
+                        className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors inline-flex items-center gap-1"
+                      >
+                        <span>Appointments</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </div>
                   </div>
                 )}
+              </div>
 
-                <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between text-xs">
-                  <Link
-                    to="/dashboard/history"
-                    onClick={() => setNotifOpen(false)}
-                    className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors inline-flex items-center gap-1"
-                  >
-                    <span>Skin scan history</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
-                  <Link
-                    to="/dashboard/appointment-status"
-                    onClick={() => setNotifOpen(false)}
-                    className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors inline-flex items-center gap-1"
-                  >
-                    <span>Appointments</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
+              {/* Profile pill */}
+              <div className="hidden sm:flex items-center gap-2.5 pl-1.5 pr-4 py-1.5 rounded-full border border-gray-200/80 bg-white">
+                <div className="w-9 h-9 rounded-full bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-sm font-bold shrink-0">
+                  {dynamicProfile.profilePictureUrl && !imgError ? (
+                    <img
+                      src={dynamicProfile.profilePictureUrl}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
+                      onError={() => setImgError(true)}
+                    />
+                  ) : (
+                    initial
+                  )}
+                </div>
+                <div className="min-w-0 leading-tight">
+                  <p className="text-xs font-semibold text-gray-900 truncate max-w-40">{displayFullName}</p>
+                  <p className="text-[10px] text-gray-400 truncate max-w-40">
+                    {[dynamicProfile.membershipTier, dynamicProfile.location].filter(Boolean).join(" · ")}
+                  </p>
                 </div>
               </div>
-            )}
-          </div>
-
-          {/* Profile pill */}
-          <div className="hidden sm:flex items-center gap-2.5 pl-1.5 pr-4 py-1.5 rounded-full border border-gray-200/80 bg-white">
-            <div className="w-9 h-9 rounded-full bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-sm font-bold shrink-0">
-              {dynamicProfile.profilePictureUrl && !imgError ? (
-                <img
-                  src={dynamicProfile.profilePictureUrl}
-                  alt="Profile"
-                  className="w-full h-full object-cover"
-                  onError={() => setImgError(true)}
-                />
-              ) : (
-                initial
-              )}
-            </div>
-            <div className="min-w-0 leading-tight">
-              <p className="text-xs font-semibold text-gray-900 truncate max-w-40">{displayFullName}</p>
-              <p className="text-[10px] text-gray-400 truncate max-w-40">
-                {[dynamicProfile.membershipTier, dynamicProfile.location].filter(Boolean).join(" · ")}
-              </p>
             </div>
           </div>
-          </div>
-        </div>
 
-        <div className="flex-1 overflow-x-hidden">{children}</div>
+          <div className="flex-1 overflow-x-hidden">{children}</div>
         </div>
       </main>
     </div>
