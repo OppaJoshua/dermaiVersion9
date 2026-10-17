@@ -561,7 +561,7 @@ export default function UserLayout({
   };
 
   return (
-    <div className="min-h-screen bg-white p-0 lg:p-3 flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-white flex flex-col lg:flex-row">
       {/* Backdrop Overlay */}
       <div
         className={cn(
@@ -571,18 +571,17 @@ export default function UserLayout({
         onClick={() => setSidebarOpen(false)}
       />
 
-      {/* Sidebar — floating box */}
+      {/* Sidebar — docked and connected */}
       <aside
         className={cn(
-          "flex flex-col w-64 bg-white border border-gray-200/80 rounded-3xl fixed z-50 overflow-hidden text-[14px]",
-          "left-3 top-3 bottom-3",
+          "flex flex-col w-64 bg-white border-r border-gray-200/80 fixed inset-y-0 left-0 z-50 text-[14px]",
           "transition-transform duration-300 ease-in-out",
           "shadow-xl lg:shadow-none",
-          sidebarOpen ? "translate-x-0" : "-translate-x-[110%] lg:translate-x-0"
+          sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
         {/* Logo */}
-        <div className="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
+        <div className="flex items-center justify-between px-5 h-16 border-b border-gray-100 shrink-0">
           <div className="flex items-center gap-2.5">
             <img src={Logo} alt="DERMAI logo" className="h-8 w-auto object-contain" />
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-magenta-50 text-magenta-600 font-semibold">
@@ -598,7 +597,7 @@ export default function UserLayout({
           </button>
         </div>
 
-        <p className="px-6 pt-2 pb-1.5 text-[10px] font-semibold tracking-[0.14em] text-gray-400 uppercase">
+        <p className="px-6 pt-3 pb-1.5 text-[10px] font-semibold tracking-[0.14em] text-gray-400 uppercase">
           Menu
         </p>
 
@@ -616,7 +615,7 @@ export default function UserLayout({
             )}
           >
             {location.pathname === "/dashboard" && (
-              <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-6 w-1 rounded-r-full bg-magenta-600" />
+              <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-1 rounded-r-full bg-magenta-600" />
             )}
             <LayoutGrid className="w-[18px] h-[18px] shrink-0" />
             <span>Dashboard</span>
@@ -636,12 +635,12 @@ export default function UserLayout({
                   className={cn(
                     "relative w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-medium transition-colors select-none text-left cursor-pointer",
                     isChildActive
-                      ? "text-magenta-700 bg-magenta-50/60"
+                      ? "text-magenta-700 bg-magenta-50/60 font-semibold"
                       : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
                   )}
                 >
                   {isChildActive && (
-                    <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-6 w-1 rounded-r-full bg-magenta-600" />
+                    <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-1 rounded-r-full bg-magenta-600" />
                   )}
                   <div className="flex items-center gap-3 min-w-0">
                     <SectionIcon
@@ -670,7 +669,7 @@ export default function UserLayout({
                       transition={{ duration: 0.2, ease: "easeInOut" }}
                       className="overflow-hidden"
                     >
-                      <div className="pt-0.5 pb-1 space-y-0.5 ml-[22px] pl-3 border-l border-gray-100">
+                      <div className="pt-1 pb-1 space-y-0.5 ml-[22px] pl-3.5 border-l border-gray-200">
                         {section.links.map((link) => {
                           const isActive = isLinkActive(link.path, location.pathname);
                           return (
@@ -679,13 +678,24 @@ export default function UserLayout({
                               to={link.path}
                               onClick={() => setSidebarOpen(false)}
                               className={cn(
-                                "block px-3 py-2 rounded-xl text-[13px] transition-colors",
+                                "relative block px-2.5 py-1.5 rounded-lg text-[13px] transition-colors",
                                 isActive
-                                  ? "bg-magenta-50 text-magenta-700 font-semibold"
-                                  : "text-gray-500 font-medium hover:bg-gray-50 hover:text-gray-900"
+                                  ? "text-magenta-700 font-semibold"
+                                  : "text-gray-500 font-medium hover:text-gray-900 hover:bg-gray-50/60"
                               )}
                             >
-                              {link.label}
+                              {/* Branch connector line from border-l */}
+                              <span
+                                className={cn(
+                                  "absolute -left-3.5 top-1/2 -translate-y-1/2 w-2.5 h-[1.5px] transition-colors",
+                                  isActive ? "bg-magenta-600" : "bg-gray-200"
+                                )}
+                              />
+                              {/* Node indicator dot on branch line when active */}
+                              {isActive && (
+                                <span className="absolute -left-3.5 -translate-x-1/2 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-magenta-600 ring-2 ring-white shadow-2xs" />
+                              )}
+                              <span>{link.label}</span>
                             </Link>
                           );
                         })}
@@ -699,7 +709,7 @@ export default function UserLayout({
         </div>
 
         {/* Logout */}
-        <div className="px-3 py-3 shrink-0">
+        <div className="px-3 py-3 border-t border-gray-100 shrink-0">
           <button
             onClick={handleLogout}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium text-gray-600 hover:bg-magenta-50 hover:text-magenta-700 transition-colors cursor-pointer"
@@ -710,11 +720,11 @@ export default function UserLayout({
         </div>
       </aside>
 
-      {/* Main Content — boxed panel */}
-      <main className="flex-1 lg:ml-[17.25rem] min-w-0 flex flex-col w-full">
-        <div className="flex-1 flex flex-col bg-white lg:border border-gray-200/80 lg:rounded-3xl lg:min-h-[calc(100vh-1.5rem)] overflow-hidden">
+      {/* Main Content — connected panel */}
+      <main className="flex-1 lg:ml-64 min-w-0 flex flex-col w-full min-h-screen">
+        <div className="flex-1 flex flex-col bg-white min-h-screen">
           {/* Top Header — breadcrumb pill + bell + profile */}
-          <div className="px-4 sm:px-6 py-3 flex items-center justify-between sticky top-0 z-40 bg-white/90 backdrop-blur">
+          <div className="px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40 bg-white/90 backdrop-blur border-b border-gray-100">
             <div className="flex items-center gap-3">
               <button
                 className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500"
@@ -859,8 +869,12 @@ export default function UserLayout({
               </div>
 
               {/* Profile pill */}
-              <div className="hidden sm:flex items-center gap-2.5 pl-1.5 pr-4 py-1.5 rounded-full border border-gray-200/80 bg-white">
-                <div className="w-9 h-9 rounded-full bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-sm font-bold shrink-0">
+              <Link
+                to="/dashboard/profile"
+                className="hidden sm:flex items-center gap-2.5 pl-1 pr-3.5 py-1 rounded-full border border-gray-200/80 bg-white hover:bg-magenta-50/40 hover:border-magenta-200 transition-colors cursor-pointer shrink-0"
+                title="View Profile"
+              >
+                <div className="w-8 h-8 rounded-full bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-xs font-bold shrink-0">
                   {dynamicProfile.profilePictureUrl && !imgError ? (
                     <img
                       src={dynamicProfile.profilePictureUrl}
@@ -878,7 +892,7 @@ export default function UserLayout({
                     {[dynamicProfile.membershipTier, dynamicProfile.location].filter(Boolean).join(" · ")}
                   </p>
                 </div>
-              </div>
+              </Link>
             </div>
           </div>
 
