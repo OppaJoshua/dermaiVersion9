@@ -1,11 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Calendar, CheckCircle2, XCircle, X, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Calendar, CalendarDays, CheckCircle2, CreditCard, XCircle, X, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
-import { cn } from "@/lib/utils";
-import gcashLogo from "@/assets/gcash.png";
-import mayaLogo from "@/assets/maya.png";
+import { withVat } from "@/lib/vat";
 
 interface SubData {
   isPro: boolean;
@@ -21,32 +19,13 @@ interface SubData {
   cancelAtPeriodEnd?: boolean;
 }
 
-type PaymentMethodType = "gcash" | "maya";
-
-interface SavedPaymentMethod {
-  type: PaymentMethodType;
-  label: string;
-  sublabel: string;
-  mobileNumber: string;
-  fullName: string;
-  email: string;
-  billingAddress: string;
-}
-
 interface BillingHistoryItem {
+  paymentId: string;
+  paymentDate: string;
   date: string;
   amount: string;
+  method: string;
   status: string;
-}
-
-function formatMobileNumber(value: string) {
-  return value.replace(/\D/g, "").slice(0, 11);
-}
-
-function maskMobile(value: string) {
-  const clean = value.replace(/\D/g, "");
-  if (clean.length < 11) return clean;
-  return `${clean.slice(0, 4)} **** ${clean.slice(7)}`;
 }
 
 export default function BillingSettingsPage() {
@@ -61,21 +40,12 @@ export default function BillingSettingsPage() {
   scanLimit: 3,
 });
 
-  const [paymentMethod, setPaymentMethod] = useState<SavedPaymentMethod | null>(null);
   const [billingHistory, setBillingHistory] = useState<BillingHistoryItem[]>([]);
+  const [selectedPayment, setSelectedPayment] = useState<BillingHistoryItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
   const [resuming, setResuming] = useState(false);
 
-  // Modal & form states
-  const [showModal, setShowModal] = useState(false);
-  const [modalMethodType, setModalMethodType] = useState<PaymentMethodType>("gcash");
-  const [mobileNumber, setMobileNumber] = useState("");
-  const [paymentFullName, setPaymentFullName] = useState("");
-  const [paymentEmail, setPaymentEmail] = useState("");
-  const [billingAddress, setBillingAddress] = useState("");
-  const [methodSaved, setMethodSaved] = useState(false);
-  const modalRef = useRef<HTMLDivElement>(null);
 
   const loadBillingData = useCallback(async () => {
     if (!user) {
@@ -164,7 +134,9 @@ export default function BillingSettingsPage() {
         : null;
 
       const hasActivePaidPeriod =
-        activeSubscription?.status === "active" &&
+        (activeSubscription?.status === "active" ||
+          activeSubscription?.status === "cancelling" ||
+          activeSubscription?.status === "pending_downgrade") &&
         currentPeriodEnd !== null &&
         currentPeriodEnd.getTime() > Date.now();
 
@@ -181,6 +153,8 @@ export default function BillingSettingsPage() {
               .filter(Boolean)
           : [];
 
+        const renewalRaw = activeSubscription.renews_at || activeSubscription.current_period_end;
+
         setSub({
           isPro: true,
           planName: plan.name || "Pro Plan",
@@ -188,8 +162,8 @@ export default function BillingSettingsPage() {
             activeSubscription.billing_cycle === "yearly"
               ? "yearly"
               : "monthly",
-          renewsAt: activeSubscription.renews_at
-            ? new Date(activeSubscription.renews_at).toLocaleDateString(
+          renewsAt: renewalRaw
+            ? new Date(renewalRaw).toLocaleDateString(
                 "en-US",
                 {
                   month: "long",
@@ -198,7 +172,8 @@ export default function BillingSettingsPage() {
                 }
               )
             : undefined,
-          price: `₱${Number(plan.price).toLocaleString("en-PH", {
+          // plan.price is the NET price; show the VAT-inclusive price the patient pays
+          price: `₱${withVat(Number(plan.price)).toLocaleString("en-PH", {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
           })} / ${
@@ -220,6 +195,7 @@ export default function BillingSettingsPage() {
       }
 
       // 2. Load payment transactions
+      // user_payment.amount must hold the amount actually charged (VAT-inclusive).
       const { data: payments } = await supabase
         .from("user_payment")
         .select("payment_id, amount, payment_date, method, status")
@@ -228,58 +204,21 @@ export default function BillingSettingsPage() {
 
       if (payments && payments.length > 0) {
         const mappedHistory: BillingHistoryItem[] = payments.map((p) => ({
+          paymentId: p.payment_id,
+          paymentDate: p.payment_date,
           date: new Date(p.payment_date).toLocaleDateString("en-US", {
             month: "short",
             day: "numeric",
             year: "numeric",
           }),
           amount: `₱${Number(p.amount).toLocaleString()}`,
+          method: p.method || "Not provided",
           status: p.status === "success" ? "Paid" : p.status,
         }));
         setBillingHistory(mappedHistory);
 
-        const currentPeriodEnd = activeSubscription?.current_period_end
-          ? new Date(activeSubscription.current_period_end)
-          : null;
-
-        const hasActivePaidPeriod =
-          activeSubscription?.status === "active" &&
-          currentPeriodEnd !== null &&
-          currentPeriodEnd.getTime() > Date.now();
-
-        const latestSuccessfulPayment = payments.find((p) => p.status === "success");
-
-        const savedPaymentMethod =
-          activeSubscription?.payment_method?.toLowerCase() ||
-          latestSuccessfulPayment?.method?.toLowerCase();
-
-        // Use the payment details saved with the current subscription.
-        // Do not display the method after cancellation or expiration.
-        if (!hasActivePaidPeriod || activeSubscription?.cancel_at_period_end) {
-          setPaymentMethod(null);
-        } else if (
-          savedPaymentMethod === "paymaya" ||
-          savedPaymentMethod === "gcash"
-        ) {
-          const isMaya = savedPaymentMethod === "paymaya";
-
-          setPaymentMethod({
-            type: isMaya ? "maya" : "gcash",
-            label: isMaya ? "Maya e-Wallet" : "GCash e-Wallet",
-            sublabel: activeSubscription.payment_mobile_number
-              ? maskMobile(activeSubscription.payment_mobile_number)
-              : "Connected via PayMongo",
-            mobileNumber: activeSubscription.payment_mobile_number || "",
-            fullName: activeSubscription.payment_full_name || "",
-            email: activeSubscription.payment_email || "",
-            billingAddress: activeSubscription.billing_address || "",
-          });
-        } else {
-          setPaymentMethod(null);
-        }
       } else {
         setBillingHistory([]);
-        setPaymentMethod(null);
       }
     } catch {
       // Fallback
@@ -292,114 +231,7 @@ export default function BillingSettingsPage() {
     loadBillingData();
   }, [loadBillingData]);
 
-  // Close modal on outside click
-  useEffect(() => {
-    if (!showModal) return;
-    const handler = (e: MouseEvent) => {
-      if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
-        setShowModal(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [showModal]);
 
-  const openModal = async () => {
-    // Show the modal right away using whatever is already loaded.
-    const meta = ((user as any)?.user_metadata || {}) as Record<string, any>;
-    const accountName = meta.full_name || meta.name || "";
-    const accountEmail = (user as any)?.email || "";
-
-    let saved = {
-      type: (paymentMethod?.type || "gcash") as PaymentMethodType,
-      fullName: paymentMethod?.fullName || "",
-      email: paymentMethod?.email || "",
-      billingAddress: paymentMethod?.billingAddress || "",
-      mobileNumber: paymentMethod?.mobileNumber || "",
-    };
-
-    // Re-read the saved checkout details so the form never opens with stale/empty state.
-    if (user) {
-      const { data } = await supabase
-        .from("user_plan_subscription")
-        .select("payment_method, payment_full_name, payment_email, billing_address, payment_mobile_number")
-        .eq("user_id", user.id)
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (data) {
-        const method = data.payment_method?.toLowerCase();
-        saved = {
-          type: method === "paymaya" || method === "maya" ? "maya" : method === "gcash" ? "gcash" : saved.type,
-          fullName: data.payment_full_name || saved.fullName,
-          email: data.payment_email || saved.email,
-          billingAddress: data.billing_address || saved.billingAddress,
-          mobileNumber: data.payment_mobile_number || saved.mobileNumber,
-        };
-      }
-    }
-
-    setModalMethodType(saved.type);
-    setMobileNumber(formatMobileNumber(saved.mobileNumber));
-    setPaymentFullName(saved.fullName || accountName);
-    setPaymentEmail(saved.email || accountEmail);
-    setBillingAddress(saved.billingAddress);
-
-    setMethodSaved(false);
-    setShowModal(true);
-  };
-
-  const handleSaveMethod = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!user || !sub.subscriptionId) return;
-
-    const cleanMobile = mobileNumber.replace(/\D/g, "");
-
-    if (cleanMobile.length < 11) return;
-
-    const databaseMethod =
-      modalMethodType === "maya" ? "paymaya" : "gcash";
-
-    try {
-      const { error } = await supabase
-        .from("user_plan_subscription")
-        .update({
-          payment_method: databaseMethod,
-          payment_full_name: paymentFullName.trim(),
-          payment_email: paymentEmail.trim(),
-          billing_address: billingAddress.trim(),
-          payment_mobile_number: cleanMobile,
-        })
-        .eq("subscription_id", sub.subscriptionId)
-        .eq("status", "active");
-
-      if (error) throw error;
-
-      const newMethod: SavedPaymentMethod = {
-        type: modalMethodType,
-        label:
-          modalMethodType === "gcash"
-            ? "GCash e-Wallet"
-            : "Maya e-Wallet",
-        sublabel: maskMobile(cleanMobile),
-        mobileNumber: cleanMobile,
-        fullName: paymentFullName.trim(),
-        email: paymentEmail.trim(),
-        billingAddress: billingAddress.trim(),
-      };
-
-      setPaymentMethod(newMethod);
-      setMethodSaved(true);
-
-      await loadBillingData();
-
-      setShowModal(false);
-    } catch (error) {
-      console.error("Failed to update payment method:", error);
-    }
-  };
   const handleCancel = async () => {
     if (!user || !sub.subscriptionId || !sub.isPro || !sub.currentPeriodEnd) return;
     if (sub.cancelAtPeriodEnd || new Date(sub.currentPeriodEnd).getTime() <= Date.now()) return;
@@ -481,89 +313,104 @@ export default function BillingSettingsPage() {
 
   return (
     <>
-    <div className="max-w-2xl mx-auto py-10 px-4 sm:px-6">
-      <div className="flex items-center gap-3 mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Billing</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Manage your subscription and payment details</p>
-        </div>
+    <div className="max-w-6xl mx-auto py-10 px-4 sm:px-6 lg:px-8">
+      {/* Page header */}
+      <div className="mb-8">
+        <h1 className="text-2xl font-semibold text-gray-900">Billing</h1>
+        <p className="mt-1 text-sm text-gray-500">Manage your subscription and payment details</p>
       </div>
 
       {/* Current Plan */}
-      <div className={`rounded-2xl p-6 mb-6 border ${sub.isPro ? "bg-magenta-50 border-magenta-200" : "bg-white border-gray-100"} shadow-sm`}>
+      <section className="mb-8 overflow-hidden rounded-lg border border-gray-200 bg-white">
+        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+          <h2 className="text-sm font-semibold text-gray-900">Current Plan</h2>
+
+          {!loading && (
+            <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${sub.isPro ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20" : "bg-gray-50 text-gray-600 ring-gray-500/20"}`}>
+              {sub.isPro ? "Active" : "Free"}
+            </span>
+          )}
+        </div>
+
         {loading ? (
-          <div className="py-8 text-center">
-            <Loader2 className="w-6 h-6 text-magenta-500 animate-spin mx-auto mb-2" />
+          <div className="py-12 text-center">
+            <Loader2 className="mx-auto mb-2 h-6 w-6 animate-spin text-[#A21D5C]" />
             <p className="text-xs text-gray-400">Loading billing details...</p>
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div>
-                  <p className="text-base font-bold text-gray-900">
-                    {sub.isPro
-                      ? (sub.planName || "Pro Plan")
-                      : (freePlan.planName || "Free Plan")}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {sub.isPro
-                      ? sub.price
-                      : freePlan.scanLimit === null
-                      ? "Unlimited scans"
-                      : `${freePlan.scanLimit ?? 0} scans per account`}
-                  </p>
-                </div>
+            <dl className="grid grid-cols-1 gap-x-8 gap-y-6 px-6 py-6 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <dt className="text-xs font-medium text-gray-500">Plan</dt>
+                <dd className="mt-1.5 text-base font-semibold text-gray-900">
+                  {sub.isPro
+                    ? (sub.planName || "Pro Plan")
+                    : (freePlan.planName || "Free Plan")}
+                </dd>
               </div>
 
-              <span className={`text-xs px-3 py-1 rounded-full font-bold ${sub.isPro ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                {sub.isPro ? "Active" : "Free"}
-              </span>
-            </div>
+              {sub.isPro ? (
+                <>
+                  <div>
+                    <dt className="text-xs font-medium text-gray-500">Price</dt>
+                    <dd className="mt-1.5 text-base font-semibold text-gray-900">{sub.price}</dd>
+                  </div>
+
+                  <div>
+                    <dt className="text-xs font-medium text-gray-500">Billing cycle</dt>
+                    <dd className="mt-1.5 text-base font-semibold capitalize text-gray-900">{sub.billingCycle}</dd>
+                  </div>
+
+                  <div>
+                    <dt className="flex items-center gap-1.5 text-xs font-medium text-gray-500">
+                      <Calendar className="h-3.5 w-3.5" />
+                      {sub.cancelAtPeriodEnd ? "Pro access until" : "Next billing date"}
+                    </dt>
+                    <dd className="mt-1.5 text-base font-semibold text-gray-900">{sub.renewsAt}</dd>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <dt className="text-xs font-medium text-gray-500">Scan limit</dt>
+                  <dd className="mt-1.5 text-base font-semibold text-gray-900">
+                    {freePlan.scanLimit === null
+                      ? "Unlimited scans"
+                      : `${freePlan.scanLimit ?? 0} scans per account`}
+                  </dd>
+                </div>
+              )}
+            </dl>
 
             {sub.isPro ? (
-              <div className="pt-4 border-t border-magenta-100 space-y-2">
-                <div className="flex items-center justify-between text-xs text-gray-600">
-                  <span className="flex items-center gap-1.5 text-gray-500">
-                    <Calendar className="w-3.5 h-3.5" />
-                    {sub.cancelAtPeriodEnd ? "Pro access until" : "Next billing date"}
-                  </span>
-                  <span className="font-semibold text-gray-900">{sub.renewsAt}</span>
+              sub.cancelAtPeriodEnd ? (
+                <div className="flex flex-col gap-4 border-t border-gray-200 bg-gray-50 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-gray-600">
+                    Your Pro access remains active until {sub.renewsAt}. You can resume your subscription before then without paying again.
+                  </p>
+                  <button
+                    onClick={handleResume}
+                    disabled={resuming}
+                    className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-[#A21D5C] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#7E1448] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#A21D5C] focus-visible:ring-offset-2 disabled:opacity-50 cursor-pointer"
+                  >
+                    {resuming ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Resume Subscription
+                  </button>
                 </div>
-
-                <div className="flex items-center justify-between text-xs text-gray-600">
-                  <span className="text-gray-500">Billing cycle</span>
-                  <span className="font-semibold capitalize text-gray-900">{sub.billingCycle}</span>
-                </div>
-
-                {sub.cancelAtPeriodEnd ? (
-                  <>
-                    <p className="mt-3 text-xs text-gray-500">
-                      Your Pro access remains active until {sub.renewsAt}. You can resume your subscription before then without paying again.
-                    </p>
-                    <button
-                      onClick={handleResume}
-                      disabled={resuming}
-                      className="mt-4 flex items-center gap-2 text-sm text-magenta-600 font-semibold hover:text-magenta-700 transition-colors disabled:opacity-50 cursor-pointer"
-                    >
-                      {resuming ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Resume Subscription
-                    </button>
-                  </>
-                ) : (
+              ) : (
+                <div className="flex justify-end border-t border-gray-200 bg-gray-50 px-6 py-4">
                   <button
                     onClick={handleCancel}
                     disabled={cancelling}
-                    className="mt-4 flex items-center gap-2 text-sm text-red-500 font-semibold hover:text-red-600 transition-colors disabled:opacity-50 cursor-pointer"
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 focus-visible:ring-offset-2 disabled:opacity-50 cursor-pointer"
                   >
                     {cancelling ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />} Cancel Subscription
                   </button>
-                )}
-              </div>
+                </div>
+              )
             ) : (
-              <div className="pt-4 border-t border-gray-100">
+              <div className="flex justify-end border-t border-gray-200 bg-gray-50 px-6 py-4">
                 <Link
-                  to="/patient/subscription"
-                  className="text-sm text-magenta-500 font-semibold hover:text-magenta-700 transition-colors"
+                  to="/dashboard/upgrade"
+                  className="inline-flex items-center justify-center rounded-md bg-[#A21D5C] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#7E1448] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#A21D5C] focus-visible:ring-offset-2"
                 >
                   Upgrade to Pro
                 </Link>
@@ -571,224 +418,200 @@ export default function BillingSettingsPage() {
             )}
           </>
         )}
-      </div>
+      </section>
 
-      {/* Payment Method */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 mb-6 shadow-sm">
-        <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-4">
-          Payment Method
-        </h2>
-
-        {paymentMethod ? (
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-10 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center">
-              {paymentMethod.type === "gcash" ? (
-                <img src={gcashLogo} alt="GCash" className="h-6 w-auto object-contain" />
-              ) : (
-                <img src={mayaLogo} alt="Maya" className="h-6 w-auto object-contain" />
-              )}
-            </div>
-
-            <div>
-              <p className="text-sm font-bold text-gray-900">{paymentMethod.label}</p>
-              <p className="text-xs text-gray-400 mt-0.5">{paymentMethod.sublabel}</p>
-              {paymentMethod.fullName && (
-                <p className="text-xs text-gray-500 mt-1 truncate">{paymentMethod.fullName}</p>
-              )}
-              {paymentMethod.email && (
-                <p className="text-xs text-gray-400 truncate">{paymentMethod.email}</p>
-              )}
-              {paymentMethod.billingAddress && (
-                <p className="text-xs text-gray-400 truncate">{paymentMethod.billingAddress}</p>
-              )}
-            </div>
-
-            <button
-              onClick={openModal}
-              className="ml-auto text-xs text-magenta-500 font-semibold hover:text-magenta-700 transition-colors cursor-pointer"
-            >
-              Update
-            </button>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-gray-400">No payment method on file.</p>
-            <button
-              onClick={openModal}
-              className="text-xs text-magenta-500 font-semibold hover:text-magenta-700 transition-colors cursor-pointer"
-            >
-              Add Payment Method
-            </button>
-          </div>
-        )}
-      </div>
 
       {/* Billing History */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
-        <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-4">Billing History</h2>
+      <section className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+        <div className="border-b border-gray-200 px-6 py-4">
+          <h2 className="text-sm font-semibold text-gray-900">Billing History</h2>
+        </div>
 
         {billingHistory.length > 0 ? (
-          <div className="divide-y divide-gray-100">
-            {billingHistory.map((row, i) => (
-              <div key={i} className="flex items-center justify-between py-3 text-sm">
-                <span className="text-gray-600">{row.date}</span>
-                <span className="font-semibold text-gray-900">{row.amount}</span>
-                <span className="px-2.5 py-0.5 rounded-full bg-green-100 text-green-700 text-xs font-semibold">
-                  {row.status}
-                </span>
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[820px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50 text-xs font-medium text-gray-500">
+                  <th scope="col" className="px-6 py-3 font-medium">Date</th>
+                  <th scope="col" className="px-6 py-3 font-medium">Description</th>
+                  <th scope="col" className="px-6 py-3 font-medium">Payment Method</th>
+                  <th scope="col" className="px-6 py-3 font-medium">Transaction ID</th>
+                  <th scope="col" className="px-6 py-3 text-right font-medium">Amount</th>
+                  <th scope="col" className="px-6 py-3 font-medium">Status</th>
+                  <th scope="col" className="px-6 py-3 text-right font-medium">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {billingHistory.map((row) => (
+                  <tr key={row.paymentId} className="transition-colors hover:bg-gray-50">
+                    <td className="whitespace-nowrap px-6 py-4 text-gray-900">{row.date}</td>
+                    <td className="whitespace-nowrap px-6 py-4 text-gray-600">DermAI Subscription</td>
+                    <td className="whitespace-nowrap px-6 py-4 text-gray-600">
+                      {row.method.toLowerCase().includes("gcash")
+                        ? "GCash"
+                        : row.method.toLowerCase().includes("maya") ||
+                            row.method.toLowerCase().includes("paymaya")
+                          ? "Maya"
+                          : row.method || "Online Payment"}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="block max-w-[180px] truncate font-mono text-xs text-gray-500" title={row.paymentId}>
+                        {row.paymentId}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-6 py-4 text-right font-semibold text-gray-900">{row.amount}</td>
+                    <td className="whitespace-nowrap px-6 py-4">
+                      <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">{row.status}</span>
+                    </td>
+                    <td className="whitespace-nowrap px-6 py-4 text-right">
+                      <button type="button" onClick={() => setSelectedPayment(row)} className="rounded text-sm font-medium text-[#A21D5C] hover:text-[#7E1448] hover:underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A21D5C]/40" aria-label={`View payment ${row.paymentId}`}>View</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         ) : (
-          <p className="text-sm text-gray-400">No billing history available.</p>
+          <p className="px-6 py-10 text-center text-sm text-gray-400">No billing history available.</p>
         )}
-      </div>
+      </section>
     </div>
 
-      {/* Update Payment Method Modal */}
-    {showModal && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm px-4">
+      {/* Billing History Payment Details Modal */}
+      {selectedPayment && (
         <div
-          ref={modalRef}
-          className="w-full max-w-md bg-white rounded-[28px] shadow-2xl p-7 space-y-5"
+          className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-6 backdrop-blur-sm"
+          onClick={() => setSelectedPayment(null)}
         >
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-gray-900">Update Payment Method</h2>
-            <button
-              onClick={() => setShowModal(false)}
-              className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors cursor-pointer"
-            >
-              <X className="w-4 h-4 text-gray-500" />
-            </button>
-          </div>
-
-          {/* Payment Method Selector Tabs: GCash & Maya */}
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-2">Select E-Wallet</label>
-            <div className="grid grid-cols-2 gap-3">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="payment-details-title"
+            className="my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-[#F4C9DC] bg-white shadow-[0_10px_40px_-12px_rgba(162,29,92,0.25)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative bg-gradient-to-br from-[#A21D5C] to-[#7E1448] px-6 pb-12 pt-7 text-center sm:px-8">
               <button
                 type="button"
-                onClick={() => setModalMethodType("gcash")}
-                className={cn(
-                  "flex flex-col items-center justify-center py-3.5 px-3 rounded-2xl border transition-all cursor-pointer",
-                  modalMethodType === "gcash"
-                    ? "border-blue-500 bg-blue-50/40 ring-2 ring-blue-500/15 font-bold shadow-xs"
-                    : "border-gray-200 bg-white hover:bg-gray-50 text-gray-600 font-medium"
-                )}
+                onClick={() => setSelectedPayment(null)}
+                aria-label="Close payment details"
+                className="absolute right-3 top-3 rounded-lg p-2 text-white/80 transition-colors hover:bg-white/10 hover:text-white"
               >
-                <img src={gcashLogo} alt="GCash" className="h-6 w-auto object-contain mb-1.5" />
-                <span className="text-xs">GCash</span>
+                <X size={20} />
               </button>
-              <button
-                type="button"
-                onClick={() => setModalMethodType("maya")}
-                className={cn(
-                  "flex flex-col items-center justify-center py-3.5 px-3 rounded-2xl border transition-all cursor-pointer",
-                  modalMethodType === "maya"
-                    ? "border-emerald-500 bg-emerald-50/40 ring-2 ring-emerald-500/15 font-bold shadow-xs"
-                    : "border-gray-200 bg-white hover:bg-gray-50 text-gray-600 font-medium"
-                )}
-              >
-                <img src={mayaLogo} alt="Maya" className="h-6 w-auto object-contain mb-1.5" />
-                <span className="text-xs">Maya</span>
-              </button>
-            </div>
-          </div>
-
-          <form onSubmit={handleSaveMethod} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                Full Name <span className="text-red-500">*</span>
-              </label>
-              <input
-                required
-                type="text"
-                placeholder="Enter your full name"
-                value={paymentFullName}
-                onChange={(e) => setPaymentFullName(e.target.value)}
-                className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-3 text-sm text-gray-900 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-magenta-500/10 focus:border-magenta-400 transition-all"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                Email Address <span className="text-red-500">*</span>
-              </label>
-              <input
-                required
-                type="email"
-                placeholder="Enter your email address"
-                value={paymentEmail}
-                onChange={(e) => setPaymentEmail(e.target.value)}
-                className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-3 text-sm text-gray-900 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-magenta-500/10 focus:border-magenta-400 transition-all"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                Billing Address <span className="text-red-500">*</span>
-              </label>
-              <input
-                required
-                type="text"
-                placeholder="Enter your billing address"
-                value={billingAddress}
-                onChange={(e) => setBillingAddress(e.target.value)}
-                className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-3 text-sm text-gray-900 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-magenta-500/10 focus:border-magenta-400 transition-all"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                {modalMethodType === "gcash" ? "GCash" : "Maya"} Mobile Number <span className="text-red-500">*</span>
-              </label>
-              <input
-                required
-                type="tel"
-                inputMode="numeric"
-                placeholder="09XXXXXXXXX"
-                maxLength={11}
-                value={mobileNumber}
-                onChange={(e) => setMobileNumber(formatMobileNumber(e.target.value))}
-                className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-3 text-sm text-gray-900 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-magenta-500/10 focus:border-magenta-400 transition-all"
-              />
-              <p className="text-[11px] text-gray-400 mt-1.5">
-                Enter the 11-digit mobile number linked to your {modalMethodType === "gcash" ? "GCash" : "Maya"} account.
+              <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-pink-100/90">
+                DermAI
               </p>
+              <h2 id="payment-details-title" className="mt-1 text-sm tracking-wide text-pink-100/90">
+                DermAI - Official Payment Receipt
+              </h2>
             </div>
 
-            <button
-              type="submit"
-              className={`w-full py-3.5 rounded-2xl text-sm font-bold transition-all cursor-pointer ${
-                methodSaved
-                  ? "bg-green-500 text-white"
-                  : "bg-magenta-500 text-white hover:bg-magenta-600 active:scale-[0.98]"
-              }`}
-            >
-              {methodSaved ? "Payment Method Updated!" : "Save Payment Method"}
-            </button>
-          </form>
+            <div className="relative z-10 -mt-9 w-[72px] h-[72px] rounded-full bg-white border-4 border-white shadow-md flex items-center justify-center mx-auto">
+              <div className="w-full h-full rounded-full bg-emerald-50 flex items-center justify-center">
+                <CheckCircle2 className="w-9 h-9 text-emerald-600" />
+              </div>
 
-          <p className="text-center text-[11px] text-gray-400">
-            Payment information is securely processed via PayMongo.
-          </p>
+            </div>
+
+            <div className="px-5 pb-6 pt-4 sm:px-8 sm:pb-8">
+              <div className="text-center">
+                <p className="text-xl font-semibold tracking-tight text-gray-900 sm:text-2xl">
+                  Payment Details
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-gray-500">
+                  Your DermAI subscription transaction record.
+                </p>
+              </div>
+
+              <div className="mt-6 rounded-xl border border-[#F4C9DC] bg-[#FDF2F7] px-5 py-5 text-center sm:px-6">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">
+                  Total Paid
+                </p>
+                <p className="mt-1 break-words text-3xl font-bold tracking-tight text-[#A21D5C]">
+                  {selectedPayment.amount}
+                </p>
+              </div>
+
+              <div className="pt-6">
+                <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">
+                  Payment Details
+                </h3>
+                <dl className="divide-y divide-gray-100 text-sm">
+                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+                    <dt className="shrink-0 text-gray-500">Account</dt>
+                    <dd className="break-all font-medium text-gray-900 sm:text-right">
+                      {user?.email || "Patient Account"}
+                    </dd>
+                  </div>
+                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+                    <dt className="shrink-0 text-gray-500">Description</dt>
+                    <dd className="font-medium text-gray-900 sm:text-right">
+                      DermAI Subscription
+                    </dd>
+                  </div>
+                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+                    <dt className="shrink-0 text-gray-500">Payment Method</dt>
+                    <dd className="flex items-center gap-2 font-medium text-gray-900 sm:justify-end">
+                      <CreditCard className="h-4 w-4 shrink-0 text-[#A21D5C]" />
+                      {selectedPayment.method.toLowerCase().includes("gcash")
+                        ? "GCash"
+                        : selectedPayment.method.toLowerCase().includes("maya") ||
+                            selectedPayment.method.toLowerCase().includes("paymaya")
+                          ? "Maya"
+                          : selectedPayment.method || "Online Payment"}
+                    </dd>
+                  </div>
+                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+                    <dt className="shrink-0 text-gray-500">Date</dt>
+                    <dd className="flex items-start gap-2 font-medium text-gray-900 sm:max-w-[70%] sm:justify-end sm:text-right">
+                      <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-[#A21D5C]" />
+                      <span>
+                        {selectedPayment.paymentDate
+                          ? new Date(selectedPayment.paymentDate).toLocaleString("en-PH", {
+                              dateStyle: "long",
+                              timeStyle: "short",
+                            })
+                          : "Not provided"}
+                      </span>
+                    </dd>
+                  </div>
+                  <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+                    <dt className="shrink-0 text-gray-500">Transaction ID</dt>
+                    <dd className="max-w-full break-all rounded-md border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-xs text-gray-700 sm:max-w-[70%] sm:text-right">
+                      {selectedPayment.paymentId}
+                    </dd>
+                  </div>
+                  <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+                    <dt className="shrink-0 text-gray-500">Status</dt>
+                    <dd>
+                      <span
+                        className={
+                          ["paid", "success"].includes(selectedPayment.status.toLowerCase())
+                            ? "inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
+                            : "inline-flex rounded-full border border-[#F4C9DC] bg-[#FDF2F7] px-3 py-1 text-xs font-semibold text-[#A21D5C]"
+                        }
+                      >
+                        {selectedPayment.status}
+                      </span>
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedPayment(null)}
+                className="mt-6 w-full rounded-xl bg-[#A21D5C] px-4 py-3 text-sm font-semibold tracking-wide text-white transition-colors hover:bg-[#7E1448] focus:outline-none focus:ring-2 focus:ring-[#A21D5C]/40 focus:ring-offset-2"
+              >
+                Close Receipt
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
-    )}
+      )}
     </>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-

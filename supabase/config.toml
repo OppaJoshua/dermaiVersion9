@@ -419,3 +419,9 @@ verify_jwt = false
 
 [functions.paymongo-payment]
 verify_jwt = false
+
+[functions.subscription-expiry]
+verify_jwt = false
+
+[functions.subscription-reminder-2weeks]
+verify_jwt = false

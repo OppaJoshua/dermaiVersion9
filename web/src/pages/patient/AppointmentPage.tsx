@@ -404,6 +404,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   });
   const [submitted, setSubmitted] = useState(false);
 
+
   const selectedScan = useMemo(() => {
     return patientScans.find((s) => s.id === selectedScanId) || null;
   }, [patientScans, selectedScanId]);

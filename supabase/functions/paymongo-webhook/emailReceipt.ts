@@ -1,4 +1,4 @@
-import nodemailer from "npm:nodemailer";
+import nodemailer from "nodemailer";
 
 export async function sendReceiptEmail({
   patientEmail,

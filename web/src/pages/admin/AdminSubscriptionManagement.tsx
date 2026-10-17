@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { CreditCard, RefreshCcw, DollarSign, Loader2 } from "lucide-react";
+import { CreditCard, RefreshCcw, DollarSign, Loader2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -13,6 +13,8 @@ type PremiumUser = {
     startedAt: string;
     renewsAt: string;
     status: SubscriptionStatus;
+    isAccessActive?: boolean;
+    cancelledAtDate?: string;
 };
 
 type Transaction = {
@@ -62,6 +64,10 @@ export default function AdminSubscriptionManagement() {
                         subscription_id,
                         started_at,
                         renews_at,
+                        current_period_start,
+                        current_period_end,
+                        cancel_at_period_end,
+                        cancelled_at,
                         status,
                         billing_cycle,
                         user:user_id (
@@ -79,14 +85,58 @@ export default function AdminSubscriptionManagement() {
                     const users: PremiumUser[] = subsData.map((s: any, idx: number) => {
                         const userObj: any = Array.isArray(s.user) ? s.user[0] : s.user;
                         const planObj: any = Array.isArray(s.plan) ? s.plan[0] : s.plan;
+
+                        // Start date fallback
+                        const startRaw = s.started_at || s.current_period_start;
+                        const startedAt = startRaw
+                            ? new Date(startRaw).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                            : "—";
+
+                        // Renewal / Expiration date fallback
+                        const renewRaw = s.renews_at || s.current_period_end;
+                        const renewsAt = renewRaw
+                            ? new Date(renewRaw).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                            : "—";
+
+                        // Period end calculation
+                        const periodEndMs = s.current_period_end
+                            ? new Date(s.current_period_end).getTime()
+                            : (s.renews_at ? new Date(s.renews_at).getTime() : null);
+                        const isPeriodExpired = periodEndMs !== null && periodEndMs <= Date.now();
+
+                        // Cancellation check: user flagged cancel_at_period_end, or has cancelled_at date, or status is cancelled
+                        const isCancelled = Boolean(
+                            s.cancel_at_period_end === true ||
+                            s.cancelled_at ||
+                            s.status === "cancelled" ||
+                            s.status === "cancelling"
+                        );
+
+                        let calculatedStatus: SubscriptionStatus = "active";
+                        if (isCancelled) {
+                            calculatedStatus = "cancelled";
+                        } else if (s.status === "expired" || isPeriodExpired) {
+                            calculatedStatus = "expired";
+                        } else {
+                            calculatedStatus = "active";
+                        }
+
+                        const cancelledAtDate = s.cancelled_at
+                            ? new Date(s.cancelled_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                            : undefined;
+
+                        const isAccessActive = isCancelled && periodEndMs !== null && periodEndMs > Date.now();
+
                         return {
                             id: s.subscription_id || idx,
                             name: userObj?.full_name || "Patient",
                             email: userObj?.email || "",
                             plan: planObj?.name || (s.billing_cycle === "yearly" ? "Premium Annual" : "Premium Monthly"),
-                            startedAt: new Date(s.started_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-                            renewsAt: s.renews_at ? new Date(s.renews_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—",
-                            status: s.status as SubscriptionStatus,
+                            startedAt,
+                            renewsAt,
+                            status: calculatedStatus,
+                            isAccessActive,
+                            cancelledAtDate,
                         };
                     });
                     setPremiumUsers(users);
@@ -139,6 +189,8 @@ export default function AdminSubscriptionManagement() {
     const visibleUsers = premiumUsers.filter((user) => statusFilter === "all" ? true : user.status === statusFilter);
     const totalRevenue = useMemo(() => transactions.reduce((sum, txn) => sum + txn.amount, 0), [transactions]);
     const activeCount = premiumUsers.filter((u) => u.status === "active").length;
+    const cancelledCount = premiumUsers.filter((u) => u.status === "cancelled").length;
+
     return (<div className="space-y-6">
       <div>
         <h1 className="text-2xl font-display font-bold text-gray-900">Subscription Management</h1>
@@ -166,7 +218,7 @@ export default function AdminSubscriptionManagement() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white rounded-2xl p-4 border border-gray-100">
           <div className="flex items-center gap-2 text-magenta-600 mb-2">
             <CreditCard className="w-4 h-4"/>
@@ -188,15 +240,46 @@ export default function AdminSubscriptionManagement() {
           </div>
           <p className="text-2xl font-display font-bold text-gray-900">{activeCount}</p>
         </div>
+        <div className="bg-white rounded-2xl p-4 border border-gray-100">
+          <div className="flex items-center gap-2 text-red-600 mb-2">
+            <XCircle className="w-4 h-4"/>
+            <p className="text-xs font-semibold uppercase tracking-wider">Cancelled Plans</p>
+          </div>
+          <p className="text-2xl font-display font-bold text-gray-900">{cancelledCount}</p>
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-gray-100 p-4">
         <div className="flex flex-wrap gap-2">
-          {(["all", "active", "expired", "cancelled"] as const).map((status) => (<button key={status} onClick={() => setStatusFilter(status)} className={cn("px-4 py-2 rounded-full text-xs font-semibold transition-colors", statusFilter === status
-                ? "bg-magenta-500 text-white"
-                : "bg-gray-50 text-gray-600 hover:bg-gray-100")}>
-              {status === "all" ? "All" : statusLabels[status]}
-            </button>))}
+          {(["all", "active", "expired", "cancelled"] as const).map((status) => {
+            const count = status === "all"
+              ? premiumUsers.length
+              : premiumUsers.filter((u) => u.status === status).length;
+            return (
+              <button
+                key={status}
+                onClick={() => setStatusFilter(status)}
+                className={cn(
+                  "px-4 py-2 rounded-full text-xs font-semibold transition-colors flex items-center gap-2",
+                  statusFilter === status
+                    ? "bg-magenta-500 text-white shadow-xs"
+                    : "bg-gray-50 text-gray-600 hover:bg-gray-100"
+                )}
+              >
+                <span>{status === "all" ? "All" : statusLabels[status]}</span>
+                <span
+                  className={cn(
+                    "text-[10px] px-1.5 py-0.5 rounded-full font-bold leading-none",
+                    statusFilter === status
+                      ? "bg-white/20 text-white"
+                      : "bg-gray-200 text-gray-700"
+                  )}
+                >
+                  {count}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -246,11 +329,34 @@ export default function AdminSubscriptionManagement() {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">{user.startedAt}</td>
-                    <td className="px-6 py-4 text-sm text-gray-500">{user.renewsAt}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500">
+                      {user.status === "cancelled" ? (
+                        <div>
+                          <span>{user.renewsAt}</span>
+                          <span className="block text-[11px] text-red-500 font-medium">
+                            {user.isAccessActive ? "Access until date" : "Does not renew"}
+                          </span>
+                        </div>
+                      ) : (
+                        user.renewsAt
+                      )}
+                    </td>
                     <td className="px-6 py-4">
-                      <span className={cn("px-3 py-1 rounded-full text-xs font-semibold", statusClasses[user.status])}>
-                        {statusLabels[user.status]}
-                      </span>
+                      <div className="flex flex-col items-start gap-1">
+                        <span className={cn("px-3 py-1 rounded-full text-xs font-semibold", statusClasses[user.status])}>
+                          {statusLabels[user.status]}
+                        </span>
+                        {user.status === "cancelled" && user.isAccessActive && (
+                          <span className="text-[10px] text-amber-600 font-medium">
+                            Active until period close
+                          </span>
+                        )}
+                        {user.status === "cancelled" && !user.isAccessActive && user.cancelledAtDate && (
+                          <span className="text-[10px] text-gray-400">
+                            Cancelled {user.cancelledAtDate}
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))

@@ -6,8 +6,10 @@ import { Calendar, CalendarDays, AlertCircle } from "lucide-react";
 import { getSubscriptionPlansAsync, type SubscriptionPlan } from "@/lib/store";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { withVat } from "@/lib/vat";
 import gcashLogo from "@/assets/gcash.png";
 import mayaLogo from "@/assets/maya.png";
+import SubscriptionAgreementModal from "../../components/common/SubscriptionAgreementModal";
 
 // PayMongo is handled by the Supabase Edge Function.
 const PAYMONGO_PUBLIC_KEY = import.meta.env.VITE_PAYMONGO_PUBLIC_KEY || "";
@@ -21,6 +23,8 @@ export default function SubscriptionUpgradePage() {
   const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("monthly");
   const [selectedPlanId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isAgreementOpen, setIsAgreementOpen] = useState(false);
+  const [agreementAccepted, setAgreementAccepted] = useState(false);
 
   // Controlled form state
   const [fullName, setFullName] = useState("");
@@ -34,8 +38,97 @@ export default function SubscriptionUpgradePage() {
   }, []);
 
   useEffect(() => {
-    if (user?.email) setEmail((prev) => prev || user.email || "");
-    if (user?.user_metadata?.full_name) setFullName((prev) => prev || user.user_metadata.full_name || "");
+    if (!user?.id) return;
+    const userId = user.id;
+
+    // 1. Initial fast population from user context and metadata
+    if (user.email) setEmail((prev) => prev || user.email || "");
+    if (user.user_metadata?.full_name) setFullName((prev) => prev || user.user_metadata.full_name || "");
+    if (user.user_metadata?.address) setAddress((prev) => prev || user.user_metadata.address || "");
+
+    // 2. Read local profile cache for instant prefill
+    try {
+      const localSaved = localStorage.getItem(`derm_profile_${userId}`);
+      if (localSaved) {
+        const parsed = JSON.parse(localSaved);
+        if (parsed.fullName) setFullName((prev) => prev || parsed.fullName);
+        if (parsed.address) setAddress((prev) => prev || parsed.address);
+        if (parsed.contactNumber) {
+          const cleaned = String(parsed.contactNumber).replace(/\D/g, "");
+          const formatted = cleaned.startsWith("63") && cleaned.length === 12
+            ? "0" + cleaned.slice(2)
+            : cleaned.slice(0, 11);
+          if (formatted) setMobileNumber((prev) => prev || formatted);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    // 3. Query Supabase public.user to get the patient's saved personal information
+    async function loadPatientProfile() {
+      try {
+        const { data: dbUser } = await supabase
+          .from("user")
+          .select("full_name, email, phone, address, district")
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        if (dbUser) {
+          if (dbUser.full_name) setFullName((prev) => prev || dbUser.full_name);
+          if (dbUser.email) setEmail((prev) => prev || dbUser.email);
+
+          // Build billing address from personal information (complete address + district)
+          let resolvedAddress = (dbUser.address || "").trim();
+          const district = (dbUser.district || "").trim();
+
+          if (resolvedAddress && district) {
+            if (!resolvedAddress.toLowerCase().includes(district.toLowerCase())) {
+              resolvedAddress = `${resolvedAddress}, ${district}`;
+            }
+          } else if (!resolvedAddress && district) {
+            resolvedAddress = district;
+          }
+
+          if (resolvedAddress) {
+            setAddress((prev) => prev || resolvedAddress);
+          }
+
+          if (dbUser.phone) {
+            const cleaned = String(dbUser.phone).replace(/\D/g, "");
+            const formatted = cleaned.startsWith("63") && cleaned.length === 12
+              ? "0" + cleaned.slice(2)
+              : cleaned.slice(0, 11);
+            if (formatted) setMobileNumber((prev) => prev || formatted);
+          }
+        }
+
+        // 4. Fallback: check if the patient has a previous subscription with a saved billing_address
+        const { data: pastSub } = await supabase
+          .from("user_plan_subscription")
+          .select("billing_address, payment_mobile_number, payment_full_name")
+          .eq("user_id", userId)
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (pastSub) {
+          if (pastSub.billing_address) setAddress((prev) => prev || pastSub.billing_address);
+          if (pastSub.payment_mobile_number) {
+            const cleaned = String(pastSub.payment_mobile_number).replace(/\D/g, "");
+            const formatted = cleaned.startsWith("63") && cleaned.length === 12
+              ? "0" + cleaned.slice(2)
+              : cleaned.slice(0, 11);
+            if (formatted) setMobileNumber((prev) => prev || formatted);
+          }
+          if (pastSub.payment_full_name) setFullName((prev) => prev || pastSub.payment_full_name);
+        }
+      } catch (err) {
+        console.warn("[upgrade] Could not load profile details for auto-fill:", err);
+      }
+    }
+
+    loadPatientProfile();
   }, [user]);
 
   const availablePlans = plans.filter(
@@ -49,10 +142,20 @@ const selectedPlan =
   availablePlans.find((p) => p.id === selectedPlanId) ??
   availablePlans[0];
 
-const basePrice = selectedPlan?.price ?? 0;
-const total = Math.round(basePrice * 100) / 100;
+// plan.price is the NET price set by the admin. The patient sees and pays
+// the VAT-inclusive price (net x 1.12). The same formula runs in the
+// paymongo-payment edge function, which sets the real charged amount.
+const total = withVat(selectedPlan?.price ?? 0);
 const billingLabel = billingCycle === "monthly" ? "Monthly" : "Yearly";
 const currentPlanId = selectedPlan?.id;
+
+// Price shown on the Monthly / Yearly toggle buttons (VAT-inclusive)
+const togglePrice = (type: "monthly" | "yearly") => {
+  const p = plans.find(
+    (x) => x.billingType === type && x.status === "active" && x.price > 0
+  );
+  return p ? withVat(p.price).toLocaleString() : "—";
+};
 
 
     // On return from PayMongo 3DS redirect, check payment status
@@ -148,22 +251,56 @@ const currentPlanId = selectedPlan?.id;
     return value.replace(/\D/g, "").slice(0, 11);
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
 
-  if (!user?.id) {
-    setError("You must be logged in to subscribe.");
-    setIsSubscribing(false);
-    return;
-  }
+    if (!fullName.trim() || !email.trim() || !address.trim() || !mobileNumber.trim()) {
+      setError("Please complete your full name, email address, billing address, and mobile number.");
+      return;
+    }
 
-  setIsSubscribing(true);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError("Please enter a valid email address.");
+      return;
+    }
 
-  setError(null);
+    if (!/^\d{11}$/.test(mobileNumber)) {
+      setError("Please enter a valid 11-digit mobile number.");
+      return;
+    }
 
-  
+    if (!user?.id) {
+      setError("You must be logged in to subscribe.");
+      return;
+    }
+
+    if (!currentPlanId || total <= 0) {
+      setError("Please select a valid subscription plan.");
+      return;
+    }
+
+    setAgreementAccepted(false);
+    setIsAgreementOpen(true);
+  };
+
+  const handleAgreeAndPay = async () => {
+    if (!agreementAccepted) {
+      setError("Please review and accept the DermAI Subscription Agreement before proceeding.");
+      return;
+    }
+
+    if (!user?.id) {
+      setError("You must be logged in to subscribe.");
+      setIsAgreementOpen(false);
+      return;
+    }
+
+    setIsAgreementOpen(false);
+    setIsSubscribing(true);
+    setError(null);
+
     try {
-
     // Frontend guard: do not start a new payment while an existing
     // paid Pro subscription is still within its current billing period.
     const { data: existingSubscription, error: subscriptionError } =
@@ -352,9 +489,7 @@ const { paymentIntentId, clientKey } = intentJson;
               )}
             >
               <Calendar className="w-3.5 h-3.5 text-magenta-500" />
-             <span>
-                Monthly ₱{plans.find((p) => p.billingType === "monthly" && p.status === "active" && p.price > 0)?.price.toLocaleString() ?? "—"}
-             </span>
+              <span>Monthly ₱{togglePrice("monthly")}</span>
             </button>
             <button
               type="button"
@@ -367,9 +502,7 @@ const { paymentIntentId, clientKey } = intentJson;
               )}
             >
               <CalendarDays className="w-3.5 h-3.5 text-magenta-500" />
-             <span>
-  Yearly ₱{plans.find((p) => p.billingType === "yearly" && p.status === "active" && p.price > 0)?.price.toLocaleString() ?? "—"}
-</span>
+              <span>Yearly ₱{togglePrice("yearly")}</span>
             </button>
           </div>
         </div>
@@ -401,7 +534,9 @@ const { paymentIntentId, clientKey } = intentJson;
                 </div>
                 <div className="flex justify-between items-center text-gray-600">
                   <span>Subtotal</span>
-                  <span className="font-semibold text-gray-900">{basePrice.toLocaleString()}</span>
+                  <span className="font-semibold text-gray-900">
+                    ₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
                 </div>
                 <div className="pt-3 border-t border-gray-100 flex justify-between items-baseline">
                   <span className="text-sm font-bold text-gray-900"> Due today</span>
@@ -594,19 +729,16 @@ const { paymentIntentId, clientKey } = intentJson;
           </motion.div>
         </div>
       </div>
+      <SubscriptionAgreementModal
+        open={isAgreementOpen}
+        accepted={agreementAccepted}
+        onAcceptedChange={setAgreementAccepted}
+        onCancel={() => {
+          setIsAgreementOpen(false);
+          setAgreementAccepted(false);
+        }}
+        onAgree={handleAgreeAndPay}
+      />
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-

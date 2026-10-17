@@ -1,0 +1,7 @@
+{
+  "nodeModulesDir": "auto",
+  "imports": {
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2",
+    "nodemailer": "npm:nodemailer@^6.9.15"
+  }
+}

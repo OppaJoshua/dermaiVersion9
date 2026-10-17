@@ -124,6 +124,8 @@ function App() {
           element={<PaymentSuccessPage />}
         />
         <Route path="/user/upgrade" element={<UserLayout><SubscriptionUpgradePage /></UserLayout>} />
+        <Route path="/patient/upgrade" element={<Navigate to="/dashboard/upgrade" replace />} />
+        <Route path="/patient/SubscriptionUpgradePage" element={<Navigate to="/dashboard/upgrade" replace />} />
         <Route path="/dashboard/settings/account" element={<Navigate to="/dashboard/profile" replace />} />
         <Route path="/dashboard/settings/help" element={<UserLayout><HelpPage /></UserLayout>} />
         <Route path="/dashboard/settings/billing" element={<UserLayout><BillingSettingsPage /></UserLayout>} />

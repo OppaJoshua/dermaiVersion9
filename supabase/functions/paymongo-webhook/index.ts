@@ -1,5 +1,4 @@
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "@supabase/supabase-js";
 import { sendReceiptEmail } from "./emailReceipt.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -52,7 +51,7 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: corsHeaders,
@@ -336,7 +335,7 @@ console.log(
   "PayMongo payment confirmed as paid."
 );
 
-let paymentIntentId =
+const paymentIntentId =
   paymentAttributes?.payment_intent_id ??
   paymentResource?.relationships?.payment_intent?.data?.id ??
   null;

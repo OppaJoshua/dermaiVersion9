@@ -26,6 +26,7 @@ interface SubscriptionInfo {
   billingCycle?: "monthly" | "yearly";
   renewsAt?: string;
   remainingDays?: number | null;
+  cancelAtPeriodEnd?: boolean;
   maxScans: number;
   scansUsed: number;
 }
@@ -139,6 +140,8 @@ export default function SubscriptionStatusPage() {
             billing_cycle,
             renews_at,
             current_period_start,
+            current_period_end,
+            cancel_at_period_end,
             plan:plan_id (
               plan_id,
               name,
@@ -151,8 +154,13 @@ export default function SubscriptionStatusPage() {
             )
           `)
           .eq("user_id", user.id)
-          .eq("status", "active")
+          .in("status", ["active", "cancelling"])
           .maybeSingle();
+
+        const paidPeriodValid = Boolean(
+          subData?.current_period_end &&
+          new Date(subData.current_period_end).getTime() > Date.now()
+        );
 
         if (subError) {
           console.warn(
@@ -164,13 +172,18 @@ export default function SubscriptionStatusPage() {
         // ------------------------------------------------------------
         // 4. Determine billing-cycle start
         // ------------------------------------------------------------
-        const cycleStart: string =
-          (subData as any)?.current_period_start ||
-          new Date(
-            new Date().getFullYear(),
-            new Date().getMonth(),
-            1
-          ).toISOString();
+        const cycleStart: string = paidPeriodValid
+          ? (subData as any)?.current_period_start ||
+            new Date(
+              new Date().getFullYear(),
+              new Date().getMonth(),
+              1
+            ).toISOString()
+          : new Date(
+              new Date().getFullYear(),
+              new Date().getMonth(),
+              1
+            ).toISOString();
 
         // ------------------------------------------------------------
         // 5. Count AI scans used during the current cycle
@@ -213,7 +226,7 @@ export default function SubscriptionStatusPage() {
         // ------------------------------------------------------------
         // 7. Build the patient's current plan
         // ------------------------------------------------------------
-        if (subData && !subError) {
+        if (subData && !subError && paidPeriodValid) {
           const planRaw: any = subData.plan;
           const plan = Array.isArray(planRaw)
             ? planRaw[0]
@@ -221,11 +234,12 @@ export default function SubscriptionStatusPage() {
 
           const isPro = plan?.scan_limit === -1;
 
-          const remainingDays = subData.renews_at
+          const periodEndRaw = subData.current_period_end || subData.renews_at;
+          const remainingDays = periodEndRaw
             ? Math.max(
                 0,
                 Math.ceil(
-                  (new Date(subData.renews_at).getTime() -
+                  (new Date(periodEndRaw).getTime() -
                     Date.now()) /
                     86400000
                 )
@@ -237,6 +251,15 @@ export default function SubscriptionStatusPage() {
               ?.map((feature: PlanFeature) => feature.feature_text)
               .filter(Boolean) ?? [];
 
+          const renewalRaw = subData.renews_at || subData.current_period_end;
+          const renewsAtFormatted = renewalRaw
+            ? new Date(renewalRaw).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              })
+            : undefined;
+
           setSubscription({
             isPro,
             planName: plan?.name ?? "Free Plan",
@@ -244,8 +267,9 @@ export default function SubscriptionStatusPage() {
             planFeatures,
             billingCycle:
               subData.billing_cycle as "monthly" | "yearly",
-            renewsAt: subData.renews_at ?? undefined,
+            renewsAt: renewsAtFormatted,
             remainingDays,
+            cancelAtPeriodEnd: Boolean(subData.cancel_at_period_end),
             maxScans:
               plan?.scan_limit === -1
                 ? Infinity
@@ -336,6 +360,8 @@ export default function SubscriptionStatusPage() {
     maxScans,
     scansUsed,
     remainingDays,
+    renewsAt,
+    cancelAtPeriodEnd,
   } = subscription;
 
   const scansRemaining = isPro
@@ -387,7 +413,7 @@ export default function SubscriptionStatusPage() {
               {planName}
             </h2>
 
-            <p className="text-xs text-gray-500 mb-3 font-medium">
+            <p className="text-xs text-gray-500 mb-1 font-medium">
               {isPro
                 ? remainingDays !== null &&
                   remainingDays !== undefined
@@ -395,6 +421,14 @@ export default function SubscriptionStatusPage() {
                   : "Active Subscription"
                 : "Free access"}
             </p>
+
+            {isPro && renewsAt && (
+              <p className="text-[11px] text-gray-400 mb-3">
+                {cancelAtPeriodEnd
+                  ? `Access ends on ${renewsAt}`
+                  : `Next renewal: ${renewsAt}`}
+              </p>
+            )}
 
             {/* Admin-managed plan description */}
             {planDescription && (

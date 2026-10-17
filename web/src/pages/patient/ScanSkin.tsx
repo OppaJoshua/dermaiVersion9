@@ -428,19 +428,26 @@ export default function ScanSkinPage() {
         // Fetch active subscription joined with plan
         const { data: sub } = await supabase
           .from("user_plan_subscription")
-          .select("status, started_at, current_period_start, plan:plan_id(scan_limit)")
+          .select("status, started_at, current_period_start, current_period_end, plan:plan_id(scan_limit)")
           .eq("user_id", user.id)
           .eq("status", "active")
           .maybeSingle();
 
-        const planScanLimit: number = (sub?.plan as any)?.scan_limit ?? 3;
-        const isPro = planScanLimit === -1;
+        const hasValidPaidPeriod = Boolean(
+          sub?.current_period_end &&
+          new Date(sub.current_period_end).getTime() > Date.now()
+        );
+        const planScanLimit: number = hasValidPaidPeriod
+          ? (sub?.plan as any)?.scan_limit ?? 3
+          : 3;
+        const isPro = hasValidPaidPeriod && planScanLimit === -1;
 
-        // Determine the start of the current billing cycle
-        const cycleStart: string =
-          (sub as any)?.current_period_start ||
-          (sub as any)?.started_at ||
-          new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+        // Expired subscriptions use the current calendar month's Free scan cycle.
+        const cycleStart: string = hasValidPaidPeriod
+          ? (sub as any)?.current_period_start ||
+            (sub as any)?.started_at ||
+            new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
+          : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
 
         // Count completed scans within the current billing cycle only
         const { count: used } = await supabase

@@ -20,6 +20,7 @@ import {
   type SubscriptionPlan,
 } from "@/lib/store";
 import { logAdminAction } from "@/lib/auditLog";
+import { withVat } from "@/lib/vat";
 
 const BILLING_LABELS = {
   monthly: "Monthly",
@@ -40,6 +41,9 @@ const EMPTY_FORM: Omit<SubscriptionPlan, "id" | "createdAt" | "updatedAt"> = {
   scanLimit: null,
   status: "active",
 };
+
+const formatPhp = (value: number) =>
+  `₱${value.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function AdminPlanManagement() {
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
@@ -114,7 +118,7 @@ export default function AdminPlanManagement() {
     logAdminAction(
       editingPlan ? "Plan Updated" : "Plan Created",
       plan.name,
-      `${editingPlan ? "Updated" : "Created"} subscription plan: ${plan.name} (₱${plan.price} / ${plan.billingType})`,
+      `${editingPlan ? "Updated" : "Created"} subscription plan: ${plan.name} (base ₱${plan.price} excl. VAT, patient price ${formatPhp(withVat(plan.price))} / ${plan.billingType})`,
       "subscription"
     );
 
@@ -232,9 +236,20 @@ export default function AdminPlanManagement() {
                     </div>
                   </td>
                   <td className="px-4 py-4">
-                    <span className="font-bold text-gray-900">
-                      {plan.price === 0 ? "Free" : `₱${plan.price.toLocaleString()}`}
-                    </span>
+                    {plan.price === 0 ? (
+                      <span className="font-bold text-gray-900">Free</span>
+                    ) : (
+                      <>
+                        {/* Patient price (incl. 12% VAT) */}
+                        <span className="font-bold text-gray-900">
+                          {formatPhp(withVat(plan.price))}
+                        </span>
+                        {/* Base price entered by the admin (stored in plan.price) */}
+                        <p className="text-[11px] text-gray-400 mt-0.5">
+                          Base {formatPhp(plan.price)}
+                        </p>
+                      </>
+                    )}
                   </td>
                   <td className="px-4 py-4">
                     <span className={cn("px-2.5 py-0.5 rounded-full text-xs font-semibold", BILLING_COLORS[plan.billingType])}>
@@ -335,20 +350,23 @@ export default function AdminPlanManagement() {
               {/* Price + Billing Type */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">Price (PHP)</label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">Base Price (PHP, excl. VAT)</label>
                   <input
                     type="number"
                     min={0}
+                    step="0.01"
                     value={form.price}
-                  onChange={(e) => {
- 		    const price = e.target.value === "" ? 0 : Number(e.target.value);
-
-  		    setForm((f) => ({
-                      ...f,
-                      price,
-                    }));
-                  }}                                                     className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
-                    />
+                    onChange={(e) => {
+                      const price = e.target.value === "" ? 0 : Number(e.target.value);
+                      setForm((f) => ({ ...f, price }));
+                    }}
+                    className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
+                  />
+                  <p className="text-xs mt-1.5 text-gray-400">
+                    {form.price > 0
+                      ? `Patients will pay ${formatPhp(withVat(form.price))} (includes 12% VAT).`
+                      : "Enter the price before VAT. Use 0 for a free plan."}
+                  </p>
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">Billing Type</label>
@@ -358,7 +376,7 @@ export default function AdminPlanManagement() {
                        setForm((f) => ({
                          ...f,
                          billingType:
-                           e.target.value as SubscriptionPlan["billingType"],         
+                           e.target.value as SubscriptionPlan["billingType"],
                       }))
                     }
                     className={cn(

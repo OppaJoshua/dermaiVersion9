@@ -1,7 +1,10 @@
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "@supabase/supabase-js";
 
 const PAYMONGO_API = "https://api.paymongo.com/v1";
+
+// plan.price is the NET price entered by the admin.
+// Patients are charged net + 12% VAT. Keep in sync with src/lib/vat.ts.
+const VAT_RATE = 0.12;
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -28,7 +31,7 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -48,30 +51,30 @@ serve(async (req: Request) => {
     }
 
     const body = await req.json();
-const action = body.action || "create_intent";
+    const action = body.action || "create_intent";
 
-const authHeader = req.headers.get("Authorization");
+    const authHeader = req.headers.get("Authorization");
 
-if (!authHeader) {
-  return jsonResponse(
-    { error: "Missing Authorization header" },
-    401
-  );
-}
+    if (!authHeader) {
+      return jsonResponse(
+        { error: "Missing Authorization header" },
+        401
+      );
+    }
 
-const token = authHeader.replace("Bearer ", "");
+    const token = authHeader.replace("Bearer ", "");
 
-const {
-  data: { user },
-  error: userError,
-} = await supabase.auth.getUser(token);
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser(token);
 
-if (userError || !user) {
-  return jsonResponse(
-    { error: "Invalid or expired authentication token" },
-    401
-  );
-}
+    if (userError || !user) {
+      return jsonResponse(
+        { error: "Invalid or expired authentication token" },
+        401
+      );
+    }
 
     const authHeaders = {
       Accept: "application/json",
@@ -84,7 +87,7 @@ if (userError || !user) {
     // =========================================================
     if (action === "create_intent") {
       const {
-        description,
+        _description,
         paymentMethod,
         planId,
         billingCycle,
@@ -115,7 +118,7 @@ if (userError || !user) {
       if (!billingCycle) {
         throw new Error("Billing cycle is required");
       }
-      
+
       // Prevent creating a second Pro subscription while the current paid period is active.
       // Free-plan rows do not block a new Pro purchase.
       const { data: existingSubscription, error: subscriptionError } = await supabase
@@ -186,11 +189,10 @@ if (userError || !user) {
         throw new Error("Billing cycle does not match the selected plan");
       }
 
-      const basePrice = Number(plan.price);
-
-      const totalAmount = Math.round(basePrice * 100) / 100;
-
-      const amountInCentavos = Math.round(totalAmount * 100);
+      // plan.price is the NET price. Compute VAT in centavos to avoid float drift.
+      const netCentavos = Math.round(Number(plan.price) * 100);
+      const vatCentavos = Math.round(netCentavos * VAT_RATE);
+      const amountInCentavos = netCentavos + vatCentavos; // total charged by PayMongo
 
       const response = await fetch(
         `${PAYMONGO_API}/payment_intents`,
@@ -215,6 +217,9 @@ if (userError || !user) {
                   payment_email: email,
                   billing_address: address,
                   payment_mobile_number: mobileNumber,
+                  net_amount: (netCentavos / 100).toFixed(2),
+                  vat_amount: (vatCentavos / 100).toFixed(2),
+                  total_amount: (amountInCentavos / 100).toFixed(2),
                 },
               },
             },
@@ -389,13 +394,3 @@ if (userError || !user) {
     );
   }
 });
-
-
-
-
-
-
-
-
-
-

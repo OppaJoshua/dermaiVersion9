@@ -355,12 +355,13 @@ export default function UserLayout({
     }
 
     // 2. Fetch membership tier
-    let tier = customProfile?.membershipTier || "Free Plan";
+    let tier = "Free Plan";
     try {
       const { data: subData } = await supabase
         .from("user_plan_subscription")
         .select(`
           status,
+          current_period_end,
           plan:plan_id (
             name,
             price
@@ -372,7 +373,10 @@ export default function UserLayout({
         .limit(1)
         .maybeSingle();
 
-      if (subData) {
+      if (
+        subData?.current_period_end &&
+        new Date(subData.current_period_end).getTime() > Date.now()
+      ) {
         const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
         tier = planObj?.name || "Pro Plan";
       }
