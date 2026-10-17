@@ -561,30 +561,31 @@ export default function UserLayout({
   };
 
   return (
-    <div className="min-h-screen bg-gray-50/80 flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-[#f7f2f4] p-0 lg:p-3 flex flex-col lg:flex-row">
       {/* Backdrop Overlay */}
       <div
         className={cn(
-          "fixed inset-0 bg-black/40 backdrop-blur-sm z-40 lg:hidden transition-all duration-300 ease-in-out",
+          "fixed inset-0 bg-black/30 backdrop-blur-sm z-40 lg:hidden transition-all duration-300 ease-in-out",
           sidebarOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         )}
         onClick={() => setSidebarOpen(false)}
       />
 
-      {/* Sidebar */}
+      {/* Sidebar — floating box */}
       <aside
         className={cn(
-          "flex flex-col w-70 bg-white border-r border-gray-100 h-screen fixed left-0 top-0 z-50 overflow-hidden text-[14px]",
+          "flex flex-col w-64 bg-white border border-gray-200/80 rounded-3xl fixed z-50 overflow-hidden text-[14px]",
+          "left-3 top-3 bottom-3",
           "transition-transform duration-300 ease-in-out",
-          "shadow-[4px_0_32px_rgba(0,0,0,0.08)] lg:shadow-none",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+          "shadow-xl lg:shadow-none",
+          sidebarOpen ? "translate-x-0" : "-translate-x-[110%] lg:translate-x-0"
         )}
       >
         {/* Logo */}
-        <div className="flex items-center justify-between px-6 h-16 border-b border-gray-100 shrink-0">
+        <div className="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
           <div className="flex items-center gap-2.5">
-            <img src={Logo} alt="DERMAI logo" className="h-9 w-auto object-contain" />
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-magenta-50 text-magenta-600 font-semibold ml-0.5">
+            <img src={Logo} alt="DERMAI logo" className="h-8 w-auto object-contain" />
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-magenta-50 text-magenta-600 font-semibold">
               Patient
             </span>
           </div>
@@ -597,45 +598,27 @@ export default function UserLayout({
           </button>
         </div>
 
-        {/* Patient Account Info */}
-        <div className="px-5 py-4 border-b border-gray-100 shrink-0">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-full ring-2 ring-magenta-100 bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-lg font-bold shrink-0">
-              {dynamicProfile.profilePictureUrl && !imgError ? (
-                <img
-                  src={dynamicProfile.profilePictureUrl}
-                  alt="Profile"
-                  className="w-full h-full object-cover"
-                  onError={() => setImgError(true)}
-                />
-              ) : (
-                initial
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-base font-semibold text-gray-900 leading-tight truncate">{displayFullName}</p>
-              {dynamicProfile.membershipTier && (
-                <p className="text-xs text-gray-500 mt-0.5">{dynamicProfile.membershipTier}</p>
-              )}
-            </div>
-          </div>
-          {dynamicProfile.location && <p className="text-xs text-gray-400">{dynamicProfile.location}</p>}
-        </div>
+        <p className="px-6 pt-2 pb-1.5 text-[10px] font-semibold tracking-[0.14em] text-gray-400 uppercase">
+          Menu
+        </p>
 
         {/* Navigation Sections */}
-        <div className="flex-1 overflow-y-auto no-scrollbar py-3 px-3 space-y-1 text-[14px]">
+        <div className="flex-1 overflow-y-auto no-scrollbar pb-3 px-3 space-y-1">
           {/* 1. Dashboard */}
           <Link
             to="/dashboard"
             onClick={() => setSidebarOpen(false)}
             className={cn(
-              "flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[15px] font-semibold transition-colors",
+              "relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-semibold transition-colors",
               location.pathname === "/dashboard"
-                ? "bg-magenta-50 text-magenta-600"
+                ? "bg-magenta-50 text-magenta-700"
                 : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
             )}
           >
-            <LayoutGrid className="w-5 h-5 shrink-0" />
+            {location.pathname === "/dashboard" && (
+              <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-6 w-1 rounded-r-full bg-magenta-600" />
+            )}
+            <LayoutGrid className="w-[18px] h-[18px] shrink-0" />
             <span>Dashboard</span>
           </Link>
 
@@ -651,16 +634,19 @@ export default function UserLayout({
                   type="button"
                   onClick={() => toggleSection(section.id)}
                   className={cn(
-                    "w-full flex items-center justify-between px-3 py-2 rounded-xl text-[13px] font-semibold uppercase tracking-wider transition-all select-none text-left cursor-pointer",
+                    "relative w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-medium transition-colors select-none text-left cursor-pointer",
                     isChildActive
-                      ? "text-magenta-700 bg-magenta-50/40 hover:bg-magenta-50/70"
-                      : "text-gray-400 hover:text-gray-700 hover:bg-gray-50"
+                      ? "text-magenta-700 bg-magenta-50/60"
+                      : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
                   )}
                 >
-                  <div className="flex items-center gap-2 min-w-0">
+                  {isChildActive && (
+                    <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-6 w-1 rounded-r-full bg-magenta-600" />
+                  )}
+                  <div className="flex items-center gap-3 min-w-0">
                     <SectionIcon
                       className={cn(
-                        "w-4 h-4 shrink-0 transition-colors",
+                        "w-[18px] h-[18px] shrink-0 transition-colors",
                         isChildActive ? "text-magenta-600" : "text-gray-400"
                       )}
                     />
@@ -668,8 +654,8 @@ export default function UserLayout({
                   </div>
                   <ChevronRight
                     className={cn(
-                      "w-3.5 h-3.5 shrink-0 transition-transform duration-200 text-gray-400",
-                      isOpen ? "rotate-90 text-gray-600" : "rotate-0"
+                      "w-3.5 h-3.5 shrink-0 transition-transform duration-200 text-gray-300",
+                      isOpen ? "rotate-90 text-gray-500" : "rotate-0"
                     )}
                   />
                 </button>
@@ -684,7 +670,7 @@ export default function UserLayout({
                       transition={{ duration: 0.2, ease: "easeInOut" }}
                       className="overflow-hidden"
                     >
-                      <div className="pt-0.5 pb-1 space-y-0.5">
+                      <div className="pt-0.5 pb-1 space-y-0.5 ml-[22px] pl-3 border-l border-gray-100">
                         {section.links.map((link) => {
                           const isActive = isLinkActive(link.path, location.pathname);
                           return (
@@ -693,10 +679,10 @@ export default function UserLayout({
                               to={link.path}
                               onClick={() => setSidebarOpen(false)}
                               className={cn(
-                                "block px-3 py-2 rounded-xl text-[14px] font-medium pl-9 transition-colors",
+                                "block px-3 py-2 rounded-xl text-[13px] transition-colors",
                                 isActive
-                                  ? "bg-magenta-50 text-magenta-600 font-semibold"
-                                  : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                                  ? "bg-magenta-50 text-magenta-700 font-semibold"
+                                  : "text-gray-500 font-medium hover:bg-gray-50 hover:text-gray-900"
                               )}
                             >
                               {link.label}
@@ -713,43 +699,46 @@ export default function UserLayout({
         </div>
 
         {/* Logout */}
-        <div className="p-3.5 border-t border-gray-100 bg-gray-50/50 shrink-0">
+        <div className="px-3 py-3 shrink-0">
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-[14px] font-medium text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors bg-white border border-gray-200 cursor-pointer"
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium text-gray-600 hover:bg-magenta-50 hover:text-magenta-700 transition-colors cursor-pointer"
           >
-            <LogOut className="w-4.5 h-4.5" />
-            Logout
+            <LogOut className="w-[18px] h-[18px]" />
+            Log out
           </button>
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 lg:ml-70 min-h-screen flex flex-col relative w-full">
-        {/* Top Header — clinic-style breadcrumb + bell */}
-        <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
+      {/* Main Content — boxed panel */}
+      <main className="flex-1 lg:ml-[17.25rem] min-w-0 flex flex-col w-full">
+        <div className="flex-1 flex flex-col bg-white lg:border border-gray-200/80 lg:rounded-3xl lg:min-h-[calc(100vh-1.5rem)] overflow-hidden">
+        {/* Top Header — breadcrumb pill + bell + profile */}
+        <div className="px-4 sm:px-6 py-3 flex items-center justify-between sticky top-0 z-40 bg-white/90 backdrop-blur">
           <div className="flex items-center gap-3">
             <button
               className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500"
               onClick={() => setSidebarOpen((prev) => !prev)}
+              aria-label="Open sidebar"
             >
               <Menu className="w-5 h-5" />
             </button>
-            <div className="flex items-center gap-1.5 text-sm">
-              <span className="text-gray-400">Patient</span>
-              <ChevronRight className="w-3.5 h-3.5 text-gray-300" />
-              <span className="font-semibold text-gray-900">{currentPage}</span>
+            <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white border border-gray-200/80 text-xs text-gray-500 font-medium">
+              <span>Patient</span>
+              <ChevronRight className="w-3 h-3 text-gray-300" />
+              <span className="font-semibold text-gray-800">{currentPage}</span>
             </div>
           </div>
 
+          <div className="flex items-center gap-2 sm:gap-3">
           <div ref={notifRef} className="relative">
             <button
               onClick={() => setNotifOpen((o) => !o)}
-              className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors"
+              className="relative w-10 h-10 flex items-center justify-center rounded-full border border-gray-200/80 bg-white hover:bg-magenta-50 transition-colors"
             >
-              <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")} />
+              <Bell className={cn("w-[18px] h-[18px]", notifOpen ? "text-magenta-600" : "text-gray-500")} />
               {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none animate-pulse">
+                <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-600 rounded-full text-white text-[10px] font-bold leading-none">
                   {unreadCount > 9 ? "9+" : unreadCount}
                 </span>
               )}
@@ -868,9 +857,33 @@ export default function UserLayout({
               </div>
             )}
           </div>
+
+          {/* Profile pill */}
+          <div className="hidden sm:flex items-center gap-2.5 pl-1.5 pr-4 py-1.5 rounded-full border border-gray-200/80 bg-white">
+            <div className="w-9 h-9 rounded-full bg-magenta-500 overflow-hidden flex items-center justify-center text-white text-sm font-bold shrink-0">
+              {dynamicProfile.profilePictureUrl && !imgError ? (
+                <img
+                  src={dynamicProfile.profilePictureUrl}
+                  alt="Profile"
+                  className="w-full h-full object-cover"
+                  onError={() => setImgError(true)}
+                />
+              ) : (
+                initial
+              )}
+            </div>
+            <div className="min-w-0 leading-tight">
+              <p className="text-xs font-semibold text-gray-900 truncate max-w-40">{displayFullName}</p>
+              <p className="text-[10px] text-gray-400 truncate max-w-40">
+                {[dynamicProfile.membershipTier, dynamicProfile.location].filter(Boolean).join(" · ")}
+              </p>
+            </div>
+          </div>
+          </div>
         </div>
 
         <div className="flex-1 overflow-x-hidden">{children}</div>
+        </div>
       </main>
     </div>
   );

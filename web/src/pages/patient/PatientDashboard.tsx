@@ -497,14 +497,7 @@ export default function PatientDashboard() {
   return (
     <div className="w-full">
       <div className="px-4 sm:px-6 pb-6 pt-2">
-        {/* Breadcrumb pill matching screenshot */}
-        <div className="mb-3">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-gray-200/80 text-xs text-gray-500 font-medium shadow-2xs">
-            <span>Patient</span>
-            <ChevronRight className="w-3 h-3 text-gray-400" />
-            <span className="font-semibold text-gray-800">Dashboard</span>
-          </div>
-        </div>
+        {/* Breadcrumb now rendered by the patient layout header */}
 
         {/* Title row */}
         <motion.div
