@@ -73,6 +73,7 @@ export type ClinicPatient = {
   lastAppointment?: PatientAppointment;
   appointments: PatientAppointment[];
   assignedDoctors: Array<{ id?: string; name: string }>;
+  photoUrl?: string;
 };
 
 export type RegisteredDoctor = {
@@ -83,6 +84,72 @@ export type RegisteredDoctor = {
 };
 
 /* ── Helper Functions ─────────────────────────────────────────────── */
+
+function resolveAvatarUrl(raw?: string | null): string | undefined {
+  if (!raw || typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.includes("scan-uploads")) return undefined;
+
+  if (
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("data:") ||
+    trimmed.startsWith("blob:")
+  ) {
+    return trimmed;
+  }
+
+  try {
+    const cleanPath = trimmed.replace(/^avatars\//, "");
+    const { data } = supabase.storage.from("avatars").getPublicUrl(cleanPath);
+    if (data?.publicUrl) return data.publicUrl;
+  } catch {
+    // fallback
+  }
+  return trimmed;
+}
+
+function PatientAvatar({
+  name,
+  photoUrl,
+  sizeClass = "w-9 h-9 text-sm",
+  borderClass = "",
+}: {
+  name: string;
+  photoUrl?: string;
+  sizeClass?: string;
+  borderClass?: string;
+}) {
+  const [imgError, setImgError] = useState(false);
+  const initial = (name || "P").trim().charAt(0).toUpperCase() || "P";
+
+  useEffect(() => {
+    setImgError(false);
+  }, [photoUrl]);
+
+  if (photoUrl && !imgError) {
+    return (
+      <img
+        src={photoUrl}
+        alt={name}
+        onError={() => setImgError(true)}
+        className={cn(sizeClass, "rounded-full object-cover shrink-0", borderClass)}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        sizeClass,
+        "rounded-full bg-pink-100 text-[#c0166a] flex items-center justify-center font-bold shrink-0",
+        borderClass
+      )}
+    >
+      {initial}
+    </div>
+  );
+}
 
 function calculateAge(birthdateStr?: string): number | undefined {
   if (!birthdateStr) return undefined;
@@ -326,7 +393,115 @@ export default function ClinicPatientsPage() {
           }
         } catch { }
 
-        // 3. Deduplicate unique patients and organize appointment history
+        // 3. Fetch patient profiles (avatars) from user table in Supabase
+        const userProfileMap = new Map<string, { avatar_url?: string; full_name?: string }>();
+        const emailProfileMap = new Map<string, { avatar_url?: string; full_name?: string }>();
+
+        const patientUserIds = Array.from(
+          new Set(
+            dbAppts
+              .map((r: any) => (r.user_id ? String(r.user_id).trim() : ""))
+              .filter((id): id is string => Boolean(id))
+          )
+        );
+        const patientEmails = Array.from(
+          new Set(
+            dbAppts
+              .flatMap((r: any) => {
+                const email = r.patient_email ? String(r.patient_email).trim() : "";
+                if (!email || !email.includes("@")) return [];
+                return [email, email.toLowerCase()];
+              })
+          )
+        );
+
+        if (patientUserIds.length > 0) {
+          try {
+            const { data: usersById } = await supabase
+              .from("user")
+              .select("user_id, email, full_name, avatar_url")
+              .in("user_id", patientUserIds);
+
+            if (usersById) {
+              usersById.forEach((u: any) => {
+                if (u.user_id) userProfileMap.set(String(u.user_id), u);
+                if (u.email) emailProfileMap.set(String(u.email).toLowerCase().trim(), u);
+              });
+            }
+          } catch (err) {
+            console.warn("[ClinicPatientsPage] Failed to fetch users by user_id:", err);
+          }
+        }
+
+        if (patientEmails.length > 0) {
+          try {
+            const { data: usersByEmail } = await supabase
+              .from("user")
+              .select("user_id, email, full_name, avatar_url")
+              .in("email", patientEmails);
+
+            if (usersByEmail) {
+              usersByEmail.forEach((u: any) => {
+                if (u.user_id && !userProfileMap.has(String(u.user_id))) {
+                  userProfileMap.set(String(u.user_id), u);
+                }
+                if (u.email && !emailProfileMap.has(String(u.email).toLowerCase().trim())) {
+                  emailProfileMap.set(String(u.email).toLowerCase().trim(), u);
+                }
+              });
+            }
+          } catch (err) {
+            console.warn("[ClinicPatientsPage] Failed to fetch users by email:", err);
+          }
+        }
+
+        const resolvePatientAvatar = (
+          userId?: string,
+          email?: string,
+          directAvatar?: string
+        ): string | undefined => {
+          let raw: string | undefined = undefined;
+
+          // 1. Direct avatar from appointment record
+          if (directAvatar && typeof directAvatar === "string" && !directAvatar.includes("scan-uploads")) {
+            raw = directAvatar;
+          }
+
+          // 2. User table by user_id
+          if (!raw && userId && userProfileMap.has(userId)) {
+            const u = userProfileMap.get(userId);
+            if (u?.avatar_url && !u.avatar_url.includes("scan-uploads")) {
+              raw = u.avatar_url;
+            }
+          }
+
+          // 3. User table by email
+          if (!raw && email && emailProfileMap.has(email.toLowerCase().trim())) {
+            const u = emailProfileMap.get(email.toLowerCase().trim());
+            if (u?.avatar_url && !u.avatar_url.includes("scan-uploads")) {
+              raw = u.avatar_url;
+            }
+          }
+
+          // 4. LocalStorage cache for this user
+          if (!raw && userId) {
+            try {
+              const local = localStorage.getItem(`derm_profile_${userId}`);
+              if (local) {
+                const parsed = JSON.parse(local);
+                if (parsed?.profilePicture && !parsed.profilePicture.includes("scan-uploads")) {
+                  raw = parsed.profilePicture;
+                } else if (parsed?.avatar_url && !parsed.avatar_url.includes("scan-uploads")) {
+                  raw = parsed.avatar_url;
+                }
+              }
+            } catch { }
+          }
+
+          return resolveAvatarUrl(raw);
+        };
+
+        // 4. Deduplicate unique patients and organize appointment history
         const patientMap = new Map<string, ClinicPatient>();
         const apptList: PatientAppointment[] = [];
 
@@ -392,6 +567,12 @@ export default function ClinicPatientsPage() {
 
           apptList.push(appointmentObj);
 
+          const resolvedPhoto = resolvePatientAvatar(
+            rawUserId || undefined,
+            rawEmail || undefined,
+            row.patient_avatar || row.avatar_url || row.patient_photo
+          );
+
           // Build or update unique patient record
           if (!patientMap.has(dedupeKey)) {
             const birthdate = row.patient_birthdate || undefined;
@@ -415,6 +596,7 @@ export default function ClinicPatientsPage() {
               assignedDoctors: assignedDocName && assignedDocName !== "Unassigned"
                 ? [{ id: assignedDocId, name: assignedDocName }]
                 : [],
+              photoUrl: resolvedPhoto,
             };
 
             patientMap.set(dedupeKey, initialPatient);
@@ -422,6 +604,20 @@ export default function ClinicPatientsPage() {
             const existing = patientMap.get(dedupeKey)!;
             existing.totalAppointments += 1;
             existing.appointments.push(appointmentObj);
+
+            if (!existing.photoUrl && resolvedPhoto) {
+              existing.photoUrl = resolvedPhoto;
+            }
+            if (!existing.userId && rawUserId) {
+              existing.userId = rawUserId;
+              if (!existing.photoUrl) {
+                existing.photoUrl = resolvePatientAvatar(
+                  rawUserId,
+                  existing.email,
+                  row.patient_avatar || row.avatar_url || row.patient_photo
+                );
+              }
+            }
 
             // Update contact details if newly available
             if (!existing.phone && row.patient_contact) existing.phone = row.patient_contact;
@@ -456,6 +652,9 @@ export default function ClinicPatientsPage() {
             return timeB - timeA;
           });
           p.lastAppointment = p.appointments[0];
+          if (!p.photoUrl) {
+            p.photoUrl = resolvePatientAvatar(p.userId, p.email);
+          }
           return p;
         });
 
@@ -484,6 +683,7 @@ export default function ClinicPatientsPage() {
     const handleSync = () => loadPatientDirectory();
     window.addEventListener("dermai_appointments_updated", handleSync);
     window.addEventListener("appointmentCreated", handleSync);
+    window.addEventListener("derm_profile_updated", handleSync);
     window.addEventListener("storage", handleSync);
     window.addEventListener("focus", handleSync);
 
@@ -507,6 +707,7 @@ export default function ClinicPatientsPage() {
       if (channel) supabase.removeChannel(channel);
       window.removeEventListener("dermai_appointments_updated", handleSync);
       window.removeEventListener("appointmentCreated", handleSync);
+      window.removeEventListener("derm_profile_updated", handleSync);
       window.removeEventListener("storage", handleSync);
       window.removeEventListener("focus", handleSync);
     };
@@ -753,9 +954,11 @@ export default function ClinicPatientsPage() {
                       {/* Column 1: Patient Details */}
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-pink-100 text-[#c0166a] flex items-center justify-center font-bold text-sm shrink-0">
-                            {patient.name.charAt(0).toUpperCase()}
-                          </div>
+                          <PatientAvatar
+                            name={patient.name}
+                            photoUrl={patient.photoUrl}
+                            sizeClass="w-9 h-9 text-sm"
+                          />
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-gray-900 truncate">{patient.name}</p>
                             <div className="flex items-center gap-2 text-xs text-gray-400 truncate mt-0.5">
@@ -876,9 +1079,12 @@ export default function ClinicPatientsPage() {
               {/* Modal Header */}
               <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
                 <div className="flex items-center gap-3.5">
-                  <div className="w-12 h-12 rounded-full bg-pink-100 text-[#c0166a] flex items-center justify-center text-lg font-bold border-2 border-pink-200 shrink-0">
-                    {selectedPatient.name.charAt(0).toUpperCase()}
-                  </div>
+                  <PatientAvatar
+                    name={selectedPatient.name}
+                    photoUrl={selectedPatient.photoUrl}
+                    sizeClass="w-12 h-12 text-lg"
+                    borderClass="border-2 border-pink-200"
+                  />
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-base font-bold text-gray-900">{selectedPatient.name}</h3>

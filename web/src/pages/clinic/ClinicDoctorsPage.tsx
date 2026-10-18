@@ -15,11 +15,16 @@ import {
   AlertTriangle,
   Check,
   ChevronDown,
+  ChevronRight,
   User,
   Info,
   HelpCircle,
   Plus,
   Copy,
+  Users,
+  Search,
+  Edit3,
+  ArrowLeft,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
@@ -39,6 +44,8 @@ import {
   parseDoctorSchedule,
   serializeDoctorSchedule,
   validateDoctorShifts,
+  getManilaNowParts,
+  parseAppointmentTimeMinutes,
 } from "@/lib/schedulingService";
 
 /* ── Types ────────────────────────────────────────────────────────── */
@@ -64,6 +71,7 @@ export type DoctorAccount = {
   dutySchedule?: Record<string, any>;
   maxPatientsPerDay?: number;
   slotIntervalMinutes?: number;
+  createdAt?: string;
 };
 
 /* ── Constants ────────────────────────────────────────────────────── */
@@ -168,6 +176,152 @@ function getDoctorShiftForDay(
     startTime: doc.dutyStartTime || "08:00",
     endTime: doc.dutyEndTime || "17:00",
   };
+}
+
+/* ── Shift Progress Calculation Helper ────────────────────────────── */
+const calculateShiftProgress = (
+  startTimeStr?: string,
+  endTimeStr?: string,
+  currentMinutes?: number
+): number => {
+  if (!startTimeStr || !endTimeStr) return 35;
+  try {
+    const startM = parseAppointmentTimeMinutes(startTimeStr);
+    const endM = parseAppointmentTimeMinutes(endTimeStr);
+    if (startM === -1 || endM === -1 || endM === startM) return 35;
+
+    const currM =
+      typeof currentMinutes === "number"
+        ? currentMinutes
+        : getManilaNowParts().totalMinutes;
+
+    // Standard shift (start < end)
+    if (endM > startM) {
+      if (currM <= startM) return 5;
+      if (currM >= endM) return 100;
+      const pct = Math.round(((currM - startM) / (endM - startM)) * 100);
+      return Math.min(100, Math.max(5, pct));
+    }
+
+    // Overnight shift (e.g., 22:00 to 02:00)
+    const totalDuration = 1440 - startM + endM;
+    let elapsed = 0;
+    if (currM >= startM) {
+      elapsed = currM - startM;
+    } else if (currM < endM) {
+      elapsed = 1440 - startM + currM;
+    } else {
+      return 5;
+    }
+    const pct = Math.round((elapsed / totalDuration) * 100);
+    return Math.min(100, Math.max(5, pct));
+  } catch {
+    return 35;
+  }
+};
+
+/* ── Doctor Avatar Component with Fallback ────────────────────────── */
+function OnDutyDoctorAvatar({ name, photo }: { name: string; photo?: string }) {
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [photo]);
+
+  const cleanName = name.replace(/^(?:dr\.?|doctor)\s*/i, "").trim();
+  const parts = cleanName.split(/\s+/).filter(Boolean);
+  let initials = "DR";
+  if (parts.length >= 2) {
+    const first = parts[0].replace(/[^A-Za-z]/g, "").charAt(0).toUpperCase();
+    const last = parts[parts.length - 1].replace(/[^A-Za-z]/g, "").charAt(0).toUpperCase();
+    initials = `${first || "D"}${last || "R"}`;
+  } else if (parts.length === 1 && parts[0]) {
+    const letters = parts[0].replace(/[^A-Za-z]/g, "");
+    initials = letters.slice(0, 2).toUpperCase() || "DR";
+  }
+
+  let resolvedPhoto = photo;
+  if (
+    resolvedPhoto &&
+    !resolvedPhoto.startsWith("http") &&
+    !resolvedPhoto.startsWith("data:") &&
+    !resolvedPhoto.startsWith("blob:")
+  ) {
+    try {
+      const cleanPath = resolvedPhoto.replace(/^avatars\//, "");
+      const { data: pubData } = supabase.storage.from("avatars").getPublicUrl(cleanPath);
+      if (pubData?.publicUrl) resolvedPhoto = pubData.publicUrl;
+    } catch { }
+  }
+
+  if (resolvedPhoto && !imgError) {
+    return (
+      <img
+        src={resolvedPhoto}
+        alt={name}
+        onError={() => setImgError(true)}
+        className="w-10.5 h-10.5 rounded-full object-cover border border-pink-100 shadow-2xs shrink-0"
+      />
+    );
+  }
+
+  return (
+    <div className="w-10.5 h-10.5 rounded-full bg-pink-100 text-[#801336] font-bold text-xs flex items-center justify-center border border-pink-200 shrink-0">
+      {initials}
+    </div>
+  );
+}
+
+/* ── Registered Doctor Avatar Component (Matching Reference Image 2) ── */
+function RegisteredDoctorAvatar({ name, photo }: { name: string; photo?: string }) {
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [photo]);
+
+  const cleanName = name.replace(/^(?:dr\.?|doctor)\s*/i, "").trim();
+  const parts = cleanName.split(/\s+/).filter(Boolean);
+  let initials = "DR";
+  if (parts.length >= 2) {
+    const first = parts[0].replace(/[^A-Za-z]/g, "").charAt(0).toUpperCase();
+    const last = parts[parts.length - 1].replace(/[^A-Za-z]/g, "").charAt(0).toUpperCase();
+    initials = `${first || "D"}${last || "R"}`;
+  } else if (parts.length === 1 && parts[0]) {
+    const letters = parts[0].replace(/[^A-Za-z]/g, "");
+    initials = letters.slice(0, 2).toUpperCase() || "DR";
+  }
+
+  let resolvedPhoto = photo;
+  if (
+    resolvedPhoto &&
+    !resolvedPhoto.startsWith("http") &&
+    !resolvedPhoto.startsWith("data:") &&
+    !resolvedPhoto.startsWith("blob:")
+  ) {
+    try {
+      const cleanPath = resolvedPhoto.replace(/^avatars\//, "");
+      const { data: pubData } = supabase.storage.from("avatars").getPublicUrl(cleanPath);
+      if (pubData?.publicUrl) resolvedPhoto = pubData.publicUrl;
+    } catch { }
+  }
+
+  if (resolvedPhoto && !imgError) {
+    return (
+      <img
+        src={resolvedPhoto}
+        alt={name}
+        onError={() => setImgError(true)}
+        className="w-12 h-12 rounded-full object-cover border border-pink-100 shadow-2xs shrink-0"
+      />
+    );
+  }
+
+  return (
+    <div className="w-12 h-12 rounded-full bg-pink-100 text-[#801336] font-bold text-sm flex items-center justify-center border border-pink-200 shrink-0">
+      {initials}
+    </div>
+  );
 }
 
 /* ── Modern Time Select Component ─────────────────────────────────── */
@@ -423,7 +577,7 @@ export default function ClinicDoctorsPage() {
   const clinicDisplayName = verifiedClinicName || "Clinic Portal";
 
   // Tab State: "register" | "schedule"
-  const [activeTab, setActiveTab] = useState<"register" | "schedule">("schedule");
+  const [activeTab, setActiveTab] = useState<"register" | "schedule">("register");
 
   // Dynamic specializations
   const [specializations, setSpecializations] = useState<SpecializationOption[]>(DEFAULT_SPECIALIZATIONS);
@@ -451,6 +605,7 @@ export default function ClinicDoctorsPage() {
   const saveDoctorLockRef = useRef(false);
   const photoFileInputRef = useRef<HTMLInputElement>(null);
   const [showRegisterConfirmModal, setShowRegisterConfirmModal] = useState(false);
+  const [showRegisterDoctorModal, setShowRegisterDoctorModal] = useState(false);
 
   /* ── Tab B: Schedule Duty Hours Form State ──────────────────────── */
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>(() => {
@@ -490,7 +645,31 @@ export default function ClinicDoctorsPage() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deletingDoctor, setDeletingDoctor] = useState(false);
 
+  /* ── Edit Doctor Profile Modal State ────────────────────────────── */
+  const [editingDoctor, setEditingDoctor] = useState<DoctorAccount | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: "",
+    email: "",
+    contactNumber: "",
+    prcLicense: "",
+    selectedSpecializationIds: [] as string[],
+    photoFile: null as File | null,
+    photoPreview: "",
+    removePhoto: false,
+  });
+  const [editError, setEditError] = useState("");
+  const [savingEditDoctor, setSavingEditDoctor] = useState(false);
+  const editPhotoFileInputRef = useRef<HTMLInputElement>(null);
+
+  /* ── All Registered Doctors Controls State ───────────────────────── */
+  const [doctorSearchQuery, setDoctorSearchQuery] = useState("");
+  const [selectedSpecialtyFilter, setSelectedSpecialtyFilter] = useState("All Specialties");
   const formSectionRef = useRef<HTMLDivElement>(null);
+
+  // Keep scroll position stable at top when switching tabs
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }, [activeTab]);
 
   // Fetch clinic-wide operating settings to bound doctor shift times
   const fetchClinicOperatingSettings = useCallback(async () => {
@@ -725,6 +904,204 @@ export default function ClinicDoctorsPage() {
     return list;
   }, [allDoctors, selectedDoctor, scheduleForm.dutyDays, scheduleForm.weeklyShifts]);
 
+  // Live clock tick (updates every 30s so completed shifts pass dynamically without manual page refresh)
+  const [currentTick, setCurrentTick] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTick(Date.now());
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Current Day, Date & Time formatted for On Duty Today section (Asia/Manila)
+  const nowParts = useMemo(() => {
+    return getManilaNowParts();
+  }, [currentTick]);
+
+  const todayDayName = useMemo(() => {
+    return new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      timeZone: "Asia/Manila",
+    }).format(new Date());
+  }, [currentTick]);
+
+  const formattedTodayDate = useMemo(() => {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "Asia/Manila",
+    }).format(new Date());
+  }, [currentTick]);
+
+  // Compute doctors who are on duty today based on their active duty schedule
+  // Excludes doctors whose duty hours/shifts for today have already concluded
+  const onDutyDoctors = useMemo(() => {
+    const currentMinutes = nowParts.totalMinutes;
+
+    return allDoctors
+      .filter((doc) => doc.status !== "Inactive")
+      .map((doc) => {
+        const docSched = parseDoctorSchedule(
+          doc.dutySchedule,
+          doc.dutyDays,
+          doc.dutyStartTime || "08:00",
+          doc.dutyEndTime || "17:00"
+        );
+
+        let shifts: DoctorShift[] = docSched.weeklyShifts[todayDayName] || [];
+
+        // Fallback 1: Check legacy dutySchedule[todayDayName] if weeklyShifts was empty
+        if (
+          shifts.length === 0 &&
+          doc.dutySchedule &&
+          typeof doc.dutySchedule === "object"
+        ) {
+          const dayData = doc.dutySchedule[todayDayName];
+          if (dayData && dayData.startTime && dayData.endTime) {
+            shifts = [
+              {
+                id: `shift-${todayDayName.toLowerCase()}-legacy`,
+                label: "Duty Shift",
+                startTime: dayData.startTime,
+                endTime: dayData.endTime,
+              },
+            ];
+          }
+        }
+
+        // Fallback 2: Check dutyDays array if weeklyShifts was empty
+        if (
+          shifts.length === 0 &&
+          doc.dutyDays &&
+          Array.isArray(doc.dutyDays) &&
+          doc.dutyDays.some((d) => d.toLowerCase().trim() === todayDayName.toLowerCase().trim())
+        ) {
+          shifts = [
+            {
+              id: `shift-${todayDayName.toLowerCase()}-default`,
+              label: "Duty Shift",
+              startTime: doc.dutyStartTime || "08:00",
+              endTime: doc.dutyEndTime || "17:00",
+            },
+          ];
+        }
+
+        const validShifts = shifts.filter((s) => s.startTime && s.endTime);
+        if (validShifts.length === 0) return null;
+
+        // Check duty hours against current time:
+        // A shift is active/upcoming if its end time has not passed yet.
+        const activeOrUpcomingShifts = validShifts.filter((shift) => {
+          const startM = parseAppointmentTimeMinutes(shift.startTime);
+          const endM = parseAppointmentTimeMinutes(shift.endTime);
+
+          if (endM === -1) return true; // Keep safe fallback if time format cannot be parsed
+
+          if (startM !== -1 && endM < startM) {
+            // Overnight shift (e.g. 22:00 to 02:00)
+            return currentMinutes >= startM || currentMinutes < endM;
+          }
+
+          // Standard daytime shift: duty is finished once current time reaches or passes endM
+          return endM > currentMinutes;
+        });
+
+        // If all scheduled duty shifts for today have finished/passed, doctor is no longer on duty today
+        if (activeOrUpcomingShifts.length === 0) {
+          return null;
+        }
+
+        const hoursDisplay = activeOrUpcomingShifts.length === 1
+          ? `${formatTime12h(activeOrUpcomingShifts[0].startTime)} – ${formatTime12h(activeOrUpcomingShifts[0].endTime)}`
+          : activeOrUpcomingShifts.map((s) => `${formatTime12h(s.startTime)} – ${formatTime12h(s.endTime)}`).join(", ");
+
+        const primarySpec =
+          doc.specializations && doc.specializations.length > 0
+            ? doc.specializations[0].name
+            : doc.specialization
+              ? doc.specialization.split(",")[0].trim()
+              : "Dermatologist";
+
+        const cleanDocName = doc.name.trim();
+        const displayName = cleanDocName.startsWith("Dr.") ? cleanDocName : `Dr. ${cleanDocName}`;
+
+        // Find active ongoing shift or the next upcoming shift
+        const activeShift = activeOrUpcomingShifts.find((s) => {
+          const sM = parseAppointmentTimeMinutes(s.startTime);
+          const eM = parseAppointmentTimeMinutes(s.endTime);
+          if (sM === -1 || eM === -1) return false;
+          if (eM < sM) return currentMinutes >= sM || currentMinutes < eM;
+          return currentMinutes >= sM && currentMinutes < eM;
+        }) || activeOrUpcomingShifts[0];
+
+        const shiftProgress = calculateShiftProgress(
+          activeShift?.startTime,
+          activeShift?.endTime,
+          currentMinutes
+        );
+
+        return {
+          doctor: doc,
+          displayName,
+          primarySpec,
+          hoursDisplay,
+          shifts: activeOrUpcomingShifts,
+          allTodayShifts: validShifts,
+          shiftProgress,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+  }, [allDoctors, todayDayName, nowParts]);
+
+  const availableSpecialtyOptions = useMemo(() => {
+    const specsSet = new Set<string>();
+    specializations.forEach((s) => {
+      if (s.name) specsSet.add(s.name);
+    });
+    allDoctors.forEach((d) => {
+      if (d.specializations) {
+        d.specializations.forEach((s) => {
+          if (s.name) specsSet.add(s.name);
+        });
+      }
+      if (d.specialization) {
+        d.specialization.split(",").forEach((s) => {
+          const trimmed = s.trim();
+          if (trimmed) specsSet.add(trimmed);
+        });
+      }
+    });
+    return Array.from(specsSet);
+  }, [specializations, allDoctors]);
+
+  const filteredRegisteredDoctors = useMemo(() => {
+    return allDoctors.filter((doc) => {
+      if (doctorSearchQuery.trim()) {
+        const q = doctorSearchQuery.trim().toLowerCase();
+        const nameMatch = doc.name.toLowerCase().includes(q);
+        const emailMatch = doc.email.toLowerCase().includes(q);
+        const specMatch =
+          (doc.specialization && doc.specialization.toLowerCase().includes(q)) ||
+          doc.specializations.some((s) => s.name.toLowerCase().includes(q));
+        if (!nameMatch && !emailMatch && !specMatch) return false;
+      }
+
+      if (selectedSpecialtyFilter && selectedSpecialtyFilter !== "All Specialties") {
+        const hasSpec =
+          doc.specializations.some(
+            (s) => s.name.toLowerCase() === selectedSpecialtyFilter.toLowerCase()
+          ) ||
+          (doc.specialization &&
+            doc.specialization.toLowerCase().includes(selectedSpecialtyFilter.toLowerCase()));
+        if (!hasSpec) return false;
+      }
+
+      return true;
+    });
+  }, [allDoctors, doctorSearchQuery, selectedSpecialtyFilter]);
+
   // Photo compression helper
   const compressImageToDataUrl = (file: File, maxDim = 512, quality = 0.85): Promise<string> => {
     return new Promise((resolve) => {
@@ -919,6 +1296,7 @@ export default function ClinicDoctorsPage() {
             specializations: docSpecs,
             clinicName: clinicDisplayName,
             status: doc.status === "Inactive" ? "Inactive" : "Active",
+            createdAt: doc.created_at || undefined,
           };
         });
 
@@ -1228,6 +1606,7 @@ export default function ClinicDoctorsPage() {
       window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
 
       resetRegisterForm();
+      setShowRegisterDoctorModal(false);
       setSuccessMsg(`Dr. ${finalizedDoctor.name} was successfully registered and added to roster.`);
       setTimeout(() => setSuccessMsg(""), 4500);
       fetchDoctors();
@@ -1565,9 +1944,9 @@ export default function ClinicDoctorsPage() {
 
       if (updateRes.error) {
         console.warn("Notice: could not save schedule to Supabase directly:", updateRes.error);
-        setSuccessMsg(`Duty schedule for Dr. ${updatedDoctor.name} updated successfully.`);
+        setSuccessMsg(`Duty schedule for ${updatedDoctor.name} updated successfully.`);
       } else {
-        setSuccessMsg(`Duty schedule and shifts for Dr. ${updatedDoctor.name} updated successfully.`);
+        setSuccessMsg(`Duty schedule and shifts for ${updatedDoctor.name} updated successfully.`);
       }
       setTimeout(() => setSuccessMsg(""), 4500);
     } catch (err: unknown) {
@@ -1578,11 +1957,217 @@ export default function ClinicDoctorsPage() {
     }
   };
 
-  // Schedule Shift button in Roster: switches tab, preselects doctor & scrolls up
-  const handleScheduleDoctor = (doc: DoctorAccount) => {
-    setActiveTab("schedule");
-    handleSelectDoctor(doc.id);
-    formSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  /* ── Edit Doctor Profile Handlers ─────────────────────────────── */
+  const handleOpenEditDoctor = (doc: DoctorAccount) => {
+    setEditingDoctor(doc);
+    setEditError("");
+
+    const resolvedPhoto = doc.photo
+      ? doc.photo.startsWith("http") || doc.photo.startsWith("data:") || doc.photo.startsWith("blob:")
+        ? doc.photo
+        : (() => {
+          try {
+            const cleanPath = doc.photo.replace(/^avatars\//, "");
+            const { data: pubData } = supabase.storage.from("avatars").getPublicUrl(cleanPath);
+            return pubData?.publicUrl || doc.photo;
+          } catch {
+            return doc.photo;
+          }
+        })()
+      : "";
+
+    setEditForm({
+      name: doc.name || "",
+      email: doc.email || "",
+      contactNumber: doc.contactNumber || "",
+      prcLicense: (doc.prcLicense || "").replace(/^#/, ""),
+      selectedSpecializationIds:
+        doc.specializations && doc.specializations.length > 0
+          ? doc.specializations.map((s) => s.id)
+          : [],
+      photoFile: null,
+      photoPreview: resolvedPhoto,
+      removePhoto: false,
+    });
+  };
+
+  const handleEditPhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setEditError("Please select a valid image file (JPG or PNG).");
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      setEditError("Image file size must be less than 8MB.");
+      return;
+    }
+
+    setEditError("");
+    try {
+      const compressedDataUrl = await compressImageToDataUrl(file);
+      setEditForm((p) => ({ ...p, photoFile: file, photoPreview: compressedDataUrl, removePhoto: false }));
+    } catch {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = (reader.result as string) || "";
+        setEditForm((p) => ({ ...p, photoFile: file, photoPreview: dataUrl, removePhoto: false }));
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSaveEditDoctor = async () => {
+    if (!editingDoctor || !clinicId) return;
+
+    const doctorName = editForm.name.trim();
+    const doctorEmail = editForm.email.trim().toLowerCase();
+    const doctorContact = editForm.contactNumber.trim();
+    const doctorLicense = editForm.prcLicense.trim();
+
+    if (!doctorName) {
+      setEditError("Full name is required.");
+      return;
+    }
+    if (!doctorEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(doctorEmail)) {
+      setEditError("A valid email address is required.");
+      return;
+    }
+    if (!doctorContact || !/^09\d{9}$/.test(doctorContact)) {
+      setEditError("Contact number must be an 11-digit Philippine mobile number starting with 09.");
+      return;
+    }
+    if (!doctorLicense) {
+      setEditError("PRC License number is required.");
+      return;
+    }
+    if (editForm.selectedSpecializationIds.length === 0) {
+      setEditError("Select at least one specialization.");
+      return;
+    }
+
+    setSavingEditDoctor(true);
+    setEditError("");
+
+    try {
+      let finalPhotoUrl: string | undefined = editingDoctor.photo;
+
+      if (editForm.removePhoto) {
+        finalPhotoUrl = undefined;
+      } else if (editForm.photoFile) {
+        finalPhotoUrl = await uploadDoctorPhoto(editForm.photoFile);
+      }
+
+      // 1. Update clinic_doctor table
+      const { error: updateDocError } = await supabase
+        .from("clinic_doctor")
+        .update({
+          doctor_name: doctorName,
+          email: doctorEmail,
+          contact_number: doctorContact,
+          prc_license: doctorLicense,
+          photo_url: finalPhotoUrl || null,
+        })
+        .eq("doctor_id", editingDoctor.id)
+        .eq("clinic_id", clinicId);
+
+      if (updateDocError) {
+        throw new Error(`Failed to update doctor profile: ${updateDocError.message}`);
+      }
+
+      // 2. Update user table if registered
+      try {
+        await supabase
+          .from("user")
+          .update({
+            full_name: doctorName,
+            contact_number: doctorContact,
+            ...(finalPhotoUrl ? { avatar_url: finalPhotoUrl } : {}),
+          })
+          .eq("email", editingDoctor.email);
+      } catch {
+        // Non-fatal if user update is restricted
+      }
+
+      // 3. Update doctor_specializations junction table
+      const assignedSpecs = specializations.filter((s) =>
+        editForm.selectedSpecializationIds.includes(s.id)
+      );
+
+      try {
+        await supabase
+          .from("doctor_specializations")
+          .delete()
+          .eq("doctor_id", editingDoctor.id);
+
+        if (assignedSpecs.length > 0) {
+          const junctionRows = assignedSpecs.map((spec) => ({
+            doctor_id: editingDoctor.id,
+            specialization_id: spec.id,
+          }));
+
+          const { error: insertSpecsError } = await supabase
+            .from("doctor_specializations")
+            .insert(junctionRows);
+
+          if (insertSpecsError) {
+            console.warn("[ClinicDoctorsPage] Specializations update warning:", insertSpecsError.message);
+          }
+        }
+      } catch (specErr) {
+        console.warn("[ClinicDoctorsPage] Exception updating specializations:", specErr);
+      }
+
+      // 4. Update local state
+      const updatedDoctor: DoctorAccount = {
+        ...editingDoctor,
+        name: doctorName,
+        email: doctorEmail,
+        contactNumber: doctorContact,
+        prcLicense: doctorLicense,
+        photo: finalPhotoUrl,
+        specialization: assignedSpecs.map((s) => s.name).join(", "),
+        specializations: assignedSpecs,
+      };
+
+      setAllDoctors((prev) =>
+        prev.map((d) => (d.id === editingDoctor.id ? updatedDoctor : d))
+      );
+
+      try {
+        const currentCached = localStorage.getItem("dermai_clinic_doctors");
+        if (currentCached) {
+          const parsed = JSON.parse(currentCached);
+          if (Array.isArray(parsed)) {
+            const updatedCache = parsed.map((d: any) =>
+              d.id === editingDoctor.id ? updatedDoctor : d
+            );
+            localStorage.setItem("dermai_clinic_doctors", JSON.stringify(updatedCache));
+            window.dispatchEvent(new Event("storage"));
+            window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
+          }
+        }
+      } catch {
+        // Non-fatal cache persistence
+      }
+
+      if (selectedDoctorForDetails && selectedDoctorForDetails.id === editingDoctor.id) {
+        setSelectedDoctorForDetails(updatedDoctor);
+      }
+
+      setSuccessMsg(`Doctor profile for ${doctorName} updated successfully.`);
+      setTimeout(() => setSuccessMsg(""), 4500);
+
+      setEditingDoctor(null);
+      await fetchDoctors();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update doctor profile.";
+      setEditError(msg);
+    } finally {
+      setSavingEditDoctor(false);
+    }
   };
 
   // Status toggle
@@ -1650,41 +2235,57 @@ export default function ClinicDoctorsPage() {
 
   return (
     <div className="space-y-6 pb-12">
-      {/* ── Page Header ─────────────────────────────────────────── */}
-      <div>
-        <h1 className="text-2xl font-display font-bold text-gray-900">
-          Clinic Doctors &amp; Duty Roster
-        </h1>
-        <p className="text-sm text-gray-400 mt-0.5">
-          Manage attending dermatologists, credentials, working days, and consultation hours.
-        </p>
-      </div>
+      {/* ── Page Header (Matching UI Reference Photo 2) ─────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-gray-900 tracking-tight">
+            {activeTab === "schedule" ? "Schedule Duty Hours & Shifts" : "Clinic Doctors & Duty Roster"}
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">
+            {activeTab === "schedule"
+              ? "Configure weekly consultation shifts, time windows, and slot capacities."
+              : "Manage attending dermatologists, credentials, working days, and consultation hours."}
+          </p>
+        </div>
 
-      {/* ── Top Tabs Navigation ──────────────────────────────────── */}
-      <div className="flex items-center gap-2.5">
-        <button
-          type="button"
-          onClick={() => setActiveTab("register")}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer ${activeTab === "register"
-            ? "border border-magenta-500 bg-magenta-500 text-white shadow-xs hover:bg-magenta-600"
-            : "border border-gray-200/80 bg-white text-gray-600 hover:text-gray-900 hover:bg-gray-50"
-            }`}
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>Register New Doctor</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap self-start sm:self-auto">
+          {activeTab === "schedule" ? (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab("register");
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-all shadow-2xs cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 text-gray-600" />
+              <span>Back to Doctor Roster</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab("schedule");
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-800 text-xs font-semibold transition-all shadow-2xs cursor-pointer"
+            >
+              <Calendar className="w-3.5 h-3.5 text-gray-700" />
+              <span>Schedule Duty Hours</span>
+            </button>
+          )}
 
-        <button
-          type="button"
-          onClick={() => setActiveTab("schedule")}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer ${activeTab === "schedule"
-            ? "border border-magenta-500 bg-magenta-500 text-white shadow-xs hover:bg-magenta-600"
-            : "border border-gray-200/80 bg-white text-gray-600 hover:text-gray-900 hover:bg-gray-50"
-            }`}
-        >
-          <Calendar className="w-4 h-4" />
-          <span>Schedule Duty Hours</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => {
+              resetRegisterForm();
+              setRegisterError("");
+              setShowRegisterDoctorModal(true);
+            }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#801336] hover:bg-[#6c0f2d] text-white text-xs font-semibold transition-all shadow-xs cursor-pointer shrink-0"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Register New Doctor</span>
+          </button>
+        </div>
       </div>
 
       {/* ── Global Success Notification ──────────────────────────── */}
@@ -1706,187 +2307,329 @@ export default function ClinicDoctorsPage() {
       <div ref={formSectionRef}>
         {activeTab === "register" ? (
           /* ══════════════════════════════════════════════════════════
-             TAB A: REGISTER NEW DOCTOR (Reference Image 2)
+             DOCTOR DASHBOARD & ROSTER
              ══════════════════════════════════════════════════════════ */
-          <div className="bg-white rounded-2xl border border-gray-200/80 p-5 sm:p-6 shadow-xs">
-            <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
-              <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                <Stethoscope className="w-4 h-4 text-[#c0166a]" />
-                Add New Doctor Profile
-              </h2>
-              <span className="text-[10px] text-gray-400 font-medium">
-                Fill required details (*)
-              </span>
-            </div>
+          <div className="space-y-6">
+            {/* 1. On Duty Today Card (UPDATED UI) */}
+            <div className="bg-white rounded-2xl border border-gray-200/70 p-5 sm:p-6 shadow-xs text-left">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900 tracking-tight">On Duty Today</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Scheduled to work today, {formattedTodayDate}.
+                  </p>
+                </div>
 
-            {/* Doctor Photo Section */}
-            <div className="mb-5 p-3.5 rounded-xl bg-gray-50/60 border border-gray-100 flex items-center gap-4">
-              <div className="relative shrink-0">
-                {registerForm.photoPreview ? (
-                  <img
-                    src={registerForm.photoPreview}
-                    alt="Doctor Preview"
-                    className="w-14 h-14 rounded-xl object-cover border border-magenta-200 shadow-2xs"
-                  />
-                ) : (
-                  <div className="w-14 h-14 rounded-xl bg-white border border-dashed border-gray-300 flex flex-col items-center justify-center text-gray-400">
-                    <Camera className="w-5 h-5 text-gray-400" />
-                    <span className="text-[8px] font-bold text-gray-400 mt-0.5">Photo</span>
-                  </div>
-                )}
-                <input
-                  ref={photoFileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handlePhotoSelect}
-                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab("schedule");
+                  }}
+                  className="text-xs font-semibold text-[#801336] hover:text-[#5a0c24] cursor-pointer inline-flex items-center gap-1 transition-colors"
+                >
+                  <span>View all schedules</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
               </div>
 
-              <div className="flex-1 min-w-0">
-                <h4 className="text-xs font-bold text-gray-800">Doctor Profile Picture</h4>
-                <p className="text-[11px] text-gray-400 mt-0.5">
-                  Clear medical headshot for patient appointment selection (JPG/PNG, max 8MB).
-                </p>
-                <div className="mt-2 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => photoFileInputRef.current?.click()}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
-                  >
-                    <Upload className="w-3 h-3 text-[#c0166a]" />
-                    {registerForm.photoPreview ? "Change Photo" : "Upload Headshot"}
-                  </button>
-                  {registerForm.photoPreview && (
+              {loadingDoctors ? (
+                <div className="py-8 text-center">
+                  <Loader2 className="w-5 h-5 text-[#801336] animate-spin mx-auto mb-2" />
+                  <p className="text-xs text-gray-400">Checking scheduled doctors...</p>
+                </div>
+              ) : onDutyDoctors.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center bg-gray-50/50 mt-4">
+                  <div className="w-9 h-9 rounded-full bg-pink-50 border border-pink-100 flex items-center justify-center mx-auto mb-2">
+                    <Stethoscope className="w-4 h-4 text-[#801336]" />
+                  </div>
+                  <p className="text-sm font-bold text-gray-800">No Doctors on Duty Today ({todayDayName})</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    No attending dermatologists are currently on duty or scheduled for further consultation today.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fill,minmax(270px,330px))] gap-4 mt-4">
+                  {onDutyDoctors.map((item) => (
+                    <div
+                      key={item.doctor.id}
+                      className="relative overflow-hidden rounded-2xl border border-pink-100 bg-gradient-to-bl from-pink-100/60 via-pink-50/30 to-white p-4 flex flex-col justify-between text-left shadow-[0_8px_22px_-12px_rgba(128,19,54,0.22)] hover:border-pink-200 hover:shadow-[0_10px_26px_-12px_rgba(128,19,54,0.30)] transition-all w-full max-w-[330px]"
+                    >
+                      {/* Left accent bar */}
+                      <span className="absolute left-0 top-3.5 bottom-3.5 w-1 rounded-r-full bg-gradient-to-b from-[#b0245f] to-[#801336]" />
+
+                      <div>
+                        {/* Top row: avatar + name/specialty + On Duty pill */}
+                        <div className="flex items-start justify-between gap-2.5">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div
+                              className="relative shrink-0 cursor-pointer"
+                              onClick={() => setSelectedDoctorForDetails(item.doctor)}
+                              title="Click to view doctor details"
+                            >
+                              <div className="p-0.5 rounded-full bg-white ring-2 ring-[#b0245f]">
+                                <OnDutyDoctorAvatar
+                                  name={item.displayName}
+                                  photo={item.doctor.photo}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <h3
+                                className="font-bold text-sm text-gray-900 truncate hover:text-[#801336] transition-colors cursor-pointer"
+                                title={item.displayName}
+                                onClick={() => setSelectedDoctorForDetails(item.doctor)}
+                              >
+                                {item.displayName}
+                              </h3>
+                              <div className="flex items-center gap-1 text-[11px] text-gray-500 truncate mt-0.5">
+                                <Stethoscope className="w-3 h-3 text-gray-400 shrink-0" />
+                                <span className="truncate">{item.primarySpec}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 shrink-0">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            On Duty
+                          </span>
+                        </div>
+
+                        {/* Duty hours box with clock tile, Today pill and shift progress */}
+                        <div className="bg-white/90 rounded-xl border border-pink-100/80 px-3 py-2.5 mt-3 flex items-center gap-2.5 shadow-2xs">
+                          <div className="w-8 h-8 rounded-lg bg-pink-100/70 flex items-center justify-center shrink-0">
+                            <Clock className="w-4 h-4 text-[#801336]" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-1.5">
+                              <span
+                                className="font-semibold text-xs sm:text-[13px] text-gray-900 truncate"
+                                title={item.hoursDisplay}
+                              >
+                                {item.hoursDisplay}
+                              </span>
+                              <span className="text-[10px] font-semibold text-[#801336] bg-pink-100/80 px-2 py-0.5 rounded-full shrink-0">
+                                Today
+                              </span>
+                            </div>
+                            <div
+                              className="w-full bg-pink-100/70 rounded-full h-1 mt-1.5 overflow-hidden"
+                              role="progressbar"
+                              aria-label={`${item.displayName} shift progress`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={item.shiftProgress || 35}
+                            >
+                              <div
+                                className="h-full rounded-full bg-gradient-to-r from-[#b0245f] to-[#801336] transition-all"
+                                style={{ width: `${item.shiftProgress || 35}%` }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="grid grid-cols-2 gap-2 mt-3 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedDoctorForDetails(item.doctor)}
+                          className="h-9 w-full px-2 rounded-xl text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 border border-gray-200 transition-colors cursor-pointer shadow-2xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                          <span>View details</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDoctorId(item.doctor.id);
+                            setActiveTab("schedule");
+                          }}
+                          className="h-9 w-full px-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-[#801336] to-[#a3246b] hover:from-[#6c0f2d] hover:to-[#8f1d5c] transition-all cursor-pointer shadow-[0_6px_14px_-6px_rgba(128,19,54,0.5)] inline-flex items-center justify-center gap-1 whitespace-nowrap"
+                        >
+                          <span>Set duty hours</span>
+                          <span className="text-white/90 font-bold ml-0.5">›</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 2. All Registered Doctors Card */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs text-left">
+              <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-gray-900">All Registered Doctors</h2>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-pink-100 text-[#801336]">
+                      {filteredRegisteredDoctors.length}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Search & Filter Controls */}
+              <div className="flex items-center gap-3 mt-4">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={doctorSearchQuery}
+                    onChange={(e) => setDoctorSearchQuery(e.target.value)}
+                    placeholder="Search name or specialty..."
+                    className="w-full pl-9 pr-7 py-2 rounded-lg border border-gray-200 text-xs text-gray-800 placeholder-gray-400 focus:outline-none focus:border-[#801336] transition-all bg-white"
+                  />
+                  {doctorSearchQuery && (
                     <button
                       type="button"
-                      onClick={() => {
-                        setRegisterForm((p) => ({ ...p, photoFile: null, photoPreview: "" }));
-                        if (photoFileInputRef.current) photoFileInputRef.current.value = "";
-                      }}
-                      className="text-xs text-rose-500 hover:text-rose-600 font-medium px-1.5 py-0.5 cursor-pointer"
+                      onClick={() => setDoctorSearchQuery("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer"
                     >
-                      Remove
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   )}
                 </div>
-              </div>
-            </div>
 
-            {/* Inputs Grid (Two Columns) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1">
-                  Full Name *
-                </label>
-                <input
-                  type="text"
-                  value={registerForm.name}
-                  onChange={(e) => setRegisterForm((p) => ({ ...p, name: e.target.value }))}
-                  placeholder="e.g. Dr. Maria Santos"
-                  className="w-full px-3.5 py-2 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-magenta-500 focus:border-[#c0166a] transition-all bg-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1">
-                  Email (used for login) *
-                </label>
-                <input
-                  type="email"
-                  value={registerForm.email}
-                  onChange={(e) => setRegisterForm((p) => ({ ...p, email: e.target.value }))}
-                  placeholder="doctor@example.com"
-                  className="w-full px-3.5 py-2 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-magenta-500 focus:border-[#c0166a] transition-all bg-white"
-                />
+                <div className="relative shrink-0">
+                  <select
+                    value={selectedSpecialtyFilter}
+                    onChange={(e) => setSelectedSpecialtyFilter(e.target.value)}
+                    className="appearance-none bg-white border border-gray-200 rounded-lg pl-3 pr-8 py-2 text-xs font-medium text-gray-700 focus:outline-none focus:border-[#801336] cursor-pointer shadow-2xs"
+                  >
+                    <option value="All Specialties">All Specialties</option>
+                    {availableSpecialtyOptions.map((spec) => (
+                      <option key={spec} value={spec}>
+                        {spec}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1">
-                  Contact Number (11 digits) *
-                </label>
-                <input
-                  type="tel"
-                  maxLength={11}
-                  value={registerForm.contactNumber}
-                  onChange={(e) =>
-                    setRegisterForm((p) => ({
-                      ...p,
-                      contactNumber: e.target.value.replace(/\D/g, "").slice(0, 11),
-                    }))
-                  }
-                  placeholder="09171234567"
-                  className="w-full px-3.5 py-2 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-magenta-500 focus:border-[#c0166a] transition-all bg-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1">
-                  PRC License # (Letters &amp; Numbers, max 7) *
-                </label>
-                <input
-                  type="text"
-                  maxLength={7}
-                  value={registerForm.prcLicense}
-                  onChange={(e) =>
-                    setRegisterForm((p) => ({
-                      ...p,
-                      prcLicense: e.target.value.slice(0, 7),
-                    }))
-                  }
-                  placeholder="e.g. 0123456 or PR12345"
-                  className="w-full px-3.5 py-2 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-magenta-500 focus:border-[#c0166a] transition-all bg-white"
-                />
-              </div>
-
-              {/* Specialization Selection */}
-              <div className="sm:col-span-2">
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-xs font-bold text-gray-700">
-                    Specialization *
-                  </label>
-                  {loadingSpecializations && (
-                    <span className="text-[10px] text-gray-400 flex items-center gap-1">
-                      <Loader2 className="w-3 h-3 animate-spin" /> Loading specializations...
-                    </span>
+              {/* Doctors List */}
+              {loadingDoctors ? (
+                <div className="py-12 text-center">
+                  <Loader2 className="w-6 h-6 text-[#801336] animate-spin mx-auto mb-2" />
+                  <p className="text-xs text-gray-400">Loading registered doctors...</p>
+                </div>
+              ) : filteredRegisteredDoctors.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center bg-gray-50/50 mt-4">
+                  <Users className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                  <p className="text-sm font-bold text-gray-800">
+                    {allDoctors.length === 0 ? "No Doctors Registered" : "No Matching Doctors Found"}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {allDoctors.length === 0
+                      ? "Use the form on the right to register your clinic's attending dermatologists."
+                      : "Try adjusting your search query or specialty filter."}
+                  </p>
+                  {(doctorSearchQuery || selectedSpecialtyFilter !== "All Specialties") && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDoctorSearchQuery("");
+                        setSelectedSpecialtyFilter("All Specialties");
+                      }}
+                      className="mt-3 px-3 py-1.5 rounded-lg text-xs font-semibold text-[#801336] bg-pink-50 hover:bg-pink-100 border border-pink-200 transition-colors cursor-pointer inline-flex items-center gap-1"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Clear Filters</span>
+                    </button>
                   )}
                 </div>
-                <SpecializationMultiSelect
-                  options={specializations}
-                  selectedIds={registerForm.selectedSpecializationIds}
-                  onChange={(ids) =>
-                    setRegisterForm((p) => ({ ...p, selectedSpecializationIds: ids }))
-                  }
-                  placeholder="Select one or more clinical specializations..."
-                  disabled={loadingSpecializations || savingDoctor}
-                />
-              </div>
-            </div>
+              ) : (
+                <div className="divide-y divide-gray-100 mt-4">
+                  {filteredRegisteredDoctors.map((doc) => {
+                    const cleanDocName = doc.name.trim();
+                    const displayName = cleanDocName.startsWith("Dr.") ? cleanDocName : `Dr. ${cleanDocName}`;
 
-            {registerError && (
-              <div className="mt-4 flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
-                <AlertCircle className="w-4 h-4 shrink-0" /> {registerError}
-              </div>
-            )}
+                    return (
+                      <div
+                        key={doc.id}
+                        className="py-4.5 first:pt-2 last:pb-0 flex flex-col sm:flex-row sm:items-start justify-between gap-4 text-left"
+                      >
+                        <div className="flex items-start gap-3.5 min-w-0 flex-1">
+                          <RegisteredDoctorAvatar name={doc.name} photo={doc.photo} />
 
-            <div className="mt-5 flex justify-end gap-2.5 pt-3 border-t border-gray-100">
-              <button
-                type="button"
-                onClick={resetRegisterForm}
-                disabled={savingDoctor}
-                className="px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-xs font-bold hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
-              >
-                Reset Form
-              </button>
-              <button
-                type="button"
-                onClick={handleInitiateAddDoctor}
-                disabled={savingDoctor}
-                className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-colors disabled:opacity-60 shadow-xs cursor-pointer"
-              >
-                {savingDoctor && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                <span>Add Doctor to Roster</span>
-              </button>
+                          <div className="min-w-0 flex-1 space-y-1">
+                            {/* Name & PRC */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3
+                                className="font-bold text-gray-900 text-sm hover:text-[#801336] transition-colors cursor-pointer"
+                                onClick={() => setSelectedDoctorForDetails(doc)}
+                              >
+                                {displayName}
+                              </h3>
+                              <span className="text-xs text-gray-400 font-normal">
+                                PRC: {doc.prcLicense ? (doc.prcLicense.startsWith("#") ? doc.prcLicense : `#${doc.prcLicense}`) : "#Pending"}
+                              </span>
+                            </div>
+
+                            {/* Email & Phone */}
+                            <p className="text-xs text-gray-500">
+                              {doc.email}
+                              {doc.contactNumber ? (
+                                <>
+                                  <span className="mx-1.5 text-gray-300">•</span>
+                                  <span>{doc.contactNumber}</span>
+                                </>
+                              ) : null}
+                            </p>
+
+                            {/* Specialization pills */}
+                            <div className="flex flex-wrap gap-1.5 pt-0.5">
+                              {doc.specializations && doc.specializations.length > 0 ? (
+                                doc.specializations.map((spec) => (
+                                  <span
+                                    key={spec.id}
+                                    className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-pink-50 text-[#801336] border border-pink-100 font-medium"
+                                  >
+                                    {spec.name}
+                                  </span>
+                                ))
+                              ) : doc.specialization ? (
+                                doc.specialization.split(",").map((s, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-pink-50 text-[#801336] border border-pink-100 font-medium"
+                                  >
+                                    {s.trim()}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-pink-50 text-[#801336] border border-pink-100 font-medium">
+                                  General Dermatology
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="flex items-center gap-2 shrink-0 self-start pt-1">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditDoctor(doc)}
+                            className="px-3.5 py-1.5 rounded-lg bg-[#801336] hover:bg-[#6c0f2d] text-white text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
+                          >
+                            Edit profile
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedDoctorForDetails(doc)}
+                            className="px-3.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors cursor-pointer shadow-2xs"
+                          >
+                            Details
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         ) : (
@@ -2184,10 +2927,10 @@ export default function ClinicDoctorsPage() {
                                 <div className="pt-1 border-t border-gray-200/60 flex items-center justify-between text-[11px]">
                                   <span className="text-gray-500">Interval source:</span>
                                   <span className={`font-semibold capitalize ${effective.intervalSource === "doctor"
-                                      ? "text-blue-700 font-bold"
-                                      : effective.intervalSource === "shift"
-                                        ? "text-magenta-700 font-bold"
-                                        : "text-gray-700"
+                                    ? "text-blue-700 font-bold"
+                                    : effective.intervalSource === "shift"
+                                      ? "text-magenta-700 font-bold"
+                                      : "text-gray-700"
                                     }`}>
                                     {effective.intervalSource === "shift"
                                       ? "Shift Override"
@@ -2549,188 +3292,458 @@ export default function ClinicDoctorsPage() {
         )}
       </div>
 
-      {/* ── Attending Doctors Roster (Visible in Register New Doctor tab only) ─────── */}
-      {activeTab === "register" && (
-        <div className="space-y-3 pt-2">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-gray-900">
-              Attending Doctors Roster ({allDoctors.length})
-            </h3>
-            <span className="text-xs text-gray-400">Synced with patient booking schedule</span>
-          </div>
 
-          {loadingDoctors ? (
-            <div className="bg-white rounded-2xl border border-gray-100 py-16 text-center shadow-xs">
-              <Loader2 className="w-7 h-7 text-[#c0166a] animate-spin mx-auto mb-2" />
-              <p className="text-xs text-gray-400">Loading doctors and duty schedules...</p>
-            </div>
-          ) : allDoctors.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-dashed border-gray-200 py-16 text-center shadow-xs">
-              <Stethoscope className="w-10 h-10 text-gray-200 mx-auto mb-2.5" />
-              <p className="text-sm text-gray-700 font-medium">No doctors registered yet.</p>
-              <p className="text-xs text-gray-400 mt-0.5">
-                Add your attending dermatologists using the Register New Doctor tab above.
-              </p>
-            </div>
-          ) : (
-            allDoctors.map((doc, i) => {
-              return (
-                <motion.div
-                  key={doc.id}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.03 }}
-                  className="bg-white rounded-2xl border border-gray-200/80 shadow-2xs p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-gray-300 transition-all text-left"
+
+      {/* ── Edit Doctor Profile Modal ────────────────────────────── */}
+      <AnimatePresence>
+        {editingDoctor && (
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 8 }}
+              className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[92vh] flex flex-col text-left"
+            >
+              {/* Modal Header */}
+              <div className="px-6 pt-5 pb-3.5 flex items-center justify-between border-b border-gray-100 bg-gray-50/50 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-pink-50 text-[#c0166a] border border-pink-100 flex items-center justify-center shrink-0">
+                    <Edit3 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-900">Edit Doctor Profile</h3>
+                    <p className="text-[11px] text-gray-500">
+                      Update credentials and details for {editingDoctor.name}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingDoctor(null)}
+                  disabled={savingEditDoctor}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
                 >
-                  <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-                    {/* Avatar */}
-                    {doc.photo ? (
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-6 overflow-y-auto space-y-4 text-xs">
+                {/* Doctor Photo Section */}
+                <div className="p-3.5 rounded-xl bg-gray-50/60 border border-gray-100 flex items-center gap-4">
+                  <div className="relative shrink-0">
+                    {editForm.photoPreview && !editForm.removePhoto ? (
                       <img
-                        src={doc.photo}
-                        alt={doc.name}
-                        className="w-12 h-12 rounded-xl object-cover border border-magenta-200 shadow-2xs shrink-0"
+                        src={editForm.photoPreview}
+                        alt="Doctor Preview"
+                        className="w-14 h-14 rounded-xl object-cover border border-pink-200 shadow-2xs"
                       />
                     ) : (
-                      <div className="w-12 h-12 rounded-xl bg-magenta-50 border border-magenta-100 flex items-center justify-center shrink-0 text-[#c0166a] font-bold text-base">
-                        {doc.name.replace("Dr.", "").trim().charAt(0) || "D"}
+                      <div className="w-14 h-14 rounded-xl bg-white border border-dashed border-gray-300 flex flex-col items-center justify-center text-gray-400">
+                        <Camera className="w-5 h-5 text-gray-400" />
+                        <span className="text-[8px] font-bold text-gray-400 mt-0.5">Photo</span>
                       </div>
                     )}
+                    <input
+                      ref={editPhotoFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleEditPhotoSelect}
+                    />
+                  </div>
 
-                    {/* Info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-bold text-gray-900 text-sm">
-                          {doc.name}
-                        </h3>
-                        <span className="text-[10px] text-gray-400 font-mono">
-                          PRC: #{doc.prcLicense || "Pending"}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        {doc.email}
-                        <span className="mx-1.5 text-gray-300">•</span>
-                        {doc.contactNumber || "No phone"}
-                      </p>
-
-                      {/* Specializations */}
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {doc.specializations.length > 0 ? (
-                          doc.specializations.map((spec) => (
-                            <span
-                              key={spec.id}
-                              className="inline-block text-[10px] px-2 py-0.5 rounded-md bg-magenta-50 text-magenta-700 border border-magenta-100 font-semibold"
-                            >
-                              {spec.name}
-                            </span>
-                          ))
-                        ) : (
-                          <span className="text-[10px] text-gray-400 italic">
-                            General Dermatology
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Shift & Capacity Summary */}
-                      {(() => {
-                        const docSched = parseDoctorSchedule(doc.dutySchedule, doc.dutyDays);
-                        const activeDays = ALL_DAYS_OF_WEEK.filter(
-                          (d) => docSched.weeklyShifts[d] && docSched.weeklyShifts[d].length > 0
-                        );
-                        const totalShiftsCount = activeDays.reduce(
-                          (acc, d) => acc + (docSched.weeklyShifts[d]?.length || 0),
-                          0
-                        );
-                        const avgShiftsPerDay = activeDays.length > 0
-                          ? Math.round(totalShiftsCount / activeDays.length)
-                          : 0;
-                        const firstDay = activeDays[0];
-                        const firstDayShifts = firstDay ? docSched.weeklyShifts[firstDay] || [] : [];
-                        const shiftsSummaryStr = firstDayShifts
-                          .map((s) => `${formatTime12h(s.startTime)}–${formatTime12h(s.endTime)}`)
-                          .join(", ");
-
-                        const distinctIntervals = Array.from(
-                          new Set(
-                            activeDays.flatMap((d) =>
-                              (docSched.weeklyShifts[d] || []).map((s) => {
-                                const eff = getEffectiveShiftSettings(
-                                  s,
-                                  docSched,
-                                  { defaultSlotIntervalMinutes: clinicDefaultInterval }
-                                );
-                                return eff.interval;
-                              })
-                            )
-                          )
-                        );
-                        const intervalDisplayStr =
-                          distinctIntervals.length > 1
-                            ? `${distinctIntervals.join("m, ")}m`
-                            : `${distinctIntervals[0] || doc.slotIntervalMinutes || docSched.slotIntervalMinutes || clinicDefaultInterval}m`;
-
-                        return (
-                          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-                            {activeDays.length > 0 ? (
-                              <>
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 border border-gray-200/80 text-gray-700 font-medium">
-                                  <Calendar className="w-3 h-3 text-[#c0166a]" />
-                                  {activeDays.map((d) => d.slice(0, 3)).join(", ")}
-                                </span>
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 border border-gray-200/80 text-gray-700 font-medium">
-                                  <Clock className="w-3 h-3 text-[#c0166a]" />
-                                  {shiftsSummaryStr || `${formatTime12h(doc.dutyStartTime || "08:00")} – ${formatTime12h(doc.dutyEndTime || "17:00")}`}
-                                  {avgShiftsPerDay > 1 && (
-                                    <span className="text-[10px] text-magenta-700 font-bold ml-0.5">
-                                      ({avgShiftsPerDay} shifts/day)
-                                    </span>
-                                  )}
-                                </span>
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-pink-50 border border-pink-200/70 text-[#c0166a] font-semibold">
-                                  <Clock className="w-3 h-3" />
-                                  {intervalDisplayStr} consultation slots
-                                </span>
-                              </>
-                            ) : (
-                              <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200/60 font-medium">
-                                No duty schedule assigned
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })()}
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-xs font-bold text-gray-800">Doctor Profile Picture</h4>
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      Headshot displayed for patient appointment booking (JPG/PNG, max 8MB).
+                    </p>
+                    <div className="mt-2.5 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => editPhotoFileInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-[#c0166a]" />
+                        <span>{editForm.photoPreview && !editForm.removePhoto ? "Change Photo" : "Upload Headshot"}</span>
+                      </button>
+                      {editForm.photoPreview && !editForm.removePhoto && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditForm((p) => ({ ...p, photoFile: null, photoPreview: "", removePhoto: true }));
+                            if (editPhotoFileInputRef.current) editPhotoFileInputRef.current.value = "";
+                          }}
+                          className="inline-flex items-center px-3 py-1.5 rounded-lg border border-rose-200 bg-white hover:bg-rose-50 text-rose-600 text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
+                        >
+                          Remove
+                        </button>
+                      )}
                     </div>
                   </div>
+                </div>
 
-                  {/* Card Actions (Matching Reference Exactly) */}
-                  <div className="flex items-center gap-2.5 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-gray-100">
-                    <button
-                      type="button"
-                      onClick={() => handleScheduleDoctor(doc)}
-                      className="px-4 py-2 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
-                    >
-                      Schedule Shift
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setSelectedDoctorForDetails(doc)}
-                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 border border-gray-200 transition-all cursor-pointer"
-                    >
-                      <Eye className="w-3.5 h-3.5 text-gray-500" />
-                      <span>Details</span>
-                    </button>
+                {/* Form Fields Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5 h-4">
+                      <label className="text-xs font-bold text-gray-700">
+                        Full Name <span className="text-[#c0166a]">*</span>
+                      </label>
+                    </div>
+                    <input
+                      type="text"
+                      value={editForm.name}
+                      onChange={(e) => setEditForm((p) => ({ ...p, name: e.target.value }))}
+                      placeholder="e.g. Dr. Nathan Bayutas"
+                      className="w-full h-10 px-3.5 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-magenta-500 focus:border-[#c0166a] transition-all bg-white shadow-2xs"
+                    />
                   </div>
-                </motion.div>
-              );
-            })
-          )}
-        </div>
-      )}
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5 h-4">
+                      <label className="text-xs font-bold text-gray-700">
+                        Email (used for login) <span className="text-[#c0166a]">*</span>
+                      </label>
+                    </div>
+                    <input
+                      type="email"
+                      value={editForm.email}
+                      onChange={(e) => setEditForm((p) => ({ ...p, email: e.target.value }))}
+                      placeholder="doctor@example.com"
+                      className="w-full h-10 px-3.5 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-magenta-500 focus:border-[#c0166a] transition-all bg-white shadow-2xs"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5 h-4">
+                      <label className="text-xs font-bold text-gray-700">
+                        Contact Number <span className="text-[#c0166a]">*</span>
+                      </label>
+                      <span className="text-[10px] text-gray-400 font-normal">11 digits</span>
+                    </div>
+                    <input
+                      type="tel"
+                      maxLength={11}
+                      value={editForm.contactNumber}
+                      onChange={(e) =>
+                        setEditForm((p) => ({
+                          ...p,
+                          contactNumber: e.target.value.replace(/\D/g, "").slice(0, 11),
+                        }))
+                      }
+                      placeholder="09171234567"
+                      className="w-full h-10 px-3.5 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-magenta-500 focus:border-[#c0166a] transition-all bg-white shadow-2xs"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5 h-4">
+                      <label className="text-xs font-bold text-gray-700">
+                        PRC License # <span className="text-[#c0166a]">*</span>
+                      </label>
+                      <span className="text-[10px] text-gray-400 font-normal">Max 7 chars</span>
+                    </div>
+                    <input
+                      type="text"
+                      maxLength={7}
+                      value={editForm.prcLicense}
+                      onChange={(e) =>
+                        setEditForm((p) => ({
+                          ...p,
+                          prcLicense: e.target.value.slice(0, 7),
+                        }))
+                      }
+                      placeholder="e.g. PR11111"
+                      className="w-full h-10 px-3.5 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-magenta-500 focus:border-[#c0166a] transition-all bg-white shadow-2xs"
+                    />
+                  </div>
+
+                  {/* Specialization Selection */}
+                  <div className="sm:col-span-2">
+                    <div className="flex items-center justify-between mb-1.5 h-4">
+                      <label className="text-xs font-bold text-gray-700">
+                        Specialization <span className="text-[#c0166a]">*</span>
+                      </label>
+                      <span className="text-[10px] text-gray-400 font-normal">Select clinical areas</span>
+                    </div>
+                    <SpecializationMultiSelect
+                      options={specializations}
+                      selectedIds={editForm.selectedSpecializationIds}
+                      onChange={(ids) =>
+                        setEditForm((p) => ({ ...p, selectedSpecializationIds: ids }))
+                      }
+                      placeholder="Select clinical specializations..."
+                      disabled={savingEditDoctor}
+                    />
+                  </div>
+                </div>
+
+                {/* Error Banner */}
+                {editError && (
+                  <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{editError}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-4 bg-gray-50/70 border-t border-gray-100 flex items-center justify-end gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setEditingDoctor(null)}
+                  disabled={savingEditDoctor}
+                  className="h-10 px-5 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-100 transition-colors disabled:opacity-50 cursor-pointer inline-flex items-center justify-center"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveEditDoctor}
+                  disabled={savingEditDoctor}
+                  className="h-10 inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-all disabled:opacity-60 shadow-xs cursor-pointer"
+                >
+                  {savingEditDoctor ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving Changes...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Save Changes</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Register New Doctor Modal ──────────────────────────────── */}
+      <AnimatePresence>
+        {showRegisterDoctorModal && (
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 8 }}
+              className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+            >
+              {/* Modal Header */}
+              <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-gray-100 bg-gray-50/50 shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-pink-50 border border-pink-100 text-[#801336] flex items-center justify-center shrink-0">
+                    <UserPlus className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900">Register New Doctor</h3>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Add a new attending dermatologist to your clinic roster.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterDoctorModal(false)}
+                  disabled={savingDoctor}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Scrollable Form Body */}
+              <div className="p-6 overflow-y-auto space-y-4">
+                {/* Profile picture upload box */}
+                <div className="border border-dashed border-gray-200 rounded-xl p-3.5 flex items-center gap-3.5 bg-gray-50/50">
+                  <div className="w-12 h-12 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center shrink-0 overflow-hidden">
+                    {registerForm.photoPreview ? (
+                      <img
+                        src={registerForm.photoPreview}
+                        alt="Doctor Preview"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Camera className="w-5 h-5 text-gray-400" />
+                    )}
+                    <input
+                      ref={photoFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handlePhotoSelect}
+                    />
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-xs font-semibold text-gray-800">Profile picture</h4>
+                    <p className="text-[11px] text-gray-400 mt-0.5">JPG/PNG, max 8MB</p>
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => photoFileInputRef.current?.click()}
+                        className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors cursor-pointer shadow-2xs"
+                      >
+                        <span>{registerForm.photoPreview ? "Change photo" : "Upload headshot"}</span>
+                      </button>
+                      {registerForm.photoPreview && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRegisterForm((p) => ({ ...p, photoFile: null, photoPreview: "" }));
+                            if (photoFileInputRef.current) photoFileInputRef.current.value = "";
+                          }}
+                          className="text-xs text-rose-500 hover:text-rose-600 font-medium cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Inputs: Vertical stack */}
+                <div className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">
+                      Full name <span className="text-[#801336]">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={registerForm.name}
+                      onChange={(e) => setRegisterForm((p) => ({ ...p, name: e.target.value }))}
+                      placeholder="e.g. Dr. Maria Santos"
+                      className="w-full h-9 px-3 rounded-lg border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-[#801336] transition-all bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">
+                      Email (used for login) <span className="text-[#801336]">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={registerForm.email}
+                      onChange={(e) => setRegisterForm((p) => ({ ...p, email: e.target.value }))}
+                      placeholder="doctor@example.com"
+                      className="w-full h-9 px-3 rounded-lg border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-[#801336] transition-all bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-gray-700">
+                        Contact number <span className="text-[#801336]">*</span>
+                      </label>
+                      <span className="text-[10px] text-gray-400 font-normal">11 digits</span>
+                    </div>
+                    <input
+                      type="tel"
+                      maxLength={11}
+                      value={registerForm.contactNumber}
+                      onChange={(e) =>
+                        setRegisterForm((p) => ({
+                          ...p,
+                          contactNumber: e.target.value.replace(/\D/g, "").slice(0, 11),
+                        }))
+                      }
+                      placeholder="09171234567"
+                      className="w-full h-9 px-3 rounded-lg border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-[#801336] transition-all bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-gray-700">
+                        PRC license # <span className="text-[#801336]">*</span>
+                      </label>
+                      <span className="text-[10px] text-gray-400 font-normal">Max 7 chars</span>
+                    </div>
+                    <input
+                      type="text"
+                      maxLength={7}
+                      value={registerForm.prcLicense}
+                      onChange={(e) =>
+                        setRegisterForm((p) => ({
+                          ...p,
+                          prcLicense: e.target.value.slice(0, 7),
+                        }))
+                      }
+                      placeholder="e.g. 0123456 or PR12345"
+                      className="w-full h-9 px-3 rounded-lg border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-[#801336] transition-all bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-gray-700">
+                        Specialization <span className="text-[#801336]">*</span>
+                      </label>
+                      {loadingSpecializations && (
+                        <span className="text-[10px] text-gray-400 flex items-center gap-1">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Loading...
+                        </span>
+                      )}
+                    </div>
+                    <SpecializationMultiSelect
+                      options={specializations}
+                      selectedIds={registerForm.selectedSpecializationIds}
+                      onChange={(ids) =>
+                        setRegisterForm((p) => ({ ...p, selectedSpecializationIds: ids }))
+                      }
+                      placeholder="Select one or more specializations..."
+                      disabled={loadingSpecializations || savingDoctor}
+                    />
+                  </div>
+                </div>
+
+                {registerError && (
+                  <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" /> {registerError}
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-center justify-end gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={resetRegisterForm}
+                  disabled={savingDoctor}
+                  className="px-4 py-2 rounded-lg border border-gray-200 bg-white text-gray-700 text-xs font-semibold hover:bg-gray-100 transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterDoctorModal(false)}
+                  disabled={savingDoctor}
+                  className="px-4 py-2 rounded-lg border border-gray-200 bg-white text-gray-700 text-xs font-semibold hover:bg-gray-100 transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleInitiateAddDoctor}
+                  disabled={savingDoctor}
+                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#801336] hover:bg-[#6c0f2d] text-white text-xs font-semibold transition-colors disabled:opacity-60 shadow-2xs cursor-pointer"
+                >
+                  {savingDoctor && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Add doctor to roster</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* ── Add Doctor Confirmation Modal ────────────────────────── */}
       <AnimatePresence>
         {showRegisterConfirmModal && (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 8 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -2998,11 +4011,12 @@ export default function ClinicDoctorsPage() {
                     onClick={() => {
                       const doc = selectedDoctorForDetails;
                       setSelectedDoctorForDetails(null);
-                      handleScheduleDoctor(doc);
+                      handleOpenEditDoctor(doc);
                     }}
-                    className="px-4 py-1.5 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                    className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
                   >
-                    Edit Schedule
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit Profile</span>
                   </button>
                 </div>
               </div>

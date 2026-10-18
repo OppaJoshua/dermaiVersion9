@@ -14,6 +14,8 @@ import {
   ShieldCheck,
   Calendar,
   ArrowLeft,
+  Stethoscope,
+  Sigma,
 } from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { motion } from "framer-motion";
@@ -57,6 +59,10 @@ type AppointmentRecord = {
 type ClinicDoctorInfo = {
   id: string;
   name: string;
+  photo?: string;
+  photo_url?: string;
+  specialization?: string;
+  specializations?: { id?: string; name: string }[];
   dutyDays?: string[];
   dutyStartTime?: string;
   dutyEndTime?: string;
@@ -123,16 +129,101 @@ function formatDoctorDisplay(name?: string): string {
   return `Dr. ${cleaned}`;
 }
 
+/** Current time in Asia/Manila as minutes since midnight */
+function getManilaMinutes(): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+    timeZone: "Asia/Manila",
+  }).formatToParts(new Date());
+  const h = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10) % 24;
+  const m = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+  return h * 60 + m;
+}
 
+function getGreeting(minutes: number): string {
+  if (minutes < 12 * 60) return "Good morning";
+  if (minutes < 18 * 60) return "Good afternoon";
+  return "Good evening";
+}
+
+type DutyState = "on-duty" | "on-break" | "upcoming" | "finished";
+
+const DUTY_STATE_LABEL: Record<DutyState, string> = {
+  "on-duty": "On duty now",
+  "on-break": "On break",
+  upcoming: "Starts later",
+  finished: "Shift ended",
+};
+
+const DUTY_STATE_DOT: Record<DutyState, string> = {
+  "on-duty": "bg-emerald-500",
+  "on-break": "bg-amber-400",
+  upcoming: "bg-gray-300",
+  finished: "bg-gray-300",
+};
+
+/* ── Doctor Avatar Component with Fallback ────────────────────────── */
+function DashboardDoctorAvatar({ name, photo }: { name: string; photo?: string }) {
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [photo]);
+
+  const cleanName = (name || "").replace(/^(?:dr\.?|doctor)\s*/i, "").trim();
+  const parts = cleanName.split(/\s+/).filter(Boolean);
+  let initials = "DR";
+  if (parts.length >= 2) {
+    const first = parts[0].replace(/[^A-Za-z]/g, "").charAt(0).toUpperCase();
+    const last = parts[parts.length - 1].replace(/[^A-Za-z]/g, "").charAt(0).toUpperCase();
+    initials = `${first || "D"}${last || "R"}`;
+  } else if (parts.length === 1 && parts[0]) {
+    const letters = parts[0].replace(/[^A-Za-z]/g, "");
+    initials = letters.slice(0, 2).toUpperCase() || "DR";
+  }
+
+  let resolvedPhoto = photo;
+  if (
+    resolvedPhoto &&
+    !resolvedPhoto.startsWith("http") &&
+    !resolvedPhoto.startsWith("data:") &&
+    !resolvedPhoto.startsWith("blob:")
+  ) {
+    try {
+      const cleanPath = resolvedPhoto.replace(/^avatars\//, "");
+      const { data: pubData } = supabase.storage.from("avatars").getPublicUrl(cleanPath);
+      if (pubData?.publicUrl) resolvedPhoto = pubData.publicUrl;
+    } catch { }
+  }
+
+  if (resolvedPhoto && !imgError) {
+    return (
+      <img
+        src={resolvedPhoto}
+        alt={name}
+        onError={() => setImgError(true)}
+        className="w-10 h-10 rounded-full object-cover border border-pink-100 shadow-2xs shrink-0"
+      />
+    );
+  }
+
+  return (
+    <div className="w-10 h-10 rounded-full bg-pink-100 text-[#801336] font-bold text-xs flex items-center justify-center border border-pink-200 shrink-0">
+      {initials}
+    </div>
+  );
+}
 
 const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number | string }>; label?: string }) => {
   if (active && payload && payload.length) {
     const val = Number(payload[0].value);
     return (
-      <div className="bg-white/95 backdrop-blur-md border border-magenta-100 text-gray-800 text-xs px-3.5 py-2.5 rounded-xl shadow-xl shadow-magenta-900/10">
+      <div className="bg-white/95 backdrop-blur-md border border-pink-100 text-gray-800 text-xs px-3.5 py-2.5 rounded-xl shadow-xl shadow-pink-900/10">
         <p className="font-bold text-gray-900 mb-1">{label}</p>
-        <div className="flex items-center gap-1.5 text-xs text-[#c0166a] font-semibold">
-          <span className="w-2 h-2 rounded-full bg-[#c0166a]"></span>
+        <div className="flex items-center gap-1.5 text-xs text-[#801336] font-semibold">
+          <span className="w-2 h-2 rounded-full bg-[#801336]"></span>
           <span>{val} {val === 1 ? "patient" : "patients"}</span>
         </div>
       </div>
@@ -146,10 +237,10 @@ const ConditionTooltip = ({ active, payload, label }: { active?: boolean; payloa
     const val = Number(payload[0].value);
     const fullName = (payload[0] as any)?.payload?.fullName || label;
     return (
-      <div className="bg-white/95 backdrop-blur-md border border-magenta-100 text-gray-800 text-xs px-3.5 py-2.5 rounded-xl shadow-xl shadow-magenta-900/10">
+      <div className="bg-white/95 backdrop-blur-md border border-pink-100 text-gray-800 text-xs px-3.5 py-2.5 rounded-xl shadow-xl shadow-pink-900/10">
         <p className="font-bold text-gray-900 mb-1">{fullName}</p>
-        <div className="flex items-center gap-1.5 text-xs text-[#c0166a] font-semibold">
-          <span className="w-2 h-2 rounded-full bg-[#c0166a]"></span>
+        <div className="flex items-center gap-1.5 text-xs text-[#801336] font-semibold">
+          <span className="w-2 h-2 rounded-full bg-[#801336]"></span>
           <span>{val} {val === 1 ? "consultation" : "consultations"}</span>
         </div>
       </div>
@@ -165,6 +256,12 @@ export default function ClinicDashboardPage() {
   const [timeframe, setTimeframe] = useState<"week" | "month" | "last-month" | "year">("month");
   const [chartMode, setChartMode] = useState<"trend" | "conditions">("trend");
   const [scheduleDate, setScheduleDate] = useState<Date>(new Date());
+  const [nowMinutes, setNowMinutes] = useState<number>(() => getManilaMinutes());
+
+  useEffect(() => {
+    const t = window.setInterval(() => setNowMinutes(getManilaMinutes()), 60_000);
+    return () => window.clearInterval(t);
+  }, []);
 
   const { status: verificationStatus, clinicName, clinicId, loading } = useClinicVerification();
 
@@ -211,18 +308,38 @@ export default function ClinicDashboardPage() {
       const loadedDoctors: ClinicDoctorInfo[] = [];
       let dbList: any[] = [];
       if (resolvedClinicId) {
-        // Fetch doctor names and duty schedules for clinic
+        // Fetch doctor names, photo, specializations, and duty schedules for clinic
         try {
           const { data: docRows } = await supabase
             .from("clinic_doctor")
-            .select("doctor_id, doctor_name, duty_days, duty_start_time, duty_end_time, duty_schedule, status")
+            .select(`
+              doctor_id,
+              doctor_name,
+              duty_days,
+              duty_start_time,
+              duty_end_time,
+              duty_schedule,
+              status,
+              photo_url,
+              doctor_specializations (
+                specialization_id,
+                specializations (
+                  id,
+                  name
+                )
+              )
+            `)
             .eq("clinic_id", resolvedClinicId);
           if (docRows) {
             docRows.forEach((d: any) => {
               docMap.set(d.doctor_id, d.doctor_name);
+              const specs = d.doctor_specializations?.map((ds: any) => ds.specializations).filter(Boolean) || [];
               loadedDoctors.push({
                 id: d.doctor_id,
                 name: d.doctor_name,
+                photo: d.photo_url,
+                specializations: specs,
+                specialization: specs[0]?.name,
                 dutyDays: Array.isArray(d.duty_days)
                   ? d.duty_days
                   : typeof d.duty_days === "string"
@@ -280,6 +397,13 @@ export default function ClinicDashboardPage() {
               }
               const existingIdx = loadedDoctors.findIndex((doc) => doc.id === d.id);
               if (existingIdx >= 0) {
+                if (!loadedDoctors[existingIdx].photo && (d.photo || d.photo_url)) {
+                  loadedDoctors[existingIdx].photo = d.photo || d.photo_url;
+                }
+                if (!loadedDoctors[existingIdx].specialization && (d.specialization || d.specializations)) {
+                  loadedDoctors[existingIdx].specialization = d.specialization || d.specializations?.[0]?.name;
+                  loadedDoctors[existingIdx].specializations = d.specializations || [{ id: "1", name: d.specialization }];
+                }
                 if (!loadedDoctors[existingIdx].dutySchedule && d.dutySchedule) {
                   loadedDoctors[existingIdx].dutySchedule = d.dutySchedule;
                 }
@@ -293,6 +417,9 @@ export default function ClinicDashboardPage() {
                 loadedDoctors.push({
                   id: d.id,
                   name: d.name,
+                  photo: d.photo || d.photo_url,
+                  specialization: d.specialization || d.specializations?.[0]?.name,
+                  specializations: d.specializations || (d.specialization ? [{ id: "1", name: d.specialization }] : []),
                   dutyDays: d.dutyDays || [],
                   dutyStartTime: d.dutyStartTime || "08:00",
                   dutyEndTime: d.dutyEndTime || "17:00",
@@ -505,6 +632,122 @@ export default function ClinicDashboardPage() {
     }
     return 30;
   }, [doctors]);
+
+  // Current Day Name in Asia/Manila
+  const todayDayName = useMemo(() => {
+    return new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      timeZone: "Asia/Manila",
+    }).format(new Date());
+  }, []);
+
+  // Compute doctors who are on duty today based on their active duty schedule
+  const onDutyDoctors = useMemo(() => {
+    return doctors
+      .filter((doc) => doc.status !== "Inactive")
+      .map((doc) => {
+        const docSched = parseDoctorSchedule(
+          doc.dutySchedule,
+          doc.dutyDays,
+          doc.dutyStartTime || "08:00",
+          doc.dutyEndTime || "17:00"
+        );
+
+        let shifts: any[] = docSched.weeklyShifts[todayDayName] || [];
+
+        // Fallback 1: Check legacy dutySchedule[todayDayName]
+        if (
+          shifts.length === 0 &&
+          doc.dutySchedule &&
+          typeof doc.dutySchedule === "object"
+        ) {
+          const dayData = doc.dutySchedule[todayDayName];
+          if (dayData && dayData.startTime && dayData.endTime) {
+            shifts = [
+              {
+                id: `shift-${todayDayName.toLowerCase()}-legacy`,
+                label: "Duty Shift",
+                startTime: dayData.startTime,
+                endTime: dayData.endTime,
+              },
+            ];
+          }
+        }
+
+        // Fallback 2: Check dutyDays array
+        if (
+          shifts.length === 0 &&
+          doc.dutyDays &&
+          Array.isArray(doc.dutyDays) &&
+          doc.dutyDays.some((d) => normalizeDayName(d).toLowerCase() === todayDayName.toLowerCase())
+        ) {
+          shifts = [
+            {
+              id: `shift-${todayDayName.toLowerCase()}-default`,
+              label: "Duty Shift",
+              startTime: doc.dutyStartTime || "08:00",
+              endTime: doc.dutyEndTime || "17:00",
+            },
+          ];
+        }
+
+        const validShifts = shifts.filter((s) => s.startTime && s.endTime);
+        if (validShifts.length === 0) return null;
+
+        const hoursDisplay = validShifts.length === 1
+          ? `${formatTime12h(validShifts[0].startTime)} – ${formatTime12h(validShifts[0].endTime)}`
+          : validShifts.map((s) => `${formatTime12h(s.startTime)} – ${formatTime12h(s.endTime)}`).join(", ");
+
+        // Real shift progress, based on the current Asia/Manila time
+        let totalMinutes = 0;
+        let workedMinutes = 0;
+        let firstStart = Infinity;
+        let lastEnd = -Infinity;
+        let inShiftNow = false;
+
+        validShifts.forEach((s) => {
+          const start = timeToMinutesSafe(s.startTime);
+          const end = timeToMinutesSafe(s.endTime);
+          if (end <= start) return;
+          totalMinutes += end - start;
+          workedMinutes += Math.min(Math.max(nowMinutes - start, 0), end - start);
+          firstStart = Math.min(firstStart, start);
+          lastEnd = Math.max(lastEnd, end);
+          if (nowMinutes >= start && nowMinutes < end) inShiftNow = true;
+        });
+
+        const progress = totalMinutes > 0 ? Math.round((workedMinutes / totalMinutes) * 100) : 0;
+        const dutyState: DutyState = inShiftNow
+          ? "on-duty"
+          : nowMinutes < firstStart
+            ? "upcoming"
+            : nowMinutes >= lastEnd
+              ? "finished"
+              : "on-break";
+
+        const primarySpec =
+          doc.specializations && doc.specializations.length > 0 && doc.specializations[0]?.name
+            ? doc.specializations[0].name
+            : doc.specialization
+              ? doc.specialization.split(",")[0].trim()
+              : "Clinical Dermatology";
+
+        const cleanDocName = doc.name.trim();
+        const displayName = cleanDocName.startsWith("Dr.") ? cleanDocName : `Dr. ${cleanDocName}`;
+
+        return {
+          id: doc.id,
+          name: doc.name,
+          displayName,
+          primarySpec,
+          hoursDisplay,
+          photo: doc.photo || doc.photo_url,
+          progress,
+          dutyState,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+  }, [doctors, todayDayName, nowMinutes]);
 
   // Shifts and patient count for the selected schedule date
   const scheduledShifts = useMemo(() => {
@@ -753,32 +996,51 @@ export default function ClinicDashboardPage() {
 
   const statCards = [
     {
-      label: "Total Patient",
-      value: uniquePatientCount,
-      sub: uniquePatientCount > 0 ? (uniquePatientCount === 1 ? "1 registered patient" : `${uniquePatientCount} registered patients`) : "From appointments",
+      label: "Total Patients",
+      value: String(uniquePatientCount),
+      unit: undefined as string | undefined,
+      sub:
+        uniquePatientCount > 0
+          ? uniquePatientCount === 1
+            ? "1 registered patient"
+            : `${uniquePatientCount} registered patients`
+          : "No registered patients",
+      icon: Users,
       highlight: true,
-      link: "/clinic/patients",
     },
     {
-      label: "Today's Appointment",
-      value: todayAppointments.length,
-      sub: todayAppointments.length > 0 ? (todayAppointments.length === 1 ? "1 scheduled today" : `${todayAppointments.length} scheduled today`) : "No bookings today",
+      label: "Today's Appointments",
+      value: String(todayAppointments.length),
+      unit: undefined,
+      sub:
+        todayAppointments.length > 0
+          ? todayAppointments.length === 1
+            ? "1 scheduled today"
+            : `${todayAppointments.length} scheduled today`
+          : "No bookings today",
+      icon: Calendar,
       highlight: false,
-      link: "/clinic/appointments",
     },
     {
       label: "Upcoming Appointments",
-      value: upcomingAppointmentsCount,
-      sub: upcomingAppointmentsCount > 0 ? (upcomingAppointmentsCount === 1 ? "1 scheduled ahead" : `${upcomingAppointmentsCount} scheduled ahead`) : "No upcoming dates",
+      value: String(upcomingAppointmentsCount),
+      unit: undefined,
+      sub:
+        upcomingAppointmentsCount > 0
+          ? upcomingAppointmentsCount === 1
+            ? "1 scheduled ahead"
+            : `${upcomingAppointmentsCount} scheduled ahead`
+          : "No upcoming dates",
+      icon: Clock,
       highlight: false,
-      link: "/clinic/appointments",
     },
     {
-      label: "Avg Time for Appointment",
-      value: `${avgTimeMinutes}`,
-      sub: "Standard consult (min)",
+      label: "Avg. Time per Appointment",
+      value: String(avgTimeMinutes),
+      unit: "min",
+      sub: "Standard consult",
+      icon: Sigma,
       highlight: false,
-      link: "/clinic/settings",
     },
   ];
 
@@ -856,19 +1118,21 @@ export default function ClinicDashboardPage() {
         </div>
       )}
 
-      {/* ── Top nav ───────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Clock className="w-4 h-4 text-[#c0166a]" />
-          <span className="text-sm font-semibold text-gray-700">
-            {now.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
-          </span>
-          {verificationStatus === "verified" && (
-            <span className="ml-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
-              <CheckCircle2 className="w-3 h-3" /> Active Clinic
-            </span>
-          )}
+      {/* ── Header ───────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-display font-bold text-gray-900 tracking-tight">
+            {getGreeting(nowMinutes)}{clinicName ? `, ${clinicName}` : ""}
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">
+            {now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+          </p>
         </div>
+        {verificationStatus === "verified" && (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-bold border border-emerald-200">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Active Clinic
+          </span>
+        )}
       </div>
 
       {/* ── Verified dashboard content ──────────────────────── */}
@@ -878,50 +1142,54 @@ export default function ClinicDashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             {/* Stats 2x2 Grid */}
             <div className="lg:col-span-1 grid grid-cols-2 gap-3.5">
-              {statCards.map((s, i) => (
-                <motion.div
-                  key={s.label}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.05 }}
-                  className={`rounded-2xl p-4 flex flex-col justify-between min-h-[115px] relative overflow-hidden shadow-xs hover:shadow-sm transition-all ${
-                    s.highlight
-                      ? "bg-[#c0166a] text-white"
-                      : "bg-white border border-gray-100 text-gray-900"
-                  }`}
-                >
-                  {s.highlight && (
-                    <>
-                      <div className="absolute -top-4 -right-4 w-20 h-20 rounded-full bg-white/10 pointer-events-none" />
-                      <div className="absolute -bottom-6 -left-4 w-24 h-24 rounded-full bg-white/10 pointer-events-none" />
-                    </>
-                  )}
-                  <div className="flex items-center justify-between relative">
-                    <p className={`text-xs font-semibold ${s.highlight ? "text-pink-100" : "text-gray-500"}`}>
-                      {s.label}
-                    </p>
-                    <Link
-                      to={s.link}
-                      className={`w-6 h-6 rounded-full flex items-center justify-center border transition-colors ${
-                        s.highlight
-                          ? "border-white/40 text-white hover:bg-white/10"
-                          : "border-gray-200 text-gray-400 hover:text-gray-700 hover:bg-gray-50"
-                      }`}
-                      title={`Open ${s.label}`}
-                    >
-                      <ArrowUpRight className="w-3 h-3" />
-                    </Link>
-                  </div>
-                  <div className="relative">
-                    <p className={`text-2xl font-bold leading-none ${s.highlight ? "text-white" : "text-gray-900"}`}>
-                      {s.value}
-                    </p>
-                    <p className={`text-[10px] mt-1 truncate ${s.highlight ? "text-pink-200" : "text-gray-400"}`}>
-                      {s.sub}
-                    </p>
-                  </div>
-                </motion.div>
-              ))}
+              {statCards.map((card, i) => {
+                const Icon = card.icon;
+                return (
+                  <motion.div
+                    key={card.label}
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.05 * (i + 1) }}
+                    className={cn(
+                      "rounded-2xl p-4 flex flex-col justify-between min-h-[118px] relative overflow-hidden",
+                      card.highlight
+                        ? "bg-gradient-to-br from-[#4a0b30] via-[#801336] to-[#b83a74] text-white shadow-lg shadow-[#801336]/25"
+                        : "bg-white border border-gray-100 shadow-2xs text-gray-900"
+                    )}
+                  >
+                    {card.highlight && (
+                      <>
+                        <div className="absolute -top-6 -right-6 w-24 h-24 rounded-full bg-white/10 pointer-events-none" />
+                        <div className="absolute -bottom-8 -left-4 w-24 h-24 rounded-full bg-white/10 pointer-events-none" />
+                      </>
+                    )}
+
+                    <div className="relative flex items-start justify-between gap-2">
+                      <p className={cn("text-xs font-semibold leading-snug", card.highlight ? "text-white" : "text-gray-600")}>
+                        {card.label}
+                      </p>
+                      <div
+                        className={cn(
+                          "w-8 h-8 rounded-[10px] flex items-center justify-center shrink-0",
+                          card.highlight ? "bg-white/20 text-white" : "bg-pink-50 text-[#801336]"
+                        )}
+                      >
+                        <Icon className="w-4 h-4" />
+                      </div>
+                    </div>
+
+                    <div className="relative mt-3">
+                      <p className="flex items-baseline gap-1 text-3xl font-extrabold leading-none tracking-tight">
+                        {card.value}
+                        {card.unit && <span className="text-xs font-semibold text-gray-400">{card.unit}</span>}
+                      </p>
+                      <p className={cn("text-[11px] mt-1.5 truncate font-medium", card.highlight ? "text-pink-200" : "text-gray-400")}>
+                        {card.sub}
+                      </p>
+                    </div>
+                  </motion.div>
+                );
+              })}
             </div>
 
             {/* Single Unified Analytics & Graphs Card */}
@@ -929,7 +1197,7 @@ export default function ClinicDashboardPage() {
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.15 }}
-              className="lg:col-span-2 bg-white border border-magenta-100/80 shadow-xs rounded-2xl p-5 flex flex-col justify-between"
+              className="lg:col-span-2 bg-white border border-gray-100 shadow-2xs rounded-2xl p-5 flex flex-col justify-between"
             >
               <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                 <div className="flex items-center gap-3">
@@ -969,7 +1237,7 @@ export default function ClinicDashboardPage() {
                     value={timeframe}
                     onChange={(e) => setTimeframe(e.target.value as any)}
                     aria-label="Select timeframe for patient trends chart"
-                    className="text-xs border border-gray-200 rounded-lg px-2.5 py-1 text-gray-700 bg-gray-50 hover:bg-gray-100 transition-colors focus:outline-none focus:ring-1 focus:ring-magenta-500 cursor-pointer font-medium"
+                    className="text-xs border border-gray-200/90 rounded-xl px-3 py-1 text-gray-700 bg-white hover:bg-gray-50 transition-colors focus:outline-none focus:ring-1 focus:ring-[#801336] cursor-pointer font-semibold shadow-2xs"
                   >
                     <option value="week">This week</option>
                     <option value="month">This month</option>
@@ -984,8 +1252,8 @@ export default function ClinicDashboardPage() {
                   <AreaChart data={patientTrendData} margin={{ top: 12, right: 16, left: 4, bottom: 6 }}>
                     <defs>
                       <linearGradient id="patientTrendGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#c0166a" stopOpacity={0.25} />
-                        <stop offset="95%" stopColor="#c0166a" stopOpacity={0.0} />
+                        <stop offset="5%" stopColor="#c2417a" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#c2417a" stopOpacity={0.0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
@@ -1008,15 +1276,15 @@ export default function ClinicDashboardPage() {
                       tickLine={false}
                       tickMargin={6}
                     />
-                    <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#c0166a40", strokeWidth: 1.5 }} />
+                    <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#80133640", strokeWidth: 1.5 }} />
                     <Area
                       type="monotone"
                       dataKey="patients"
-                      stroke="#c0166a"
+                      stroke="#801336"
                       strokeWidth={2.5}
                       fillOpacity={1}
                       fill="url(#patientTrendGrad)"
-                      activeDot={{ r: 5, fill: "#c0166a", stroke: "#fff", strokeWidth: 2 }}
+                      activeDot={{ r: 4.5, fill: "#801336", stroke: "#fff", strokeWidth: 2 }}
                     />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -1051,7 +1319,7 @@ export default function ClinicDashboardPage() {
                     <Tooltip content={<ConditionTooltip />} cursor={{ fill: "#fce7f320" }} />
                     <Bar
                       dataKey="consultations"
-                      fill="#c0166a"
+                      fill="#801336"
                       radius={[6, 6, 0, 0]}
                       maxBarSize={48}
                     />
@@ -1061,6 +1329,87 @@ export default function ClinicDashboardPage() {
             </motion.div>
           </div>
 
+          {/* ── On Duty Today ────────────────────────────────────── */}
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.25 }}
+            className="bg-white border border-gray-100 shadow-2xs rounded-2xl p-5"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Stethoscope className="w-4 h-4 text-[#801336]" />
+                <h2 className="text-sm sm:text-base font-bold text-gray-900">On Duty Today</h2>
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-pink-100/70 text-[#801336] border border-pink-200/50">
+                  {onDutyDoctors.length} {onDutyDoctors.length === 1 ? "doctor" : "doctors"}
+                </span>
+              </div>
+              <Link
+                to="/clinic/doctors"
+                className="text-xs font-semibold text-[#801336] hover:underline transition-colors cursor-pointer"
+              >
+                Manage roster ›
+              </Link>
+            </div>
+
+            {onDutyDoctors.length === 0 ? (
+              <div className="py-6 text-center text-xs text-gray-400">
+                No attending doctors scheduled on duty today.
+              </div>
+            ) : (
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3.5 mt-3.5">
+                {onDutyDoctors.map((doc) => (
+                  <div
+                    key={doc.id}
+                    className="rounded-2xl border border-pink-100/80 bg-gradient-to-br from-pink-50/70 via-white to-white p-3.5 flex items-center gap-3.5 hover:shadow-md hover:-translate-y-0.5 transition-all text-left"
+                  >
+                    {/* Avatar: gradient ring + live status dot */}
+                    <div className="relative shrink-0">
+                      <div className="rounded-full p-[3px] bg-gradient-to-tr from-[#801336] via-pink-300 to-[#801336]">
+                        <div className="rounded-full bg-white p-0.5">
+                          <DashboardDoctorAvatar name={doc.name} photo={doc.photo} />
+                        </div>
+                      </div>
+                      <span
+                        className={cn("absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-white", DUTY_STATE_DOT[doc.dutyState])}
+                        title={DUTY_STATE_LABEL[doc.dutyState]}
+                      />
+                    </div>
+
+                    {/* Details */}
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-bold text-[13px] text-gray-900 truncate" title={doc.displayName}>
+                        {doc.displayName}
+                      </h3>
+                      <p className="text-xs text-gray-500 truncate mt-0.5 font-medium">{doc.primarySpec}</p>
+
+                      <div
+                        className="h-1.5 rounded-full bg-pink-100 overflow-hidden mt-2"
+                        role="progressbar"
+                        aria-label={`Shift progress for ${doc.displayName}`}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={doc.progress}
+                      >
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-[#c2417a] to-[#801336] transition-all duration-500"
+                          style={{ width: `${doc.progress}%` }}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 mt-1.5">
+                        <p className="text-xs font-bold text-gray-900 truncate">{doc.hoursDisplay}</p>
+                        <span className="text-[10px] font-semibold text-gray-400 whitespace-nowrap">
+                          {DUTY_STATE_LABEL[doc.dutyState]}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+
           {/* ── Today's Appointments & Upcoming Schedule ─────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
             {/* Left Card: Today's Appointments */}
@@ -1068,17 +1417,17 @@ export default function ClinicDashboardPage() {
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 }}
-              className="lg:col-span-7 bg-white border border-gray-100 shadow-sm rounded-2xl p-6 flex flex-col justify-between"
+              className="lg:col-span-7 bg-white border border-gray-100 shadow-2xs rounded-2xl p-6 flex flex-col justify-between"
             >
               <div>
                 <div className="flex items-center justify-between mb-5">
                   <div className="flex items-center gap-2.5">
-                    <Calendar className="w-5 h-5 text-[#c0166a]" />
+                    <Calendar className="w-5 h-5 text-[#801336]" />
                     <h2 className="text-base font-bold text-gray-900">Today's Appointments</h2>
                   </div>
                   <Link
                     to="/clinic/appointments"
-                    className="text-xs text-[#c0166a] font-semibold hover:underline flex items-center gap-1"
+                    className="text-xs text-[#801336] font-semibold hover:underline flex items-center gap-1"
                   >
                     View all &rarr;
                   </Link>
@@ -1096,7 +1445,7 @@ export default function ClinicDashboardPage() {
                 {todayAppointments.length === 0 ? (
                   <div className="py-14 flex flex-col items-center justify-center text-center text-gray-400">
                     <div className="w-10 h-10 rounded-full bg-pink-50 flex items-center justify-center mb-2">
-                      <Calendar className="w-5 h-5 text-[#c0166a]/70" />
+                      <Calendar className="w-5 h-5 text-[#801336]/70" />
                     </div>
                     <p className="text-xs font-bold text-gray-700">No appointments scheduled for today</p>
                     <p className="text-[10px] text-gray-400 mt-0.5">Confirmed patient appointments for today will appear here.</p>
@@ -1127,7 +1476,7 @@ export default function ClinicDashboardPage() {
                             <span className="text-sm font-bold text-gray-900">{timeStr}</span>
                           </div>
                           <div className="col-span-3 sm:col-span-4 pr-3">
-                            <p className="text-sm font-bold text-gray-900 leading-snug truncate group-hover:text-[#c0166a] transition-colors">{pName}</p>
+                            <p className="text-sm font-bold text-gray-900 leading-snug truncate group-hover:text-[#801336] transition-colors">{pName}</p>
                           </div>
                           <div className="col-span-3 sm:col-span-4 pr-3">
                             <span className="text-sm font-medium text-gray-700 truncate block">{docName}</span>
@@ -1164,17 +1513,17 @@ export default function ClinicDashboardPage() {
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.35 }}
-              className="lg:col-span-5 bg-white border border-gray-100 shadow-sm rounded-2xl p-6 flex flex-col justify-between"
+              className="lg:col-span-5 bg-white border border-gray-100 shadow-2xs rounded-2xl p-6 flex flex-col justify-between"
             >
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2.5">
-                    <Calendar className="w-5 h-5 text-[#c0166a]" />
+                    <Calendar className="w-5 h-5 text-[#801336]" />
                     <h2 className="text-base font-bold text-gray-900">Upcoming Schedule</h2>
                   </div>
                   <Link
                     to="/clinic/appointments"
-                    className="text-xs text-[#c0166a] font-semibold hover:underline flex items-center gap-1"
+                    className="text-xs text-[#801336] font-semibold hover:underline flex items-center gap-1"
                   >
                     View calendar &rarr;
                   </Link>
@@ -1182,40 +1531,23 @@ export default function ClinicDashboardPage() {
 
                 {/* Subheader: Date Navigator */}
                 <div className="flex items-center justify-between py-2 mb-4 border-b border-gray-100">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handlePrevDay}
-                      className="text-gray-500 hover:text-[#c0166a] transition-colors cursor-pointer"
-                      title="Previous day"
-                    >
-                      <ArrowLeft className="w-4 h-4" />
-                    </button>
-                    <span className="text-sm font-bold text-gray-900">
-                      {scheduleDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
-                    </span>
-                    {!isSameDay(scheduleDate, new Date()) && (
-                      <button
-                        onClick={handleResetToToday}
-                        className="text-[10px] font-bold text-[#c0166a] bg-pink-50 hover:bg-pink-100 px-2 py-0.5 rounded-full transition-colors cursor-pointer ml-1"
-                      >
-                        Today
-                      </button>
-                    )}
-                  </div>
+                  <span className="text-sm font-bold text-gray-900">
+                    {scheduleDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                  </span>
                   <div className="flex items-center gap-1">
                     <button
                       onClick={handlePrevDay}
-                      className="w-7 h-7 rounded-lg border border-gray-100 hover:bg-pink-50 hover:text-[#c0166a] flex items-center justify-center transition-colors cursor-pointer"
+                      className="w-7 h-7 rounded-lg border border-gray-200 hover:bg-pink-50 hover:text-[#801336] flex items-center justify-center transition-colors cursor-pointer text-gray-500"
                       title="Previous day"
                     >
-                      <ChevronLeft className="w-4 h-4 text-gray-400" />
+                      <ChevronLeft className="w-4 h-4" />
                     </button>
                     <button
                       onClick={handleNextDay}
-                      className="w-7 h-7 rounded-lg border border-gray-100 hover:bg-pink-50 hover:text-[#c0166a] flex items-center justify-center transition-colors cursor-pointer"
+                      className="w-7 h-7 rounded-lg border border-gray-200 hover:bg-pink-50 hover:text-[#801336] flex items-center justify-center transition-colors cursor-pointer text-gray-500"
                       title="Next day"
                     >
-                      <ChevronRight className="w-4 h-4 text-gray-400" />
+                      <ChevronRight className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
@@ -1234,12 +1566,7 @@ export default function ClinicDashboardPage() {
                     {scheduledShifts.map((slot) => (
                       <div key={slot.shiftId} className="flex items-center justify-between gap-3 py-1">
                         <div className="flex items-center gap-3 min-w-0">
-                          <div
-                            className={cn(
-                              "w-1.5 h-10 rounded-full shrink-0",
-                              slot.patientCount > 0 ? "bg-[#c0166a]" : "bg-slate-400"
-                            )}
-                          />
+                          <div className={cn("w-1.5 h-10 rounded-full shrink-0", slot.patientCount > 0 ? "bg-[#801336]" : "bg-pink-200")} />
                           <div className="min-w-0">
                             <p className="text-sm font-bold text-gray-900 leading-snug truncate">
                               {slot.timeDisplay}
@@ -1251,11 +1578,11 @@ export default function ClinicDashboardPage() {
                         </div>
                         <div className="shrink-0">
                           {slot.patientCount > 0 ? (
-                            <span className="inline-flex items-center px-3.5 py-1 rounded-full text-xs font-medium bg-[#fdeef3] text-[#c0166a]">
+                            <span className="inline-flex items-center px-3.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                               {slot.patientCount} {slot.patientCount === 1 ? "patient" : "patients"}
                             </span>
                           ) : (
-                            <span className="inline-flex items-center px-3.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                            <span className="inline-flex items-center px-3.5 py-1 rounded-full text-xs font-medium bg-gray-50 border border-gray-100 text-gray-400">
                               No patients
                             </span>
                           )}
