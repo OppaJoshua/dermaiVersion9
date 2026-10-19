@@ -247,51 +247,107 @@ export default function UserLayout({
     }
   }, [user, session, loading, role, roleLoading, isProfileComplete, location.pathname, location.search, navigate]);
 
-  const getLocalProfile = (userId?: string) => {
-    if (!userId) return null;
+  const getCachedPatientProfile = (userId?: string) => {
     try {
-      const localSaved = localStorage.getItem(`derm_profile_${userId}`);
-      return localSaved ? JSON.parse(localSaved) : null;
+      // 1. Direct user key
+      if (userId) {
+        const direct = localStorage.getItem(`derm_profile_${userId}`);
+        if (direct) {
+          const parsed = JSON.parse(direct);
+          if (parsed && (parsed.fullName || parsed.profilePicture || parsed.profilePictureUrl)) {
+            return {
+              fullName: parsed.fullName || "",
+              profilePictureUrl: parsed.profilePicture || parsed.profilePictureUrl,
+              location: parsed.district || parsed.address || parsed.location,
+              membershipTier: parsed.membershipTier || "Free Plan",
+            };
+          }
+        }
+      }
+
+      // 2. Global patient profile cache
+      const globalCached = localStorage.getItem("dermai_patient_profile");
+      if (globalCached) {
+        const parsed = JSON.parse(globalCached);
+        if (parsed && (parsed.fullName || parsed.profilePicture || parsed.profilePictureUrl)) {
+          return {
+            fullName: parsed.fullName || "",
+            profilePictureUrl: parsed.profilePicture || parsed.profilePictureUrl,
+            location: parsed.location || parsed.district || parsed.address,
+            membershipTier: parsed.membershipTier || "Free Plan",
+          };
+        }
+      }
+
+      // 3. Any derm_profile_* in localStorage
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("derm_profile_")) {
+          const item = localStorage.getItem(key);
+          if (item) {
+            const parsed = JSON.parse(item);
+            if (parsed && (parsed.fullName || parsed.profilePicture || parsed.profilePictureUrl)) {
+              return {
+                fullName: parsed.fullName || "",
+                profilePictureUrl: parsed.profilePicture || parsed.profilePictureUrl,
+                location: parsed.district || parsed.address || parsed.location,
+                membershipTier: parsed.membershipTier || "Free Plan",
+              };
+            }
+          }
+        }
+      }
+
+      // 4. Supabase auth token stored in localStorage (synchronous session)
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("sb-") && key.endsWith("-auth-token")) {
+          const item = localStorage.getItem(key);
+          if (item) {
+            const parsed = JSON.parse(item);
+            const sbUser = parsed?.user || parsed?.currentSession?.user;
+            if (sbUser) {
+              const meta = sbUser.user_metadata || {};
+              const name = meta.full_name || meta.name || sbUser.email?.split("@")[0] || "";
+              const avatar = meta.avatar_url || meta.picture || undefined;
+              if (name || avatar) {
+                return {
+                  fullName: name,
+                  profilePictureUrl: avatar,
+                  location: meta.district || meta.address || undefined,
+                  membershipTier: "Free Plan",
+                };
+              }
+            }
+          }
+        }
+      }
     } catch {
-      return null;
+      // ignore
     }
+    return null;
   };
 
-  const localData = getLocalProfile(user?.id);
-  const userMeta = session?.user?.user_metadata || user?.user_metadata;
-  const displayName =
-    customProfile?.fullName ||
-    localData?.fullName ||
-    userMeta?.full_name ||
-    userMeta?.name ||
-    user?.email?.split("@")[0] ||
-    "Patient User";
-
-  const resolvedInitialPicture =
-    customProfile?.profilePictureUrl ||
-    localData?.profilePicture ||
-    userMeta?.avatar_url ||
-    userMeta?.picture ||
-    undefined;
-
-  const resolvedInitialLocation =
-    customProfile?.location ||
-    localData?.district ||
-    localData?.address ||
-    undefined;
-
-  const profile = {
-    fullName: displayName,
-    membershipTier: customProfile?.membershipTier || "Free Plan",
-    profilePictureUrl: resolvedInitialPicture,
-    location: resolvedInitialLocation,
-  };
-
-  const [dynamicProfile, setDynamicProfile] = useState<UserProfileSummary>({
-    fullName: profile.fullName || "",
-    membershipTier: profile.membershipTier || "Free Plan",
-    profilePictureUrl: profile.profilePictureUrl,
-    location: profile.location,
+  const [dynamicProfile, setDynamicProfile] = useState<UserProfileSummary>(() => {
+    if (customProfile && (customProfile.fullName || customProfile.profilePictureUrl)) {
+      return {
+        fullName: customProfile.fullName || "",
+        membershipTier: customProfile.membershipTier || "Free Plan",
+        profilePictureUrl: customProfile.profilePictureUrl,
+        location: customProfile.location,
+      };
+    }
+    const cached = getCachedPatientProfile(user?.id);
+    if (cached) {
+      return cached;
+    }
+    const meta = session?.user?.user_metadata || user?.user_metadata;
+    return {
+      fullName: meta?.full_name || meta?.name || user?.email?.split("@")[0] || "",
+      membershipTier: "Free Plan",
+      profilePictureUrl: meta?.avatar_url || meta?.picture || undefined,
+      location: undefined,
+    };
   });
   const [imgError, setImgError] = useState(false);
 
@@ -302,26 +358,33 @@ export default function UserLayout({
   const loadUserData = useCallback(async () => {
     if (!user) return;
 
-    const localProfile = getLocalProfile(user.id);
+    const cached = getCachedPatientProfile(user.id);
     const meta = user.user_metadata || {};
     let name =
       customProfile?.fullName ||
-      localProfile?.fullName ||
+      cached?.fullName ||
       meta.full_name ||
       meta.name ||
       user.email?.split("@")[0] ||
-      "Patient";
+      "";
     let picture =
       customProfile?.profilePictureUrl ||
-      localProfile?.profilePicture ||
+      cached?.profilePictureUrl ||
       meta.avatar_url ||
       meta.picture ||
       undefined;
     const loc =
       customProfile?.location ||
-      localProfile?.district ||
-      localProfile?.address ||
+      cached?.location ||
       undefined;
+
+    // Immediately update dynamicProfile if cached or meta has newer details
+    setDynamicProfile((prev) => ({
+      fullName: prev.fullName || name,
+      membershipTier: prev.membershipTier || "Free Plan",
+      profilePictureUrl: prev.profilePictureUrl || picture,
+      location: prev.location || loc,
+    }));
 
     // 1. Fetch user name and avatar from DB "user" table
     try {
@@ -377,6 +440,29 @@ export default function UserLayout({
       profilePictureUrl: picture,
       location: loc,
     });
+
+    try {
+      localStorage.setItem(
+        "dermai_patient_profile",
+        JSON.stringify({
+          fullName: name,
+          profilePicture: picture,
+          location: loc,
+          membershipTier: tier,
+          userId: user.id,
+        })
+      );
+      const existing = localStorage.getItem(`derm_profile_${user.id}`);
+      const parsedExisting = existing ? JSON.parse(existing) : {};
+      localStorage.setItem(
+        `derm_profile_${user.id}`,
+        JSON.stringify({
+          ...parsedExisting,
+          fullName: name,
+          profilePicture: picture,
+        })
+      );
+    } catch {}
   }, [user, customProfile]);
 
   useEffect(() => {
@@ -405,11 +491,14 @@ export default function UserLayout({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const displayFullName = dynamicProfile.fullName || (user?.email?.split("@")[0] ?? "Patient");
-  const initial = displayFullName.charAt(0)?.toUpperCase() ?? "P";
+  const displayFullName = dynamicProfile.fullName || (user?.email?.split("@")[0] ?? "");
+  const initial = displayFullName.trim().charAt(0)?.toUpperCase() ?? "";
   const currentPage = allLinks.find((l) => l.path === location.pathname)?.label || "Dashboard";
 
   const handleLogout = async () => {
+    try {
+      localStorage.removeItem("dermai_patient_profile");
+    } catch {}
     if (onLogout) {
       onLogout();
     } else {
@@ -631,14 +720,21 @@ export default function UserLayout({
                       src={dynamicProfile.profilePictureUrl}
                       alt="Profile"
                       className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
                       onError={() => setImgError(true)}
                     />
-                  ) : (
+                  ) : initial ? (
                     initial
+                  ) : (
+                    <div className="w-full h-full bg-magenta-400/40 animate-pulse" />
                   )}
                 </div>
                 <div className="min-w-0 leading-tight">
-                  <p className="text-xs font-semibold text-gray-900 truncate max-w-40">{displayFullName}</p>
+                  {displayFullName ? (
+                    <p className="text-xs font-semibold text-gray-900 truncate max-w-40">{displayFullName}</p>
+                  ) : (
+                    <div className="w-20 h-3 bg-gray-200 rounded animate-pulse my-0.5" />
+                  )}
                   <p className="text-[10px] text-gray-400 truncate max-w-40">
                     {[dynamicProfile.membershipTier, dynamicProfile.location].filter(Boolean).join(" · ")}
                   </p>

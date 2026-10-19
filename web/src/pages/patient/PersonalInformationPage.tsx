@@ -246,6 +246,17 @@ export default function PatientPersonalInformation() {
             profile_completed: true,
           })
         );
+        try {
+          localStorage.setItem(
+            "dermai_patient_profile",
+            JSON.stringify({
+              fullName: profile.fullName.trim(),
+              profilePicture: finalAvatarUrl,
+              location: profile.district || profile.address.trim(),
+              userId: session.user.id,
+            })
+          );
+        } catch {}
 
         // 4. Sync metadata to Supabase auth user
         try {

@@ -1,10 +1,9 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Calendar,
   Clock,
-  ChevronLeft,
-  ChevronRight,
+  ChevronDown,
   Stethoscope,
   X,
   Loader2,
@@ -17,6 +16,11 @@ import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/use
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 
 type AppointmentRecord = DoctorAppointmentRecord;
+
+const MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+];
 
 // Safe date parsing that avoids timezone shifts
 function parseLocalDate(dateStr: string): Date {
@@ -83,6 +87,38 @@ export default function DoctorScheduledAppointmentsPage() {
   const { appointments, loading, markAppointmentDone } = useDoctorAppointments();
   const [tab, setTab] = useState<"upcoming" | "completed">("upcoming");
   const [currentDate, setCurrentDate] = useState(() => new Date());
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [pickerYear, setPickerYear] = useState(() => new Date().getFullYear());
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  const yearOptions = useMemo(() => {
+    const baseYear = new Date().getFullYear();
+    const start = Math.min(baseYear - 5, pickerYear - 2);
+    const end = Math.max(baseYear + 7, pickerYear + 2);
+    const years: number[] = [];
+    for (let y = start; y <= end; y++) {
+      years.push(y);
+    }
+    return years;
+  }, [pickerYear]);
+
+  useEffect(() => {
+    if (isPickerOpen) {
+      setPickerYear(currentDate.getFullYear());
+    }
+  }, [isPickerOpen, currentDate]);
+
+  useEffect(() => {
+    if (!isPickerOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setIsPickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isPickerOpen]);
+
   const [selectedDate, setSelectedDate] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -159,15 +195,6 @@ export default function DoctorScheduledAppointmentsPage() {
     const list = appointmentsByDate.get(selectedDate) || [];
     return [...list].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
   }, [appointmentsByDate, selectedDate]);
-
-  // Month navigation handlers
-  const handlePrevMonth = () => {
-    setCurrentDate((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
-  };
-
-  const handleNextMonth = () => {
-    setCurrentDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
-  };
 
   // Generate calendar days for current month view
   const calendarDays = useMemo(() => {
@@ -396,26 +423,96 @@ export default function DoctorScheduledAppointmentsPage() {
               </div>
 
               {/* Month / Year Controls */}
-              <div className="flex items-center justify-between sm:justify-end gap-1.5 shrink-0 w-full sm:w-auto">
+              <div ref={pickerRef} className="relative shrink-0">
                 <button
                   type="button"
-                  onClick={handlePrevMonth}
-                  className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors cursor-pointer"
-                  title="Previous month"
+                  onClick={() => setIsPickerOpen((prev) => !prev)}
+                  className="flex items-center gap-1.5 text-base font-bold text-slate-900 tracking-tight hover:text-blue-600 transition-colors cursor-pointer group px-2 py-1 rounded-lg hover:bg-slate-50"
+                  title="Click to choose month and year"
                 >
-                  <ChevronLeft className="w-4 h-4" />
+                  <span>{currentMonthYearLabel}</span>
+                  <ChevronDown
+                    className={`w-4 h-4 text-slate-400 group-hover:text-blue-600 transition-transform ${
+                      isPickerOpen ? "rotate-180 text-blue-600" : ""
+                    }`}
+                  />
                 </button>
-                <span className="text-sm md:text-sm font-bold text-slate-800 px-1 whitespace-nowrap">
-                  {currentMonthYearLabel}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleNextMonth}
-                  className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors cursor-pointer"
-                  title="Next month"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
+
+                {isPickerOpen && (
+                  <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-100 p-3.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                    {/* Year Selector */}
+                    <div className="flex items-center justify-center pb-2 mb-2 border-b border-slate-100">
+                      <div className="relative inline-flex items-center">
+                        <select
+                          value={pickerYear}
+                          onChange={(e) => setPickerYear(Number(e.target.value))}
+                          className="appearance-none font-bold text-sm text-slate-900 bg-transparent border-0 outline-none pl-1 pr-5 py-0.5 cursor-pointer hover:text-blue-600 transition-colors"
+                          aria-label="Select year"
+                        >
+                          {yearOptions.map((y) => (
+                            <option key={y} value={y}>
+                              {y}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-0.5 pointer-events-none" />
+                      </div>
+                    </div>
+
+                    {/* 12 Months Grid */}
+                    <div className="grid grid-cols-3 gap-1.5 my-1">
+                      {MONTH_NAMES.map((name, idx) => {
+                        const isSelected =
+                          currentDate.getFullYear() === pickerYear && currentDate.getMonth() === idx;
+                        const isCurrentMonth =
+                          new Date().getFullYear() === pickerYear && new Date().getMonth() === idx;
+
+                        return (
+                          <button
+                            key={name}
+                            type="button"
+                            onClick={() => {
+                              setCurrentDate(new Date(pickerYear, idx, 1));
+                              setIsPickerOpen(false);
+                            }}
+                            className={`py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
+                              isSelected
+                                ? "bg-blue-600 text-white shadow-xs font-bold"
+                                : isCurrentMonth
+                                ? "bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold"
+                                : "text-slate-700 hover:bg-slate-100"
+                            }`}
+                          >
+                            {name}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Footer Shortcut */}
+                    <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-slate-100 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const now = new Date();
+                          setPickerYear(now.getFullYear());
+                          setCurrentDate(now);
+                          setIsPickerOpen(false);
+                        }}
+                        className="font-semibold text-blue-600 hover:text-blue-700 py-1 px-2 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
+                      >
+                        This Month
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsPickerOpen(false)}
+                        className="font-medium text-slate-400 hover:text-slate-600 py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

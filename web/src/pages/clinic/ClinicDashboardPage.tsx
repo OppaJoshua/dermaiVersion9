@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import {
   CheckCircle2,
-  Clock,
   ArrowUpRight,
   ChevronLeft,
   ChevronRight,
@@ -13,9 +12,7 @@ import {
   CalendarX,
   ShieldCheck,
   Calendar,
-  ArrowLeft,
   Stethoscope,
-  Sigma,
 } from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { motion } from "framer-motion";
@@ -844,10 +841,6 @@ export default function ClinicDashboardPage() {
       next.setDate(next.getDate() + 1);
       return next;
     });
-  };
-
-  const handleResetToToday = () => {
-    setScheduleDate(new Date());
   };
 
   const patientTrendData = useMemo(() => {

@@ -19,7 +19,7 @@ export async function sendClinicApprovalEmail(params: {
   recipientEmail: string;
   doctorName?: string;
 }): Promise<{ success: boolean; mailtoUrl: string; message: string }> {
-  const { clinicName, recipientEmail, doctorName } = params;
+  const { clinicId, clinicName, recipientEmail, doctorName } = params;
 
   const subject = `Clinic Verification Approved - ${clinicName}`;
   const plainTextBody = `Dear ${doctorName || clinicName} Team,
@@ -48,14 +48,23 @@ dermaisupport@gmail.com`;
       .maybeSingle();
 
     if (matchedUser?.user_id) {
-      await supabase.from("user_notification").insert({
+      const emailNotifPayload = {
         user_id: matchedUser.user_id,
-        type: "system",
-        subtype: "clinic_approval",
-        title: "Clinic Verification Approved",
-        body: `Your clinic "${clinicName}" has been verified and approved. All clinic operations and appointment tools are now active.`,
+        type: "clinic_application",
+        subtype: "application_approved",
+        title: "Clinic Application Approved",
+        body: `Congratulations! Your clinic application for ${clinicName} has been approved by the platform administrator. You can now access your full clinic dashboard, manage doctors, and accept patient appointments.`,
         is_read: false,
+        created_at: new Date().toISOString(),
+      };
+
+      const { error: metaErr } = await supabase.from("user_notification").insert({
+        ...emailNotifPayload,
+        metadata: { clinic_id: clinicId, status: "approved" },
       });
+      if (metaErr) {
+        await supabase.from("user_notification").insert(emailNotifPayload);
+      }
     }
   } catch (err) {
     console.warn("Could not insert user_notification:", err);
