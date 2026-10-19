@@ -358,8 +358,6 @@ function AppointmentCard({
     </TouchableOpacity>
   );
 }
-  );
-}
 
 function BookingModal({
   visible,

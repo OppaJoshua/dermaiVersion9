@@ -104,78 +104,7 @@ export default function HomeScreen() {
       setLastScanLabel('Never');
     }
 
-    let appts = await getAppointments(u.id);
-
-    if (appts.length === 0) {
-      const today = new Date();
-      const fmt = (d: Date) => d.toISOString().slice(0, 10);
-      const d1 = new Date(today); d1.setDate(d1.getDate() + 5);
-      const d2 = new Date(today); d2.setDate(d2.getDate() + 10);
-      const d3 = new Date(today); d3.setDate(d3.getDate() - 3);
-      const seeds: Appointment[] = [
-        {
-          id: 'appt-demo-001',
-          userId: u.id,
-          clinicId: 1,
-          clinicName: 'Cebu Skin Institute',
-          clinicAddress: 'Mango Ave, Cebu City',
-          doctorName: 'Dr. Maria Santos',
-          specialty: 'Fungal & Parasitic Infections',
-          consultationType: 'face-to-face',
-          patientName: u.fullName,
-          patientEmail: u.email,
-          date: fmt(d1),
-          time: '10:00 AM',
-          status: 'pending',
-          notes: 'Skin discoloration concern.',
-          createdAt: new Date().toISOString(),
-        },
-        {
-          id: 'appt-demo-002',
-          userId: u.id,
-          clinicId: 2,
-          clinicName: 'SkinMD Dermatology Center',
-          clinicAddress: 'AS Fortuna St, Mandaue City',
-          doctorName: 'Dr. Anna Cruz',
-          specialty: 'Pigmentation & Dermatitis',
-          consultationType: 'face-to-face',
-          patientName: u.fullName,
-          patientEmail: u.email,
-          date: fmt(d2),
-          time: '2:00 PM',
-          status: 'scheduled',
-          notes: 'Follow-up for melasma treatment.',
-          createdAt: new Date().toISOString(),
-        },
-        {
-          id: 'appt-demo-003',
-          userId: u.id,
-          clinicId: 3,
-          clinicName: 'DermaPlus Clinic',
-          clinicAddress: 'Osmeña Blvd, Cebu City',
-          doctorName: 'Dr. Ramon Lopez',
-          specialty: 'Bacterial & Fungal Infections',
-          consultationType: 'face-to-face',
-          patientName: u.fullName,
-          patientEmail: u.email,
-          date: fmt(d3),
-          time: '9:00 AM',
-          status: 'rejected',
-          clinicNote: 'Slot unavailable on that date.',
-          createdAt: new Date().toISOString(),
-        },
-      ]; 
-      for (const seed of seeds) await saveAppointment(seed);
-      appts = seeds;
-
-      await addAppNotification(u.id, {
-        type: 'general',
-        title: 'Welcome to DermAI! 👋',
-        message: 'Your account is set up. Book an appointment or start a skin scan to get started.',
-        userId: u.id,
-      });
-    }
-
+    const appts = await getAppointments(u.id);
     await syncAppointmentNotifications(u.id, appts);
 
     const upcoming = appts.find(

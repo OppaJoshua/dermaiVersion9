@@ -475,7 +475,7 @@ export default function ClinicsScreen() {
                   {/* Doctor Info */}
                   {clinic.doctors.length > 0 && (
                     <View style={styles.doctorRow}>
-                      <Ionicons name="stethoscope-outline" size={15} color={COLORS.primary} />
+                      <Ionicons name="medical-outline" size={15} color={COLORS.primary} />
                       <Text style={styles.doctorText} numberOfLines={1}>
                         {clinic.doctors[0].name}
                         {clinic.doctors[0].specialization ? ` · ${clinic.doctors[0].specialization}` : ''}

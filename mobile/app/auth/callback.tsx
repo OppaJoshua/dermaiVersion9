@@ -37,6 +37,25 @@ export default function AuthCallback() {
   useEffect(() => {
     let handled = false;
 
+    // Realtime listener for web or background auth session resolution
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user && !handled) {
+        handled = true;
+        try {
+          await savePatientAccount({
+            id: session.user.id,
+            fullName: session.user.user_metadata?.full_name || session.user.user_metadata?.name || '',
+            email: session.user.email || '',
+            profileImage: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || undefined,
+            createdAt: new Date().toISOString(),
+          });
+        } catch (e) {
+          console.warn('[AuthCallback] savePatientAccount notice:', e);
+        }
+        router.replace('/(app)');
+      }
+    });
+
     async function handleAuth() {
       if (handled) return;
 
@@ -46,7 +65,15 @@ export default function AuthCallback() {
         let accessToken = searchParams.access_token as string | undefined;
         let refreshToken = searchParams.refresh_token as string | undefined;
 
-        // 2. Check full deep link URL from Linking for hash fragments
+        // 2. Check window.location directly on web
+        if (typeof window !== 'undefined' && window.location) {
+          const parsed = parseParams(window.location.href);
+          code = code || parsed.code;
+          accessToken = accessToken || parsed.access_token;
+          refreshToken = refreshToken || parsed.refresh_token;
+        }
+
+        // 3. Check full deep link URL from Linking for native hash fragments
         const initialUrl = await Linking.getInitialURL();
         if (initialUrl) {
           const parsed = parseParams(initialUrl);
@@ -90,7 +117,7 @@ export default function AuthCallback() {
           }
         }
 
-        // 3. Fallback: check if session already active
+        // 4. Fallback: check if session is already active
         const { data: sessionData } = await supabase.auth.getSession();
         if (sessionData?.session?.user) {
           handled = true;
@@ -105,8 +132,12 @@ export default function AuthCallback() {
           return;
         }
 
-        // If no auth tokens, return to login smoothly
-        router.replace('/(auth)/login');
+        // 5. If no auth tokens found yet, give a brief grace period before navigating back to login
+        setTimeout(() => {
+          if (!handled) {
+            router.replace('/(auth)/login');
+          }
+        }, 1500);
       } catch (err) {
         console.warn('[AuthCallback] Notice:', err);
         router.replace('/(app)');
@@ -114,6 +145,10 @@ export default function AuthCallback() {
     }
 
     handleAuth();
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   return (
