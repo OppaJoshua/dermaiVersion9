@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { useAuth } from "@/context/AuthContext";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
@@ -1030,6 +1031,23 @@ const AppointmentStatusPage: React.FC = () => {
       window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
       window.dispatchEvent(new Event("storage"));
 
+      logAuditEvent({
+        userId: user?.id,
+        role: "patient",
+        category: "Appointment",
+        action: "Appointment Reschedule Requested",
+        target: `${rescheduleModalAppt.clinicName} - ${rescheduleDate} ${rescheduleTime}`,
+        details: `Patient requested reschedule for appointment #${rescheduleModalAppt.id.slice(0, 8)} to ${rescheduleDate} at ${rescheduleTime}. Reason: "${rescheduleReason.trim() || "Schedule adjustment"}".`,
+        metadata: {
+          appointmentId: rescheduleModalAppt.id,
+          clinicName: rescheduleModalAppt.clinicName,
+          previousDate: rescheduleModalAppt.date,
+          previousTime: rescheduleModalAppt.time,
+          requestedDate: rescheduleDate,
+          requestedTime: rescheduleTime,
+        },
+      }).catch(() => {});
+
       setRescheduleModalAppt(null);
       setSuccessToast(
         `Reschedule request submitted to ${rescheduleModalAppt.clinicName}. Your current schedule (${rescheduleModalAppt.date} at ${rescheduleModalAppt.time}) remains safely reserved while the clinic reviews your request.`
@@ -1180,6 +1198,21 @@ const AppointmentStatusPage: React.FC = () => {
       // Notify other tabs and components (Clinic, Doctor, PatientDashboard)
       window.dispatchEvent(new Event("dermai_appointments_updated"));
       window.dispatchEvent(new Event("storage"));
+
+      logAuditEvent({
+        userId: user?.id,
+        role: "patient",
+        category: "Appointment",
+        action: "Appointment Cancelled",
+        target: `Appointment #${targetId.slice(0, 8)}`,
+        details: `Patient cancelled appointment #${targetId.slice(0, 8)} with ${target.clinicName}.`,
+        metadata: {
+          appointmentId: targetId,
+          clinicName: target.clinicName,
+          date: target.date,
+          time: target.time,
+        },
+      }).catch(() => {});
 
       setCancellingAppt(null);
       setSuccessToast("Appointment cancelled successfully. It has been moved to your Past tab.");

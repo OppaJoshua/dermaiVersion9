@@ -3,6 +3,7 @@
 
 import { supabase } from "./supabaseClient";
 import { withCacheBuster } from "./doctorAvatarService";
+import { logAuditEvent } from "@/utils/auditLogger";
 
 export type PlatformUser = {
   id: string;
@@ -163,6 +164,16 @@ export async function updatePlatformScanStatus(
     .eq("analysis_id", id);
 
   if (error) console.error("[store] updatePlatformScanStatus:", error.message);
+  else {
+    logAuditEvent({
+      role: "admin",
+      category: "Scan",
+      action: "AI Scan Status Updated",
+      target: `Scan #${id.slice(0, 8)}`,
+      details: `Scan status updated to "${status}".`,
+      metadata: { scanId: id, status },
+    }).catch(() => {});
+  }
 }
 
 export type HelpdeskTicketStatus = "open" | "in-progress" | "resolved";
@@ -479,6 +490,20 @@ export async function createHelpdeskTicketAsync(input: {
     /* Ignore local event-dispatch errors. */
   }
 
+  logAuditEvent({
+    userId: effectiveUserId,
+    category: "System",
+    action: "Support Ticket Created",
+    target: `Ticket #${data.ticket_id.slice(0, 8)}: ${subject}`,
+    details: `${input.user || "User"} (${input.email || "N/A"}) submitted ticket: "${subject}" [${ticketCategory}].`,
+    performerName: input.user || "User",
+    metadata: {
+      ticketId: data.ticket_id,
+      category: ticketCategory,
+      priority: ticketPriority,
+    },
+  }).catch(() => {});
+
   return newTicket;
 }
 // PATCH helpdesk ticket status & optional admin response
@@ -516,6 +541,19 @@ export async function updateHelpdeskTicketStatus(
       "No support ticket was updated. It may have been deleted, or you may not have permission."
     );
   }
+
+  logAuditEvent({
+    role: "admin",
+    category: "System",
+    action: status === "resolved" ? "Support Ticket Resolved" : "Support Ticket Updated",
+    target: `Ticket #${id.slice(0, 8)}`,
+    details: `Support ticket #${id.slice(0, 8)} status updated to "${status}"${response ? ` with reply: "${response.slice(0, 80)}"` : ""}.`,
+    metadata: {
+      ticketId: id,
+      newStatus: status,
+      hasResponse: Boolean(response),
+    },
+  }).catch(() => {});
 
   // Update local storage only after the database confirms success.
   const local = getLocalHelpdeskTickets();
@@ -650,12 +688,36 @@ export async function upsertSubscriptionPlan(plan: SubscriptionPlan): Promise<vo
       }
     }
   }
+
+  logAuditEvent({
+    role: "admin",
+    category: "Subscription",
+    action: isNew ? "Subscription Plan Created" : "Subscription Plan Modified",
+    target: `Plan: ${plan.name}`,
+    details: `Subscription tier "${plan.name}" (₱${plan.price}/${plan.billingType}) ${isNew ? "created" : "modified"}.`,
+    metadata: {
+      planId: savedPlanId,
+      name: plan.name,
+      price: plan.price,
+      billingType: plan.billingType,
+    },
+  }).catch(() => {});
 }
 
 // Delete subscription plan (admin only)
 export async function deleteSubscriptionPlan(id: string): Promise<void> {
   const { error } = await supabase.from("plan").delete().eq("plan_id", id);
   if (error) console.error("[store] deleteSubscriptionPlan:", error.message);
+  else {
+    logAuditEvent({
+      role: "admin",
+      category: "Subscription",
+      action: "Subscription Plan Deleted",
+      target: `Plan ID: ${id}`,
+      details: `Subscription plan ${id} was deleted by admin.`,
+      metadata: { planId: id },
+    }).catch(() => {});
+  }
 }
 
 // Clinic Patient Records with file_path support

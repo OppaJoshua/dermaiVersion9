@@ -14,6 +14,7 @@ import {
   Stethoscope,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { createHelpdeskTicketAsync } from "@/lib/store";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
 import { updateDoctorAvatar, removeDoctorAvatar } from "@/lib/doctorAvatarService";
@@ -204,6 +205,16 @@ export default function DoctorSettingsPage() {
       setProfile((prev) => ({ ...prev, photo: updatedUrl }));
       setPhotoSaved(true);
       setTimeout(() => setPhotoSaved(false), 3000);
+
+      logAuditEvent({
+        userId: sessionUserId || profile.id,
+        role: "doctor",
+        category: "User",
+        action: "Avatar Updated",
+        target: "Doctor Avatar",
+        details: `Dr. ${profile.fullName || "Doctor"} updated their profile avatar.`,
+        performerName: profile.fullName || "Doctor",
+      }).catch(() => {});
     } catch (err) {
       console.error("Failed to upload doctor photo:", err);
     }
@@ -226,6 +237,16 @@ export default function DoctorSettingsPage() {
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
+
+      logAuditEvent({
+        userId: sessionUserId || profile.id,
+        role: "doctor",
+        category: "User",
+        action: "Avatar Removed",
+        target: "Doctor Avatar",
+        details: `Dr. ${profile.fullName || "Doctor"} removed their profile avatar.`,
+        performerName: profile.fullName || "Doctor",
+      }).catch(() => {});
     } catch (err) {
       console.error("Failed to remove doctor photo:", err);
     }
@@ -438,6 +459,20 @@ export default function DoctorSettingsPage() {
       setTicketSubject("");
       setTicketMessage("");
       window.setTimeout(() => setTicketSent(false), 4000);
+
+      logAuditEvent({
+        userId: session?.user?.id || profile.id,
+        role: "doctor",
+        category: "System",
+        action: "Support Ticket Submitted",
+        target: `Ticket: ${ticketSubject.trim()}`,
+        details: `Dr. ${profile.fullName || "Doctor"} submitted a clinical support inquiry: "${ticketSubject.trim()}".`,
+        performerName: profile.fullName || "Doctor",
+        metadata: {
+          category: "Doctor Clinical Support",
+          priority: "medium",
+        },
+      }).catch(() => {});
     } catch (err) {
       console.error("Failed to submit doctor ticket:", err);
       setTicketError(

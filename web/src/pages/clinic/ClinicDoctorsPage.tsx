@@ -29,6 +29,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import SpecializationMultiSelect, {
   type SpecializationOption,
 } from "@/components/clinic/SpecializationMultiSelect";
@@ -1609,6 +1610,20 @@ export default function ClinicDoctorsPage() {
       setShowRegisterDoctorModal(false);
       setSuccessMsg(`Dr. ${finalizedDoctor.name} was successfully registered and added to roster.`);
       setTimeout(() => setSuccessMsg(""), 4500);
+
+      logAuditEvent({
+        role: "clinic",
+        category: "Clinic",
+        action: "Doctor Added",
+        target: `Dr. ${finalizedDoctor.name}`,
+        details: `Clinic added doctor "${finalizedDoctor.name}" (PRC: ${finalizedDoctor.prcLicense || "N/A"}) with specialization: ${finalizedDoctor.specialization || "General Dermatology"}.`,
+        metadata: {
+          doctorName: finalizedDoctor.name,
+          doctorId: finalizedDoctor.id,
+          clinicName: clinicDisplayName,
+        },
+      }).catch(() => {});
+
       fetchDoctors();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "An unexpected error occurred.";
@@ -1949,6 +1964,20 @@ export default function ClinicDoctorsPage() {
         setSuccessMsg(`Duty schedule and shifts for ${updatedDoctor.name} updated successfully.`);
       }
       setTimeout(() => setSuccessMsg(""), 4500);
+
+      logAuditEvent({
+        role: "clinic",
+        category: "Clinic",
+        action: "Doctor Schedule Updated",
+        target: `Dr. ${updatedDoctor.name}`,
+        details: `Updated duty schedule for Dr. ${updatedDoctor.name}: ${updatedDoctor.dutyDays.join(", ")} (${totalConfiguredShifts} shifts).`,
+        metadata: {
+          doctorName: updatedDoctor.name,
+          doctorId: updatedDoctor.id,
+          dutyDays: updatedDoctor.dutyDays,
+          shiftsCount: totalConfiguredShifts,
+        },
+      }).catch(() => {});
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to update schedule.";
       setScheduleError(msg);
@@ -2160,6 +2189,20 @@ export default function ClinicDoctorsPage() {
       setSuccessMsg(`Doctor profile for ${doctorName} updated successfully.`);
       setTimeout(() => setSuccessMsg(""), 4500);
 
+      logAuditEvent({
+        role: "clinic",
+        category: "Clinic",
+        action: "Doctor Profile Updated",
+        target: `Dr. ${doctorName}`,
+        details: `Updated profile details for Dr. ${doctorName} (PRC: ${doctorLicense || "N/A"}).`,
+        metadata: {
+          doctorName,
+          doctorId: editingDoctor.id,
+          doctorEmail,
+          prcLicense: doctorLicense,
+        },
+      }).catch(() => {});
+
       setEditingDoctor(null);
       await fetchDoctors();
     } catch (err: unknown) {
@@ -2194,6 +2237,19 @@ export default function ClinicDoctorsPage() {
       setSuccessMsg(`Dr. ${doctor.name} is now ${nextStatus}.`);
       setTimeout(() => setSuccessMsg(""), 3000);
 
+      logAuditEvent({
+        role: "clinic",
+        category: "Clinic",
+        action: "Doctor Status Changed",
+        target: `Dr. ${doctor.name}`,
+        details: `Dr. ${doctor.name} status updated to ${nextStatus}.`,
+        metadata: {
+          doctorName: doctor.name,
+          doctorId: doctor.id,
+          newStatus: nextStatus,
+        },
+      }).catch(() => {});
+
       await supabase
         .from("clinic_doctor")
         .update({ status: nextStatus })
@@ -2222,6 +2278,17 @@ export default function ClinicDoctorsPage() {
     setDeleteTarget(null);
     setSuccessMsg("Doctor removed successfully.");
     setTimeout(() => setSuccessMsg(""), 4000);
+
+    logAuditEvent({
+      role: "clinic",
+      category: "Clinic",
+      action: "Doctor Archived",
+      target: `Doctor ID: ${targetId}`,
+      details: `Doctor account was archived/removed from clinic roster.`,
+      metadata: {
+        doctorId: targetId,
+      },
+    }).catch(() => {});
 
     setDeletingDoctor(true);
     try {

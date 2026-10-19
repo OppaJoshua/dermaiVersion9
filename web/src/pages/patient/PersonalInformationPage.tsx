@@ -4,6 +4,7 @@ import { User, Mail, Phone, Calendar, MapPin, Save, UserCircle } from "lucide-re
 import { motion } from "framer-motion";
 import { useAuth, isPatientProfileComplete } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
+import { logAuditEvent } from "../../utils/auditLogger";
 
 interface UserProfile {
   fullName: string;
@@ -281,6 +282,22 @@ export default function PatientPersonalInformation() {
         setIsProfileComplete(true);
         window.dispatchEvent(new Event("derm_profile_updated"));
         window.dispatchEvent(new Event("storage"));
+
+        // 6. Record audit log entry
+        logAuditEvent({
+          userId: session.user.id,
+          role: "patient",
+          category: "User",
+          action: "Profile Updated",
+          target: "Personal Profile",
+          details: `${profile.fullName.trim()} updated their personal profile details.`,
+          performerName: profile.fullName.trim() || session.user.email?.split("@")[0],
+          metadata: {
+            district: profile.district,
+            gender: profile.gender,
+            hasAvatar: Boolean(finalAvatarUrl),
+          },
+        }).catch(() => {});
       }
 
       if (showIncompleteBanner) {
