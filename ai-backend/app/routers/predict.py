@@ -122,10 +122,10 @@ async def predict_skin_condition(
             detail={
                 "success": False,
                 "error": (
-                    f"The model is not confident enough on the close-up photo "
-                    f"({primary_result['confidence']:.1f}%). "
-                    "Please retake the photo with better lighting and a clear "
-                    "close-up of the affected skin."
+                    f"We couldn't confidently assess this photo. The model's confidence was "
+                    f"{primary_result['confidence']:.2f}%, below the required "
+                    f"{CLASSIFIER_CONFIDENCE_FALLBACK:.2f}% threshold. Please retake the close-up "
+                    "photo with good lighting and the affected skin area clearly in focus."
                 ),
                 "error_type": "low_confidence",
             },

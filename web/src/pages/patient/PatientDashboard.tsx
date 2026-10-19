@@ -330,6 +330,7 @@ export default function PatientDashboard() {
             scanned_at,
             body_part,
             photo_url,
+            photo_url_wide,
             condition_id,
             skin_condition:condition_id ( condition_id, name )
           `)
@@ -346,10 +347,11 @@ export default function PatientDashboard() {
               const scObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
               const matchesId = appt.conditionId && s.condition_id === appt.conditionId;
               const matchesName = appt.conditionName && scObj?.name && scObj.name.toLowerCase() === appt.conditionName.toLowerCase();
-              return (matchesId || matchesName) && Boolean(s.photo_url);
+              return (matchesId || matchesName) && Boolean(s.photo_url || s.photo_url_wide);
             });
-            if (matchedScan?.photo_url) {
-              const signed = await getSignedSkinPhotoUrl(matchedScan.photo_url);
+            const photoToSign = matchedScan?.photo_url || matchedScan?.photo_url_wide;
+            if (photoToSign) {
+              const signed = await getSignedSkinPhotoUrl(photoToSign);
               if (signed) {
                 appt.conditionImage = signed;
                 appointmentsUpdated = true;
@@ -485,7 +487,7 @@ export default function PatientDashboard() {
     return clean.split(" ")[0]?.trim().replace(/,/g, "") || "there";
   }, [profile.fullName]);
 
-  const card = "bg-white rounded-3xl border border-gray-200";
+  const card = "bg-white rounded-3xl border border-gray-100";
 
   const statTiles = [
     { label: "Total Scans", value: stats.totalScans },
@@ -542,8 +544,8 @@ export default function PatientDashboard() {
                 <div
                   key={notif.id}
                   className={`flex items-start gap-3 p-4 rounded-2xl border ${notif.type === "appointment-scheduled"
-                      ? "bg-green-50 border-green-200"
-                      : "bg-red-50 border-red-200"
+                    ? "bg-green-50 border-green-200"
+                    : "bg-red-50 border-red-200"
                     }`}
                 >
                   {notif.type === "appointment-scheduled" ? (
@@ -597,14 +599,17 @@ export default function PatientDashboard() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.06 }}
                 className={cn(
-                  "lg:col-span-3 relative overflow-hidden rounded-3xl p-5 min-h-36 flex flex-col justify-between shadow-2xs",
+                  "lg:col-span-3 relative overflow-hidden rounded-3xl p-5 min-h-36 flex flex-col justify-between",
                   featured
-                    ? "bento-magenta text-white"
-                    : "bg-white border border-gray-200 text-gray-900"
+                    ? "bg-gradient-to-br from-[#8a1553] via-[#b02a72] to-[#db6597] text-white shadow-lg shadow-[#8a1553]/20"
+                    : "bg-white border border-gray-100 text-gray-900 shadow-2xs"
                 )}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <p className={cn("text-sm font-semibold", featured ? "text-white" : "text-gray-800")}>
+                {featured && (
+                  <div className="absolute -bottom-16 -right-10 w-44 h-44 rounded-full bg-white/10 pointer-events-none" />
+                )}
+                <div className="relative flex items-start justify-between gap-2">
+                  <p className={cn("text-sm font-semibold", featured ? "text-white" : "text-gray-600")}>
                     {stat.label}
                   </p>
                   <span
@@ -616,7 +621,7 @@ export default function PatientDashboard() {
                     <ArrowUpRight className="w-5 h-5" />
                   </span>
                 </div>
-                <p className="text-4xl font-display font-bold tracking-tight">
+                <p className="relative text-4xl font-display font-bold tracking-tight">
                   {loading ? (
                     <span
                       className={cn(
@@ -634,7 +639,7 @@ export default function PatientDashboard() {
 
           {/* Left Column (8 cols): Recent Analyses + My Appointments */}
           <div className="lg:col-span-8 flex flex-col gap-4">
-            {/* Recent Analyses — pill chart + list */}
+            {/* Recent Analyses */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -658,43 +663,45 @@ export default function PatientDashboard() {
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: 0.25 + i * 0.08 }}
-                      className="flex items-center gap-5 p-4 rounded-2xl border border-gray-200 hover:border-magenta-200 hover:bg-magenta-50/40 transition-colors group cursor-pointer"
+                      className="flex items-center gap-4 sm:gap-5 p-4 rounded-2xl border border-gray-100 bg-gray-50/40 hover:border-magenta-200 hover:bg-magenta-50/40 transition-colors group cursor-pointer"
                     >
-                      <div className="relative w-20 h-20 shrink-0">
-                        <svg className="w-20 h-20 -rotate-90" viewBox="0 0 36 36">
-                          <path
-                            className="text-gray-100"
-                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      {/* Confidence ring (lighter rose) */}
+                      <div className="relative w-[68px] h-[68px] shrink-0">
+                        <svg className="w-[68px] h-[68px] -rotate-90" viewBox="0 0 36 36">
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="15.9155"
                             fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2.8"
+                            stroke="#faeaf2"
+                            strokeWidth="3"
                           />
-                          <path
-                            className="text-[#881337]"
-                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="15.9155"
                             fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2.8"
-                            strokeDasharray={`${analysis.confidence}, 100`}
+                            stroke="#c95a8c"
+                            strokeWidth="3"
                             strokeLinecap="round"
+                            strokeDasharray={`${Math.min(Math.max(analysis.confidence, 0), 100)}, 100`}
                           />
                         </svg>
-                        <span className="absolute inset-0 flex items-center justify-center text-base font-bold text-gray-900">
+                        <span className="absolute inset-0 flex items-center justify-center text-sm font-bold text-gray-900">
                           {analysis.confidence}%
                         </span>
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h4 className="font-semibold text-gray-900 text-base truncate">
-                            {analysis.condition}
-                          </h4>
-                        </div>
-                        <div className="flex items-center gap-3 text-xs text-gray-400">
-                          <span className="flex items-center gap-1">
-                            <Calendar className="w-3 h-3 text-gray-400" /> {analysis.date}
+                        <h4 className="font-semibold text-gray-900 text-base truncate mb-1">
+                          {analysis.condition}
+                        </h4>
+                        <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-xs text-gray-500">
+                          <span className="flex items-center gap-1.5">
+                            <Calendar className="w-3.5 h-3.5 text-gray-400" /> {analysis.date}
                           </span>
-                          <span className="flex items-center gap-1">
-                            <User className="w-3 h-3 text-gray-400" />{" "}
+                          <span className="w-1 h-1 rounded-full bg-gray-300" />
+                          <span className="flex items-center gap-1.5">
+                            <User className="w-3.5 h-3.5 text-gray-400" />
                             {analysis.bodyPart && analysis.bodyPart !== "Unknown"
                               ? analysis.bodyPart
                               : "Skin Assessment"}
@@ -739,12 +746,12 @@ export default function PatientDashboard() {
                 {appointments.slice(0, 3).map((item) => (
                   <div
                     key={item.id}
-                    className="rounded-2xl border border-gray-200 p-3.5 flex gap-3.5 items-center hover:border-gray-300 transition-colors"
+                    className="rounded-2xl border border-gray-100 p-3.5 flex gap-4 items-center hover:border-gray-200 hover:shadow-2xs transition-all"
                   >
                     <img
                       src={item.conditionImage || fallbackImage}
                       alt={item.conditionName || "Skin condition"}
-                      className="w-14 h-14 rounded-full object-cover border-2 border-white shadow-2xs shrink-0"
+                      className="w-14 h-14 rounded-2xl object-cover shrink-0"
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2 mb-1">
@@ -752,15 +759,15 @@ export default function PatientDashboard() {
                           {item.conditionName || "Skin concern"}
                         </p>
                         <span
-                          className={`text-[10px] px-2.5 py-0.5 rounded-md font-semibold shrink-0 ${item.status === "scheduled" || item.status === "accepted"
-                              ? "bg-emerald-100 text-emerald-700"
-                              : item.status === "cancelled"
-                                ? "bg-gray-200 text-gray-600"
-                                : item.status === "rejected"
-                                  ? "bg-rose-100 text-rose-700"
-                                  : item.status === "completed"
-                                    ? "bg-green-100 text-green-700"
-                                    : "bg-amber-100 text-amber-700"
+                          className={`text-[11px] px-3 py-0.5 rounded-full font-semibold shrink-0 ${item.status === "scheduled" || item.status === "accepted"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : item.status === "cancelled"
+                              ? "bg-gray-200 text-gray-600"
+                              : item.status === "rejected"
+                                ? "bg-rose-100 text-rose-700"
+                                : item.status === "completed"
+                                  ? "bg-green-100 text-green-700"
+                                  : "bg-amber-100 text-amber-700"
                             }`}
                         >
                           {item.status === "scheduled" || item.status === "accepted"
@@ -778,7 +785,7 @@ export default function PatientDashboard() {
                         <p className="text-xs text-gray-600 truncate font-medium">{item.clinicName}</p>
                         <VerifiedBadge size={13} className="w-3.5 h-3.5" title="Verified Clinic" />
                       </div>
-                      <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-3 flex-wrap">
+                      <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-x-3 gap-y-1 flex-wrap">
                         <span className="inline-flex items-center gap-1">
                           <MapPin className="w-3 h-3 text-[#c0166a]" />
                           Face-to-face
@@ -813,14 +820,15 @@ export default function PatientDashboard() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1 }}
-              className="relative overflow-hidden rounded-3xl bento-magenta p-6 text-white shadow-2xs"
+              className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#8a1553] via-[#b02a72] to-[#db6597] p-6 text-white shadow-lg shadow-[#8a1553]/20"
             >
-              <p className="text-sm font-semibold text-magenta-200">Skin Scan</p>
-              <h3 className="font-display font-bold text-2xl leading-tight mt-1">Scan Your Skin</h3>
-              <p className="text-magenta-100/90 text-sm mt-1.5">AI-powered analysis in seconds</p>
+              <div className="absolute -top-16 -right-14 w-48 h-48 rounded-full bg-white/10 pointer-events-none" />
+              <p className="relative text-sm font-semibold text-white/80">Skin Scan</p>
+              <h3 className="relative font-display font-bold text-2xl leading-tight mt-1">Scan Your Skin</h3>
+              <p className="relative text-white/85 text-sm mt-1.5">AI-powered analysis in seconds</p>
               <Link
                 to="/dashboard/scan"
-                className="group mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white text-[#881337] hover:bg-magenta-50 transition-colors py-3 text-sm font-bold shadow-xs"
+                className="group relative mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white text-[#881337] hover:bg-magenta-50 transition-colors py-3 text-sm font-bold shadow-xs"
               >
                 <Camera className="w-4 h-4 text-[#881337]" /> Start Scan
                 <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
@@ -832,7 +840,7 @@ export default function PatientDashboard() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.15 }}
-              className={cn(card, "p-3 space-y-1 shadow-2xs")}
+              className={cn(card, "p-3 shadow-2xs")}
             >
               <Link
                 to="/dashboard/clinics"
@@ -843,10 +851,11 @@ export default function PatientDashboard() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="font-display font-bold text-gray-900 text-sm">Find a Clinic</h3>
-                  <p className="text-gray-400 text-xs">Verified dermatologists near you</p>
+                  <p className="text-gray-500 text-xs">Verified dermatologists near you</p>
                 </div>
                 <ArrowUpRight className="w-4 h-4 text-magenta-300 group-hover:text-[#c0166a] transition-colors" />
               </Link>
+              <div className="mx-3 border-t border-gray-100" />
               <Link
                 to="/dashboard/clinics"
                 className="group flex items-center gap-4 rounded-2xl p-3 hover:bg-gray-50 transition-colors"
@@ -856,7 +865,7 @@ export default function PatientDashboard() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="font-display font-bold text-gray-900 text-sm">Book Appointment</h3>
-                  <p className="text-gray-400 text-xs">Find verified clinic and schedule</p>
+                  <p className="text-gray-500 text-xs">Find verified clinic and schedule</p>
                 </div>
                 <ArrowUpRight className="w-4 h-4 text-magenta-300 group-hover:text-[#c0166a] transition-colors" />
               </Link>
@@ -874,7 +883,7 @@ export default function PatientDashboard() {
                 {skinTips.map((tip) => (
                   <div
                     key={tip.title}
-                    className="flex items-start gap-4 rounded-2xl border border-gray-200 p-3.5 hover:border-gray-300 transition-colors"
+                    className="flex items-start gap-4 rounded-2xl border border-gray-100 p-3.5 hover:border-gray-200 transition-colors"
                   >
                     <div className="w-11 h-11 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center shrink-0">
                       <tip.icon className="w-5 h-5 text-[#c0166a]" />
@@ -893,10 +902,10 @@ export default function PatientDashboard() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 }}
-              className="relative overflow-hidden rounded-3xl bg-magenta-50/80 border border-magenta-300 ring-2 ring-magenta-500/20 p-5 sm:p-6 shadow-xs"
+              className="relative overflow-hidden rounded-3xl bg-magenta-50/70 border border-magenta-200 p-5 sm:p-6"
             >
               <div className="flex items-center gap-3 mb-2.5">
-                <div className="w-10 h-10 rounded-full bg-magenta-100 border border-magenta-200/80 flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-full bg-white border border-magenta-200/80 flex items-center justify-center shrink-0">
                   <Stethoscope className="w-5 h-5 text-magenta-700" />
                 </div>
                 <h3 className="font-display font-bold text-lg text-magenta-900">Reminder</h3>

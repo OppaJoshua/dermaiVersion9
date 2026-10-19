@@ -301,7 +301,7 @@ export default function ClinicDashboardPage() {
         } catch { }
       }
 
-      let docMap = new Map<string, string>();
+      const docMap = new Map<string, string>();
       const loadedDoctors: ClinicDoctorInfo[] = [];
       let dbList: any[] = [];
       if (resolvedClinicId) {
@@ -964,7 +964,7 @@ export default function ClinicDashboardPage() {
   // Builds clean integer Y-axis ticks (e.g. 0,1,2,3,4 or 0,2,4,6) so labels never repeat or show decimals
   const buildYAxis = (maxVal: number) => {
     const targetMax = Math.max(maxVal, 4);
-    let step = 1;
+    let step: number;
     if (targetMax <= 4) step = 1;
     else if (targetMax <= 8) step = 2;
     else if (targetMax <= 15) step = 3;

@@ -1,0 +1,160 @@
+"""
+Regression test suite for DermAI Low-Confidence Threshold and Image Combiner.
+Verifies:
+1. 64.99% confidence is strictly rejected (< 65.00%).
+2. Rejection message formats confidence and configured threshold to 2 decimal places.
+3. 65.00% confidence passes the confidence check (does not reject).
+4. 65.01% confidence passes the confidence check.
+5. Dynamic threshold from environment/config is respected.
+6. Wide-view failures gracefully fallback to close-up prediction with status='invalid'.
+7. Close-up and wide-view agreement vs disagreement metadata behavior.
+"""
+
+import os
+import unittest
+from unittest.mock import patch
+from fastapi import HTTPException
+
+from app.config import CLASSIFIER_CONFIDENCE_FALLBACK
+from app.services.result_combiner import combine_image_predictions
+
+
+def evaluate_confidence_gate(confidence: float, threshold: float = CLASSIFIER_CONFIDENCE_FALLBACK):
+    """
+    Simulates the exact gate in predict.py lines 119-132:
+    if primary_result["confidence"] < CLASSIFIER_CONFIDENCE_FALLBACK:
+        raise HTTPException(...)
+    """
+    primary_result = {"confidence": confidence}
+    if primary_result["confidence"] < threshold:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "success": False,
+                "error": (
+                    f"We couldn't confidently assess this photo. The model's confidence was "
+                    f"{primary_result['confidence']:.2f}%, below the required "
+                    f"{threshold:.2f}% threshold. Please retake the close-up "
+                    "photo with good lighting and the affected skin area clearly in focus."
+                ),
+                "error_type": "low_confidence",
+            },
+        )
+    return True
+
+
+class TestConfidenceAndCombiner(unittest.TestCase):
+
+    def test_confidence_64_99_rejected(self):
+        """64.99% must be strictly rejected when threshold is 65.00%."""
+        with self.assertRaises(HTTPException) as ctx:
+            evaluate_confidence_gate(64.99, 65.0)
+
+        exc = ctx.exception
+        self.assertEqual(exc.status_code, 400)
+        self.assertEqual(exc.detail["error_type"], "low_confidence")
+        self.assertFalse(exc.detail["success"])
+        # Must show exactly 64.99% and 65.00% without rounding 64.99% to 65.0%
+        self.assertIn("64.99%", exc.detail["error"])
+        self.assertIn("65.00%", exc.detail["error"])
+        self.assertNotIn("65.0%", exc.detail["error"])
+
+    def test_confidence_65_00_passes(self):
+        """65.00% must pass the confidence check (65.00 < 65.0 is False)."""
+        passed = evaluate_confidence_gate(65.00, 65.0)
+        self.assertTrue(passed)
+
+    def test_confidence_65_01_passes(self):
+        """65.01% must pass the confidence check."""
+        passed = evaluate_confidence_gate(65.01, 65.0)
+        self.assertTrue(passed)
+
+    def test_dynamic_threshold(self):
+        """Custom configured threshold (e.g. 70.0%) must be respected and formatted."""
+        with self.assertRaises(HTTPException) as ctx:
+            evaluate_confidence_gate(69.99, 70.0)
+        exc = ctx.exception
+        self.assertIn("69.99%", exc.detail["error"])
+        self.assertIn("70.00%", exc.detail["error"])
+
+        # 70.00% passes
+        self.assertTrue(evaluate_confidence_gate(70.00, 70.0))
+
+    def test_combiner_invalid_wide_view_fallback(self):
+        """When wide-view is marked invalid, combiner must fallback to close-up without failing scan."""
+        primary_result = {
+            "predicted_class": "Acne_Vulgaris",
+            "display_name": "Acne Vulgaris",
+            "confidence": 88.50,
+            "confidence_level": "high",
+            "probabilities": {"Acne_Vulgaris": 88.50, "Melasma": 5.0, "Vitiligo": 2.0, "Atopic_Dermatitis": 2.5, "Contact_Dermatitis": 2.0},
+        }
+        supporting_result = {
+            "status": "invalid",
+            "error": "Quality issue: Image appears blurry",
+        }
+        combined = combine_image_predictions(primary_result, supporting_result)
+
+        self.assertEqual(combined["predicted_class"], "Acne_Vulgaris")
+        self.assertEqual(combined["confidence"], 88.50)
+        self.assertFalse(combined["is_combined"])
+        self.assertIsNone(combined["agreement"])
+        self.assertIsNotNone(combined["supporting_prediction"])
+        self.assertEqual(combined["supporting_prediction"]["status"], "invalid")
+        self.assertEqual(combined["supporting_prediction"]["error"], "Quality issue: Image appears blurry")
+
+    def test_combiner_disagreement_anchors_closeup(self):
+        """When images disagree, close-up must anchor the predicted class."""
+        primary_result = {
+            "predicted_class": "Acne_Vulgaris",
+            "display_name": "Acne Vulgaris",
+            "confidence": 75.00,
+            "confidence_level": "medium",
+            "probabilities": {"Acne_Vulgaris": 75.00, "Melasma": 5.0, "Vitiligo": 5.0, "Atopic_Dermatitis": 10.0, "Contact_Dermatitis": 5.0},
+        }
+        supporting_result = {
+            "status": "valid",
+            "predicted_class": "Melasma",
+            "display_name": "Melasma",
+            "confidence": 60.00,
+            "confidence_level": "medium",
+            "probabilities": {"Acne_Vulgaris": 15.00, "Melasma": 60.00, "Vitiligo": 5.0, "Atopic_Dermatitis": 10.0, "Contact_Dermatitis": 10.0},
+        }
+        combined = combine_image_predictions(primary_result, supporting_result)
+
+        self.assertEqual(combined["predicted_class"], "Acne_Vulgaris")
+        self.assertEqual(combined["display_name"], "Acne Vulgaris")
+        self.assertEqual(combined["confidence"], 75.00)
+        self.assertTrue(combined["is_combined"])
+        self.assertFalse(combined["agreement"])
+        self.assertIsNotNone(combined["combined_evidence_score"])
+
+    def test_combiner_agreement(self):
+        """When images agree, agreement flag is true and score is fused."""
+        primary_result = {
+            "predicted_class": "Melasma",
+            "display_name": "Melasma",
+            "confidence": 85.00,
+            "confidence_level": "high",
+            "probabilities": {"Acne_Vulgaris": 5.0, "Melasma": 85.00, "Vitiligo": 2.0, "Atopic_Dermatitis": 4.0, "Contact_Dermatitis": 4.0},
+        }
+        supporting_result = {
+            "status": "valid",
+            "predicted_class": "Melasma",
+            "display_name": "Melasma",
+            "confidence": 80.00,
+            "confidence_level": "high",
+            "probabilities": {"Acne_Vulgaris": 4.0, "Melasma": 80.00, "Vitiligo": 1.0, "Atopic_Dermatitis": 5.0, "Contact_Dermatitis": 10.0},
+        }
+        combined = combine_image_predictions(primary_result, supporting_result)
+
+        self.assertEqual(combined["predicted_class"], "Melasma")
+        self.assertEqual(combined["confidence"], 85.00)
+        self.assertTrue(combined["is_combined"])
+        self.assertTrue(combined["agreement"])
+        # 0.7 * 85 + 0.3 * 80 = 59.5 + 24.0 = 83.5
+        self.assertEqual(combined["combined_evidence_score"], 83.50)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -36,12 +36,12 @@ export function LazySkinPhoto({
       return;
     }
 
-    // Direct URL check
+    // Direct local URIs (data/blob) or external non-Supabase URLs can be resolved immediately
     if (
-      pathOrUrl.startsWith("http://") ||
-      pathOrUrl.startsWith("https://") ||
       pathOrUrl.startsWith("data:") ||
-      pathOrUrl.startsWith("blob:")
+      pathOrUrl.startsWith("blob:") ||
+      ((pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) &&
+        !pathOrUrl.includes("/scan-uploads/"))
     ) {
       setResolvedUrl(pathOrUrl);
       setLoading(false);
