@@ -29,11 +29,9 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
-import { DoctorAvatar } from "@/components/common/DoctorAvatar";
-import { updateDoctorAvatar } from "@/lib/doctorAvatarService";
 import SpecializationMultiSelect, {
   type SpecializationOption,
-} from "./SpecializationMultiSelect";
+} from "@/components/clinic/SpecializationMultiSelect";
 import {
   type DoctorShift,
   type EffectiveShiftSettings,
@@ -465,12 +463,17 @@ function DoctorSelectDropdown({
       >
         {selectedDoc ? (
           <div className="flex items-center gap-3 min-w-0">
-            <DoctorAvatar
-              doctorId={selectedDoc.id}
-              doctor={selectedDoc}
-              name={selectedDoc.name}
-              className="w-10 h-10 rounded-xl border border-magenta-200 shrink-0 shadow-2xs font-bold text-sm"
-            />
+            {selectedDoc.photo ? (
+              <img
+                src={selectedDoc.photo}
+                alt={selectedDoc.name}
+                className="w-10 h-10 rounded-xl object-cover border border-magenta-200 shrink-0 shadow-2xs"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-xl bg-magenta-50 border border-magenta-100 text-[#c0166a] font-bold flex items-center justify-center shrink-0 text-sm">
+                {selectedDoc.name.replace("Dr.", "").trim().charAt(0) || "D"}
+              </div>
+            )}
             <div className="min-w-0">
               <span className="font-bold text-gray-900 text-xs sm:text-sm block truncate">
                 {selectedDoc.name}
@@ -530,12 +533,17 @@ function DoctorSelectDropdown({
                     }`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <DoctorAvatar
-                      doctorId={doc.id}
-                      doctor={doc}
-                      name={doc.name}
-                      className="w-9 h-9 rounded-lg border border-magenta-100 shrink-0 font-bold text-xs"
-                    />
+                    {doc.photo ? (
+                      <img
+                        src={doc.photo}
+                        alt={doc.name}
+                        className="w-9 h-9 rounded-lg object-cover border border-magenta-100 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-9 h-9 rounded-lg bg-magenta-50 text-[#c0166a] font-bold text-xs flex items-center justify-center shrink-0">
+                        {doc.name.replace("Dr.", "").trim().charAt(0) || "D"}
+                      </div>
+                    )}
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-gray-900 truncate">{doc.name}</p>
                       <div className="flex items-center gap-1.5 text-[10px] text-gray-500 flex-wrap">
@@ -1589,14 +1597,6 @@ export default function ClinicDoctorsPage() {
         dutyStartTime: "08:00",
         dutyEndTime: "17:00",
       };
-
-      if (createdDoctorId && uploadedPhotoUrl) {
-        try {
-          await updateDoctorAvatar(createdDoctorId, uploadedPhotoUrl);
-        } catch (avatarSyncErr) {
-          console.warn("[ClinicDoctorsPage] updateDoctorAvatar sync notice:", avatarSyncErr);
-        }
-      }
 
       const updatedList = [finalizedDoctor, ...allDoctors];
       setAllDoctors(updatedList);
@@ -3323,8 +3323,6 @@ export default function ClinicDoctorsPage() {
                   disabled={savingEditDoctor}
                   className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
                 >
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -3354,21 +3352,6 @@ export default function ClinicDoctorsPage() {
                       onChange={handleEditPhotoSelect}
                     />
                   </div>
-=======
-=======
->>>>>>> Stashed changes
-                  <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-                    {/* Avatar */}
-                    <DoctorAvatar
-                      doctorId={doc.id}
-                      doctor={doc}
-                      name={doc.name}
-                      className="w-12 h-12 rounded-xl border border-magenta-200 shadow-2xs shrink-0 font-bold text-base"
-                    />
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
 
                   <div className="flex-1 min-w-0">
                     <h4 className="text-xs font-bold text-gray-800">Doctor Profile Picture</h4>
@@ -3874,12 +3857,17 @@ export default function ClinicDoctorsPage() {
 
               <div className="p-6 space-y-3.5 max-h-[75vh] overflow-y-auto">
                 <div className="flex items-center gap-3">
-                  <DoctorAvatar
-                    doctorId={selectedDoctorForDetails.id}
-                    doctor={selectedDoctorForDetails}
-                    name={selectedDoctorForDetails.name}
-                    className="w-14 h-14 rounded-xl border border-magenta-200 shrink-0 font-bold text-lg"
-                  />
+                  {selectedDoctorForDetails.photo ? (
+                    <img
+                      src={selectedDoctorForDetails.photo}
+                      alt={selectedDoctorForDetails.name}
+                      className="w-14 h-14 rounded-xl object-cover border border-magenta-200 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-14 h-14 rounded-xl bg-magenta-50 border border-magenta-100 flex items-center justify-center shrink-0">
+                      <Stethoscope className="w-6 h-6 text-[#c0166a]" />
+                    </div>
+                  )}
                   <div>
                     <h4 className="font-bold text-gray-900 text-sm">
                       {selectedDoctorForDetails.name}
