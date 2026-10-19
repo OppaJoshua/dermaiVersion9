@@ -1,10 +1,8 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
   CheckCircle2,
   Clock,
-  ChevronRight,
-  ChevronLeft,
   ChevronDown,
   Loader2,
   ArrowRight,
@@ -18,6 +16,11 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { isAppointmentExcludedFromIncomingQueue } from "@/lib/schedulingService";
+
+const MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+];
 
 
 
@@ -156,6 +159,38 @@ export default function DoctorDashboardPage() {
 
   // Calendar State
   const [calendarDate, setCalendarDate] = useState(() => new Date());
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [pickerYear, setPickerYear] = useState(() => new Date().getFullYear());
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  const yearOptions = useMemo(() => {
+    const baseYear = new Date().getFullYear();
+    const start = Math.min(baseYear - 5, pickerYear - 2);
+    const end = Math.max(baseYear + 7, pickerYear + 2);
+    const years: number[] = [];
+    for (let y = start; y <= end; y++) {
+      years.push(y);
+    }
+    return years;
+  }, [pickerYear]);
+
+  useEffect(() => {
+    if (isPickerOpen) {
+      setPickerYear(calendarDate.getFullYear());
+    }
+  }, [isPickerOpen, calendarDate]);
+
+  useEffect(() => {
+    if (!isPickerOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setIsPickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isPickerOpen]);
+
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -536,45 +571,109 @@ export default function DoctorDashboardPage() {
         {/* Right Column: Calendar Widget (approx 35% / 5 cols) */}
         <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-6 shadow-xs min-w-0">
           {/* Calendar Header with Legend and Month Nav */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 tracking-tight">
-                {calendarDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-              </h3>
-              {/* Legend dots matching Mediczen screenshot */}
-              <div className="flex items-center gap-3.5 mt-1.5 text-[12px] font-medium text-slate-500">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-blue-600 inline-block" />
-                  <span>Scheduled</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-                  <span>Completed</span>
-                </span>
-              </div>
+          <div className="pb-4 border-b border-slate-100">
+            <div ref={pickerRef} className="relative inline-block">
+              <button
+                type="button"
+                onClick={() => setIsPickerOpen((prev) => !prev)}
+                className="flex items-center gap-1.5 text-base font-bold text-slate-900 tracking-tight hover:text-blue-600 transition-colors cursor-pointer group text-left"
+                title="Click to choose month and year"
+              >
+                <span>{calendarDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
+                <ChevronDown
+                  className={`w-4 h-4 text-slate-400 group-hover:text-blue-600 transition-transform ${
+                    isPickerOpen ? "rotate-180 text-blue-600" : ""
+                  }`}
+                />
+              </button>
+
+              {isPickerOpen && (
+                <div className="absolute left-0 top-full mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-100 p-3.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                  {/* Year Selector */}
+                  <div className="flex items-center justify-center pb-2 mb-2 border-b border-slate-100">
+                    <div className="relative inline-flex items-center">
+                      <select
+                        value={pickerYear}
+                        onChange={(e) => setPickerYear(Number(e.target.value))}
+                        className="appearance-none font-bold text-sm text-slate-900 bg-transparent border-0 outline-none pl-1 pr-5 py-0.5 cursor-pointer hover:text-blue-600 transition-colors"
+                        aria-label="Select year"
+                      >
+                        {yearOptions.map((y) => (
+                          <option key={y} value={y}>
+                            {y}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-0.5 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  {/* 12 Months Grid */}
+                  <div className="grid grid-cols-3 gap-1.5 my-1">
+                    {MONTH_NAMES.map((name, idx) => {
+                      const isSelected =
+                        calendarDate.getFullYear() === pickerYear && calendarDate.getMonth() === idx;
+                      const isCurrentMonth =
+                        new Date().getFullYear() === pickerYear && new Date().getMonth() === idx;
+
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          onClick={() => {
+                            setCalendarDate(new Date(pickerYear, idx, 1));
+                            setIsPickerOpen(false);
+                          }}
+                          className={`py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
+                            isSelected
+                              ? "bg-blue-600 text-white shadow-xs font-bold"
+                              : isCurrentMonth
+                              ? "bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold"
+                              : "text-slate-700 hover:bg-slate-100"
+                          }`}
+                        >
+                          {name}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Footer Shortcut */}
+                  <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-slate-100 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const now = new Date();
+                        setPickerYear(now.getFullYear());
+                        setCalendarDate(now);
+                        setIsPickerOpen(false);
+                      }}
+                      className="font-semibold text-blue-600 hover:text-blue-700 py-1 px-2 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
+                    >
+                      This Month
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsPickerOpen(false)}
+                      className="font-medium text-slate-400 hover:text-slate-600 py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center justify-between sm:justify-end gap-1 w-full sm:w-auto">
-              <button
-                type="button"
-                onClick={() =>
-                  setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1))
-                }
-                className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-slate-800 transition-colors cursor-pointer shadow-2xs"
-                title="Previous month"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1))
-                }
-                className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-slate-800 transition-colors cursor-pointer shadow-2xs"
-                title="Next month"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+            {/* Legend dots matching Mediczen screenshot */}
+            <div className="flex items-center gap-3.5 mt-1.5 text-[12px] font-medium text-slate-500">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-600 inline-block" />
+                <span>Scheduled</span>
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                <span>Completed</span>
+              </span>
             </div>
           </div>
 

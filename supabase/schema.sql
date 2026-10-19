@@ -26,6 +26,7 @@ alter table if exists "user" add column if not exists updated_at timestamptz not
 -- 2. user_notification table updates
 alter table if exists user_notification add column if not exists subtype varchar(50);
 alter table if exists user_notification add column if not exists body text;
+alter table if exists user_notification add column if not exists metadata jsonb;
 alter table if exists user_notification add column if not exists is_read boolean not null default false;
 alter table if exists user_notification add column if not exists created_at timestamptz not null default now();
 
@@ -207,6 +208,7 @@ create table if not exists user_notification (
   subtype     varchar(50),
   title       varchar(200) not null,
   body        text,
+  metadata    jsonb,
   is_read     boolean not null default false,
   created_at  timestamptz not null default now(),
   user_id     uuid not null references "user"(user_id) on delete cascade
@@ -647,6 +649,7 @@ alter table if exists "user" add column if not exists updated_at timestamptz not
 -- 2. user_notification table updates
 alter table if exists user_notification add column if not exists subtype varchar(50);
 alter table if exists user_notification add column if not exists body text;
+alter table if exists user_notification add column if not exists metadata jsonb;
 alter table if exists user_notification add column if not exists is_read boolean not null default false;
 alter table if exists user_notification add column if not exists created_at timestamptz not null default now();
 
@@ -1893,5 +1896,108 @@ on patient_appointment (clinic_id, assigned_doctor_id, ((date at time zone 'Asia
 
 create index if not exists idx_patient_appt_doctor_date_status
 on patient_appointment (assigned_doctor_id, date, status);
+
+-- ============================================================================
+-- Clinic Application Approval Notification Trigger
+-- ============================================================================
+
+-- Function: Automatically notify clinic owner dynamically when clinic is approved
+create or replace function trg_notify_clinic_owner_on_approval()
+returns trigger
+language plpgsql
+security definer
+as $$
+declare
+  v_owner_id uuid;
+  v_notif_exists boolean;
+begin
+  -- Trigger only when clinic status transitions to 'approved' or 'active'
+  if (NEW.status in ('approved', 'active')) and (OLD.status is null or OLD.status not in ('approved', 'active')) then
+    
+    -- Dynamically resolve owner_user_id
+    v_owner_id := NEW.owner_user_id;
+
+    -- Fallback: match by email on "user" table if owner_user_id is not yet set
+    if v_owner_id is null and NEW.email is not null then
+      select user_id into v_owner_id
+      from "user"
+      where lower(trim(email)) = lower(trim(NEW.email))
+      limit 1;
+
+      -- If found, also link owner_user_id on clinic record
+      if v_owner_id is not null then
+        update clinic set owner_user_id = v_owner_id where clinic_id = NEW.clinic_id;
+      end if;
+    end if;
+
+    if v_owner_id is not null then
+      -- Promote user role to clinic if not already
+      update "user"
+      set role = 'clinic'
+      where user_id = v_owner_id and role <> 'clinic';
+
+      -- Prevent duplicate notifications if already sent in the last 10 minutes
+      select exists (
+        select 1 from user_notification
+        where user_id = v_owner_id
+          and type = 'clinic_application'
+          and subtype = 'application_approved'
+          and created_at > (now() - interval '10 minutes')
+      ) into v_notif_exists;
+
+      if not v_notif_exists then
+        begin
+          insert into user_notification (
+            user_id,
+            type,
+            subtype,
+            title,
+            body,
+            metadata,
+            is_read,
+            created_at
+          ) values (
+            v_owner_id,
+            'clinic_application',
+            'application_approved',
+            'Clinic Application Approved',
+            'Congratulations! Your clinic application for ' || NEW.name || ' has been approved by the platform administrator. You can now access your full clinic dashboard, manage doctors, and accept patient appointments.',
+            jsonb_build_object('clinic_id', NEW.clinic_id, 'status', 'approved'),
+            false,
+            now()
+          );
+        exception when undefined_column then
+          insert into user_notification (
+            user_id,
+            type,
+            subtype,
+            title,
+            body,
+            is_read,
+            created_at
+          ) values (
+            v_owner_id,
+            'clinic_application',
+            'application_approved',
+            'Clinic Application Approved',
+            'Congratulations! Your clinic application for ' || NEW.name || ' has been approved by the platform administrator. You can now access your full clinic dashboard, manage doctors, and accept patient appointments.',
+            false,
+            now()
+          );
+        end;
+      end if;
+    end if;
+  end if;
+
+  return NEW;
+end;
+$$;
+
+-- Drop trigger if exists and recreate
+drop trigger if exists trg_clinic_approval_notification on clinic;
+create trigger trg_clinic_approval_notification
+after update of status on clinic
+for each row
+execute function trg_notify_clinic_owner_on_approval();
 
 

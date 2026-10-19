@@ -461,17 +461,17 @@ export default function DoctorSettingsPage() {
       </div>
 
       {/* Doctor Information - Top Banner Card */}
-      <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-6 md:p-7 shadow-xs relative overflow-hidden min-w-0">
+      <div className="bg-white rounded-2xl border border-sky-100/80 p-5 sm:p-6 md:p-7 shadow-xs relative overflow-hidden min-w-0">
         {/* Subtle decorative faceted gradient accent on the right */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute right-0 top-0 bottom-0 w-80 bg-gradient-to-l from-[#E8F3FD] via-[#F2F8FD]/80 to-transparent opacity-90"
+          className="pointer-events-none absolute right-0 top-0 bottom-0 w-80 bg-gradient-to-l from-[#E8F3FD] via-[#F2F8FD]/80 to-transparent opacity-90 hidden sm:block"
           style={{ clipPath: "polygon(30% 0%, 100% 0%, 100% 100%, 0% 100%)" }}
         />
 
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
           {/* Left: Doctor Photo & Primary Info */}
-          <div className="flex flex-col sm:flex-row items-center sm:items-start text-center sm:text-left gap-4 sm:gap-6 min-w-0">
+          <div className="flex flex-col sm:flex-row items-center sm:items-start text-center sm:text-left gap-4 sm:gap-6 min-w-0 flex-1">
             <div className="relative group shrink-0">
               <div
                 onClick={() => fileInputRef.current?.click()}
@@ -502,12 +502,11 @@ export default function DoctorSettingsPage() {
               />
             </div>
 
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="flex items-center justify-center sm:justify-start gap-3 flex-wrap">
                 <h2 className="text-xl sm:text-2xl md:text-[26px] font-bold text-slate-900 tracking-tight">
                   {profile.fullName || "Doctor"}
                 </h2>
-
               </div>
 
               <p className="text-sm font-medium text-[#64748B] flex items-center justify-center sm:justify-start gap-2 mt-2">
@@ -522,7 +521,7 @@ export default function DoctorSettingsPage() {
                   className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-semibold text-rose-500 hover:text-rose-600 transition-colors cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-                  <span>Remove custom photo</span>
+                  <span>Remove Profile Photo</span>
                 </button>
               )}
 
@@ -535,13 +534,13 @@ export default function DoctorSettingsPage() {
           </div>
 
           {/* Right: Specialization */}
-          <div className="flex items-center sm:items-start gap-4 lg:pl-10 lg:border-l lg:border-slate-200/80 pt-4 lg:pt-0 border-t border-slate-100 lg:border-t-0 shrink-0">
-            <CaduceusIcon className="w-7 h-7 text-[#5B6B82] shrink-0" />
-            <div>
-              <p className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 mb-0.5">
+          <div className="flex items-start gap-3.5 sm:gap-4 md:pl-8 lg:pl-10 md:border-l md:border-slate-200/80 pt-4 md:pt-0 border-t border-slate-100 md:border-t-0 md:max-w-md lg:max-w-lg min-w-0 shrink-0">
+            <CaduceusIcon className="w-7 h-7 text-[#5B6B82] shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] sm:text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 mb-0.5">
                 SPECIALIZATION
               </p>
-              <p className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+              <p className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight leading-snug break-words">
                 {profile.specializations && profile.specializations.length > 0
                   ? profile.specializations.join(", ")
                   : "Not assigned"}

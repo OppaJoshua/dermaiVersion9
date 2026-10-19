@@ -462,6 +462,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
+    try {
+      localStorage.removeItem("dermai_patient_profile");
+      localStorage.removeItem("dermai_doctor_profile");
+      localStorage.removeItem("dermai_clinic_profile_cache");
+      localStorage.removeItem("dermai_admin_profile");
+    } catch {}
     await supabase.auth.signOut();
     setSession(null);
     setRole(null);

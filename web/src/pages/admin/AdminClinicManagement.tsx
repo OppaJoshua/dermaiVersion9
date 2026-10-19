@@ -296,8 +296,9 @@ export default function AdminClinicManagement() {
       description: `${target.name} has been approved. Clinic permissions and directory listings are now active.`,
     });
 
-    // 2. Background database synchronization
+    // 2. Background database synchronization & Notification trigger
     try {
+      // Step A: Update clinic status to approved and verified
       await Promise.allSettled([
         supabase.rpc("set_clinic_status", {
           target_clinic_id: String(id),
@@ -308,30 +309,74 @@ export default function AdminClinicManagement() {
           verified: true,
           ...(target.logo ? { logo_url: target.logo } : {})
         }).eq("clinic_id", id),
-        target.email
-          ? (async () => {
-            await sendClinicApprovalEmail({
-              clinicId: id,
-              clinicName: target.name,
-              recipientEmail: target.email!,
-              doctorName: target.doctor,
-            });
-            const emailTrimmed = target.email!.toLowerCase().trim();
-            const { data: matchedUser } = await supabase
-              .from("user")
-              .select("user_id")
-              .ilike("email", emailTrimmed)
-              .maybeSingle();
-
-            if (matchedUser) {
-              await Promise.allSettled([
-                supabase.from("user").update({ role: "clinic" }).eq("user_id", matchedUser.user_id),
-                supabase.from("clinic").update({ owner_user_id: matchedUser.user_id }).eq("clinic_id", id),
-              ]);
-            }
-          })()
-          : Promise.resolve(),
       ]);
+
+      // Step B: Dynamically resolve clinic owner user_id from clinic or user table
+      let ownerUserId: string | null = null;
+      const { data: clinicRow } = await supabase
+        .from("clinic")
+        .select("clinic_id, name, owner_user_id, email")
+        .eq("clinic_id", id)
+        .maybeSingle();
+
+      if (clinicRow?.owner_user_id) {
+        ownerUserId = clinicRow.owner_user_id;
+      }
+
+      const emailTrimmed = (clinicRow?.email || target.email || "").toLowerCase().trim();
+      if (!ownerUserId && emailTrimmed) {
+        const { data: matchedUser } = await supabase
+          .from("user")
+          .select("user_id")
+          .ilike("email", emailTrimmed)
+          .maybeSingle();
+
+        if (matchedUser?.user_id) {
+          ownerUserId = matchedUser.user_id;
+          await Promise.allSettled([
+            supabase.from("user").update({ role: "clinic" }).eq("user_id", ownerUserId),
+            supabase.from("clinic").update({ owner_user_id: ownerUserId }).eq("clinic_id", id),
+          ]);
+        }
+      }
+
+      // Step C: Insert in-app approval notification targeted to clinic owner
+      if (ownerUserId) {
+        const clinicName = clinicRow?.name || target.name || "your clinic";
+        const notifPayload = {
+          user_id: ownerUserId,
+          type: "clinic_application",
+          subtype: "application_approved",
+          title: "Clinic Application Approved",
+          body: `Congratulations! Your clinic application for ${clinicName} has been approved by the platform administrator. You can now access your full clinic dashboard, manage doctors, and accept patient appointments.`,
+          is_read: false,
+          created_at: new Date().toISOString(),
+        };
+
+        // Attempt insert with metadata column; gracefully fallback without metadata if column is not in schema
+        const { error: metaInsertErr } = await supabase.from("user_notification").insert({
+          ...notifPayload,
+          metadata: { clinic_id: id, status: "approved" },
+        });
+
+        if (metaInsertErr) {
+          await supabase.from("user_notification").insert(notifPayload);
+        }
+
+        // Notify active windows and listeners immediately
+        window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+        window.dispatchEvent(new Event("clinicStatusUpdated"));
+      }
+
+      // Step D: Send confirmation email if email available
+      if (emailTrimmed) {
+        await sendClinicApprovalEmail({
+          clinicId: id,
+          clinicName: target.name,
+          recipientEmail: emailTrimmed,
+          doctorName: target.doctor,
+        });
+      }
     } catch (err: any) {
       console.warn("Background clinic status sync:", err.message);
     }
