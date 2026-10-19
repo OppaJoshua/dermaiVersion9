@@ -3324,6 +3324,7 @@ export default function ClinicDoctorsPage() {
                   className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
                 >
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -3354,6 +3355,8 @@ export default function ClinicDoctorsPage() {
                     />
                   </div>
 =======
+=======
+>>>>>>> Stashed changes
                   <div className="flex items-start sm:items-center gap-3.5 min-w-0">
                     {/* Avatar */}
                     <DoctorAvatar
@@ -3362,6 +3365,9 @@ export default function ClinicDoctorsPage() {
                       name={doc.name}
                       className="w-12 h-12 rounded-xl border border-magenta-200 shadow-2xs shrink-0 font-bold text-base"
                     />
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 
                   <div className="flex-1 min-w-0">
