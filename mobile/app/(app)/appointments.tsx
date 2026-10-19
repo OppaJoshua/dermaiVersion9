@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -31,6 +31,37 @@ import type { Appointment, PatientAccount, ClinicRecord, ClinicDoctor } from '@/
 
 type Tab = 'upcoming' | 'past';
 
+function formatDateDisplay(dStr?: string): string {
+  if (!dStr) return 'Date to be confirmed';
+  try {
+    const parts = dStr.split('-');
+    if (parts.length === 3) {
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      const d = new Date(year, month, day);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString('en-US', {
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
+        });
+      }
+    }
+    const d = new Date(dStr);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    }
+  } catch {}
+  return dStr;
+}
+
 const BATCH_SLOTS = [
   { batchTime: '09:00', label: '09:00 AM – 10:00 AM' },
   { batchTime: '10:00', label: '10:00 AM – 11:00 AM' },
@@ -47,6 +78,7 @@ export default function AppointmentsScreen() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [user, setUser] = useState<PatientAccount | null>(null);
   const [showBooking, setShowBooking] = useState(false);
+  const [selectedApptForSummary, setSelectedApptForSummary] = useState<Appointment | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -166,6 +198,7 @@ export default function AppointmentsScreen() {
               <AppointmentCard
                 key={appt.id}
                 appt={appt}
+                onViewSummary={() => setSelectedApptForSummary(appt)}
                 onCancel={() => handleCancel(appt.id)}
               />
             ))
@@ -184,6 +217,19 @@ export default function AppointmentsScreen() {
           loadData();
         }}
       />
+
+      <AppointmentSummaryModal
+        visible={!!selectedApptForSummary}
+        appt={selectedApptForSummary}
+        onClose={() => setSelectedApptForSummary(null)}
+        onCancel={() => {
+          if (selectedApptForSummary) {
+            const id = selectedApptForSummary.id;
+            setSelectedApptForSummary(null);
+            handleCancel(id);
+          }
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -191,9 +237,11 @@ export default function AppointmentsScreen() {
 function AppointmentCard({
   appt,
   onCancel,
+  onViewSummary,
 }: {
   appt: Appointment;
   onCancel: () => void;
+  onViewSummary: () => void;
 }) {
   const sc = STATUS_COLORS[appt.status] ?? STATUS_COLORS.pending;
 
@@ -208,10 +256,10 @@ function AppointmentCard({
   const isFinalized = appt.status === 'confirmed' || appt.status === 'scheduled' || appt.status === 'completed';
 
   return (
-    <View style={styles.card}>
+    <TouchableOpacity activeOpacity={0.92} onPress={onViewSummary} style={styles.card}>
       <View style={styles.cardTopRow}>
-        <View style={[styles.listIconWrap, { backgroundColor: '#2563eb15' }]}>
-          <Ionicons name="medkit-outline" size={20} color="#2563eb" />
+        <View style={[styles.listIconWrap, { backgroundColor: '#be185d15' }]}>
+          <Ionicons name="medkit-outline" size={20} color={COLORS.primary} />
         </View>
         <View style={{ flex: 1, marginLeft: 12 }}>
           <View style={styles.cardHeader}>
@@ -287,21 +335,29 @@ function AppointmentCard({
         </View>
       ) : null}
 
-      {/* Cancellation controls */}
-      <View style={{ marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center' }}>
+      {/* Summary button & Cancellation controls */}
+      <View style={{ marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <TouchableOpacity onPress={onViewSummary} style={styles.viewSummaryBtn}>
+          <Ionicons name="document-text-outline" size={13} color={COLORS.primary} />
+          <Text style={styles.viewSummaryTxt}>Consultation Summary</Text>
+          <Ionicons name="chevron-forward" size={12} color={COLORS.primary} />
+        </TouchableOpacity>
+
         {appt.status === 'pending' ? (
           <TouchableOpacity onPress={onCancel} style={styles.cancelActionBtn}>
             <Ionicons name="close-circle-outline" size={14} color="#dc2626" />
-            <Text style={styles.cancelActionTxt}>Cancel Request</Text>
+            <Text style={styles.cancelActionTxt}>Cancel</Text>
           </TouchableOpacity>
         ) : isFinalized ? (
           <View style={styles.lockedBadge}>
             <Ionicons name="lock-closed-outline" size={12} color="#64748b" />
-            <Text style={styles.lockedBadgeTxt}>Finalized schedule (cancellation closed)</Text>
+            <Text style={styles.lockedBadgeTxt}>Finalized</Text>
           </View>
         ) : null}
       </View>
-    </View>
+    </TouchableOpacity>
+  );
+}
   );
 }
 
@@ -335,6 +391,25 @@ function BookingModal({
   const [saving, setSaving] = useState(false);
   const [aiConditionName, setAiConditionName] = useState('');
   const [skinPhotoUri, setSkinPhotoUri] = useState<string | null>(null);
+
+  const quickDates = useMemo(() => {
+    const list: Array<{ label: string; dateStr: string; sub: string }> = [];
+    const offsets = [1, 2, 3, 7];
+    const labels = ['Tomorrow', '+2 Days', '+3 Days', '+1 Week'];
+    offsets.forEach((offset, idx) => {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      list.push({
+        label: labels[idx],
+        dateStr: `${yyyy}-${mm}-${dd}`,
+        sub: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+      });
+    });
+    return list;
+  }, []);
 
   // Load clinics from live Supabase
   useEffect(() => {
@@ -541,6 +616,25 @@ function BookingModal({
 
             {/* Date Selection */}
             <Text style={styles.modalLabel}>Consultation Date (YYYY-MM-DD) *</Text>
+            <View style={styles.quickDateRow}>
+              {quickDates.map((q) => {
+                const isActive = dateStr === q.dateStr;
+                return (
+                  <TouchableOpacity
+                    key={q.dateStr}
+                    style={[styles.quickDateChip, isActive && styles.quickDateChipActive]}
+                    onPress={() => setDateStr(q.dateStr)}
+                  >
+                    <Text style={[styles.quickDateLabel, isActive && styles.quickDateLabelActive]}>
+                      {q.label}
+                    </Text>
+                    <Text style={[styles.quickDateSub, isActive && styles.quickDateSubActive]}>
+                      {q.sub}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
             <TextInput
               style={styles.modalInput}
               value={dateStr}
@@ -661,15 +755,105 @@ function BookingModal({
               numberOfLines={4}
             />
 
+            {/* ════════ Consultation Summary Card (matching Web) ════════ */}
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={styles.summaryIconBadge}>
+                    <Ionicons name="calendar-outline" size={14} color={COLORS.primary} />
+                  </View>
+                  <Text style={styles.summaryTitle}>Consultation Summary</Text>
+                </View>
+                <View style={styles.summaryModeBadge}>
+                  <Text style={styles.summaryModeTxt}>In-Person</Text>
+                </View>
+              </View>
+
+              {/* Prominent Slot Consultation Details */}
+              <View style={styles.summarySlotBox}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={styles.summarySlotLabel}>Selected Consultation Slot</Text>
+                  <View style={styles.summaryDurationBadge}>
+                    <Text style={styles.summaryDurationTxt}>30 mins</Text>
+                  </View>
+                </View>
+                <Text style={styles.summaryDoctorName} numberOfLines={1}>
+                  {selectedDoctor?.name ? (selectedDoctor.name.startsWith('Dr') ? selectedDoctor.name : `Dr. ${selectedDoctor.name}`) : 'Attending Dermatologist'}
+                </Text>
+                <Text style={styles.summaryDoctorSpec} numberOfLines={1}>
+                  {selectedDoctor?.specialization || 'General Dermatology'}
+                </Text>
+                <View style={styles.summarySlotRow}>
+                  <Ionicons name="time-outline" size={13} color={COLORS.primary} />
+                  <Text style={styles.summarySlotTime}>
+                    Time Slot: <Text style={{ fontWeight: '700', color: COLORS.primary }}>{selectedBatch.label}</Text>
+                  </Text>
+                </View>
+                <Text style={styles.summarySlotFootnote}>
+                  Individual in-person patient consultation
+                </Text>
+              </View>
+
+              {/* Clean Minimal Schedule Details */}
+              <View style={styles.summaryClinicBox}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  {selectedClinic.logoUrl ? (
+                    <Image source={{ uri: selectedClinic.logoUrl }} style={styles.summaryClinicLogo} />
+                  ) : (
+                    <View style={styles.summaryClinicLogoFallback}>
+                      <Text style={styles.summaryClinicLogoTxt}>{selectedClinic.name.charAt(0) || 'C'}</Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.summaryClinicName} numberOfLines={1}>
+                      {selectedClinic.name}
+                    </Text>
+                    <Text style={styles.summaryClinicAddr} numberOfLines={1}>
+                      {selectedClinic.address || selectedClinic.district || 'Dermatology Clinic'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.summaryDivider} />
+
+                <View style={{ gap: 2 }}>
+                  <Text style={styles.summaryDateText}>{formatDateDisplay(dateStr)}</Text>
+                  <Text style={styles.summaryHoursText}>{selectedClinic.hours || 'Mon–Sat: 9:00 AM – 5:00 PM'}</Text>
+                  <Text style={styles.summaryAppointmentOnly}>(By Appointment Only)</Text>
+                </View>
+
+                <View style={styles.summaryDivider} />
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <View>
+                    <Text style={styles.summaryFeeLabel}>Fee</Text>
+                    <Text style={styles.summaryFeeAmount}>
+                      ₱{Number(selectedClinic.consultationFee || 500).toLocaleString()}
+                    </Text>
+                  </View>
+                  <View style={styles.summaryPayableBadge}>
+                    <Ionicons name="checkmark-circle-outline" size={13} color={COLORS.textSecondary} />
+                    <Text style={styles.summaryPayableText}>Payable at clinic</Text>
+                  </View>
+                </View>
+              </View>
+            </View>
+
             <TouchableOpacity
               style={[styles.sendBtn, saving && { opacity: 0.7 }]}
               onPress={handleBook}
               disabled={saving}
             >
               {saving ? (
-                <ActivityIndicator color="#fff" />
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <ActivityIndicator color="#fff" size="small" />
+                  <Text style={styles.sendBtnTxt}>Submitting Appointment...</Text>
+                </View>
               ) : (
-                <Text style={styles.sendBtnTxt}>Confirm & Submit Request</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.sendBtnTxt}>Book Here</Text>
+                  <Ionicons name="checkmark" size={18} color="#fff" />
+                </View>
               )}
             </TouchableOpacity>
             <Text style={styles.sendNote}>
@@ -678,6 +862,205 @@ function BookingModal({
           </ScrollView>
         </SafeAreaView>
       </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function AppointmentSummaryModal({
+  visible,
+  appt,
+  onClose,
+  onCancel,
+}: {
+  visible: boolean;
+  appt: Appointment | null;
+  onClose: () => void;
+  onCancel: () => void;
+}) {
+  if (!appt) return null;
+  const sc = STATUS_COLORS[appt.status] ?? STATUS_COLORS.pending;
+  const STEPS = ['Request Sent', 'Clinic Review', 'Scheduled', 'Completed'] as const;
+  const getStepIndex = (status: string) => {
+    if (status === 'completed') return 3;
+    if (status === 'scheduled' || status === 'confirmed') return 2;
+    if (status === 'pending') return 1;
+    return 0;
+  };
+  const currentStep = appt.status === 'rejected' || appt.status === 'cancelled' ? -1 : getStepIndex(appt.status);
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+      <SafeAreaView style={styles.modalSafe}>
+        {/* Header */}
+        <View style={styles.summaryModalHeader}>
+          <TouchableOpacity onPress={onClose} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={18} color={COLORS.text} />
+            <Text style={styles.backBtnTxt}>Close</Text>
+          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.summaryModalHeading}>Consultation Summary</Text>
+              <Text style={styles.summaryModalSub}>Details of your dermatologist appointment</Text>
+            </View>
+            <View style={[styles.statusBadge, { backgroundColor: sc.bg }]}>
+              <Text style={[styles.statusTxt, { color: sc.text }]}>{sc.label}</Text>
+            </View>
+          </View>
+        </View>
+
+        <ScrollView contentContainerStyle={styles.summaryModalContent} showsVerticalScrollIndicator={false}>
+          {/* Progress Tracker */}
+          {currentStep >= 0 && (
+            <View style={styles.summaryProgressCard}>
+              <Text style={styles.summarySectionTitle}>Appointment Status</Text>
+              <View style={styles.stepTracker}>
+                {STEPS.map((step, idx) => (
+                  <View key={step} style={styles.stepItem}>
+                    <View style={styles.stepRow}>
+                      <View style={[styles.stepCircle, idx <= currentStep ? styles.stepCircleActive : styles.stepCircleInactive]}>
+                        {idx <= currentStep ? (
+                          <Text style={styles.stepCheck}>✓</Text>
+                        ) : (
+                          <Text style={styles.stepNum}>{idx + 1}</Text>
+                        )}
+                      </View>
+                      {idx < STEPS.length - 1 && (
+                        <View style={[styles.stepLine, idx < currentStep ? styles.stepLineActive : styles.stepLineInactive]} />
+                      )}
+                    </View>
+                    <Text style={[styles.stepLabel, idx <= currentStep && { color: COLORS.primary, fontWeight: '700' }]}>
+                      {step}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* Consultation Slot Details */}
+          <View style={styles.summaryCard}>
+            <View style={styles.summarySlotBox}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={styles.summarySlotLabel}>Consultation Slot</Text>
+                {appt.queueNumber ? (
+                  <View style={styles.summaryDurationBadge}>
+                    <Text style={styles.summaryDurationTxt}>Queue #{appt.queueNumber}</Text>
+                  </View>
+                ) : (
+                  <View style={styles.summaryDurationBadge}>
+                    <Text style={styles.summaryDurationTxt}>In-Person</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={styles.summaryDoctorName}>
+                {appt.doctorName ? (appt.doctorName.startsWith('Dr') ? appt.doctorName : `Dr. ${appt.doctorName}`) : 'Attending Dermatologist'}
+              </Text>
+              {appt.specialty ? (
+                <Text style={styles.summaryDoctorSpec}>{appt.specialty}</Text>
+              ) : null}
+              <View style={styles.summarySlotRow}>
+                <Ionicons name="calendar-outline" size={13} color={COLORS.primary} />
+                <Text style={styles.summarySlotTime}>{formatDateDisplay(appt.date)}</Text>
+              </View>
+              {appt.batchTime || appt.time ? (
+                <View style={[styles.summarySlotRow, { marginTop: 4 }]}>
+                  <Ionicons name="time-outline" size={13} color={COLORS.primary} />
+                  <Text style={styles.summarySlotTime}>Arrival Window: {appt.batchTime || appt.time}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            {/* Clinic Details */}
+            <View style={styles.summaryClinicBox}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={styles.summaryClinicLogoFallback}>
+                  <Text style={styles.summaryClinicLogoTxt}>{appt.clinicName.charAt(0) || 'C'}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.summaryClinicName}>{appt.clinicName}</Text>
+                  <Text style={styles.summaryClinicAddr}>{appt.clinicAddress || 'Dermatology Clinic'}</Text>
+                </View>
+              </View>
+
+              <View style={styles.summaryDivider} />
+
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View>
+                  <Text style={styles.summaryFeeLabel}>Fee</Text>
+                  <Text style={styles.summaryFeeAmount}>₱500</Text>
+                </View>
+                <View style={styles.summaryPayableBadge}>
+                  <Ionicons name="checkmark-circle-outline" size={13} color={COLORS.textSecondary} />
+                  <Text style={styles.summaryPayableText}>Payable at clinic</Text>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          {/* Patient Details & Clinical Findings */}
+          <View style={styles.summaryCard}>
+            <Text style={styles.summarySectionTitle}>Patient Information</Text>
+            <View style={styles.summaryInfoRow}>
+              <Text style={styles.summaryInfoKey}>Patient Name</Text>
+              <Text style={styles.summaryInfoVal}>{appt.patientName || 'Patient'}</Text>
+            </View>
+            {appt.patientContact ? (
+              <View style={styles.summaryInfoRow}>
+                <Text style={styles.summaryInfoKey}>Contact</Text>
+                <Text style={styles.summaryInfoVal}>{appt.patientContact}</Text>
+              </View>
+            ) : null}
+            {appt.patientEmail ? (
+              <View style={styles.summaryInfoRow}>
+                <Text style={styles.summaryInfoKey}>Email</Text>
+                <Text style={styles.summaryInfoVal}>{appt.patientEmail}</Text>
+              </View>
+            ) : null}
+
+            {appt.conditionName ? (
+              <View style={[styles.summaryInfoRow, { marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#f1f5f9' }]}>
+                <Text style={styles.summaryInfoKey}>AI Skin Condition</Text>
+                <View style={styles.conditionTag}>
+                  <Text style={styles.conditionTagTxt}>{appt.conditionName}</Text>
+                </View>
+              </View>
+            ) : null}
+
+            {appt.notes ? (
+              <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f1f5f9' }}>
+                <Text style={styles.summaryInfoKey}>Patient Symptoms / Notes</Text>
+                <Text style={styles.summaryNotesTxt}>{appt.notes}</Text>
+              </View>
+            ) : null}
+
+            {appt.clinicNote ? (
+              <View style={{ marginTop: 8, backgroundColor: '#fff7ed', borderRadius: 10, padding: 10 }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#c2410c' }}>Clinic Note</Text>
+                <Text style={{ fontSize: 12, color: '#9a3412', marginTop: 2 }}>{appt.clinicNote}</Text>
+              </View>
+            ) : null}
+
+            {appt.skinPhotoUri ? (
+              <View style={{ marginTop: 12 }}>
+                <Text style={[styles.summaryInfoKey, { marginBottom: 6 }]}>Attached Skin Photo</Text>
+                <Image source={{ uri: appt.skinPhotoUri }} style={styles.summaryPhoto} resizeMode="cover" />
+              </View>
+            ) : null}
+          </View>
+
+          {/* Action Buttons */}
+          {appt.status === 'pending' ? (
+            <TouchableOpacity onPress={onCancel} style={styles.summaryCancelBtn}>
+              <Ionicons name="close-circle-outline" size={16} color="#dc2626" />
+              <Text style={styles.summaryCancelBtnTxt}>Cancel Appointment Request</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          <TouchableOpacity onPress={onClose} style={styles.summaryCloseBtn}>
+            <Text style={styles.summaryCloseBtnTxt}>Close</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
     </Modal>
   );
 }
@@ -922,7 +1305,7 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
   },
   textArea: { height: 90, textAlignVertical: 'top', paddingTop: 12 },
-  sendBtn: { backgroundColor: COLORS.primary, borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 24 },
+  sendBtn: { backgroundColor: COLORS.primary, borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 20 },
   sendBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 16 },
   sendNote: { fontSize: 12, color: COLORS.textSecondary, textAlign: 'center', marginTop: 10 },
 
@@ -944,4 +1327,183 @@ const styles = StyleSheet.create({
 
   aiBox: { backgroundColor: '#fff0fa', borderRadius: 16, padding: 14, marginTop: 14 },
   aiBoxTitle: { fontSize: 14, fontWeight: '700', color: COLORS.text },
+
+  // Consultation Summary & Quick Dates styles
+  viewSummaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#fdf2f8',
+  },
+  viewSummaryTxt: { fontSize: 12, fontWeight: '700', color: COLORS.primary },
+
+  quickDateRow: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+  quickDateChip: {
+    flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+  },
+  quickDateChipActive: { backgroundColor: '#fdf2f8', borderColor: COLORS.primary },
+  quickDateLabel: { fontSize: 11, fontWeight: '700', color: COLORS.text },
+  quickDateLabelActive: { color: COLORS.primary },
+  quickDateSub: { fontSize: 9, color: COLORS.textLight, marginTop: 2 },
+  quickDateSubActive: { color: COLORS.primary, fontWeight: '600' },
+
+  summaryCard: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 16,
+    marginTop: 18,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  summaryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    marginBottom: 12,
+  },
+  summaryIconBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: COLORS.primaryLight ?? '#fce7f3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  summaryTitle: { fontSize: 14, fontWeight: '800', color: COLORS.text },
+  summaryModeBadge: {
+    backgroundColor: '#fdf2f8',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#fbcfe8',
+  },
+  summaryModeTxt: { fontSize: 10, fontWeight: '700', color: COLORS.primary },
+
+  summarySlotBox: {
+    backgroundColor: '#fdf2f8',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#fbcfe8',
+    marginBottom: 12,
+  },
+  summarySlotLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.primary,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  summaryDurationBadge: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  summaryDurationTxt: { color: '#fff', fontSize: 10, fontWeight: '700' },
+  summaryDoctorName: { fontSize: 13, fontWeight: '800', color: COLORS.text, marginTop: 4 },
+  summaryDoctorSpec: { fontSize: 11, color: COLORS.primary, fontWeight: '600', marginTop: 1 },
+  summarySlotRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 },
+  summarySlotTime: { fontSize: 12, color: COLORS.text },
+  summarySlotFootnote: { fontSize: 10, color: COLORS.textSecondary, fontStyle: 'italic', marginTop: 4 },
+
+  summaryClinicBox: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  summaryClinicLogo: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#f1f5f9' },
+  summaryClinicLogoFallback: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#fce7f3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  summaryClinicLogoTxt: { color: COLORS.primary, fontWeight: '800', fontSize: 14 },
+  summaryClinicName: { fontSize: 13, fontWeight: '700', color: COLORS.text },
+  summaryClinicAddr: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
+  summaryDivider: { height: 1, backgroundColor: '#e2e8f0', marginVertical: 10 },
+  summaryDateText: { fontSize: 12, fontWeight: '700', color: COLORS.text },
+  summaryHoursText: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
+  summaryAppointmentOnly: { fontSize: 10, color: COLORS.textLight, fontStyle: 'italic', marginTop: 2 },
+  summaryFeeLabel: { fontSize: 10, fontWeight: '700', color: COLORS.textLight, textTransform: 'uppercase', letterSpacing: 0.5 },
+  summaryFeeAmount: { fontSize: 16, fontWeight: '800', color: COLORS.text, marginTop: 1 },
+  summaryPayableBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  summaryPayableText: { fontSize: 11, color: COLORS.textSecondary },
+
+  // Summary Modal styles
+  summaryModalHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 12,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  summaryModalHeading: { fontSize: 18, fontWeight: '800', color: COLORS.text, marginTop: 2 },
+  summaryModalSub: { fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
+  summaryModalContent: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 40 },
+  summaryProgressCard: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  summarySectionTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 10 },
+  summaryInfoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
+  summaryInfoKey: { fontSize: 12, color: COLORS.textSecondary },
+  summaryInfoVal: { fontSize: 12, fontWeight: '700', color: COLORS.text },
+  conditionTag: {
+    backgroundColor: '#fdf2f8',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#fbcfe8',
+  },
+  conditionTagTxt: { fontSize: 11, fontWeight: '700', color: COLORS.primary },
+  summaryNotesTxt: { fontSize: 12, color: COLORS.text, lineHeight: 17, marginTop: 4 },
+  summaryPhoto: { width: '100%', height: 160, borderRadius: 14, marginTop: 4 },
+  summaryCancelBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  summaryCancelBtnTxt: { fontSize: 13, fontWeight: '700', color: '#dc2626' },
+  summaryCloseBtn: { paddingVertical: 14, borderRadius: 14, backgroundColor: '#f3f4f6', alignItems: 'center', marginTop: 4 },
+  summaryCloseBtnTxt: { fontSize: 14, fontWeight: '700', color: COLORS.text },
 });
