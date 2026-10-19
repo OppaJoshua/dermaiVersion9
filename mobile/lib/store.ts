@@ -195,6 +195,8 @@ export interface ClinicRecord {
   logoUrl?: string;
   doctors: ClinicDoctor[];
   conditionsTreated: string[];
+  description?: string;
+  photos?: string[];
 }
 
 // ─── Auth Functions ───────────────────────────────────────────────────────────
@@ -439,29 +441,67 @@ export async function getSkinHistory(userId: string): Promise<ScanResult[]> {
   try {
     const { data, error } = await supabase
       .from('ai_scan_result')
-      .select('*, skin_condition(name, local_name, description)')
+      .select(`
+        analysis_id,
+        user_id,
+        scanned_at,
+        photo_url,
+        confidence_score,
+        body_part,
+        status,
+        referral_suggested,
+        questionnaire_answers,
+        skin_condition:condition_id (
+          name,
+          local_name,
+          description,
+          skin_condition_care_tip (
+            tip_text
+          )
+        )
+      `)
       .eq('user_id', userId)
       .order('scanned_at', { ascending: false });
 
     if (error || !data) return [];
 
-    return data.map((s: any) => ({
-      id: s.analysis_id,
-      userId: s.user_id,
-      date: s.scanned_at,
-      imageUri: s.photo_url || undefined,
-      answers: s.questionnaire_answers || {},
-      condition: s.skin_condition?.name || 'Skin Analysis Result',
-      confidence: Number(s.confidence_score) || 0,
-      severity: (s.confidence_score > 75 ? 'severe' : s.confidence_score > 50 ? 'moderate' : 'mild') as any,
-      category: 'Dermatology',
-      description: s.skin_condition?.description || '',
-      symptoms: [],
-      careTips: [],
-      referralSuggested: s.referral_suggested || false,
-      localName: s.skin_condition?.local_name || undefined,
-      status: s.status || 'pending',
-    }));
+    const results: ScanResult[] = await Promise.all(
+      data.map(async (s: any) => {
+        const condObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+        let imageUrl = s.photo_url || undefined;
+        if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('file:') && !imageUrl.startsWith('data:')) {
+          try {
+            const { data: signed } = await supabase.storage
+              .from('scan-uploads')
+              .createSignedUrl(imageUrl, 3600);
+            if (signed?.signedUrl) imageUrl = signed.signedUrl;
+          } catch {}
+        }
+
+        const careTipsList: string[] = (condObj?.skin_condition_care_tip || [])
+          .map((t: any) => t.tip_text)
+          .filter(Boolean);
+
+        return {
+          id: s.analysis_id,
+          userId: s.user_id,
+          date: s.scanned_at,
+          imageUri: imageUrl,
+          answers: s.questionnaire_answers || (s.body_part ? { bodyLocation: s.body_part } : {}),
+          condition: condObj?.name || 'Skin Analysis Result',
+          confidence: Number(s.confidence_score) || 0,
+          severity: (Number(s.confidence_score) >= 75 ? 'severe' : Number(s.confidence_score) >= 50 ? 'moderate' : 'mild') as any,
+          category: 'Dermatology',
+          description: condObj?.description || '',
+          symptoms: [],
+          careTips: careTipsList,
+          referralSuggested: s.referral_suggested || false,
+          localName: condObj?.local_name || undefined,
+          status: s.status || 'pending',
+        };
+      })
+    );
+    return results;
   } catch (err) {
     console.warn('[Store] getSkinHistory error:', err);
     return [];
@@ -859,13 +899,24 @@ export async function getClinics(): Promise<ClinicRecord[]> {
         logo_url,
         verified,
         status,
+        description,
+        clinic_photo (
+          photo_url,
+          sort_order
+        ),
+        clinic_service_offered (
+          service_name
+        ),
         clinic_doctor (
           doctor_id,
           doctor_name,
           duty_days,
           duty_start_time,
           duty_end_time,
-          status
+          status,
+          doctor_specializations (
+            specializations ( name )
+          )
         ),
         clinic_operating_hours (
           day_of_week,
@@ -873,6 +924,7 @@ export async function getClinics(): Promise<ClinicRecord[]> {
           close_time
         )
       `)
+      .or('status.eq.approved,status.eq.verified,status.eq.active')
       .order('name', { ascending: true });
 
     if (error || !data || data.length === 0) {
@@ -890,34 +942,56 @@ export async function getClinics(): Promise<ClinicRecord[]> {
       }));
     }
 
-    return data.map((c: any) => ({
-      id: c.clinic_id,
-      name: c.name,
-      address: c.address || '',
-      phone: c.phone || '',
-      email: c.email || '',
-      hours: c.clinic_operating_hours?.length
-        ? `${c.clinic_operating_hours[0].day_of_week}: ${c.clinic_operating_hours[0].open_time} - ${c.clinic_operating_hours[0].close_time}`
-        : 'Mon-Sat: 9:00 AM - 5:00 PM',
-      verified: c.verified ?? false,
-      district: c.district || 'Cebu City',
-      city: c.city || 'Cebu City',
-      lat: Number(c.latitude) || 10.3157,
-      lng: Number(c.longitude) || 123.8854,
-      consultationFee: c.consultation_fee ? String(c.consultation_fee) : '500',
-      logoUrl: c.logo_url || undefined,
-      doctors: (c.clinic_doctor || [])
-        .filter((d: any) => d.status === 'Active' || !d.status)
-        .map((d: any) => ({
-          id: d.doctor_id,
-          name: d.doctor_name,
-          specialization: 'Dermatologist',
-          dutyDays: d.duty_days || ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-          dutyStartTime: d.duty_start_time || '09:00',
-          dutyEndTime: d.duty_end_time || '17:00',
-        })),
-      conditionsTreated: ['Acne Vulgaris', 'Atopic Dermatitis (Eczema)', 'Psoriasis', 'Tinea Corporis (Buni)', 'Melasma'],
-    }));
+    return data.map((c: any) => {
+      const realServices = (c.clinic_service_offered || [])
+        .map((s: any) => s.service_name)
+        .filter(Boolean);
+
+      const realDoctors = (c.clinic_doctor || [])
+        .filter((d: any) => d.status === 'Active' || d.status === 'active' || !d.status)
+        .map((d: any) => {
+          const spec = Array.isArray(d.doctor_specializations)
+            ? d.doctor_specializations
+                .map((ds: any) => ds.specializations?.name || ds.specialization?.name)
+                .filter(Boolean)
+                .join(', ')
+            : '';
+          return {
+            id: d.doctor_id,
+            name: d.doctor_name,
+            specialization: spec || 'Dermatologist',
+            dutyDays: d.duty_days || ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+            dutyStartTime: d.duty_start_time || '09:00',
+            dutyEndTime: d.duty_end_time || '17:00',
+          };
+        });
+
+      const photos = (c.clinic_photo || [])
+        .map((p: any) => p.photo_url)
+        .filter(Boolean);
+
+      return {
+        id: String(c.clinic_id),
+        name: c.name,
+        address: c.address || '',
+        phone: c.phone || '',
+        email: c.email || '',
+        description: c.description || undefined,
+        photos: photos.length > 0 ? photos : undefined,
+        hours: c.clinic_operating_hours?.length
+          ? `${c.clinic_operating_hours[0].day_of_week}: ${c.clinic_operating_hours[0].open_time} - ${c.clinic_operating_hours[0].close_time}`
+          : 'Mon-Sat: 9:00 AM - 5:00 PM',
+        verified: c.verified ?? false,
+        district: c.district || 'Cebu City',
+        city: c.city || 'Cebu City',
+        lat: Number(c.latitude) || 10.3157,
+        lng: Number(c.longitude) || 123.8854,
+        consultationFee: c.consultation_fee ? String(c.consultation_fee) : '500',
+        logoUrl: c.logo_url || undefined,
+        doctors: realDoctors,
+        conditionsTreated: realServices.length > 0 ? realServices : ['General Dermatology', 'Acne Treatment', 'Skin Allergy'],
+      };
+    });
   } catch (err) {
     console.warn('[Store] getClinics fallback:', err);
     return SAMPLE_CLINICS.map((c) => ({
@@ -965,5 +1039,32 @@ export async function unsaveClinic(userId: string, clinicId: string | number): P
       .eq('clinic_id', String(clinicId));
   } catch (err) {
     console.warn('[Store] unsaveClinic error:', err);
+  }
+}
+
+export async function getUserPayments(userId: string): Promise<PlatformTransaction[]> {
+  try {
+    const { data, error } = await supabase
+      .from('user_payment')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error || !data) return [];
+    return data.map((p: any) => ({
+      id: String(p.payment_id || p.id),
+      userId: p.user_id,
+      amount: Number(p.amount) || 0,
+      method: p.method || 'card',
+      billingCycle: p.billing_cycle || 'monthly',
+      status: p.status === 'success' ? 'paid' : p.status || 'paid',
+      date: p.created_at || new Date().toISOString(),
+      plan: p.billing_cycle === 'yearly' ? 'DermAI Pro Plan — Annual' : 'DermAI Pro Plan — Monthly',
+      userEmail: '',
+      userName: '',
+    }));
+  } catch (err) {
+    console.warn('[Store] getUserPayments error:', err);
+    return [];
   }
 }

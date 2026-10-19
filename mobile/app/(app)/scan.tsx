@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -29,8 +29,9 @@ import {
   getUserSubscription,
   setUserSubscription,
   addAppNotification,
+  getClinics,
 } from '@/lib/store';
-import type { ScanResult } from '@/lib/store';
+import type { ScanResult, ClinicRecord } from '@/lib/store';
 
 type Step = 'welcome' | 'questionnaire' | 'upload' | 'analyzing' | 'result';
 
@@ -755,8 +756,15 @@ function ResultScreen({
   const isGovReportable = result.isGovernmentReportable ?? false;
   const isLowConfidence = result.confidence < 40;
   const showMultiplePossibilities = isLowConfidence || !!result.secondaryCondition;
+  const [realClinics, setRealClinics] = useState<ClinicRecord[]>([]);
 
-  const verifiedClinics = SAMPLE_CLINICS.filter((c) => c.verified).slice(0, 2);
+  useEffect(() => {
+    getClinics().then(setRealClinics);
+  }, []);
+
+  const verifiedClinics = (realClinics.length > 0 ? realClinics : SAMPLE_CLINICS)
+    .filter((c) => c.verified)
+    .slice(0, 2);
 
   return (
     <SafeAreaView style={styles.safe}>

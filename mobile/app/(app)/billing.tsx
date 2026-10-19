@@ -19,6 +19,7 @@ import {
   getCurrentUser,
   getUserSubscription,
   setUserSubscription,
+  getUserPayments,
 } from '@/lib/store';
 import type { PatientAccount, SubscriptionRecord } from '@/lib/store';
 
@@ -42,19 +43,19 @@ export default function BillingScreen() {
     const s = await getUserSubscription(u.id);
     setSub(s);
 
-    const isDemo = u.id === 'demo_patient';
     const isYearly = s?.billingCycle === 'yearly';
     const cyclePrice = isYearly ? 1999 : 199;
     const label = isYearly ? 'DermAI Pro Plan — Annual' : 'DermAI Pro Plan — Monthly';
 
-    if (isDemo) {
-      // Always show 3 demo billing entries regardless of stored state
-      const now = new Date();
-      setTransactions([
-        { date: new Date(now.getFullYear(), now.getMonth() - 2, 4).toISOString(), amount: 199, label: 'DermAI Pro Plan — Monthly' },
-        { date: new Date(now.getFullYear(), now.getMonth() - 1, 4).toISOString(), amount: 199, label: 'DermAI Pro Plan — Monthly' },
-        { date: new Date(now.getFullYear(), now.getMonth(), 4).toISOString(), amount: 199, label: 'DermAI Pro Plan — Monthly' },
-      ]);
+    const realPayments = await getUserPayments(u.id);
+    if (realPayments.length > 0) {
+      setTransactions(
+        realPayments.map((p) => ({
+          date: p.date,
+          amount: p.amount,
+          label: p.plan,
+        }))
+      );
     } else if (s?.plan === 'premium' && s.startDate) {
       const start = new Date(s.startDate);
       const monthStep = isYearly ? 12 : 1;
@@ -67,6 +68,8 @@ export default function BillingScreen() {
         }
       }
       setTransactions(entries);
+    } else {
+      setTransactions([]);
     }
   }
 
