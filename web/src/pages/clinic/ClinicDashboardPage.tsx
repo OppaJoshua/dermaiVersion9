@@ -1005,8 +1005,8 @@ export default function ClinicDashboardPage() {
             ? "1 registered patient"
             : `${uniquePatientCount} registered patients`
           : "No registered patients",
-      icon: Users,
       highlight: true,
+      link: "/clinic/patients",
     },
     {
       label: "Today's Appointments",
@@ -1018,8 +1018,8 @@ export default function ClinicDashboardPage() {
             ? "1 scheduled today"
             : `${todayAppointments.length} scheduled today`
           : "No bookings today",
-      icon: Calendar,
       highlight: false,
+      link: "/clinic/appointments",
     },
     {
       label: "Upcoming Appointments",
@@ -1031,16 +1031,16 @@ export default function ClinicDashboardPage() {
             ? "1 scheduled ahead"
             : `${upcomingAppointmentsCount} scheduled ahead`
           : "No upcoming dates",
-      icon: Clock,
       highlight: false,
+      link: "/clinic/appointments",
     },
     {
       label: "Avg. Time per Appointment",
       value: String(avgTimeMinutes),
       unit: "min",
       sub: "Standard consult",
-      icon: Sigma,
       highlight: false,
+      link: "/clinic/appointments",
     },
   ];
 
@@ -1061,7 +1061,10 @@ export default function ClinicDashboardPage() {
           <div className="lg:col-span-1 grid grid-cols-2 gap-4">
             {[1, 2, 3, 4].map((i) => (
               <div key={i} className="rounded-2xl p-4 bg-white border border-magenta-100 shadow-sm min-h-[110px] space-y-3">
-                <div className="h-3 w-16 bg-gray-200 rounded"></div>
+                <div className="flex items-start justify-between">
+                  <div className="h-3 w-16 bg-gray-200 rounded"></div>
+                  <div className="w-8 h-8 rounded-full border border-gray-200 bg-gray-50 shrink-0"></div>
+                </div>
                 <div className="h-7 w-12 bg-gray-200 rounded"></div>
                 <div className="h-2 w-20 bg-gray-100 rounded"></div>
               </div>
@@ -1143,50 +1146,56 @@ export default function ClinicDashboardPage() {
             {/* Stats 2x2 Grid */}
             <div className="lg:col-span-1 grid grid-cols-2 gap-3.5">
               {statCards.map((card, i) => {
-                const Icon = card.icon;
                 return (
                   <motion.div
                     key={card.label}
                     initial={{ opacity: 0, y: 12 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.05 * (i + 1) }}
-                    className={cn(
-                      "rounded-2xl p-4 flex flex-col justify-between min-h-[118px] relative overflow-hidden",
-                      card.highlight
-                        ? "bg-gradient-to-br from-[#4a0b30] via-[#801336] to-[#b83a74] text-white shadow-lg shadow-[#801336]/25"
-                        : "bg-white border border-gray-100 shadow-2xs text-gray-900"
-                    )}
+                    className="h-full"
                   >
-                    {card.highlight && (
-                      <>
-                        <div className="absolute -top-6 -right-6 w-24 h-24 rounded-full bg-white/10 pointer-events-none" />
-                        <div className="absolute -bottom-8 -left-4 w-24 h-24 rounded-full bg-white/10 pointer-events-none" />
-                      </>
-                    )}
+                    <Link
+                      to={card.link}
+                      className={cn(
+                        "rounded-2xl p-4 flex flex-col justify-between min-h-[118px] h-full relative overflow-hidden group transition-all duration-200 block",
+                        card.highlight
+                          ? "bg-gradient-to-br from-[#4a0b30] via-[#801336] to-[#b83a74] text-white shadow-lg shadow-[#801336]/25 hover:shadow-xl hover:shadow-[#801336]/35 hover:-translate-y-0.5"
+                          : "bg-white border border-gray-100 shadow-2xs text-gray-900 hover:border-gray-200 hover:shadow-xs hover:-translate-y-0.5"
+                      )}
+                    >
+                      {card.highlight && (
+                        <>
+                          <div className="absolute -top-6 -right-6 w-24 h-24 rounded-full bg-white/10 pointer-events-none" />
+                          <div className="absolute -bottom-8 -left-4 w-24 h-24 rounded-full bg-white/10 pointer-events-none" />
+                        </>
+                      )}
 
-                    <div className="relative flex items-start justify-between gap-2">
-                      <p className={cn("text-xs font-semibold leading-snug", card.highlight ? "text-white" : "text-gray-600")}>
-                        {card.label}
-                      </p>
-                      <div
-                        className={cn(
-                          "w-8 h-8 rounded-[10px] flex items-center justify-center shrink-0",
-                          card.highlight ? "bg-white/20 text-white" : "bg-pink-50 text-[#801336]"
-                        )}
-                      >
-                        <Icon className="w-4 h-4" />
+                      <div className="relative flex items-start justify-between gap-2">
+                        <p className={cn("text-xs font-semibold leading-snug", card.highlight ? "text-white" : "text-gray-600")}>
+                          {card.label}
+                        </p>
+                        <span
+                          className={cn(
+                            "w-8 h-8 rounded-full border flex items-center justify-center shrink-0 transition-all",
+                            card.highlight
+                              ? "border-white/60 text-white group-hover:bg-white/10"
+                              : "border-gray-200 text-gray-800 bg-white group-hover:border-gray-300"
+                          )}
+                        >
+                          <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                        </span>
                       </div>
-                    </div>
 
-                    <div className="relative mt-3">
-                      <p className="flex items-baseline gap-1 text-3xl font-extrabold leading-none tracking-tight">
-                        {card.value}
-                        {card.unit && <span className="text-xs font-semibold text-gray-400">{card.unit}</span>}
-                      </p>
-                      <p className={cn("text-[11px] mt-1.5 truncate font-medium", card.highlight ? "text-pink-200" : "text-gray-400")}>
-                        {card.sub}
-                      </p>
-                    </div>
+                      <div className="relative mt-3">
+                        <p className="flex items-baseline gap-1 text-3xl font-extrabold leading-none tracking-tight">
+                          {card.value}
+                          {card.unit && <span className="text-xs font-semibold text-gray-400">{card.unit}</span>}
+                        </p>
+                        <p className={cn("text-[11px] mt-1.5 truncate font-medium", card.highlight ? "text-pink-200" : "text-gray-400")}>
+                          {card.sub}
+                        </p>
+                      </div>
+                    </Link>
                   </motion.div>
                 );
               })}
