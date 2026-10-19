@@ -5,16 +5,17 @@ import {
   Image,
   CheckCircle2,
   AlertTriangle,
-  Sun,
-  ZoomIn,
   Sparkles,
   MapPin,
   ArrowRight,
   ArrowLeft,
-  Lock,
   Users,
   Stethoscope,
   ShieldAlert,
+  ExternalLink,
+  Edit3,
+  HelpCircle,
+  Info,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "../../lib/utils";
@@ -22,276 +23,29 @@ import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 import { predictSkinCondition, getConditionUUID, AIPredictionError } from "../../lib/aiApi";
 import { createPatientNotification } from "../../lib/notificationService";
+import {
+  QUESTIONNAIRE_QUESTIONS,
+  toggleOptionSelection,
+} from "../../data/questionnaireData";
+import type { QuestionnaireQuestion } from "../../data/questionnaireData";
+import {
+  evaluateDiseaseMapping,
+  compareAIAndQuestionnaire,
+  evaluateSafetyWarnings,
+  normalizeAnswers,
+} from "../../lib/diseaseMappingService";
+import type {
+  DiseaseMappingResult,
+  AIQuestionnaireComparison,
+} from "../../lib/diseaseMappingService";
+import { getConditionGuide } from "../../data/conditionGuides";
+import type { ConditionGuide } from "../../data/conditionGuides";
 
 const steps = [
   { label: "Answer Questions", number: 1 },
   { label: "Upload Photo", number: 2 },
   { label: "View Result", number: 3 },
 ];
-
-
-/* ---------------------------------------------------------------
-   Questionnaire data — sourced directly from
-   "Skin Condition Pre-Screening Questionnaire (with Severity)"
-   This is the exact set of 15 questions/options. The severity +
-   disease-mapping values on each option are ONLY used for the
-   lightweight client-side preview below — the real classification
-   comes from the backend Random Forest (see API contract further
-   down), which does its own feature encoding from raw answers.
---------------------------------------------------------------- */
-
-type Condition =
-  | "Vitiligo"
-  | "Acne Vulgaris"
-  | "Atopic Dermatitis (Eczema)"
-  | "Contact Dermatitis"
-  | "Melasma";
-
-interface QuestionOption {
-  label: string;
-  severity: number | null;
-  conditions: Condition[];
-  warning?: "urgent" | "emergency";
-}
-
-interface Question {
-  id: string;
-  text: string;
-  helper: string;
-  usedForSeverity: boolean;
-  options: QuestionOption[];
-}
-
-const QUESTIONS: Question[] = [
-  {
-    id: "q1",
-    text: "How intense is the itching on the affected skin?",
-    helper: "Choose the option that best describes your itching right now.",
-    usedForSeverity: true,
-    options: [
-      { label: "No itching at all", severity: 0, conditions: ["Vitiligo", "Melasma"] },
-      { label: "Mild, occasional itching", severity: 1, conditions: ["Vitiligo", "Acne Vulgaris"] },
-      { label: "Moderate itching that bothers me sometimes", severity: 2, conditions: ["Acne Vulgaris", "Contact Dermatitis"] },
-      { label: "Intense, constant itching", severity: 3, conditions: ["Atopic Dermatitis (Eczema)", "Contact Dermatitis"] },
-    ],
-  },
-  {
-    id: "q2",
-    text: "Do you feel pain, burning, or stinging in the affected area?",
-    helper: "Choose the option that best matches how it feels.",
-    usedForSeverity: true,
-    options: [
-      { label: "No pain, burning, or stinging", severity: 0, conditions: ["Vitiligo", "Melasma"] },
-      { label: "Mild burning, stinging, or tenderness", severity: 1, conditions: ["Atopic Dermatitis (Eczema)", "Contact Dermatitis"] },
-      { label: "Moderate pain or burning", severity: 2, conditions: ["Acne Vulgaris", "Contact Dermatitis"] },
-      { label: "Severe pain, burning, warmth, or swelling", severity: 3, conditions: ["Acne Vulgaris", "Contact Dermatitis", "Atopic Dermatitis (Eczema)"] },
-    ],
-  },
-  {
-    id: "q3",
-    text: "What color is the affected skin?",
-    helper: "Pick the color that most closely matches what you see.",
-    usedForSeverity: false,
-    options: [
-      { label: "White or noticeably lighter than my natural skin tone", severity: null, conditions: ["Vitiligo"] },
-      { label: "Red or pink, with visible bumps or pimples", severity: null, conditions: ["Acne Vulgaris"] },
-      { label: "Red, purple, brown, or gray discoloration", severity: null, conditions: ["Atopic Dermatitis (Eczema)"] },
-      { label: "Red, purple, or darker than my normal skin tone (like a rash)", severity: null, conditions: ["Contact Dermatitis"] },
-      { label: "Light brown, dark brown, or blue-gray patches", severity: null, conditions: ["Melasma"] },
-    ],
-  },
-  {
-    id: "q4",
-    text: "How does the surface of the affected skin feel or look?",
-    helper: "Select the description that fits best.",
-    usedForSeverity: false,
-    options: [
-      { label: "Smooth and flat — no change in texture", severity: null, conditions: ["Vitiligo", "Melasma"] },
-      { label: "Oily or greasy, with clogged pores", severity: null, conditions: ["Acne Vulgaris"] },
-      { label: "Dry, rough, cracked, or scaly", severity: null, conditions: ["Atopic Dermatitis (Eczema)"] },
-      { label: "Flaky, peeling, or scaling skin", severity: null, conditions: ["Contact Dermatitis", "Atopic Dermatitis (Eczema)"] },
-    ],
-  },
-  {
-    id: "q5",
-    text: "Do you notice any bumps or blisters?",
-    helper: "Choose the option closest to your main symptom.",
-    usedForSeverity: false,
-    options: [
-      { label: "Blackheads, whiteheads, or pus-filled pimples", severity: null, conditions: ["Acne Vulgaris"] },
-      { label: "Small fluid-filled blisters", severity: null, conditions: ["Atopic Dermatitis (Eczema)", "Contact Dermatitis"] },
-      { label: "Swollen, raised, hive-like bumps", severity: null, conditions: ["Contact Dermatitis"] },
-      { label: "No bumps or blisters — just flat discoloration", severity: null, conditions: ["Vitiligo", "Melasma"] },
-    ],
-  },
-  {
-    id: "q6",
-    text: "Is there any discharge, oozing, or crusting from the affected skin?",
-    helper: "This helps us check for signs that the skin may be infected.",
-    usedForSeverity: true,
-    options: [
-      { label: "No discharge or oozing", severity: 0, conditions: ["Vitiligo", "Acne Vulgaris", "Melasma"] },
-      { label: "Occasional clear fluid, especially after scratching", severity: 1, conditions: ["Atopic Dermatitis (Eczema)"] },
-      { label: "Pus-filled bumps or cysts", severity: 2, conditions: ["Acne Vulgaris"] },
-      { label: "Yellow pus, odor, warmth, or crusting", severity: 3, conditions: ["Atopic Dermatitis (Eczema)", "Contact Dermatitis"] },
-    ],
-  },
-  {
-    id: "q7",
-    text: "Where on your body is the affected skin located?",
-    helper: "Choose the area that best matches your main concern.",
-    usedForSeverity: false,
-    options: [
-      { label: "Face only, appearing evenly on both cheeks, forehead, or upper lip", severity: null, conditions: ["Melasma"] },
-      { label: "Face, chest, shoulders, or back", severity: null, conditions: ["Acne Vulgaris"] },
-      { label: "Skin folds — elbows, behind the knees, or wrists", severity: null, conditions: ["Atopic Dermatitis (Eczema)"] },
-      { label: "Hands, forearms, feet, or scattered patches on the face", severity: null, conditions: ["Vitiligo"] },
-      { label: "A specific spot that touched a product, plant, or metal", severity: null, conditions: ["Contact Dermatitis"] },
-    ],
-  },
-  {
-    id: "q8",
-    text: "Did the affected skin appear after touching a new product, plant, or metal?",
-    helper: "Think about new soaps, jewelry, cosmetics, detergents, or plants.",
-    usedForSeverity: false,
-    options: [
-      { label: "Yes, it appeared soon after contact with something new", severity: null, conditions: ["Contact Dermatitis"] },
-      { label: "No, it appeared gradually with no clear cause", severity: null, conditions: ["Vitiligo", "Melasma", "Atopic Dermatitis (Eczema)", "Acne Vulgaris"] },
-    ],
-  },
-  {
-    id: "q9",
-    text: "Does sun exposure change how the affected skin looks?",
-    helper: "Consider how the area reacts after being in the sun.",
-    usedForSeverity: false,
-    options: [
-      { label: "It gets darker or more noticeable in the sun", severity: null, conditions: ["Melasma"] },
-      { label: "It burns or turns red very easily in the sun", severity: null, conditions: ["Vitiligo"] },
-      { label: "No noticeable change with sun exposure", severity: null, conditions: ["Acne Vulgaris", "Atopic Dermatitis (Eczema)", "Contact Dermatitis"] },
-    ],
-  },
-  {
-    id: "q10",
-    text: "Has the affected area spread or grown since it first appeared?",
-    helper: "This helps us understand how much the area has changed.",
-    usedForSeverity: true,
-    options: [
-      { label: "No, it has stayed about the same, in one small area", severity: 0, conditions: [] },
-      { label: "Slightly spread within the same general area", severity: 1, conditions: ["Acne Vulgaris", "Contact Dermatitis"] },
-      { label: "Spread to nearby skin or a few new areas", severity: 2, conditions: ["Vitiligo", "Acne Vulgaris", "Contact Dermatitis"] },
-      { label: "Spread to multiple or distant parts of the body", severity: 3, conditions: ["Vitiligo", "Atopic Dermatitis (Eczema)", "Contact Dermatitis", "Melasma"] },
-    ],
-  },
-  {
-    id: "q11",
-    text: "How long have you had these symptoms?",
-    helper: "Choose the option that best matches your timeline.",
-    usedForSeverity: true,
-    options: [
-      { label: "Less than 1 week", severity: 1, conditions: ["Contact Dermatitis", "Acne Vulgaris"] },
-      { label: "1–4 weeks", severity: 2, conditions: ["Acne Vulgaris", "Contact Dermatitis", "Atopic Dermatitis (Eczema)"] },
-      { label: "More than 1 month, or it keeps coming back", severity: 3, conditions: ["Vitiligo", "Atopic Dermatitis (Eczema)", "Melasma"] },
-    ],
-  },
-  {
-    id: "q12",
-    text: "How much do these symptoms affect your daily activities or emotional wellbeing?",
-    helper: "Be honest — this helps us gauge how much the condition is affecting you.",
-    usedForSeverity: true,
-    options: [
-      { label: "No effect on my daily life", severity: 0, conditions: [] },
-      { label: "Slight discomfort, but it doesn't interrupt my activities", severity: 1, conditions: [] },
-      { label: "Sometimes interrupts my activities or bothers me emotionally", severity: 2, conditions: ["Vitiligo", "Acne Vulgaris", "Atopic Dermatitis (Eczema)", "Contact Dermatitis", "Melasma"] },
-      { label: "Makes daily activities difficult, or causes significant distress", severity: 3, conditions: ["Vitiligo", "Acne Vulgaris", "Atopic Dermatitis (Eczema)", "Contact Dermatitis", "Melasma"] },
-    ],
-  },
-  {
-    id: "q13",
-    text: "Are you currently experiencing any of the following?",
-    helper: "Select the one that applies to you right now. These are important warning signs.",
-    usedForSeverity: true,
-    options: [
-      { label: "None of these", severity: 0, conditions: [] },
-      { label: "Skin is warm, red, swollen, or oozing yellow pus (possible infection)", severity: 3, conditions: ["Acne Vulgaris", "Atopic Dermatitis (Eczema)", "Contact Dermatitis"], warning: "urgent" },
-      { label: "The patch is raised, bleeding, or changing rapidly in size or color", severity: 3, conditions: ["Melasma"], warning: "urgent" },
-      { label: "Trouble breathing, or swelling of the lips or mouth", severity: 3, conditions: ["Contact Dermatitis"], warning: "emergency" },
-      { label: "New eye redness, irritation, or vision changes", severity: 3, conditions: ["Vitiligo"], warning: "urgent" },
-    ],
-  },
-  {
-    id: "q14",
-    text: "Are you currently pregnant, recently gave birth, or using hormonal birth control or hormone therapy?",
-    helper: "Hormonal changes can affect certain skin conditions.",
-    usedForSeverity: false,
-    options: [
-      { label: "Yes", severity: null, conditions: ["Melasma"] },
-      { label: "No or not applicable", severity: null, conditions: ["Vitiligo", "Acne Vulgaris", "Atopic Dermatitis (Eczema)", "Contact Dermatitis"] },
-    ],
-  },
-  {
-    id: "q15",
-    text: "Do you (or your close family) have a history of allergies, asthma, or hay fever?",
-    helper: "This can point to skin conditions linked to allergic tendencies.",
-    usedForSeverity: false,
-    options: [
-      { label: "Yes", severity: null, conditions: ["Atopic Dermatitis (Eczema)"] },
-      { label: "No or not sure", severity: null, conditions: ["Vitiligo", "Acne Vulgaris", "Contact Dermatitis", "Melasma"] },
-    ],
-  },
-];
-
-const SEVERITY_QUESTION_IDS = ["q1", "q2", "q6", "q10", "q11", "q12"];
-
-/** Lightweight, client-side ONLY. Gives the user a quick sense of severity
- *  while answering. Never sent as the diagnosis — the RF does that. */
-interface QuickPreview {
-  severityScore: number;
-  severityLevel: "Mild" | "Moderate" | "Severe";
-  urgent: boolean;
-  urgentMessage?: string;
-  urgentType?: "urgent" | "emergency";
-}
-
-function computeQuickPreview(answers: Record<string, number>): QuickPreview {
-  let score = 0;
-  for (const qId of SEVERITY_QUESTION_IDS) {
-    const q = QUESTIONS.find((x) => x.id === qId)!;
-    const opt = answers[qId] !== undefined ? q.options[answers[qId]] : undefined;
-    if (opt?.severity != null) score += opt.severity;
-  }
-  const level: QuickPreview["severityLevel"] = score >= 11 ? "Severe" : score >= 5 ? "Moderate" : "Mild";
-
-  const q13 = QUESTIONS.find((q) => q.id === "q13")!;
-  const q13Idx = answers["q13"];
-  const q13Opt = q13Idx !== undefined ? q13.options[q13Idx] : undefined;
-  const urgent = !!q13Opt && q13Idx !== 0;
-
-  return {
-    severityScore: score,
-    severityLevel: urgent ? "Severe" : level,
-    urgent,
-    urgentMessage: urgent ? q13Opt?.label : undefined,
-    urgentType: urgent ? q13Opt?.warning : undefined,
-  };
-}
-
-/* ---------------------------------------------------------------
-   API CONTRACT — this is what the frontend sends/expects.
-   Implement server-side once the Random Forest + CNN are ready.
-
-   POST /api/scans/analyze   (multipart/form-data)
-     - image: File
-     - answers: JSON string, shape AnswerPayload (below) — RAW answers,
-       the backend does its own feature encoding for the RF.
-
-   AnswerPayload = { [questionId: string]: number }  // option index per question
-   e.g. { "q1": 2, "q2": 0, "q3": 4, ... }
-
-   Response: ScanResultData (below) — whatever the backend decides after
-   combining the RF's questionnaire-based prediction with the CNN's
-   image-based prediction (ensemble weighting, RF-as-triage + CNN-confirms,
-   etc. is a backend decision, not a frontend one).
---------------------------------------------------------------- */
 
 interface ScanResultData {
   id: string;
@@ -300,7 +54,8 @@ interface ScanResultData {
   confidence: number;
   bodyPart: string;
   date: string;
-  severity: "Mild" | "Moderate" | "Severe";
+  severity: "Mild" | "Moderate" | "Severe"; // Legacy field preserved for consumers: stores patient-reported impact
+  patientReportedImpact?: "Mild" | "Moderate" | "Severe";
   description: string;
   symptoms: string[];
   whoAffected: string;
@@ -308,6 +63,9 @@ interface ScanResultData {
   whenToSeeDoctor: string;
   imageUrl?: string;
   wideImageUrl?: string;
+  mappingResult: DiseaseMappingResult;
+  comparison: AIQuestionnaireComparison;
+  conditionGuide: ConditionGuide | null;
   primaryPrediction?: {
     predicted_class?: string;
     display_name?: string;
@@ -336,7 +94,6 @@ export default function ScanSkinPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
-  const isAuthenticated = !!user;
 
   // Booking-origin context: ONLY active if explicitly launched from Appointment booking flow
   const location = useLocation();
@@ -361,8 +118,6 @@ export default function ScanSkinPage() {
     }
   }, [isBookingOrigin, searchParams, location.state]);
 
-  // If user entered Scan Skin normally (NOT from appointment flow),
-  // purge any stale booking return clinic and scan booking context
   useEffect(() => {
     if (!isBookingOrigin) {
       try {
@@ -375,12 +130,31 @@ export default function ScanSkinPage() {
       } catch { }
     }
   }, [isBookingOrigin, returnClinicId]);
+
   const [currentStep, setCurrentStep] = useState(1);
   const [qIndex, setQIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, number>>(() => {
+  const [isReviewing, setIsReviewing] = useState(false);
+
+  // Store answers as map of question ID to array of option IDs
+  const [answers, setAnswers] = useState<Record<string, string[]>>(() => {
     try {
-      const saved = sessionStorage.getItem("dermai_scan_answers");
-      return saved ? JSON.parse(saved) : {};
+      const saved = sessionStorage.getItem("dermai_scan_answers_v2");
+      if (saved) return JSON.parse(saved);
+
+      // Handle migration from legacy single-index format
+      const legacy = sessionStorage.getItem("dermai_scan_answers");
+      if (legacy) {
+        const parsed = JSON.parse(legacy);
+        const migrated: Record<string, string[]> = {};
+        for (const [k, val] of Object.entries(parsed)) {
+          const q = QUESTIONNAIRE_QUESTIONS.find((item) => item.id === k);
+          if (q && typeof val === "number" && q.options[val]) {
+            migrated[k] = [q.options[val].id];
+          }
+        }
+        return migrated;
+      }
+      return {};
     } catch {
       return {};
     }
@@ -388,13 +162,18 @@ export default function ScanSkinPage() {
 
   useEffect(() => {
     try {
-      sessionStorage.setItem("dermai_scan_answers", JSON.stringify(answers));
+      sessionStorage.setItem("dermai_scan_answers_v2", JSON.stringify(answers));
     } catch { }
   }, [answers]);
 
-  const currentQuestion = QUESTIONS[qIndex];
-  const hasAnswered = answers[currentQuestion.id] !== undefined;
-  const quickPreview = useMemo(() => computeQuickPreview(answers), [answers]);
+  const currentQuestion: QuestionnaireQuestion = QUESTIONNAIRE_QUESTIONS[qIndex] || QUESTIONNAIRE_QUESTIONS[0];
+  const currentSelections = answers[currentQuestion.id] || [];
+  const hasAnsweredCurrent = currentSelections.length > 0;
+
+  // Real-time safety alert computed from Q14
+  const activeSafetyAlert = useMemo(() => {
+    return evaluateSafetyWarnings(normalizeAnswers(answers));
+  }, [answers]);
 
   const closeUpInputRef = useRef<HTMLInputElement>(null);
   const closeUpCameraRef = useRef<HTMLInputElement>(null);
@@ -404,7 +183,6 @@ export default function ScanSkinPage() {
   const [closeUpImage, setCloseUpImage] = useState<string | null>(null);
   const [wideFile, setWideFile] = useState<File | null>(null);
   const [wideImage, setWideImage] = useState<string | null>(null);
-  const uploadedCount = (closeUpImage ? 1 : 0) + (wideImage ? 1 : 0);
   const allPhotosUploaded = !!closeUpImage && !!wideImage;
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -414,18 +192,15 @@ export default function ScanSkinPage() {
   const [recommendedClinics, setRecommendedClinics] = useState<RecommendedClinic[]>([]);
 
   const [subData, setSubData] = useState({ scansUsed: 0, scanLimit: 3, isPro: false });
-  const [subLoading, setSubLoading] = useState(true);
 
   useEffect(() => {
     const loadSubscription = async () => {
-      setSubLoading(true);
       try {
         if (!user?.id) {
           setSubData({ scansUsed: 0, scanLimit: 3, isPro: false });
           return;
         }
 
-        // Fetch active subscription joined with plan
         const { data: sub } = await supabase
           .from("user_plan_subscription")
           .select("status, started_at, current_period_start, current_period_end, plan:plan_id(scan_limit)")
@@ -445,24 +220,16 @@ export default function ScanSkinPage() {
         // Expired subscriptions use the current calendar month's Free scan cycle.
         const cycleStart: string = hasValidPaidPeriod
           ? (sub as any)?.current_period_start ||
-            (sub as any)?.started_at ||
-            new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
+          (sub as any)?.started_at ||
+          new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
           : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
 
-        // Count completed scans within the current billing cycle only
         const { count: used } = await supabase
           .from("ai_scan_result")
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id)
           .eq("status", "completed")
           .gte("scanned_at", cycleStart);
-
-        console.log("SCAN LIMIT DEBUG:", {
-          userId: user.id,
-          used,
-          scanLimit: planScanLimit,
-          isPro,
-        });
 
         setSubData({
           scansUsed: used ?? 0,
@@ -471,8 +238,6 @@ export default function ScanSkinPage() {
         });
       } catch (err) {
         console.error("Failed to load subscription data:", err);
-      } finally {
-        setSubLoading(false);
       }
     };
     loadSubscription();
@@ -480,14 +245,12 @@ export default function ScanSkinPage() {
 
   const isPro = subData.isPro;
   const remainingScans = isPro ? Infinity : Math.max(0, subData.scanLimit - subData.scansUsed);
-  const scansLeft = isPro ? "Unlimited" : remainingScans;
   const canScan = isPro || remainingScans > 0;
 
   useEffect(() => {
     if (!showResult || !scanResult) return;
     const loadRecommendedClinics = async () => {
       try {
-        // TODO: GET /api/clinics/recommended?condition=<scanResult.condition> from Supabase
         setRecommendedClinics([]);
       } catch (err) {
         console.error("Failed to load recommended clinics:", err);
@@ -496,18 +259,34 @@ export default function ScanSkinPage() {
     loadRecommendedClinics();
   }, [showResult, scanResult]);
 
-  const selectAnswer = (optIdx: number) => {
-    setAnswers((a) => ({ ...a, [currentQuestion.id]: optIdx }));
+  const selectOption = (optId: string) => {
+    setAnswers((prev) => {
+      const cur = prev[currentQuestion.id] || [];
+      const updated = toggleOptionSelection(cur, optId, currentQuestion);
+      return { ...prev, [currentQuestion.id]: updated };
+    });
   };
 
   const goNextQuestion = () => {
-    if (qIndex < QUESTIONS.length - 1) setQIndex((i) => i + 1);
-    else setCurrentStep(2);
+    if (qIndex < QUESTIONNAIRE_QUESTIONS.length - 1) {
+      setQIndex((i) => i + 1);
+    } else {
+      setIsReviewing(true);
+    }
   };
 
   const goPrevQuestion = () => {
-    if (qIndex > 0) setQIndex((i) => i - 1);
-    else setCurrentStep(1);
+    if (isReviewing) {
+      setIsReviewing(false);
+      setQIndex(QUESTIONNAIRE_QUESTIONS.length - 1);
+    } else if (qIndex > 0) {
+      setQIndex((i) => i - 1);
+    }
+  };
+
+  const jumpToQuestion = (index: number) => {
+    setQIndex(index);
+    setIsReviewing(false);
   };
 
   const handleFileChange = (slot: "closeup" | "wide") => (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -536,6 +315,10 @@ export default function ScanSkinPage() {
   };
 
   const handleAnalyze = async () => {
+    if (!user?.id) {
+      setAnalyzeError("You must be signed in to analyze and save your skin scan.");
+      return;
+    }
     if (!isPro && !canScan) {
       navigate("/dashboard/upgrade");
       return;
@@ -545,40 +328,32 @@ export default function ScanSkinPage() {
     setIsAnalyzing(true);
     setAnalyzeError(null);
 
-    // Reference to the DB row so we can update status later
     let analysisId: string | null = null;
     let uploadedCloseUpPath: string | undefined;
     let uploadedWidePath: string | undefined;
 
     try {
-      // ==========================================================
-      // STEP 1: Build questionnaire payload (unchanged)
-      // ==========================================================
-      const questionnaireData = QUESTIONS.map((q) => {
-        const chosenIndex = answers[q.id];
-        const chosenOption = chosenIndex !== undefined ? q.options[chosenIndex] : null;
+      // 1. Build standardized questionnaire payload
+      const questionnaireData = QUESTIONNAIRE_QUESTIONS.map((q) => {
+        const chosenIds = answers[q.id] || [];
+        const chosenOptions = q.options.filter((o) => chosenIds.includes(o.id));
+        const answerEn = chosenOptions.map((o) => o.labelEn).join("; ") || "Not answered";
+        const answerTl = chosenOptions.map((o) => o.labelTl).join("; ") || "Hindi sinagot";
         return {
           id: q.id,
-          question: q.text,
-          answer: chosenOption?.label || "Not specified",
-          severity: chosenOption?.severity ?? null,
+          question: q.titleEn,
+          tagalogQuestion: q.titleTl,
+          answer: answerEn,
+          tagalogAnswer: answerTl,
+          selectedOptionIds: chosenIds,
+          role: q.role,
         };
       });
 
-      // ==========================================================
-      // STEP 2: Call FastAPI /predict with BOTH close-up and wide-view images
-      // Pipeline in FastAPI:
-      //   1. Image quality & skin validation on primary close-up
-      //   2. ResNet50 inference on primary close-up
-      //   3. Separate validation & ResNet50 inference on supporting wide-view
-      //   4. Multi-view evidence combination (70% primary, 30% supporting)
-      //
-      // If primary close-up fails:
-      //   - FastAPI raises 400 HTTPException with user-friendly retake instructions
-      //   - We catch it, setAnalyzeError(message), and DO NOT proceed
-      // If wide-view fails validation:
-      //   - Scan proceeds with 100% close-up primary evidence
-      // ==========================================================
+      // 2. Evaluate Disease Mapping rule-based support
+      const mappingResult = evaluateDiseaseMapping(answers);
+
+      // 3. ResNet50 inference via FastAPI backend
       let aiResult;
       try {
         aiResult = await predictSkinCondition(closeUpFile, wideFile);
@@ -586,32 +361,52 @@ export default function ScanSkinPage() {
         const errMsg =
           err instanceof AIPredictionError
             ? err.message
-            : "AI prediction failed.";
-        throw new Error(errMsg);
+            : "We couldn't complete your skin analysis. Please try again.";
+        throw new Error(errMsg, { cause: err });
       }
 
-      // ==========================================================
-      // STEP 3: If authenticated and AI succeeded — upload photos & insert completed record
-      // ==========================================================
+      // 4. Compare AI prediction and Questionnaire support independently
+      const comparison = compareAIAndQuestionnaire(
+        aiResult.display_name,
+        aiResult.confidence,
+        mappingResult
+      );
+
+      // 5. Retrieve condition definition and evidence care tips
+      const conditionGuide = getConditionGuide(aiResult.display_name);
+
+      // 6. Persistence to Supabase
       const conditionUUID = getConditionUUID(aiResult.predicted_class);
 
       if (user?.id) {
         const ts = Date.now();
-        // Upload close-up (primary evidence)
-        const closeUpPath = `${user.id}/${ts}_close_up_${closeUpFile.name}`;
+        const sanitizeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+        // Upload close-up
+        const safeCloseUpName = sanitizeFileName(closeUpFile.name);
+        const closeUpPath = `${user.id}/${ts}_close_up_${safeCloseUpName}`;
         const { error: upErr1 } = await supabase.storage
           .from("scan-uploads")
-          .upload(closeUpPath, closeUpFile, { upsert: false });
-        if (!upErr1) uploadedCloseUpPath = closeUpPath;
+          .upload(closeUpPath, closeUpFile, { upsert: true });
+        if (!upErr1) {
+          uploadedCloseUpPath = closeUpPath;
+        } else {
+          console.error("[ScanSkin] Close-up upload error:", upErr1.message);
+        }
 
-        // Upload wide view (supporting multi-view evidence)
-        const widePath = `${user.id}/${ts}_wide_${wideFile.name}`;
+        // Upload wide view
+        const safeWideName = sanitizeFileName(wideFile.name);
+        const widePath = `${user.id}/${ts}_wide_${safeWideName}`;
         const { error: upErr2 } = await supabase.storage
           .from("scan-uploads")
-          .upload(widePath, wideFile, { upsert: false });
-        if (!upErr2) uploadedWidePath = widePath;
+          .upload(widePath, wideFile, { upsert: true });
+        if (!upErr2) {
+          uploadedWidePath = widePath;
+        } else {
+          console.error("[ScanSkin] Wide-view upload error:", upErr2.message);
+        }
 
-        // Insert ONE completed scan record directly with full AI results and confidence
+        // Insert into ai_scan_result with questionnaire_answers
         const { data: scanInsertData, error: insertErr } = await supabase
           .from("ai_scan_result")
           .insert({
@@ -628,11 +423,23 @@ export default function ScanSkinPage() {
           .maybeSingle();
 
         if (insertErr) {
-          console.warn("Failed to insert ai_scan_result:", insertErr.message);
+          console.error("[ScanSkin] Failed to insert ai_scan_result:", insertErr);
+          // Clean up newly uploaded files from this failed attempt to avoid orphaned files
+          const filesToClean = [uploadedCloseUpPath, uploadedWidePath].filter(
+            (p): p is string => Boolean(p)
+          );
+          if (filesToClean.length > 0) {
+            try {
+              await supabase.storage.from("scan-uploads").remove(filesToClean);
+            } catch (cleanupErr) {
+              console.warn("[ScanSkin] Orphan storage cleanup skipped:", cleanupErr);
+            }
+          }
+          throw new Error("We couldn't save your scan result. Please try again. Your scan has not been confirmed as saved.");
         } else if (scanInsertData?.analysis_id) {
           analysisId = scanInsertData.analysis_id;
 
-          // Also save questionnaire answers
+          // Also save to ai_skin_answer table if present and authorized
           try {
             const skinAnswerRows = questionnaireData.map((item, idx) => ({
               analysis_id: analysisId,
@@ -640,22 +447,32 @@ export default function ScanSkinPage() {
               answer_value: item.answer,
               sort_order: idx + 1,
             }));
-            await supabase.from("ai_skin_answer").insert(skinAnswerRows);
-          } catch {
-            /* ignore if ai_skin_answer table is missing */
+            const { error: ansErr } = await supabase.from("ai_skin_answer").insert(skinAnswerRows);
+            if (ansErr) {
+              console.warn("ai_skin_answer secondary table write skipped:", ansErr.message);
+            }
+          } catch (secErr) {
+            console.warn("ai_skin_answer secondary write skipped:", secErr);
           }
-        }
 
-        // Deduct 1 scan from local allowance state so UI reflects usage immediately
-        setSubData((prev) => ({
-          ...prev,
-          scansUsed: prev.scansUsed + 1,
-        }));
+          // Deduct 1 scan from local allowance state only upon confirmed insert
+          setSubData((prev) => ({
+            ...prev,
+            scansUsed: prev.scansUsed + 1,
+          }));
+        }
       }
 
-      // ==========================================================
-      // STEP 5: Cache last scan in localStorage (for appointment booking)
-      // ==========================================================
+      // 7. Cache last scan in localStorage for appointment booking
+      // Patient-reported daily-life impact (Q13) only — NOT clinical disease severity,
+      // and kept strictly separate from Q14 acute safety referral / emergency warnings.
+      const patientReportedImpact: "Mild" | "Moderate" | "Severe" =
+        mappingResult.contextualImpact.level === "severe"
+          ? "Severe"
+          : mappingResult.contextualImpact.level === "moderate"
+            ? "Moderate"
+            : "Mild";
+
       try {
         localStorage.setItem(
           "dermai_last_scan",
@@ -663,60 +480,51 @@ export default function ScanSkinPage() {
             predictedClass: aiResult.predicted_class,
             displayName: aiResult.display_name,
             confidence: aiResult.confidence,
-            severity: quickPreview.severityLevel,
+            severity: patientReportedImpact, // Preserves backward compatibility: explicitly patient-reported impact
+            patientReportedImpact,
             questionnaire: questionnaireData,
             photoUrl: uploadedCloseUpPath || closeUpImage,
             photoUrlWide: uploadedWidePath || wideImage,
             analysisId,
             timestamp: Date.now(),
-            primaryPrediction: aiResult.primary_prediction || {
-              predicted_class: aiResult.predicted_class,
-              display_name: aiResult.display_name,
-              confidence: aiResult.confidence,
-              status: "valid",
-            },
-            supportingPrediction: aiResult.supporting_prediction || null,
-            isCombined: aiResult.is_combined,
-            agreement: aiResult.agreement,
-            combinedEvidenceScore: aiResult.combined_evidence_score ?? null,
+            mappingResult,
+            comparison,
           })
         );
       } catch {
-        /* ignore */
+        /* ignore storage quota errors */
       }
 
-      // ==========================================================
-      // STEP 6: Set UI result with the ACTUAL AI prediction
-      // ==========================================================
+      // 8. Set complete UI result
       setScanResult({
         id: analysisId || `scan-${Date.now()}`,
         condition: aiResult.display_name,
-        localName: aiResult.display_name,
-        confidence: aiResult.primary_prediction?.confidence ?? aiResult.confidence,
-        bodyPart: "Uploaded Photos & Questionnaire",
+        localName: conditionGuide?.filipinoName || aiResult.display_name,
+        confidence: aiResult.confidence,
+        bodyPart: "Uploaded Photos & 15-Question Assessment",
         date: new Date().toLocaleDateString("en-PH", {
           month: "long",
           day: "numeric",
           year: "numeric",
         }),
-        severity: quickPreview.severityLevel,
-        description:
-          "AI-generated preliminary assessment based on your uploaded close-up and supporting photos. " +
-          "This is not a medical diagnosis — please consult a licensed dermatologist.",
-        symptoms: quickPreview.urgentMessage
-          ? [quickPreview.urgentMessage]
-          : ["Detected from uploaded skin photo"],
-        whoAffected: "General assessment",
-        careTips: [
-          "Do not scratch, peel, or apply unprescribed topical steroids to the area.",
-          "Keep the skin clean with mild, unscented cleanser.",
-          "Book a consultation with a verified clinic for official medical diagnosis.",
+        severity: patientReportedImpact,
+        patientReportedImpact,
+        description: conditionGuide?.definition || "Preliminary AI assessment.",
+        symptoms: conditionGuide?.commonSymptoms || ["Detected from uploaded skin photo"],
+        whoAffected: conditionGuide?.whoIsAffected || "General assessment",
+        careTips: conditionGuide?.basicCareTips || [
+          "Do not scratch, peel, or apply unprescribed topical steroids.",
+          "Keep the skin clean with a gentle, fragrance-free cleanser.",
+          "Consult a licensed dermatologist for formal evaluation.",
         ],
-        whenToSeeDoctor: quickPreview.urgent
-          ? "Immediate clinic visit recommended due to reported severe symptoms."
-          : "Consult a specialist if symptoms persist or cause discomfort.",
+        whenToSeeDoctor:
+          conditionGuide?.whenToSeeDoctor ||
+          "Consult a healthcare professional if symptoms persist or cause discomfort.",
         imageUrl: closeUpImage || undefined,
         wideImageUrl: wideImage || undefined,
+        mappingResult,
+        comparison,
+        conditionGuide,
         primaryPrediction: aiResult.primary_prediction || {
           predicted_class: aiResult.predicted_class,
           display_name: aiResult.display_name,
@@ -741,11 +549,11 @@ export default function ScanSkinPage() {
         });
       }
     } catch (err) {
-      console.error("Analysis failed:", err);
+      console.error("[ScanSkin] Analysis failed:", err);
       setAnalyzeError(
         err instanceof Error
           ? err.message
-          : "Something went wrong while analyzing your photo. Please try again."
+          : "We couldn't complete your skin analysis. Please try again."
       );
     } finally {
       setIsAnalyzing(false);
@@ -755,14 +563,16 @@ export default function ScanSkinPage() {
   const handleScanBookingContext = () => {
     if (scanResult) {
       try {
-        const questionnairePayload = QUESTIONS.map((q) => {
-          const chosenIndex = answers[q.id];
-          const chosenOption = chosenIndex !== undefined ? q.options[chosenIndex] : null;
+        const questionnairePayload = QUESTIONNAIRE_QUESTIONS.map((q) => {
+          const chosenIds = answers[q.id] || [];
+          const chosenOpts = q.options.filter((o) => chosenIds.includes(o.id));
           return {
             id: q.id,
-            question: q.text,
-            answer: chosenOption?.label || "Not specified",
-            severity: chosenOption?.severity ?? null,
+            question: q.titleEn,
+            tagalogQuestion: q.titleTl,
+            answer: chosenOpts.map((o) => o.labelEn).join("; ") || "Not answered",
+            tagalogAnswer: chosenOpts.map((o) => o.labelTl).join("; ") || "Hindi sinagot",
+            selectedOptionIds: chosenIds,
           };
         });
 
@@ -798,7 +608,7 @@ export default function ScanSkinPage() {
   }, [scanResult, returnClinicId]);
 
   return (
-    <div className="min-h-screen bg-white text-slate-900 pt-8 pb-16">
+    <div className="min-h-screen bg-slate-50/50 text-slate-900 pt-8 pb-16">
       <div className="max-w-3xl mx-auto px-4 sm:px-6">
         <input
           ref={closeUpInputRef}
@@ -832,7 +642,7 @@ export default function ScanSkinPage() {
         />
 
         {isBookingOrigin && (
-          <div className="mb-6 flex items-center justify-between bg-magenta-50/80 border border-magenta-200/80 rounded-xl px-4 py-2.5 text-xs text-magenta-900">
+          <div className="mb-6 flex items-center justify-between bg-magenta-50 border border-magenta-200 rounded-xl px-4 py-2.5 text-xs text-magenta-900">
             <span className="font-semibold flex items-center gap-1.5">
               <span>Appointment booking in progress</span>
             </span>
@@ -845,16 +655,17 @@ export default function ScanSkinPage() {
           </div>
         )}
 
-        <div className="text-center mb-10">
+        <div className="text-center mb-8">
           <h1 className="text-3xl sm:text-4xl font-display font-bold text-slate-900 mb-2">
             Scan Your Skin
           </h1>
           <p className="text-slate-500 text-sm">
-            Get an AI-powered preliminary assessment of your skin condition
+            Complete the 15-question pre-screening and upload skin photos for an evidence-informed AI assessment
           </p>
         </div>
 
-        <div className="flex items-center justify-center gap-0 mb-10">
+        {/* Multi-step progress bar */}
+        <div className="flex items-center justify-center gap-0 mb-8">
           {steps.map((step, i) => (
             <div key={step.number} className="flex items-center">
               <div className="flex flex-col items-center">
@@ -862,8 +673,8 @@ export default function ScanSkinPage() {
                   className={cn(
                     "w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all duration-300",
                     currentStep >= step.number
-                      ? "bg-magenta-500 text-white shadow-lg shadow-magenta-500/30"
-                      : "bg-magenta-100 text-magenta-400"
+                      ? "bg-magenta-600 text-white shadow-md shadow-magenta-600/30"
+                      : "bg-slate-200 text-slate-500"
                   )}
                 >
                   {currentStep > step.number ? <CheckCircle2 className="w-5 h-5" /> : step.number}
@@ -871,7 +682,7 @@ export default function ScanSkinPage() {
                 <span
                   className={cn(
                     "text-xs mt-2 font-medium",
-                    currentStep >= step.number ? "text-magenta-600 font-semibold" : "text-slate-400"
+                    currentStep >= step.number ? "text-magenta-700 font-semibold" : "text-slate-400"
                   )}
                 >
                   {step.label}
@@ -881,7 +692,7 @@ export default function ScanSkinPage() {
                 <div
                   className={cn(
                     "w-16 sm:w-24 h-0.5 mx-2 transition-colors",
-                    currentStep > step.number ? "bg-magenta-500" : "bg-slate-200"
+                    currentStep > step.number ? "bg-magenta-600" : "bg-slate-200"
                   )}
                 />
               )}
@@ -890,124 +701,319 @@ export default function ScanSkinPage() {
         </div>
 
         <AnimatePresence mode="wait">
-          {/* Step 1: Questionnaire — one question at a time */}
-          {currentStep === 1 && (
+          {/* =========================================================================
+              STEP 1: Questionnaire — One question at a time or Review Step
+             ========================================================================= */}
+          {currentStep === 1 && !isReviewing && (
             <motion.div
               key={`q-${currentQuestion.id}`}
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 sm:p-8"
+              className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 sm:p-8"
             >
-              <div className="flex items-center justify-between mb-5">
-                <span className="text-xs font-semibold text-magenta-600">
-                  Question {qIndex + 1} of {QUESTIONS.length}
-                </span>
-                <div className="w-32 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              {/* Question header and progress */}
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-magenta-50 text-magenta-700 border border-magenta-100">
+                    Question {qIndex + 1} of {QUESTIONNAIRE_QUESTIONS.length}
+                  </span>
+                  {currentQuestion.isMultiSelect && (
+                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+                      Multi-select / Piliin lahat ng naaangkop
+                    </span>
+                  )}
+                </div>
+                <div className="w-28 sm:w-36 h-2 bg-slate-100 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-magenta-500 rounded-full transition-all"
-                    style={{ width: `${((qIndex + 1) / QUESTIONS.length) * 100}%` }}
+                    className="h-full bg-magenta-600 rounded-full transition-all duration-300"
+                    style={{ width: `${((qIndex + 1) / QUESTIONNAIRE_QUESTIONS.length) * 100}%` }}
                   />
                 </div>
               </div>
 
-              <h2 className="text-lg sm:text-xl font-display font-bold text-slate-900 mb-1">
-                {currentQuestion.text}
-              </h2>
-              <p className="text-xs text-slate-500 mb-6">{currentQuestion.helper}</p>
+              {/* Bilingual Question Title */}
+              <div className="mb-4">
+                <h2 className="text-lg sm:text-xl font-display font-bold text-slate-900 leading-snug">
+                  {currentQuestion.titleEn}
+                </h2>
+                <p className="text-sm font-medium text-slate-500 italic mt-0.5">
+                  {currentQuestion.titleTl}
+                </p>
+                {currentQuestion.helperEn && (
+                  <p className="text-xs text-slate-400 mt-2 flex items-center gap-1.5">
+                    <HelpCircle className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>{currentQuestion.helperEn}</span>
+                  </p>
+                )}
+              </div>
 
+              {/* Options */}
               <div className="space-y-2.5 mb-8">
-                {currentQuestion.options.map((opt, i) => {
-                  const selected = answers[currentQuestion.id] === i;
+                {currentQuestion.options.map((opt) => {
+                  const isSelected = currentSelections.includes(opt.id);
                   return (
                     <button
-                      key={opt.label}
-                      onClick={() => selectAnswer(i)}
+                      key={opt.id}
+                      type="button"
+                      onClick={() => selectOption(opt.id)}
                       className={cn(
-                        "w-full text-left px-4 py-3.5 rounded-2xl border-2 text-sm font-medium transition-all active:scale-[0.98] flex items-start gap-3 cursor-pointer",
-                        selected
-                          ? "border-magenta-500 bg-magenta-50/80 text-magenta-900 shadow-xs"
-                          : "border-slate-200 text-slate-700 hover:border-magenta-200 hover:bg-magenta-50/30"
+                        "w-full text-left px-4 py-3.5 rounded-2xl border-2 transition-all active:scale-[0.99] flex items-start gap-3 cursor-pointer",
+                        isSelected
+                          ? "border-magenta-600 bg-magenta-50/60 text-magenta-950 shadow-xs"
+                          : "border-slate-200 text-slate-700 hover:border-magenta-200 hover:bg-magenta-50/20"
                       )}
                     >
+                      {/* Checkbox or Radio indicator */}
                       <span
                         className={cn(
-                          "mt-0.5 w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0",
-                          selected ? "border-magenta-500" : "border-slate-300"
+                          "mt-0.5 w-4 h-4 flex items-center justify-center shrink-0 border-2 transition-colors",
+                          currentQuestion.isMultiSelect ? "rounded-md" : "rounded-full",
+                          isSelected ? "border-magenta-600 bg-magenta-600 text-white" : "border-slate-300 bg-white"
                         )}
                       >
-                        {selected && <span className="w-2 h-2 rounded-full bg-magenta-500" />}
-                      </span>
-                      <span className="flex-1">
-                        {opt.label}
-                        {opt.warning && (
-                          <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-bold text-rose-600">
-                            <ShieldAlert className="w-3 h-3" />
-                            {opt.warning === "emergency" ? "EMERGENCY" : "URGENT"}
-                          </span>
+                        {isSelected && (
+                          currentQuestion.isMultiSelect ? (
+                            <CheckCircle2 className="w-3 h-3 text-white" />
+                          ) : (
+                            <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                          )
                         )}
                       </span>
+
+                      {/* Bilingual Option Text */}
+                      <span className="flex-1">
+                        <span className="block text-sm font-semibold text-slate-800">
+                          {opt.labelEn}
+                        </span>
+                        <span className="block text-xs text-slate-500 mt-0.5">
+                          {opt.labelTl}
+                        </span>
+                      </span>
+
+                      {/* Warning tags for Q14 */}
+                      {opt.safetyWarning && (
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md",
+                            opt.safetyWarning === "emergency"
+                              ? "bg-rose-100 text-rose-700"
+                              : "bg-amber-100 text-amber-800"
+                          )}
+                        >
+                          <ShieldAlert className="w-3 h-3" />
+                          {opt.safetyWarning === "emergency" ? "EMERGENCY" : "URGENT"}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
               </div>
 
+              {/* Navigation buttons */}
               <div className="flex gap-3">
                 <button
+                  type="button"
                   onClick={goPrevQuestion}
                   disabled={qIndex === 0}
-                  className="px-5 py-3.5 rounded-full font-semibold text-sm border-2 border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors active:scale-[0.96] flex items-center gap-1.5 cursor-pointer"
+                  className="px-5 py-3.5 rounded-full font-semibold text-sm border-2 border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   <ArrowLeft className="w-4 h-4" /> Back
                 </button>
                 <button
-                  disabled={!hasAnswered}
+                  type="button"
+                  disabled={!hasAnsweredCurrent}
                   onClick={goNextQuestion}
                   className={cn(
-                    "flex-1 py-3.5 rounded-full font-semibold text-sm transition-all active:scale-[0.96]",
-                    hasAnswered
-                      ? "bg-magenta-500 text-white hover:bg-magenta-600 shadow-lg shadow-magenta-500/20 cursor-pointer"
-                      : "bg-magenta-100 text-magenta-300 cursor-not-allowed"
+                    "flex-1 py-3.5 rounded-full font-semibold text-sm transition-all flex items-center justify-center gap-2",
+                    hasAnsweredCurrent
+                      ? "bg-magenta-600 text-white hover:bg-magenta-700 shadow-lg shadow-magenta-600/20 cursor-pointer active:scale-[0.98]"
+                      : "bg-slate-200 text-slate-400 cursor-not-allowed"
                   )}
                 >
-                  {qIndex < QUESTIONS.length - 1 ? "Next Question" : "Next: Upload Photo"}
+                  <span>
+                    {qIndex < QUESTIONNAIRE_QUESTIONS.length - 1 ? "Next Question" : "Review All 15 Answers"}
+                  </span>
+                  <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
             </motion.div>
           )}
 
-          {/* Step 2: Upload */}
+          {/* =========================================================================
+              REVIEW STEP: Review all 15 answers with edit buttons before photo upload
+             ========================================================================= */}
+          {currentStep === 1 && isReviewing && (
+            <motion.div
+              key="review-step"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 sm:p-8"
+            >
+              <div className="flex items-center justify-between mb-4 pb-4 border-b border-slate-100">
+                <div>
+                  <h2 className="text-xl font-display font-bold text-slate-900">
+                    Review Your Answers
+                  </h2>
+                  <p className="text-xs text-slate-500 italic">
+                    Suriin ang iyong mga sagot bago magpatuloy sa pag-upload ng larawan.
+                  </p>
+                </div>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                  15 of 15 Completed
+                </span>
+              </div>
+
+              {/* Safety notice if Q14 had warning signs */}
+              {activeSafetyAlert.level !== "none" && (
+                <div
+                  className={cn(
+                    "mb-6 p-4 rounded-2xl border-2 flex items-start gap-3",
+                    activeSafetyAlert.level === "emergency"
+                      ? "bg-rose-50 border-rose-300 text-rose-900"
+                      : "bg-amber-50 border-amber-300 text-amber-900"
+                  )}
+                >
+                  <ShieldAlert
+                    className={cn(
+                      "w-5 h-5 shrink-0 mt-0.5",
+                      activeSafetyAlert.level === "emergency" ? "text-rose-600" : "text-amber-600"
+                    )}
+                  />
+                  <div className="text-xs leading-relaxed">
+                    <p className="font-bold text-sm mb-1">{activeSafetyAlert.title}</p>
+                    <p>{activeSafetyAlert.message}</p>
+                    <p className="font-semibold mt-1">{activeSafetyAlert.actionRequired}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* List of all 15 Questions and Selected Answers */}
+              <div className="space-y-3.5 mb-8 max-h-[60vh] overflow-y-auto pr-1">
+                {QUESTIONNAIRE_QUESTIONS.map((q, idx) => {
+                  const chosenIds = answers[q.id] || [];
+                  const chosenOptions = q.options.filter((o) => chosenIds.includes(o.id));
+
+                  return (
+                    <div
+                      key={q.id}
+                      className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-colors flex items-start justify-between gap-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[11px] font-bold text-magenta-700 uppercase tracking-wider block mb-0.5">
+                          Question {q.number}
+                        </span>
+                        <p className="text-xs font-bold text-slate-800 truncate">
+                          {q.titleEn}
+                        </p>
+                        <p className="text-[11px] text-slate-500 italic truncate mb-2">
+                          {q.titleTl}
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {chosenOptions.length > 0 ? (
+                            chosenOptions.map((opt) => (
+                              <span
+                                key={opt.id}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-xs font-medium text-slate-800 shadow-2xs"
+                              >
+                                <span>{opt.labelEn}</span>
+                                <span className="text-[10px] text-slate-400">({opt.labelTl})</span>
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-xs text-rose-500 italic">Not answered</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => jumpToQuestion(idx)}
+                        className="p-2 rounded-xl text-magenta-600 hover:bg-magenta-50 hover:text-magenta-700 transition-colors shrink-0 flex items-center gap-1 text-xs font-semibold"
+                        title="Edit this answer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Edit</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Review Step Action Buttons */}
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={goPrevQuestion}
+                  className="px-5 py-3.5 rounded-full font-semibold text-sm border-2 border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <ArrowLeft className="w-4 h-4" /> Back to Q15
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsReviewing(false);
+                    setCurrentStep(2);
+                  }}
+                  className="flex-1 py-3.5 rounded-full font-semibold text-sm bg-magenta-600 text-white hover:bg-magenta-700 transition-all shadow-lg shadow-magenta-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
+                >
+                  <span>Confirm &amp; Proceed to Upload Photos</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* =========================================================================
+              STEP 2: Photo Upload (Close-up & Wide-view with quality & skin validation)
+             ========================================================================= */}
           {currentStep === 2 && !isAnalyzing && !showResult && (
             <motion.div
               key="step2"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 sm:p-8"
+              className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 sm:p-8"
             >
               <button
-                onClick={() => setCurrentStep(1)}
-                className="flex items-center gap-1 text-sm text-magenta-500 mb-4 hover:text-magenta-600 cursor-pointer font-medium"
+                type="button"
+                onClick={() => {
+                  setCurrentStep(1);
+                  setIsReviewing(true);
+                }}
+                className="flex items-center gap-1 text-sm text-magenta-600 mb-4 hover:text-magenta-700 font-medium cursor-pointer"
               >
-                <ArrowLeft className="w-4 h-4" /> Back to questions
+                <ArrowLeft className="w-4 h-4" /> Back to Questionnaire Review
               </button>
 
-              <h2 className="text-xl font-display font-bold text-slate-900 mb-1">Upload Photos</h2>
+              <h2 className="text-xl font-display font-bold text-slate-900 mb-1">
+                Upload Skin Photos
+              </h2>
               <p className="text-sm text-slate-500 mb-6">
-                2 photos required — one close-up and one showing the surrounding area.
+                2 photos required — one clear close-up of the lesion, and one wider-area photo for context.
               </p>
 
-              {quickPreview.urgent && (
-                <div className="mb-6 rounded-2xl border-2 border-rose-200 bg-rose-50 p-4 flex gap-3">
-                  <ShieldAlert className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-bold text-rose-800">
-                      {quickPreview.urgentType === "emergency" ? "Emergency warning sign" : "Urgent warning sign"}
-                    </p>
-                    <p className="text-xs text-rose-700 mt-1 leading-relaxed">{quickPreview.urgentMessage}</p>
-                    <p className="text-xs text-rose-700 mt-1">
-                      Please seek medical attention promptly — this analysis is not a substitute for care.
-                    </p>
+              {/* Safety notice banner if warning signs were selected in Q14 */}
+              {activeSafetyAlert.level !== "none" && (
+                <div
+                  className={cn(
+                    "mb-6 p-4 rounded-2xl border-2 flex items-start gap-3",
+                    activeSafetyAlert.level === "emergency"
+                      ? "bg-rose-50 border-rose-300 text-rose-900"
+                      : "bg-amber-50 border-amber-300 text-amber-900"
+                  )}
+                >
+                  <ShieldAlert
+                    className={cn(
+                      "w-5 h-5 shrink-0 mt-0.5",
+                      activeSafetyAlert.level === "emergency" ? "text-rose-600" : "text-amber-600"
+                    )}
+                  />
+                  <div className="text-xs leading-relaxed">
+                    <p className="font-bold text-sm mb-0.5">{activeSafetyAlert.title}</p>
+                    <p>{activeSafetyAlert.message}</p>
+                    <p className="font-semibold mt-1">{activeSafetyAlert.actionRequired}</p>
                   </div>
                 </div>
               )}
@@ -1018,447 +1024,591 @@ export default function ScanSkinPage() {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              {/* Photo Upload Slots */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                 {(
                   [
-                    { slot: "closeup" as const, title: "Photo 1 — Close-up", image: closeUpImage, inputRef: closeUpInputRef, cameraRef: closeUpCameraRef },
-                    { slot: "wide" as const, title: "Photo 2 — Wider view", image: wideImage, inputRef: wideInputRef, cameraRef: wideCameraRef },
+                    {
+                      slot: "closeup" as const,
+                      title: "Photo 1 — Close-Up View",
+                      description: "Primary close-up of the affected area",
+                      image: closeUpImage,
+                      inputRef: closeUpInputRef,
+                      cameraRef: closeUpCameraRef,
+                    },
+                    {
+                      slot: "wide" as const,
+                      title: "Photo 2 — Wider Area",
+                      description: "Surrounding skin for spatial distribution",
+                      image: wideImage,
+                      inputRef: wideInputRef,
+                      cameraRef: wideCameraRef,
+                    },
                   ]
                 ).map((p) => (
-                  <div key={p.slot}>
-                    <p className="text-xs font-semibold text-slate-700 mb-2">{p.title}</p>
-
-                    {!p.image ? (
-                      <div
-                        onClick={() => p.inputRef.current?.click()}
-                        className="border-2 border-dashed border-slate-200 bg-slate-50/50 rounded-2xl p-8 text-center cursor-pointer hover:border-magenta-400 hover:bg-magenta-50/30 transition-colors"
-                      >
-                        <Camera className="w-8 h-8 text-slate-400 mx-auto mb-3" />
-                        <p className="text-slate-900 font-semibold text-sm mb-1">Tap to add photo</p>
-                        <p className="text-slate-400 text-xs">JPG, PNG, or HEIC</p>
-                      </div>
-                    ) : (
-                      <div className="relative rounded-2xl overflow-hidden border border-slate-200">
-                        <img src={p.image} alt={p.title} className="w-full h-40 object-cover" />
+                  <div
+                    key={p.slot}
+                    className="border-2 border-dashed border-slate-200 rounded-2xl p-4 flex flex-col items-center justify-center min-h-[220px] bg-slate-50/50 hover:bg-slate-50 transition-colors"
+                  >
+                    {p.image ? (
+                      <div className="relative w-full aspect-4/3 rounded-xl overflow-hidden border border-slate-200">
+                        <img
+                          src={p.image}
+                          alt={p.title}
+                          className="w-full h-full object-cover"
+                        />
                         <button
+                          type="button"
                           onClick={() => clearPhoto(p.slot)}
-                          className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm rounded-full p-1.5 text-slate-600 hover:text-rose-600 hover:bg-white shadow-sm cursor-pointer"
+                          className="absolute top-2 right-2 px-2.5 py-1 rounded-full bg-slate-900/80 text-white text-xs font-semibold hover:bg-slate-900 transition-colors cursor-pointer"
                         >
-                          ✕
+                          Change
                         </button>
                       </div>
+                    ) : (
+                      <div className="text-center p-3">
+                        <div className="w-12 h-12 rounded-full bg-magenta-50 text-magenta-600 flex items-center justify-center mx-auto mb-3">
+                          <Camera className="w-6 h-6" />
+                        </div>
+                        <h3 className="text-sm font-bold text-slate-800 mb-0.5">{p.title}</h3>
+                        <p className="text-xs text-slate-400 mb-4">{p.description}</p>
+                        <div className="flex gap-2 justify-center">
+                          <button
+                            type="button"
+                            onClick={() => p.cameraRef.current?.click()}
+                            className="px-3 py-1.5 rounded-full bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <Camera className="w-3.5 h-3.5" /> Camera
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => p.inputRef.current?.click()}
+                            className="px-3 py-1.5 rounded-full border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-white transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <Image className="w-3.5 h-3.5" /> Upload
+                          </button>
+                        </div>
+                      </div>
                     )}
-
-                    <div className="flex gap-2 mt-3">
-                      <button
-                        onClick={() => p.inputRef.current?.click()}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-medium hover:bg-slate-50 transition-colors cursor-pointer"
-                      >
-                        <Image className="w-3.5 h-3.5 text-slate-500" />
-                        Gallery
-                      </button>
-                      <button
-                        onClick={() => p.cameraRef.current?.click()}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-medium hover:bg-slate-50 transition-colors cursor-pointer"
-                      >
-                        <Camera className="w-3.5 h-3.5 text-slate-500" />
-                        Camera
-                      </button>
-                    </div>
                   </div>
                 ))}
               </div>
 
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2">
-                  {(["closeup", "wide"] as const).map((slot, i) => {
-                    const uploaded = slot === "closeup" ? !!closeUpImage : !!wideImage;
-                    return (
-                      <span
-                        key={slot}
-                        className={cn(
-                          "px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5",
-                          uploaded
-                            ? "border-magenta-500 bg-magenta-50 text-magenta-700"
-                            : "border-slate-200 text-slate-400"
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "w-2.5 h-2.5 rounded-full border-2 shrink-0",
-                            uploaded ? "border-magenta-500 bg-magenta-500" : "border-slate-300"
-                          )}
-                        />
-                        Photo {i + 1}
-                      </span>
-                    );
-                  })}
-                </div>
-                <span className="text-xs font-semibold text-slate-400">{uploadedCount}/2 uploaded</span>
+              {/* Upload instructions / tips */}
+              <div className="rounded-2xl bg-slate-100/70 p-4 mb-6 text-xs text-slate-600 space-y-1.5">
+                <p className="font-semibold text-slate-800">Tips for an accurate skin scan:</p>
+                <p>• Ensure good natural lighting; avoid harsh shadows or flash glare.</p>
+                <p>• Keep camera steady so the close-up photo is sharp and in focus.</p>
+                <p>• Capture only the skin area of concern without clothing obstruction.</p>
               </div>
 
-              <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 mb-6">
-                <p className="text-sm font-semibold text-slate-900 mb-2">📸 Photo Guidelines</p>
-                <ul className="space-y-1.5 mb-3">
-                  {[
-                    { icon: Sun, text: "Good lighting — use clear, natural light" },
-                    { icon: ZoomIn, text: "Clear close-up — include some surrounding normal skin for context" },
-                    { icon: Sparkles, text: "No filters, makeup, or editing" },
-                  ].map((item, i) => (
-                    <li key={i} className="flex items-center gap-2 text-xs sm:text-sm text-slate-600">
-                      <item.icon className="w-3.5 h-3.5 text-magenta-500 shrink-0" />
-                      {item.text}
-                    </li>
-                  ))}
-                </ul>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  Before AI analysis, the system automatically checks photo quality and confirms human skin is detected.
-                  Including a small border of surrounding healthy skin helps the AI accurately recognize skin context.
-                  If validation fails, you will be asked to retake the photo.
-                </p>
-              </div>
-
-              {isAuthenticated ? (
-                <div className="mb-6 rounded-2xl border border-slate-200 bg-slate-50 p-4 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="shrink-0 w-9 h-9 rounded-full bg-white border border-slate-200 flex items-center justify-center shadow-xs">
-                      <Lock className="w-4 h-4 text-magenta-500" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">
-                        {isPro ? "Pro Plan: Unlimited Scans" : `Free Plan: ${subData.scanLimit} Scans`}
-                      </p>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        You have{" "}
-                        <span className="font-semibold text-magenta-600">
-                          {subLoading
-                            ? "…"
-                            : `${scansLeft} free skin scan${typeof scansLeft === "number" && scansLeft !== 1 ? "s" : ""}`}
-                        </span>
-                        . Upgrade for unlimited access.
-                      </p>
-                    </div>
-                  </div>
-                  <Link
-                    to="/dashboard/upgrade"
-                    className="shrink-0 px-4 py-2 rounded-full bg-magenta-500 text-white text-xs font-bold hover:bg-magenta-600 transition-colors shadow-sm"
-                  >
-                    Upgrade
-                  </Link>
-                </div>
-              ) : (
-                <div className="mb-6 rounded-2xl border border-magenta-100 bg-magenta-50/60 p-4 flex items-start gap-3">
-                  <Lock className="w-5 h-5 text-magenta-500 shrink-0 mt-0.5" />
-                  <div className="text-xs text-slate-700">
-                    <p className="font-bold text-magenta-900 mb-0.5">Save & View Your Assessment</p>
-                    <p className="text-slate-600">
-                      Log in or create an account to run your preliminary AI analysis, save your scan history, and connect with verified clinics.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {!isAuthenticated ? (
-                <Link
-                  to="/login"
-                  className="w-full py-3.5 rounded-full font-semibold text-sm bg-magenta-500 text-white hover:bg-magenta-600 transition-all shadow-lg shadow-magenta-500/20 active:scale-[0.96] flex items-center justify-center gap-2 cursor-pointer text-center"
-                >
-                  <Lock className="w-4 h-4" />
-                  Login to Analyze Skin Condition
-                </Link>
-              ) : (
+              <div className="flex gap-3">
                 <button
-                  disabled={!allPhotosUploaded || !canScan}
+                  type="button"
+                  onClick={() => {
+                    setCurrentStep(1);
+                    setIsReviewing(true);
+                  }}
+                  className="px-5 py-3.5 rounded-full font-semibold text-sm border-2 border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <ArrowLeft className="w-4 h-4" /> Back to Questions
+                </button>
+                <button
+                  type="button"
+                  disabled={!allPhotosUploaded || isAnalyzing}
                   onClick={handleAnalyze}
                   className={cn(
-                    "w-full py-3.5 rounded-full font-semibold text-sm transition-all active:scale-[0.96] flex items-center justify-center gap-2 cursor-pointer",
-                    allPhotosUploaded && canScan
-                      ? "bg-magenta-500 text-white hover:bg-magenta-600 shadow-lg shadow-magenta-500/20"
-                      : "bg-magenta-100 text-magenta-300 cursor-not-allowed"
+                    "flex-1 py-3.5 rounded-full font-semibold text-sm transition-all flex items-center justify-center gap-2",
+                    allPhotosUploaded && !isAnalyzing
+                      ? "bg-magenta-600 text-white hover:bg-magenta-700 shadow-lg shadow-magenta-600/20 cursor-pointer active:scale-[0.98]"
+                      : "bg-slate-200 text-slate-400 cursor-not-allowed"
                   )}
                 >
-                  {!canScan
-                    ? "Out of Free Scans"
-                    : !allPhotosUploaded
-                      ? `Add ${2 - uploadedCount} more photo${2 - uploadedCount !== 1 ? "s" : ""} to continue`
-                      : "Analyze Skin Condition"}
+                  <Sparkles className="w-4 h-4" />
+                  <span>Analyze Photos &amp; Questionnaire</span>
                 </button>
-              )}
+              </div>
             </motion.div>
           )}
 
-          {/* Analyzing State */}
+          {/* Analyzing progress state */}
           {isAnalyzing && (
             <motion.div
               key="analyzing"
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0 }}
-              className="bg-white rounded-[20px] shadow-[0_4px_24px_rgba(160,25,90,0.08)] p-12 text-center"
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-8 text-center"
             >
-              <div className="w-16 h-16 rounded-full bg-magenta-100 flex items-center justify-center mx-auto mb-6 animate-pulse">
-                <Sparkles className="w-8 h-8 text-magenta-500" />
+              <div className="w-16 h-16 rounded-full bg-magenta-50 text-magenta-600 flex items-center justify-center mx-auto mb-4 animate-spin">
+                <Sparkles className="w-8 h-8" />
               </div>
-              <h2 className="text-xl font-display font-bold text-magenta-900 mb-2">Analyzing your photo...</h2>
-              <p className="text-magenta-400 text-sm">Our AI is examining your skin condition</p>
-              <div className="w-48 h-2 bg-magenta-100 rounded-full mx-auto mt-6 overflow-hidden">
+              <h2 className="text-xl font-display font-bold text-slate-900 mb-2">
+                Analyzing Skin Assessment…
+              </h2>
+              <p className="text-sm text-slate-500 max-w-md mx-auto mb-6">
+                Evaluating photo quality, running ResNet50 skin condition inference, and computing evidence-based rule mapping from your 15 questions.
+              </p>
+              <div className="w-48 h-2 bg-slate-100 rounded-full mx-auto overflow-hidden">
                 <motion.div
-                  className="h-full bg-magenta-500 rounded-full"
-                  initial={{ width: "0%" }}
-                  animate={{ width: "100%" }}
+                  className="h-full bg-magenta-600 rounded-full"
+                  initial={{ width: "10%" }}
+                  animate={{ width: "95%" }}
                   transition={{ duration: 2.5, ease: "easeInOut" }}
                 />
               </div>
             </motion.div>
           )}
 
-          {/* Step 3: Result */}
+          {/* =========================================================================
+              STEP 3: Result Presentation — AI Prediction, Questionnaire Support, & Care
+             ========================================================================= */}
           {currentStep === 3 && showResult && scanResult && (
-            <motion.div key="step3" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-              <div className="bg-white rounded-[20px] shadow-[0_4px_24px_rgba(160,25,90,0.08)] overflow-hidden">
-                <div className="p-6 sm:p-8 border-b border-magenta-100">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 text-xs font-semibold mb-2.5 border border-magenta-100">
-                    <Sparkles className="w-3.5 h-3.5 text-magenta-500" />
-                    <span>AI-generated preliminary result</span>
+            <motion.div
+              key="step3"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-6"
+            >
+              {/* Primary Assessment Card */}
+              <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm overflow-hidden">
+                <div className="p-6 sm:p-8 border-b border-slate-100">
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 text-xs font-semibold border border-magenta-100">
+                      <Sparkles className="w-3.5 h-3.5 text-magenta-600" />
+                      <span>AI-generated preliminary result</span>
+                    </div>
+                    {scanResult.patientReportedImpact && (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-medium border border-slate-200">
+                        <span>Reported Daily-Life Impact:</span>
+                        <strong className="text-slate-900 font-semibold">{scanResult.patientReportedImpact}</strong>
+                      </span>
+                    )}
                   </div>
-                  <h2 className="text-2xl sm:text-3xl font-display font-bold text-magenta-900 mb-2">
+                  <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 mb-1">
                     Possible Condition: {scanResult.condition}
                   </h2>
+                  {scanResult.localName && scanResult.localName !== scanResult.condition && (
+                    <p className="text-sm font-medium text-slate-500 italic">
+                      Lokal na tawag: {scanResult.localName}
+                    </p>
+                  )}
                 </div>
-                <div className="px-6 sm:px-8 py-5 border-b border-magenta-100 space-y-4">
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div>
-                        <span className="text-sm font-semibold text-magenta-900">
-                          AI Confidence Score
-                        </span>
-                      </div>
-                      <span className="text-lg font-bold text-magenta-600">
-                        {scanResult.primaryPrediction?.confidence ?? scanResult.confidence}%
-                      </span>
-                    </div>
-                    <div className="w-full h-3 bg-magenta-100 rounded-full overflow-hidden">
-                      <motion.div
-                        className="h-full bg-linear-to-r from-magenta-400 to-magenta-500 rounded-full"
-                        initial={{ width: "0%" }}
-                        animate={{ width: `${scanResult.primaryPrediction?.confidence ?? scanResult.confidence}%` }}
-                        transition={{ duration: 1, delay: 0.3 }}
-                      />
-                    </div>
-                  </div>
 
-                  {/* Patient Safety Notice */}
-                  <div className="rounded-xl bg-amber-50/80 border border-amber-200/80 p-3.5 flex items-start gap-2.5">
-                    <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                {/* 1. ResNet50 Independent Confidence Score */}
+                <div className="px-6 sm:px-8 py-5 border-b border-slate-100 bg-slate-50/40">
+                  <div className="flex items-center justify-between mb-1.5">
                     <div>
-                      <p className="text-xs font-bold text-amber-900 mb-0.5">Important to know</p>
-                      <p className="text-xs text-amber-800 leading-relaxed">
-                        AI results can be incorrect and are not a confirmed medical diagnosis. Consult a qualified healthcare professional to assess your skin concerns.
+                      <span className="text-sm font-semibold text-slate-900">
+                        Image Model Confidence (ResNet50)
+                      </span>
+                      <p className="text-[11px] text-slate-500">
+                        Solely from skin-image inference; untouched by questionnaire answers
                       </p>
                     </div>
+                    <span className="text-xl font-bold text-magenta-600">
+                      {Math.round(scanResult.confidence)}%
+                    </span>
+                  </div>
+                  <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+                    <motion.div
+                      className="h-full bg-linear-to-r from-magenta-500 to-magenta-600 rounded-full"
+                      initial={{ width: "0%" }}
+                      animate={{ width: `${Math.round(scanResult.confidence)}%` }}
+                      transition={{ duration: 1, delay: 0.2 }}
+                    />
                   </div>
                 </div>
 
-                <div className="p-6 sm:p-8 border-b border-magenta-100">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-display font-bold text-magenta-900 text-lg">
-                      Uploaded Photos & AI Evidence
-                    </h3>
+                {/* 2. AI vs Questionnaire Agreement / Discrepancy Banner */}
+                {scanResult.comparison && (
+                  <div className="px-6 sm:px-8 py-4 border-b border-slate-100">
+                    <div
+                      className={cn(
+                        "rounded-2xl p-4 border flex items-start gap-3",
+                        scanResult.comparison.agreementStatus === "aligned"
+                          ? "bg-emerald-50/80 border-emerald-200 text-emerald-950"
+                          : scanResult.comparison.agreementStatus === "differing"
+                            ? "bg-amber-50/80 border-amber-300 text-amber-950"
+                            : "bg-slate-100 border-slate-200 text-slate-800"
+                      )}
+                    >
+                      {scanResult.comparison.agreementStatus === "aligned" ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                      )}
+                      <div className="text-xs leading-relaxed">
+                        <p className="font-bold text-sm mb-1">
+                          {scanResult.comparison.agreementStatus === "aligned"
+                            ? "Supportive Alignment Between Photo & Questionnaire"
+                            : scanResult.comparison.agreementStatus === "differing"
+                              ? "Assessment Discrepancy Noted"
+                              : "Assessment Context"}
+                        </p>
+                        <p>{scanResult.comparison.summary}</p>
+                        <p className="font-semibold mt-1.5">{scanResult.comparison.recommendation}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Questionnaire Evidence-Based Support Details */}
+                <div className="p-6 sm:p-8 border-b border-slate-100 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="font-display font-bold text-slate-900 text-lg">
+                        Questionnaire Evidence Support
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Rule-based screening mapping grounded in AAD and DermNet guidelines (Version {scanResult.mappingResult.version})
+                      </p>
+                    </div>
+                    {/* Support label badge for predicted condition */}
+                    {(() => {
+                      const condEval = (scanResult.mappingResult.conditions as any)[scanResult.condition] ||
+                        Object.values(scanResult.mappingResult.conditions).find((c) =>
+                          scanResult.condition.toLowerCase().includes(c.condition.toLowerCase())
+                        );
+                      const level = condEval?.supportLevel || "Limited / no specific support";
+
+                      return (
+                        <span
+                          className={cn(
+                            "px-3 py-1 rounded-full text-xs font-bold shrink-0 border",
+                            level === "Strong support"
+                              ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                              : level === "Moderate support"
+                                ? "bg-blue-100 text-blue-800 border-blue-200"
+                                : "bg-slate-100 text-slate-700 border-slate-200"
+                          )}
+                        >
+                          {level}
+                        </span>
+                      );
+                    })()}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {/* Close-Up Photo Card */}
-                    <div className="rounded-2xl border border-magenta-200 bg-magenta-50/40 p-3.5 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-magenta-900 uppercase tracking-wider flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 rounded-full bg-magenta-500 ring-2 ring-magenta-200" />
-                          Close-Up Photo
-                        </span>
-                        <span className="text-[11px] font-medium text-magenta-700 bg-magenta-100/80 px-2.5 py-0.5 rounded-full">
-                          Main image for analysis
-                        </span>
+                  {/* Supporting findings from questionnaire */}
+                  {(() => {
+                    const condEval = (scanResult.mappingResult.conditions as any)[scanResult.condition] ||
+                      Object.values(scanResult.mappingResult.conditions).find((c) =>
+                        scanResult.condition.toLowerCase().includes(c.condition.toLowerCase())
+                      );
+                    const findings = condEval?.supportingFindings || [];
+                    const limitations = condEval?.limitations || [];
+
+                    return (
+                      <div className="space-y-3 bg-slate-50 rounded-2xl p-4 border border-slate-200/80">
+                        <div>
+                          <span className="text-xs font-bold text-slate-800 block mb-1.5">
+                            Key Supporting Questionnaire Findings:
+                          </span>
+                          {findings.length > 0 ? (
+                            <ul className="space-y-1">
+                              {findings.map((f: string, i: number) => (
+                                <li key={i} className="flex items-start gap-2 text-xs text-slate-700">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
+                                  <span>{f}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="text-xs text-slate-500 italic">
+                              No specific primary symptom criteria for this condition were reported in the questionnaire.
+                            </p>
+                          )}
+                        </div>
+
+                        {limitations.length > 0 && (
+                          <div className="pt-2 border-t border-slate-200">
+                            <span className="text-xs font-bold text-slate-700 block mb-1">
+                              Clinical Limitations &amp; Nuances:
+                            </span>
+                            <ul className="space-y-1">
+                              {limitations.map((lim: string, i: number) => (
+                                <li key={i} className="flex items-start gap-2 text-xs text-slate-600">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-1.5 shrink-0" />
+                                  <span>{lim}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                       </div>
-                      <div className="relative overflow-hidden rounded-xl border border-magenta-100 bg-white aspect-4/3">
+                    );
+                  })()}
+
+                  <p className="text-[11px] text-slate-400 italic">
+                    {scanResult.mappingResult.disclaimer}
+                  </p>
+                </div>
+
+                {/* 4. Independent Q14 Safety Alert Card (if triggered) */}
+                {scanResult.mappingResult.safetyAlert.level !== "none" && (
+                  <div className="p-6 sm:p-8 border-b border-slate-100">
+                    <div
+                      className={cn(
+                        "rounded-2xl p-5 border-2 flex items-start gap-3.5",
+                        scanResult.mappingResult.safetyAlert.level === "emergency"
+                          ? "bg-rose-50 border-rose-300 text-rose-950"
+                          : "bg-amber-50 border-amber-300 text-amber-950"
+                      )}
+                    >
+                      <ShieldAlert
+                        className={cn(
+                          "w-6 h-6 shrink-0 mt-0.5",
+                          scanResult.mappingResult.safetyAlert.level === "emergency"
+                            ? "text-rose-600"
+                            : "text-amber-600"
+                        )}
+                      />
+                      <div className="text-xs leading-relaxed space-y-1">
+                        <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-white/80 border">
+                          Safety Alert (Q14)
+                        </span>
+                        <h4 className="text-sm font-bold">{scanResult.mappingResult.safetyAlert.title}</h4>
+                        <p>{scanResult.mappingResult.safetyAlert.message}</p>
+                        <p className="font-semibold text-rose-800 mt-1">
+                          Action Required: {scanResult.mappingResult.safetyAlert.actionRequired}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. Uploaded Photos Card */}
+                <div className="p-6 sm:p-8 border-b border-slate-100">
+                  <h3 className="font-display font-bold text-slate-900 text-lg mb-4">
+                    Uploaded Photos &amp; AI Evidence
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                        Close-Up Photo (Primary Image)
+                      </span>
+                      <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
                         <img
                           src={scanResult.imageUrl || closeUpImage || undefined}
-                          alt="Close-up skin photo"
+                          alt="Close-up photo"
                           className="w-full h-full object-cover"
                         />
                       </div>
                     </div>
-
-                    {/* Wider-Area Photo Card */}
-                    <div className="rounded-2xl border border-magenta-200 bg-magenta-50/20 p-3.5 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-magenta-900 uppercase tracking-wider flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 rounded-full bg-magenta-400 ring-2 ring-magenta-100" />
-                          Wider-Area Photo
-                        </span>
-                        <span className="text-[11px] font-medium text-magenta-700 bg-magenta-100/60 px-2.5 py-0.5 rounded-full">
-                          Additional image for context
-                        </span>
-                      </div>
-                      <div className="relative overflow-hidden rounded-xl border border-magenta-100 bg-white aspect-4/3">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                        Wider-Area Photo (Context Image)
+                      </span>
+                      <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
                         {scanResult.wideImageUrl || wideImage ? (
                           <img
                             src={scanResult.wideImageUrl || wideImage || undefined}
-                            alt="Wider-area skin photo"
+                            alt="Wider photo"
                             className="w-full h-full object-cover"
                           />
                         ) : (
-                          <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-xs text-magenta-400">
-                            <Image className="w-5 h-5 text-magenta-300" />
-                            <span>No photo provided</span>
+                          <div className="w-full h-full flex items-center justify-center text-xs text-slate-400">
+                            No wide photo
                           </div>
                         )}
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 pt-4 px-1">
-                    <MapPin className="w-4 h-4 text-magenta-400 shrink-0" />
-                    <span className="text-sm text-magenta-700 font-medium">{scanResult.bodyPart}</span>
-                    <span className="ml-auto text-xs text-magenta-400">{scanResult.date}</span>
+                  {/* Supporting Image Feedback (Fix C) */}
+                  {scanResult.supportingPrediction?.status === "invalid" && (
+                    <div className="mt-3 p-3 rounded-xl bg-slate-100 border border-slate-200 text-xs text-slate-700 flex items-start gap-2">
+                      <Info className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                      <span>The supporting photo could not be analyzed. This result is based on the close-up photo.</span>
+                    </div>
+                  )}
+
+                  {scanResult.isCombined && scanResult.agreement === false && (
+                    <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>The close-up and supporting photos produced different predictions. Please discuss the result with a dermatologist.</span>
+                    </div>
+                  )}
+
+                  {scanResult.isCombined && scanResult.agreement === true && (
+                    <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-start gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <span>The close-up and supporting photos produced consistent predictions.</span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 pt-4 px-1 text-xs text-slate-500">
+                    <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span>{scanResult.bodyPart}</span>
+                    <span className="ml-auto">{scanResult.date}</span>
                   </div>
                 </div>
 
-                <div className="p-6 sm:p-8 space-y-8">
+                {/* 6. Condition Guide Details (Grounded in AAD, DermNet, Cleveland Clinic) */}
+                <div className="p-6 sm:p-8 space-y-6">
                   <div>
-                    <h3 className="font-display font-bold text-magenta-900 text-lg mb-3">What is it?</h3>
-                    <p className="text-sm text-magenta-700 leading-relaxed">{scanResult.description}</p>
+                    <h3 className="font-display font-bold text-slate-900 text-lg mb-2">
+                      What is it? / Ano ito?
+                    </h3>
+                    <p className="text-sm text-slate-700 leading-relaxed">
+                      {scanResult.description}
+                    </p>
                   </div>
 
                   <div>
-                    <h3 className="font-display font-bold text-magenta-900 text-lg mb-3">Common Symptoms</h3>
-                    <ul className="space-y-2">
+                    <h3 className="font-display font-bold text-slate-900 text-lg mb-2">
+                      Common Symptoms / Karaniwang Sintomas
+                    </h3>
+                    <ul className="space-y-1.5">
                       {scanResult.symptoms.map((s, i) => (
-                        <li key={i} className="flex items-start gap-2 text-sm text-magenta-700">
-                          <div className="w-1.5 h-1.5 rounded-full bg-magenta-400 mt-1.5 shrink-0" />
-                          {s}
+                        <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
+                          <div className="w-1.5 h-1.5 rounded-full bg-magenta-500 mt-2 shrink-0" />
+                          <span>{s}</span>
                         </li>
                       ))}
                     </ul>
                   </div>
 
-                  <div className="bg-magenta-50 rounded-xl p-5">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Users className="w-5 h-5 text-magenta-500" />
-                      <h3 className="font-display font-bold text-magenta-900 text-lg">Who does it affect?</h3>
+                  <div className="bg-slate-50 rounded-2xl p-5 border border-slate-200/80">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <Users className="w-4 h-4 text-magenta-600" />
+                      <h3 className="font-display font-bold text-slate-900 text-base">
+                        Who does it affect? / Sino ang naaapektuhan?
+                      </h3>
                     </div>
-                    <p className="text-sm text-magenta-700 leading-relaxed">{scanResult.whoAffected}</p>
+                    <p className="text-sm text-slate-700 leading-relaxed">{scanResult.whoAffected}</p>
                   </div>
 
                   <div>
-                    <h3 className="font-display font-bold text-magenta-900 text-lg mb-3">Basic Care Tips</h3>
+                    <h3 className="font-display font-bold text-slate-900 text-lg mb-2">
+                      Evidence-Based Basic Care Tips
+                    </h3>
                     <ul className="space-y-2">
                       {scanResult.careTips.map((tip, i) => (
-                        <li key={i} className="flex items-start gap-2 text-sm text-magenta-700">
-                          <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-                          {tip}
+                        <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                          <span>{tip}</span>
                         </li>
                       ))}
                     </ul>
                   </div>
 
-                  <div className="bg-amber-50 rounded-xl p-5 border border-amber-200">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Stethoscope className="w-5 h-5 text-amber-600" />
-                      <h3 className="font-display font-bold text-amber-900 text-lg">When to See a Doctor</h3>
+                  <div className="bg-amber-50/70 rounded-2xl p-5 border border-amber-200/80">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <Stethoscope className="w-4 h-4 text-amber-700" />
+                      <h3 className="font-display font-bold text-amber-950 text-base">
+                        When to See a Doctor / Kailan Dapat Magpatingin sa Doktor
+                      </h3>
                     </div>
-                    <p className="text-sm text-amber-800 leading-relaxed">{scanResult.whenToSeeDoctor}</p>
+                    <p className="text-sm text-amber-900 leading-relaxed">{scanResult.whenToSeeDoctor}</p>
                   </div>
 
-                  <div className="bg-rose-soft/50 rounded-xl p-5 flex gap-3">
-                    <AlertTriangle className="w-5 h-5 text-magenta-500 shrink-0 mt-0.5" />
+                  {/* Medical Sources and Research Citations */}
+                  {scanResult.conditionGuide?.medicalSources && (
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                      <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block mb-2">
+                        Verified Medical Sources &amp; Clinical Citations:
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {scanResult.conditionGuide.medicalSources.map((src, i) => (
+                          <a
+                            key={i}
+                            href={src.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-between p-2.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-700 hover:text-magenta-700 hover:border-magenta-300 transition-colors"
+                          >
+                            <span className="truncate pr-2 font-medium">{src.organization}: {src.title}</span>
+                            <ExternalLink className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Medical Disclaimer */}
+                  <div className="bg-rose-50/60 rounded-2xl p-4 flex gap-3 border border-rose-100">
+                    <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-sm font-semibold text-magenta-900 mb-1">Medical Disclaimer</p>
-                      <p className="text-xs text-magenta-700 leading-relaxed">
-                        This information is for educational purposes only and is NOT a medical diagnosis. Always
-                        consult a licensed dermatologist for proper evaluation and treatment.
+                      <p className="text-xs font-bold text-rose-900 mb-0.5">Medical Disclaimer</p>
+                      <p className="text-xs text-rose-800 leading-relaxed">
+                        This AI assessment and rule-based questionnaire mapping are intended for educational and pre-screening purposes only. It is NOT a clinical diagnosis and cannot replace an in-person examination by a licensed medical dermatologist.
                       </p>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {isBookingOrigin && (
-                <div className="bg-magenta-50 border-2 border-magenta-200 rounded-[20px] p-5 sm:p-6 shadow-[0_4px_20px_rgba(160,25,90,0.06)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <span className="inline-block px-2.5 py-0.5 rounded-full bg-magenta-100 text-magenta-700 text-xs font-bold uppercase tracking-wider">
-                      Appointment Booking in Progress
-                    </span>
-                    <h3 className="text-base font-bold text-magenta-900">
-                      Your new AI skin scan is ready for your appointment
-                    </h3>
-                    <p className="text-xs text-magenta-600">
-                      Return to the appointment booking page to attach this scan as your Primary AI Skin Scan.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-white rounded-[20px] shadow-[0_4px_24px_rgba(160,25,90,0.08)] p-6 sm:p-8">
-                <h3 className="text-lg font-display font-bold text-magenta-900 mb-4">Recommended Clinics Near You</h3>
+              {/* Recommended Clinics */}
+              <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 sm:p-8">
+                <h3 className="text-lg font-display font-bold text-slate-900 mb-4">
+                  Recommended Clinics Near You
+                </h3>
                 <div className="space-y-3">
                   {recommendedClinics.map((clinic, i) => (
                     <div
                       key={i}
-                      className="flex items-center justify-between p-4 rounded-xl border border-magenta-100 hover:border-magenta-200 transition-colors"
+                      className="flex items-center justify-between p-4 rounded-xl border border-slate-200 hover:border-magenta-300 transition-colors"
                     >
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold text-magenta-900 text-sm">{clinic.name}</span>
+                          <span className="font-semibold text-slate-900 text-sm">{clinic.name}</span>
                           {clinic.verified && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold">
                               ✓ Verified
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-magenta-400 mt-1 flex items-center gap-1">
+                        <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
                           <MapPin className="w-3 h-3" /> {clinic.addr}
                         </p>
                       </div>
                       <Link
                         to={scanClinicsUrl}
                         onClick={handleScanBookingContext}
-                        className="px-4 py-2 rounded-full bg-magenta-500 text-white text-xs font-semibold hover:bg-magenta-600 transition-colors"
+                        className="px-4 py-2 rounded-full bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors"
                       >
                         View
                       </Link>
                     </div>
                   ))}
                   {recommendedClinics.length === 0 && (
-                    <p className="text-xs text-magenta-400">Loading nearby clinics…</p>
+                    <p className="text-xs text-slate-500">
+                      Explore our clinic directory to connect with a verified dermatologist near you.
+                    </p>
                   )}
                 </div>
                 <Link
                   to={scanClinicsUrl}
                   onClick={handleScanBookingContext}
-                  className="flex items-center justify-center gap-1 mt-4 text-sm text-magenta-500 font-semibold hover:text-magenta-600"
+                  className="flex items-center justify-center gap-1 mt-4 text-sm text-magenta-600 font-semibold hover:text-magenta-700"
                 >
                   View all clinics <ArrowRight className="w-4 h-4" />
                 </Link>
               </div>
 
+              {/* Navigation Actions */}
               <div className="flex gap-3">
                 <button
+                  type="button"
                   onClick={() => {
                     setCurrentStep(1);
                     setQIndex(0);
+                    setIsReviewing(false);
                     setShowResult(false);
                     clearPhoto("closeup");
                     clearPhoto("wide");
                     setScanResult(null);
                     setAnswers({});
                   }}
-                  className="flex-1 py-3.5 rounded-full font-semibold text-sm border-2 border-magenta-500 text-magenta-500 hover:bg-magenta-50 transition-colors active:scale-[0.96]"
+                  className="flex-1 py-3.5 rounded-full font-semibold text-sm border-2 border-magenta-600 text-magenta-600 hover:bg-magenta-50 transition-colors cursor-pointer"
                 >
                   Scan Again
                 </button>
                 <Link
                   to={isBookingOrigin ? returnAppointmentUrl : scanClinicsUrl}
                   onClick={handleScanBookingContext}
-                  className="flex-1 py-3.5 rounded-full font-semibold text-sm bg-magenta-500 text-white text-center hover:bg-magenta-600 transition-colors shadow-lg shadow-magenta-500/20 active:scale-[0.96] flex items-center justify-center gap-2"
+                  className="flex-1 py-3.5 rounded-full font-semibold text-sm bg-magenta-600 text-white text-center hover:bg-magenta-700 transition-all shadow-lg shadow-magenta-600/20 flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <span>{isBookingOrigin ? "Continue to Appointment Booking" : "Find a Clinic"}</span>
                   <ArrowRight className="w-4 h-4" />

@@ -19,7 +19,7 @@
 
 // FastAPI base URL — reads from Vite env var, falls back to localhost
 const AI_API_BASE_URL =
-  (import.meta.env.VITE_AI_API_URL as string | undefined) ||
+  (import.meta.env?.VITE_AI_API_URL as string | undefined) ||
   "http://localhost:8000";
 
 // Request timeout (30s — generous for first cold inference)
@@ -114,15 +114,18 @@ export async function predictSkinCondition(
   } catch (err) {
     clearTimeout(timeoutId);
     
+    // Diagnostic logging without leaking sensitive patient data
+    console.error("[aiApi] Connection error while contacting AI service:", err);
+
     if (err instanceof DOMException && err.name === "AbortError") {
       throw new AIPredictionError(
-        "AI service timed out. Please try again.",
+        "We couldn't connect to the skin analysis service. Please try again shortly.",
         "network"
       );
     }
     
     throw new AIPredictionError(
-      `Cannot reach AI service at ${AI_API_BASE_URL}. Is FastAPI running?`,
+      "We couldn't connect to the skin analysis service. Please try again shortly.",
       "network"
     );
   } finally {
@@ -133,28 +136,50 @@ export async function predictSkinCondition(
   let data: any;
   try {
     data = await response.json();
-  } catch {
+  } catch (parseErr) {
+    console.error("[aiApi] Failed to parse AI service response:", parseErr);
     throw new AIPredictionError(
-      "AI service returned invalid response.",
+      "We couldn't complete your skin analysis. Please try again.",
       "server"
     );
   }
 
   // Handle HTTP errors
   if (!response.ok) {
+    console.error("[aiApi] AI service returned error status:", response.status, data);
+
     // FastAPI wraps errors as { detail: { success, error, error_type } }
     const detail = data?.detail;
-    const errorMessage = detail?.error || data?.error || "Prediction failed";
-    const errorType = detail?.error_type || "server";
-    throw new AIPredictionError(errorMessage, errorType);
+    const errorType = (typeof detail === "object" && detail?.error_type) || data?.error_type || "server";
+
+    // Allow safe, user-actionable pre-screening messages from the backend validation pipeline
+    const isSafeClinicalError =
+      errorType === "low_confidence" ||
+      errorType === "not_human_skin" ||
+      (typeof errorType === "string" && errorType.startsWith("quality_")) ||
+      errorType === "validation";
+
+    let patientMessage = "We couldn't complete your skin analysis. Please try again.";
+
+    if (isSafeClinicalError && typeof detail?.error === "string") {
+      patientMessage = detail.error;
+    } else if (response.status === 502 || response.status === 503 || response.status === 504) {
+      patientMessage = "We couldn't connect to the skin analysis service. Please try again shortly.";
+    }
+
+    throw new AIPredictionError(patientMessage, errorType);
   }
 
   // Validate success flag
   if (!data.success) {
-    throw new AIPredictionError(
-      data.error || "Prediction failed",
-      data.error_type || "server"
-    );
+    console.error("[aiApi] AI service returned unsuccessful payload:", data);
+    const errorType = data?.error_type || "server";
+    const patientMessage =
+      typeof data?.error === "string" &&
+      (errorType === "low_confidence" || errorType === "not_human_skin" || errorType.startsWith("quality_"))
+        ? data.error
+        : "We couldn't complete your skin analysis. Please try again.";
+    throw new AIPredictionError(patientMessage, errorType);
   }
 
   return data as PredictionResult;

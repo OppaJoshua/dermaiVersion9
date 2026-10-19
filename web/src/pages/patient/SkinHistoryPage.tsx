@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "@/lib/supabaseClient";
+import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 
 interface SkinHistoryItem {
   id: string;
@@ -36,6 +37,7 @@ export default function PatientSkinHistory() {
     useState<SkinHistoryItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +56,23 @@ export default function PatientSkinHistory() {
         return;
       }
 
+      // Supplemental fallbacks to ensure patient's actual uploaded photo is fetched
+      let lastScanCached: any = null;
+      try {
+        const raw = localStorage.getItem("dermai_last_scan");
+        if (raw) lastScanCached = JSON.parse(raw);
+      } catch { }
+
+      let userStorageFiles: any[] = [];
+      try {
+        const { data: storageFiles } = await supabase.storage
+          .from("scan-uploads")
+          .list(userId, { limit: 50, sortBy: { column: "created_at", order: "desc" } });
+        if (Array.isArray(storageFiles)) {
+          userStorageFiles = storageFiles;
+        }
+      } catch { }
+
       const { data, error } = await supabase
         .from("ai_scan_result")
         .select(`
@@ -62,6 +81,8 @@ export default function PatientSkinHistory() {
           body_part,
           scanned_at,
           photo_url,
+          photo_url_wide,
+          questionnaire_answers,
           skin_condition:condition_id (
             name,
             local_name,
@@ -85,12 +106,7 @@ export default function PatientSkinHistory() {
 
       /*
        * Convert Supabase Storage paths into temporary signed URLs.
-       *
-       * Example database value:
-       * user-id/filename.jpg
-       *
-       * becomes:
-       * https://...signed-url...
+       * Dynamically resolves the actual photo uploaded by the patient.
        */
       const mapped: SkinHistoryItem[] = await Promise.all(
         ((data ?? []) as any[]).map(async (s: any) => {
@@ -98,21 +114,59 @@ export default function PatientSkinHistory() {
             ? s.skin_condition[0]
             : s.skin_condition;
 
+          let rawPath: string | null = s.photo_url || s.photo_url_wide || null;
+
+          // Fallback 1: If database row lacks photo path, check cached last scan
+          if (!rawPath && lastScanCached) {
+            const matchesAnalysisId =
+              lastScanCached.analysisId && lastScanCached.analysisId === s.analysis_id;
+            const scanTime = new Date(s.scanned_at).getTime();
+            const timeDiff = Math.abs(scanTime - (lastScanCached.timestamp || 0));
+            if (matchesAnalysisId || timeDiff < 300_000) {
+              rawPath =
+                lastScanCached.photoUrl || lastScanCached.photoUrlWide || null;
+            }
+          }
+
+          // Fallback 2: Check user's uploaded storage files matching scan timestamp
+          if (!rawPath && userStorageFiles.length > 0) {
+            const scanTime = new Date(s.scanned_at).getTime();
+            const candidates = userStorageFiles
+              .map((f: any) => {
+                const ts = parseInt(f.name.split("_")[0], 10);
+                return {
+                  name: f.name,
+                  diff: Math.abs(ts - scanTime),
+                  isCloseUp: f.name.includes("close_up"),
+                };
+              })
+              .filter((f: any) => !isNaN(f.diff) && f.diff < 600_000)
+              .sort((a: any, b: any) => {
+                if (a.isCloseUp && !b.isCloseUp) return -1;
+                if (!a.isCloseUp && b.isCloseUp) return 1;
+                return a.diff - b.diff;
+              });
+
+            if (candidates.length > 0) {
+              rawPath = `${userId}/${candidates[0].name}`;
+            }
+          }
+
           let imageUrl: string | undefined = undefined;
 
-          if (s.photo_url) {
-            const { data: signedUrlData, error: signedUrlError } =
-              await supabase.storage
-                .from("scan-uploads")
-                .createSignedUrl(s.photo_url, 60 * 60);
+          // First try resolving the primary photo path
+          if (rawPath) {
+            const signed = await getSignedSkinPhotoUrl(rawPath);
+            if (signed) {
+              imageUrl = signed;
+            }
+          }
 
-            if (signedUrlError) {
-              console.error(
-                "[SkinHistory] image signed URL error:",
-                signedUrlError.message
-              );
-            } else {
-              imageUrl = signedUrlData?.signedUrl;
+          // If primary path failed to resolve and wide path is available, try wide path
+          if (!imageUrl && s.photo_url_wide && s.photo_url_wide !== rawPath) {
+            const signedWide = await getSignedSkinPhotoUrl(s.photo_url_wide);
+            if (signedWide) {
+              imageUrl = signedWide;
             }
           }
 
@@ -241,11 +295,14 @@ export default function PatientSkinHistory() {
               >
                 <div className="flex items-center gap-5">
                   <div className="w-14 h-14 rounded-xl overflow-hidden ring-4 ring-magenta-50/50 group-hover:ring-magenta-100/50 transition-all shrink-0 bg-magenta-50">
-                    {item.imageUrl ? (
+                    {item.imageUrl && !failedImages[item.id] ? (
                       <img
                         src={item.imageUrl}
                         alt={item.condition}
                         className="w-full h-full object-cover"
+                        onError={() =>
+                          setFailedImages((prev) => ({ ...prev, [item.id]: true }))
+                        }
                       />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-magenta-600">
@@ -441,12 +498,18 @@ export default function PatientSkinHistory() {
               </div>
 
               {/* Uploaded Photo */}
-              {selectedItem.imageUrl && (
+              {selectedItem.imageUrl && !failedImages[selectedItem.id] && (
                 <div className="mb-4 rounded-xl overflow-hidden border border-gray-100">
                   <img
                     src={selectedItem.imageUrl}
                     alt={`${selectedItem.condition} scan photo`}
                     className="w-full max-h-56 object-cover"
+                    onError={() =>
+                      setFailedImages((prev) => ({
+                        ...prev,
+                        [selectedItem.id]: true,
+                      }))
+                    }
                   />
                 </div>
               )}
