@@ -144,6 +144,15 @@ export default function LoginScreen() {
       }
     });
 
+    // 3. On Web: check window.location for tokens/code
+    if (typeof window !== 'undefined' && window.location) {
+      const href = window.location.href;
+      if (href.includes('code=') || href.includes('access_token=')) {
+        console.log('[Google Auth Web] Found OAuth params in window.location:', href);
+        processAuthUrl(href);
+      }
+    }
+
     return () => {
       sub.remove();
     };
@@ -171,7 +180,9 @@ export default function LoginScreen() {
     setGoogleLoading(true);
     try {
       if (Platform.OS === 'web') {
-        const redirectUrl = typeof window !== 'undefined' ? `${window.location.origin}` : 'http://localhost:8081';
+        const redirectUrl = typeof window !== 'undefined'
+          ? `${window.location.origin}/auth/callback`
+          : 'http://localhost:8081/auth/callback';
         const { error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
           options: {
@@ -182,26 +193,17 @@ export default function LoginScreen() {
         return;
       }
 
+      // In Expo Go, the phone OS only recognizes the exp:// scheme owned by Expo Go.
+      // In a development build or standalone APK, the OS recognizes dermaimobile://.
       const isExpoGo =
         Constants.appOwnership === 'expo' ||
-        Constants.executionEnvironment === ExecutionEnvironment.StoreClient ||
-        !Constants.executionEnvironment;
+        Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
-      let redirectUrl: string;
-      if (isExpoGo) {
-        // Use the live Metro host (e.g. "192.168.x.x:8081" or a tunnel domain) so the
-        // redirect works on any developer's machine — never "localhost", which the
-        // phone cannot reach and which Supabase would reject (falling back to Site URL).
-        const hostUri = Constants.expoConfig?.hostUri;
-        if (hostUri && !hostUri.startsWith('localhost') && !hostUri.startsWith('127.0.0.1')) {
-          redirectUrl = `exp://${hostUri}/--/auth/callback`;
-        } else {
-          redirectUrl = makeRedirectUri({ path: 'auth/callback' });
-        }
-      } else {
-        redirectUrl = makeRedirectUri({ scheme: 'dermaimobile', path: 'auth/callback' });
-      }
-      console.log('[Google Auth] Initiating OAuth with direct mobile redirectUrl:', redirectUrl, 'isExpoGo:', isExpoGo);
+      const redirectUrl = isExpoGo
+        ? makeRedirectUri({ path: 'auth/callback' })
+        : makeRedirectUri({ scheme: 'dermaimobile', path: 'auth/callback' });
+
+      console.log('[Google Auth] Initiating OAuth with mobile redirectUrl:', redirectUrl, 'isExpoGo:', isExpoGo);
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
