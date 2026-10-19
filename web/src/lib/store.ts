@@ -2,6 +2,7 @@
 // Stub bodies have been replaced with real queries.
 
 import { supabase } from "./supabaseClient";
+import { withCacheBuster } from "./doctorAvatarService";
 
 export type PlatformUser = {
   id: string;
@@ -171,6 +172,7 @@ export type HelpdeskTicket = {
   userId?: string;
   user: string;
   email: string;
+  avatarUrl?: string;
   subject: string;
   message: string;
   status: HelpdeskTicketStatus;
@@ -195,6 +197,7 @@ export function getLocalHelpdeskTickets(): HelpdeskTicket[] {
       userId: t.userId || t.user_id,
       user: t.user || t.full_name || t.userName || "Platform User",
       email: t.email || "",
+      avatarUrl: t.avatarUrl || t.avatar_url || undefined,
       subject: t.subject || "Support Inquiry",
       message: t.message || "",
       status: (t.status === "in-progress" || t.status === "resolved" ? t.status : "open") as HelpdeskTicketStatus,
@@ -238,14 +241,16 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
 
     if (!error && data && data.length > 0) {
       // Fetch sender profiles safely
-      const userIds = Array.from(new Set(data.map((t: any) => t.user_id).filter(Boolean)));
-      const userMap = new Map<string, { full_name: string; email: string }>();
+      const userIds = Array.from(new Set(data.map((t: any) => t.user_id).filter(Boolean))) as string[];
+      const userMap = new Map<string, { full_name: string; email: string; role?: string; avatar_url?: string }>();
+      const doctorPhotoMap = new Map<string, string>(); // user_id or lower(email) -> photo_url
+      const clinicLogoMap = new Map<string, string>(); // owner_user_id or lower(email) -> logo_url
 
       if (userIds.length > 0) {
         try {
           const { data: usersData } = await supabase
             .from("user")
-            .select("user_id, full_name, email")
+            .select("user_id, full_name, email, role, avatar_url")
             .in("user_id", userIds);
 
           if (usersData) {
@@ -253,12 +258,50 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
               userMap.set(u.user_id, {
                 full_name: u.full_name || "Platform User",
                 email: u.email || "",
+                role: u.role || undefined,
+                avatar_url: u.avatar_url || undefined,
               });
             });
           }
         } catch {
           /* ignore */
         }
+      }
+
+      // Query clinic_doctor to fetch doctor photo_url
+      try {
+        const { data: docsData } = await supabase
+          .from("clinic_doctor")
+          .select("doctor_id, user_id, email, photo_url");
+
+        if (docsData) {
+          docsData.forEach((d: any) => {
+            if (d.photo_url) {
+              if (d.user_id) doctorPhotoMap.set(d.user_id, d.photo_url);
+              if (d.email) doctorPhotoMap.set(d.email.toLowerCase().trim(), d.photo_url);
+            }
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // Query clinic to fetch clinic logo_url
+      try {
+        const { data: clinicsData } = await supabase
+          .from("clinic")
+          .select("clinic_id, owner_user_id, email, logo_url");
+
+        if (clinicsData) {
+          clinicsData.forEach((c: any) => {
+            if (c.logo_url) {
+              if (c.owner_user_id) clinicLogoMap.set(c.owner_user_id, c.logo_url);
+              if (c.email) clinicLogoMap.set(c.email.toLowerCase().trim(), c.logo_url);
+            }
+          });
+        }
+      } catch {
+        /* ignore */
       }
 
       const statusMap: Record<string, HelpdeskTicketStatus> = {
@@ -274,15 +317,38 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
           statusMap[rawStatus] ||
           (rawStatus === "in-progress" || rawStatus === "resolved" ? (rawStatus as HelpdeskTicketStatus) : "open");
 
+        const userEmail = (userInfo?.email || t.email || "").toLowerCase().trim();
+        const userRole = userInfo?.role;
+        const category = t.category || "General Support";
+
+        // Resolve avatar URL with priority hierarchy
+        const docPhoto = (t.user_id && doctorPhotoMap.get(t.user_id)) || (userEmail ? doctorPhotoMap.get(userEmail) : undefined);
+        const clLogo = (t.user_id && clinicLogoMap.get(t.user_id)) || (userEmail ? clinicLogoMap.get(userEmail) : undefined);
+        const uAvatar = userInfo?.avatar_url || t.avatarUrl || t.avatar_url;
+
+        let resolvedAvatar: string | undefined = undefined;
+        if (category.toLowerCase().includes("doctor") || userRole === "doctor") {
+          resolvedAvatar = docPhoto || uAvatar;
+        } else if (category.toLowerCase().includes("clinic") || userRole === "clinic") {
+          resolvedAvatar = clLogo || uAvatar;
+        } else {
+          resolvedAvatar = uAvatar || docPhoto || clLogo;
+        }
+
+        if (resolvedAvatar) {
+          resolvedAvatar = withCacheBuster(resolvedAvatar);
+        }
+
         return {
           id: t.ticket_id || t.id,
           userId: t.user_id,
           user: userInfo?.full_name || t.user_name || t.user || "Platform User",
           email: userInfo?.email || t.email || "",
+          avatarUrl: resolvedAvatar || undefined,
           subject: t.subject || "Support Inquiry",
           message: t.message || "",
           status: mappedStatus,
-          category: t.category || "General Support",
+          category,
           priority: (t.priority as any) || "medium",
           response: t.response || undefined,
           createdAt: t.created_at || t.createdAt || new Date().toISOString(),
@@ -327,6 +393,7 @@ export async function createHelpdeskTicketAsync(input: {
   userId?: string;
   user?: string;
   email?: string;
+  avatarUrl?: string;
   subject: string;
   message: string;
   category?: string;
@@ -387,6 +454,7 @@ export async function createHelpdeskTicketAsync(input: {
     userId: effectiveUserId,
     user: input.user || "Current User",
     email: input.email || "",
+    avatarUrl: input.avatarUrl,
     subject,
     message,
     status: "open",

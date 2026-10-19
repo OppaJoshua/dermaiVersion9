@@ -12,18 +12,15 @@ import {
   Bell,
   Menu,
   ChevronRight,
-  Megaphone,
-  Calendar,
-  ScanSearch,
-  ArrowRight,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Logo from "@/assets/logo2.png";
 import { useAuth } from "../../context/AuthContext";
-import { supabase } from "../../lib/supabaseClient";
-import { getCachedPatientNotifications } from "../../lib/notificationService";
+import { supabase } from "@/lib/supabaseClient";
+import PatientNotifications from "@/pages/patient/PatientNotifications";
+import { useRoleNotifications } from "@/lib/notificationService";
 
 // ---------------------------------------------------------------------------
 // TYPES
@@ -34,15 +31,6 @@ export interface UserProfileSummary {
   profilePictureUrl?: string;
   membershipTier?: string;
   location?: string;
-}
-
-export interface PatientNotif {
-  id: string;
-  type: string;
-  title: string;
-  body: string;
-  isRead: boolean;
-  createdAt: string;
 }
 
 interface UserLayoutProps {
@@ -209,8 +197,7 @@ export default function UserLayout({
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [notifications, setNotifications] = useState<PatientNotif[]>([]);
+  const { unreadCount: liveUnreadCount } = useRoleNotifications("patient", { userId: user?.id });
   const notifRef = useRef<HTMLDivElement>(null);
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
@@ -384,58 +371,6 @@ export default function UserLayout({
       /* ignore */
     }
 
-    // 3. Fetch notifications & unread count
-    try {
-      const { data: notifRows, error: notifErr } = await supabase
-        .from("user_notification")
-        .select("notif_id, type, title, body, is_read, created_at")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(20);
-
-      let finalNotifs: PatientNotif[] = [];
-      if (!notifErr && notifRows && notifRows.length > 0) {
-        finalNotifs = notifRows.map((n) => ({
-          id: n.notif_id,
-          type: n.type || "system",
-          title: n.title,
-          body: n.body || "",
-          isRead: Boolean(n.is_read),
-          createdAt: n.created_at,
-        }));
-      } else {
-        // Fallback to local cached notifications for this patient
-        const cached = getCachedPatientNotifications(user.id);
-        if (cached && cached.length > 0) {
-          finalNotifs = cached.map((n: any) => ({
-            id: n.id,
-            type: n.type || "system",
-            title: n.title,
-            body: n.body || "",
-            isRead: Boolean(n.isRead),
-            createdAt: n.createdAt,
-          }));
-        }
-      }
-
-      setNotifications(finalNotifs);
-      setUnreadCount(finalNotifs.filter((n) => !n.isRead).length);
-    } catch {
-      const cached = getCachedPatientNotifications(user.id);
-      if (cached && cached.length > 0) {
-        const mapped = cached.map((n: any) => ({
-          id: n.id,
-          type: n.type || "system",
-          title: n.title,
-          body: n.body || "",
-          isRead: Boolean(n.isRead),
-          createdAt: n.createdAt,
-        }));
-        setNotifications(mapped);
-        setUnreadCount(mapped.filter((n: any) => !n.isRead).length);
-      }
-    }
-
     setDynamicProfile({
       fullName: name,
       membershipTier: tier,
@@ -443,64 +378,6 @@ export default function UserLayout({
       location: loc,
     });
   }, [user, customProfile]);
-
-  const markAsRead = async (notifId: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === notifId ? { ...n, isRead: true } : n))
-    );
-    setUnreadCount((prev) => Math.max(0, prev - 1));
-
-    // Update local cache
-    if (user?.id) {
-      try {
-        const key = `dermai_patient_notifications_${user.id}`;
-        const raw = localStorage.getItem(key);
-        if (raw) {
-          const list = JSON.parse(raw);
-          if (Array.isArray(list)) {
-            const patched = list.map((item: any) =>
-              item.id === notifId ? { ...item, isRead: true } : item
-            );
-            localStorage.setItem(key, JSON.stringify(patched));
-          }
-        }
-      } catch { }
-    }
-
-    try {
-      await supabase
-        .from("user_notification")
-        .update({ is_read: true })
-        .eq("notif_id", notifId);
-    } catch { }
-  };
-
-  const markAllRead = async () => {
-    if (!user) return;
-    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
-    setUnreadCount(0);
-
-    // Update local cache
-    try {
-      const key = `dermai_patient_notifications_${user.id}`;
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const list = JSON.parse(raw);
-        if (Array.isArray(list)) {
-          const patched = list.map((item: any) => ({ ...item, isRead: true }));
-          localStorage.setItem(key, JSON.stringify(patched));
-        }
-      }
-    } catch { }
-
-    try {
-      await supabase
-        .from("user_notification")
-        .update({ is_read: true })
-        .eq("user_id", user.id)
-        .eq("is_read", false);
-    } catch { }
-  };
 
   useEffect(() => {
     loadUserData();
@@ -510,36 +387,13 @@ export default function UserLayout({
     };
 
     window.addEventListener("derm_profile_updated", handleProfileUpdate);
-    window.addEventListener("dermai_notifications_updated", handleProfileUpdate);
     window.addEventListener("storage", handleProfileUpdate);
-
-    // Realtime notifications for logged-in patient
-    let channel: any = null;
-    if (user?.id) {
-      channel = supabase
-        .channel(`patient-notifs-${user.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "user_notification",
-            filter: `user_id=eq.${user.id}`,
-          },
-          () => {
-            loadUserData();
-          }
-        )
-        .subscribe();
-    }
 
     return () => {
       window.removeEventListener("derm_profile_updated", handleProfileUpdate);
-      window.removeEventListener("dermai_notifications_updated", handleProfileUpdate);
       window.removeEventListener("storage", handleProfileUpdate);
-      if (channel) supabase.removeChannel(channel);
     };
-  }, [loadUserData, user?.id]);
+  }, [loadUserData]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -751,123 +605,16 @@ export default function UserLayout({
                   className="relative w-10 h-10 flex items-center justify-center rounded-full border border-gray-200/80 bg-white hover:bg-magenta-50 transition-colors"
                 >
                   <Bell className={cn("w-[18px] h-[18px]", notifOpen ? "text-magenta-600" : "text-gray-500")} />
-                  {unreadCount > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-600 rounded-full text-white text-[10px] font-bold leading-none">
-                      {unreadCount > 9 ? "9+" : unreadCount}
+                  {liveUnreadCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-600 rounded-full text-white text-[10px] font-bold leading-none animate-pulse">
+                      {liveUnreadCount > 9 ? "9+" : liveUnreadCount}
                     </span>
                   )}
                 </button>
 
                 {notifOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-80 sm:w-88 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/50">
-                      <div className="flex items-center gap-2">
-                        <Bell className="w-4 h-4 text-magenta-500" />
-                        <span className="font-semibold text-gray-900 text-sm">Notifications</span>
-                      </div>
-                      {unreadCount > 0 ? (
-                        <button
-                          onClick={markAllRead}
-                          className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700"
-                        >
-                          Mark all read
-                        </button>
-                      ) : (
-                        <span className="text-[11px] text-gray-400">All caught up</span>
-                      )}
-                    </div>
-
-                    {notifications.length === 0 ? (
-                      <div className="py-10 text-center">
-                        <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                        <p className="text-sm text-gray-400">No new notifications</p>
-                      </div>
-                    ) : (
-                      <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
-                        {notifications.map((n) => {
-                          const isBroadcast = n.type === "broadcast";
-                          const isAppointment = n.type.includes("appointment");
-                          const isScan = n.type.includes("scan");
-
-                          return (
-                            <div
-                              key={n.id}
-                              onClick={() => {
-                                if (!n.isRead) markAsRead(n.id);
-                                setNotifOpen(false);
-                                if (isAppointment) {
-                                  navigate("/dashboard/appointment-status");
-                                } else if (isScan) {
-                                  navigate("/dashboard/history");
-                                }
-                              }}
-                              className={cn(
-                                "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
-                                !n.isRead && "bg-magenta-50/20"
-                              )}
-                            >
-                              <div
-                                className={cn(
-                                  "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
-                                  isBroadcast
-                                    ? "bg-amber-100 text-amber-600"
-                                    : isAppointment
-                                      ? "bg-blue-100 text-blue-600"
-                                      : isScan
-                                        ? "bg-magenta-100 text-magenta-600"
-                                        : "bg-purple-100 text-purple-600"
-                                )}
-                              >
-                                {isBroadcast ? (
-                                  <Megaphone className="w-4 h-4" />
-                                ) : isAppointment ? (
-                                  <Calendar className="w-4 h-4" />
-                                ) : isScan ? (
-                                  <ScanSearch className="w-4 h-4" />
-                                ) : (
-                                  <Bell className="w-4 h-4" />
-                                )}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-semibold text-gray-900 truncate">
-                                  {n.title}
-                                </p>
-                                <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
-                                  {n.body}
-                                </p>
-                                <p className="text-[10px] text-gray-400 mt-1 flex items-center gap-1.5">
-                                  <span>{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                  <span>•</span>
-                                  <span>{new Date(n.createdAt).toLocaleDateString()}</span>
-                                </p>
-                              </div>
-                              {!n.isRead && (
-                                <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between text-xs">
-                      <Link
-                        to="/dashboard/history"
-                        onClick={() => setNotifOpen(false)}
-                        className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors inline-flex items-center gap-1"
-                      >
-                        <span>Skin scan history</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </Link>
-                      <Link
-                        to="/dashboard/appointment-status"
-                        onClick={() => setNotifOpen(false)}
-                        className="font-semibold text-magenta-600 hover:text-magenta-800 transition-colors inline-flex items-center gap-1"
-                      >
-                        <span>Appointments</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </Link>
-                    </div>
+                  <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+                    <PatientNotifications isDropdown onClose={() => setNotifOpen(false)} />
                   </div>
                 )}
               </div>
@@ -906,5 +653,3 @@ export default function UserLayout({
     </div>
   );
 }
-
-

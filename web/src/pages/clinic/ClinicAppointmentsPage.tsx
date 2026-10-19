@@ -23,6 +23,7 @@ import { motion } from "framer-motion";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
+import { DoctorAvatar } from "@/components/common/DoctorAvatar";
 import { createPatientNotification } from "@/lib/notificationService";
 import {
   findAvailableDoctorsForSlot,
@@ -3439,17 +3440,12 @@ export default function ClinicAppointmentsPage() {
                           : "border-gray-200 hover:border-gray-300 bg-white"
                           }`}
                       >
-                        {doctor.photo ? (
-                          <img
-                            src={doctor.photo}
-                            alt={doctor.name}
-                            className="w-9 h-9 rounded-xl object-cover border border-magenta-200 shrink-0"
-                          />
-                        ) : (
-                          <div className="w-9 h-9 rounded-xl bg-magenta-100 text-magenta-700 font-bold flex items-center justify-center text-xs shrink-0">
-                            {doctor.name.replace(/^(?:dr\.?|doctor)\s*/i, "").trim().charAt(0) || "D"}
-                          </div>
-                        )}
+                        <DoctorAvatar
+                          doctorId={doctor.id}
+                          doctor={doctor}
+                          name={doctor.name}
+                          className="w-9 h-9 rounded-xl border border-magenta-200 shrink-0 font-bold text-xs"
+                        />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-1">
                             <p className="font-bold text-gray-900 truncate">{doctor.name}</p>
@@ -3468,9 +3464,12 @@ export default function ClinicAppointmentsPage() {
                         key={doctor.id}
                         className="w-full text-left px-3.5 py-2 rounded-2xl border border-gray-100 bg-gray-50/60 text-xs opacity-60 flex items-center gap-3"
                       >
-                        <div className="w-9 h-9 rounded-xl bg-gray-200 text-gray-500 font-bold flex items-center justify-center text-xs shrink-0">
-                          {doctor.name.replace(/^(?:dr\.?|doctor)\s*/i, "").trim().charAt(0) || "D"}
-                        </div>
+                        <DoctorAvatar
+                          doctorId={doctor.id}
+                          doctor={doctor}
+                          name={doctor.name}
+                          className="w-9 h-9 rounded-xl border border-gray-200 shrink-0 font-bold text-xs opacity-60"
+                        />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-1">
                             <p className="font-semibold text-gray-700 truncate">{doctor.name}</p>
@@ -3494,17 +3493,12 @@ export default function ClinicAppointmentsPage() {
                         : "border-gray-200 hover:border-gray-300 bg-white"
                         }`}
                     >
-                      {doc.photo ? (
-                        <img
-                          src={doc.photo}
-                          alt={doc.name}
-                          className="w-9 h-9 rounded-xl object-cover border border-magenta-200 shrink-0"
-                        />
-                      ) : (
-                        <div className="w-9 h-9 rounded-xl bg-magenta-100 text-magenta-700 font-bold flex items-center justify-center text-xs shrink-0">
-                          {doc.name.replace(/^(?:dr\.?|doctor)\s*/i, "").trim().charAt(0) || "D"}
-                        </div>
-                      )}
+                      <DoctorAvatar
+                        doctorId={doc.id}
+                        doctor={doc}
+                        name={doc.name}
+                        className="w-9 h-9 rounded-xl border border-magenta-200 shrink-0 font-bold text-xs"
+                      />
                       <div className="min-w-0 flex-1">
                         <p className="font-bold text-gray-900 truncate">{doc.name}</p>
                         <p className="text-[11px] text-gray-500 mt-0.5 truncate">{doc.specialization}</p>

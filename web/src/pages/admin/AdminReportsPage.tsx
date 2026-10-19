@@ -1,6 +1,5 @@
 import { useMemo, useState, useEffect, useCallback } from "react";
-import { Download, FileText, RefreshCw, Printer } from "lucide-react";
-import { motion } from "framer-motion";
+import { RefreshCw, CalendarDays, CheckCircle2, Clock, XCircle } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
 type ReportType =
@@ -331,54 +330,57 @@ export default function AdminReportsPage() {
     ? `${Math.round((appointmentData.filter((a) => a.status === "rejected" || a.status === "cancelled").length / totalAppointments) * 100)}%`
     : "0%";
 
+  const summary = [
+    { label: "Total appointments", value: totalAppointments, hint: "All recorded bookings", Icon: CalendarDays },
+    { label: "Scheduled", value: scheduledCount, hint: "Confirmed or accepted", Icon: CheckCircle2 },
+    { label: "Pending", value: pendingCount, hint: "Awaiting a decision", Icon: Clock },
+    { label: "Rejection rate", value: rejectionRate, hint: "Rejected or cancelled", Icon: XCircle },
+  ];
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between">
+    <div className="space-y-8">
+      <div className="flex items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-display font-bold text-gray-900">Reports</h1>
-          <p className="text-sm text-gray-400 mt-0.5">Generate, filter, and export platform analytics reports.</p>
+          <h1 className="text-2xl font-display font-bold text-black">Reports</h1>
+          <p className="text-sm text-gray-600 mt-1">Generate, filter, and export platform reports.</p>
         </div>
         <button
           type="button"
           onClick={fetchAllReportData}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+          disabled={loading}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg border border-gray-300 bg-white text-sm font-semibold text-black hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh Data
+          <RefreshCw className={`w-4 h-4 text-magenta-600 ${loading ? "animate-spin" : ""}`} /> Refresh data
         </button>
       </div>
 
-      {/* Metric summary */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs">
-          <p className="text-2xl font-display font-bold text-gray-900">{totalAppointments}</p>
-          <p className="text-xs text-gray-400 mt-0.5">Total Appointments</p>
-        </div>
-        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs">
-          <p className="text-2xl font-display font-bold text-emerald-600">{scheduledCount}</p>
-          <p className="text-xs text-gray-400 mt-0.5">Scheduled Appointments</p>
-        </div>
-        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs">
-          <p className="text-2xl font-display font-bold text-amber-600">{pendingCount}</p>
-          <p className="text-xs text-gray-400 mt-0.5">Pending Appointments</p>
-        </div>
-        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-xs">
-          <p className="text-2xl font-display font-bold text-red-600">{rejectionRate}</p>
-          <p className="text-xs text-gray-400 mt-0.5">Rejection Rate</p>
-        </div>
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+        {summary.map(({ label, value, hint, Icon }) => (
+          <div key={label} className="bg-white rounded-xl border border-gray-200 shadow-sm p-7 min-h-[156px]">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-black">{label}</p>
+              <Icon className="w-5 h-5 text-magenta-600" />
+            </div>
+            <p className="mt-5 text-4xl font-bold text-black tabular-nums">{value}</p>
+            <p className="mt-2 text-sm text-gray-600">{hint}</p>
+          </div>
+        ))}
       </div>
 
       {/* Generator controls */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-7">
+        <h2 className="text-lg font-semibold text-black mb-5">Report parameters</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-6">
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1.5">Report Type</label>
+            <label className="block text-sm font-medium text-black mb-2">Report type</label>
             <select
               value={selectedReport}
               onChange={(e) => {
                 setSelectedReport(e.target.value as ReportType);
                 setGenerated(false);
               }}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-magenta-500 bg-white cursor-pointer"
+              className="w-full px-4 py-3 rounded-lg border border-gray-300 text-sm text-black outline-none focus:border-magenta-500 bg-white cursor-pointer"
             >
               {reportTypes.map((r) => (
                 <option key={r} value={r}>{r}</option>
@@ -387,22 +389,22 @@ export default function AdminReportsPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1.5">From Date</label>
+            <label className="block text-sm font-medium text-black mb-2">From date</label>
             <input
               type="date"
               value={fromDate}
               onChange={(e) => { setFromDate(e.target.value); setGenerated(false); }}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-magenta-500 bg-white"
+              className="w-full px-4 py-3 rounded-lg border border-gray-300 text-sm text-black outline-none focus:border-magenta-500 bg-white"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1.5">To Date</label>
+            <label className="block text-sm font-medium text-black mb-2">To date</label>
             <input
               type="date"
               value={toDate}
               onChange={(e) => { setToDate(e.target.value); setGenerated(false); }}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-magenta-500 bg-white"
+              className="w-full px-4 py-3 rounded-lg border border-gray-300 text-sm text-black outline-none focus:border-magenta-500 bg-white"
             />
           </div>
         </div>
@@ -411,76 +413,71 @@ export default function AdminReportsPage() {
           <button
             type="button"
             onClick={() => setGenerated(true)}
-            className="px-5 py-2.5 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-xs cursor-pointer"
+            className="px-6 py-3 rounded-lg bg-magenta-600 hover:bg-magenta-700 text-white text-sm font-semibold transition-colors cursor-pointer"
           >
-            Generate Report
+            Generate report
           </button>
           {(fromDate || toDate) && (
             <button
               type="button"
               onClick={() => { setFromDate(""); setToDate(""); }}
-              className="px-4 py-2.5 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer"
+              className="px-5 py-3 rounded-lg border border-gray-300 bg-white text-sm font-semibold text-black hover:bg-gray-50 transition-colors cursor-pointer"
             >
-              Clear Filters
+              Clear dates
             </button>
           )}
         </div>
       </div>
 
-      {/* Generated Report Table */}
+      {/* Generated report */}
       {generated && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-xs"
-        >
-          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-7 py-5 border-b border-gray-200 flex items-center justify-between flex-wrap gap-3">
             <div>
-              <h2 className="font-bold text-gray-900 text-base">{report.title}</h2>
-              <p className="text-xs text-gray-400 mt-0.5">{report.rows.length} row(s) found</p>
+              <h2 className="text-lg font-semibold text-black">{report.title}</h2>
+              <p className="text-sm text-gray-600 mt-0.5">{report.rows.length} row(s) found</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <button
                 type="button"
                 onClick={() => downloadCsv(report.filename, report.rows)}
                 disabled={report.rows.length === 0}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50 transition-colors shadow-xs cursor-pointer"
+                className="px-5 py-2.5 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-black text-sm font-semibold disabled:opacity-50 transition-colors cursor-pointer"
               >
-                <Download className="w-3.5 h-3.5" /> Export CSV
+                Export CSV
               </button>
               <button
                 type="button"
                 onClick={() => downloadPdf(report.title, report.columns, report.rows)}
                 disabled={report.rows.length === 0}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold disabled:opacity-50 transition-colors shadow-xs cursor-pointer"
+                className="px-5 py-2.5 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-black text-sm font-semibold disabled:opacity-50 transition-colors cursor-pointer"
               >
-                <Printer className="w-3.5 h-3.5" /> Print / PDF
+                Print / PDF
               </button>
             </div>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left">
-              <thead className="bg-gray-50/70 border-b border-gray-100 text-gray-500 uppercase font-bold text-[10px] tracking-wider">
+            <table className="w-full text-sm text-left text-black">
+              <thead className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-black uppercase tracking-wider">
                 <tr>
                   {report.columns.map((c) => (
-                    <th key={c} className="px-6 py-3.5">{c}</th>
+                    <th key={c} className="px-7 py-4">{c}</th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
+              <tbody className="divide-y divide-gray-100">
                 {report.rows.length === 0 ? (
                   <tr>
-                    <td colSpan={report.columns.length} className="px-6 py-12 text-center text-gray-400 italic">
-                      <FileText className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                    <td colSpan={report.columns.length} className="px-7 py-14 text-center text-gray-600">
                       No data found for this report and date range.
                     </td>
                   </tr>
                 ) : (
                   report.rows.map((row, i) => (
-                    <tr key={i} className="hover:bg-gray-50/50 transition-colors">
+                    <tr key={i} className="hover:bg-gray-50 transition-colors">
                       {report.columns.map((col) => (
-                        <td key={col} className="px-6 py-3.5 font-medium text-gray-800">
+                        <td key={col} className="px-7 py-4 text-black">
                           {row[col]}
                         </td>
                       ))}
@@ -490,7 +487,7 @@ export default function AdminReportsPage() {
               </tbody>
             </table>
           </div>
-        </motion.div>
+        </div>
       )}
     </div>
   );

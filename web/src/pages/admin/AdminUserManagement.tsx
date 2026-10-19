@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Eye, Lock, Unlock, UserX, ShieldCheck, UserCheck } from "lucide-react";
+import { X, ShieldCheck } from "lucide-react";
 import { logAdminAction } from "@/lib/auditLog";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
@@ -25,16 +25,16 @@ type User = {
 type StatusType = "all" | "active" | "suspended" | "inactive";
 
 const statusBadge: Record<string, string> = {
-  active: "bg-green-100 text-green-700",
-  suspended: "bg-amber-100 text-amber-700",
-  inactive: "bg-gray-100 text-gray-700",
+  active: "bg-gray-100 border-gray-300 text-black",
+  suspended: "bg-magenta-50 border-magenta-200 text-black",
+  inactive: "bg-white border-gray-300 text-black",
 };
 
 const roleBadge: Record<UserRole, { bg: string; text: string; label: string }> = {
-  admin: { bg: "bg-purple-100 text-purple-800 border-purple-200", text: "Admin", label: "Admin" },
-  clinic: { bg: "bg-blue-100 text-blue-800 border-blue-200", text: "Clinic", label: "Clinic Owner" },
-  doctor: { bg: "bg-emerald-100 text-emerald-800 border-emerald-200", text: "Doctor", label: "Doctor" },
-  patient: { bg: "bg-slate-100 text-slate-700 border-slate-200", text: "Patient", label: "Patient" },
+  admin: { bg: "bg-magenta-50 text-black border-magenta-200", text: "Admin", label: "Admin" },
+  clinic: { bg: "bg-white text-black border-gray-300", text: "Clinic", label: "Clinic Owner" },
+  doctor: { bg: "bg-white text-black border-gray-300", text: "Doctor", label: "Doctor" },
+  patient: { bg: "bg-gray-100 text-black border-gray-200", text: "Patient", label: "Patient" },
 };
 
 function getInitialUsers(): User[] {
@@ -206,16 +206,17 @@ export default function AdminUserManagement() {
   };
 
   return (
-    <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-display font-bold text-gray-900">
+    <div className="space-y-8">
+      <div>
+        <h1 className="text-2xl font-display font-bold text-black">
           User Management
         </h1>
-        <p className="text-sm text-gray-400 mt-0.5">Manage platform users, roles, and access credentials</p>
+        <p className="text-sm text-gray-600 mt-1">Manage platform users, roles, and access credentials.</p>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-2 mb-6">
+      {/* Filters */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-black mr-2">Status</span>
         {(["all", "active", "suspended", "inactive"] as StatusType[]).map((tab) => {
           const count =
             tab === "all"
@@ -226,10 +227,10 @@ export default function AdminUserManagement() {
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={cn(
-                "px-5 py-2 rounded-full text-sm font-semibold capitalize transition-all active:scale-[0.96]",
+                "px-4 py-2 rounded-lg text-sm font-semibold capitalize transition-colors cursor-pointer",
                 activeTab === tab
-                  ? "bg-magenta-500 text-white"
-                  : "bg-white text-gray-600 hover:bg-gray-50 border border-gray-200"
+                  ? "bg-magenta-600 text-white"
+                  : "bg-gray-100 text-black hover:bg-gray-200"
               )}
             >
               {tab} ({count})
@@ -239,103 +240,101 @@ export default function AdminUserManagement() {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-xs">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-7 py-5 border-b border-gray-200 flex items-baseline justify-between">
+          <h2 className="text-lg font-semibold text-black">Users</h2>
+          <span className="text-sm text-gray-600">{filtered.length} shown</span>
+        </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full text-black">
             <thead>
-              <tr className="border-b border-gray-100 bg-gray-50/60">
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-4 py-3.5 whitespace-nowrap">User</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-3 py-3.5 whitespace-nowrap">Role</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-3 py-3.5 whitespace-nowrap">Email</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-3 py-3.5 whitespace-nowrap">Plan</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-3 py-3.5 whitespace-nowrap">Scans</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-3 py-3.5 whitespace-nowrap">Joined</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-3 py-3.5 whitespace-nowrap">Status</th>
-                <th className="text-right text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-4 py-3.5 whitespace-nowrap">Actions</th>
+              <tr className="border-b border-gray-200 bg-gray-50">
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-6 py-4 whitespace-nowrap">User</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Role</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Email</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Plan</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Scans</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Joined</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Status</th>
+                <th className="text-right text-xs font-semibold text-black uppercase tracking-wider px-6 py-4 whitespace-nowrap">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody className="divide-y divide-gray-100">
               {filtered.map((user) => {
                 const isSelf = user.id === currentAuthUser?.id;
                 const isAdmin = user.role === "admin";
                 const roleInfo = roleBadge[user.role] || roleBadge.patient;
 
                 return (
-                  <tr key={user.id} className="hover:bg-gray-50/50 transition-colors">
-                    <td className="px-4 py-3.5 whitespace-nowrap">
+                  <tr key={user.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-6 py-5 whitespace-nowrap">
                       <div>
-                        <div className="flex items-center gap-1.5">
-                          <p className="text-sm font-semibold text-gray-900">{user.name}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold text-black">{user.name}</p>
                           {isSelf && (
-                            <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-magenta-50 text-magenta-600 border border-magenta-200/80 shrink-0">
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-magenta-50 text-black border border-magenta-200 shrink-0">
                               You
                             </span>
                           )}
                         </div>
                         {user.phone && user.phone !== "N/A" && (
-                          <p className="text-[11px] text-gray-400 mt-0.5">{user.phone}</p>
+                          <p className="text-xs text-gray-600 mt-0.5">{user.phone}</p>
                         )}
                       </div>
                     </td>
 
                     {/* Role Badge */}
-                    <td className="px-3 py-3.5 whitespace-nowrap">
-                      <span className={cn("inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border whitespace-nowrap shrink-0", roleInfo.bg)}>
-                        {isAdmin && <ShieldCheck className="w-3 h-3 text-purple-700" />}
+                    <td className="px-5 py-5 whitespace-nowrap">
+                      <span className={cn("inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border whitespace-nowrap shrink-0", roleInfo.bg)}>
+                        {isAdmin && <ShieldCheck className="w-3.5 h-3.5 text-magenta-600" />}
                         {roleInfo.label}
                       </span>
                     </td>
 
-                    <td className="px-3 py-3.5 text-xs sm:text-sm text-gray-600 whitespace-nowrap">{user.email}</td>
+                    <td className="px-5 py-5 text-sm text-black whitespace-nowrap">{user.email}</td>
 
-                    <td className="px-3 py-3.5 whitespace-nowrap">
+                    <td className="px-5 py-5 whitespace-nowrap">
                       <span
                         className={cn(
-                          "inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap shrink-0",
-                          user.plan === "Admin Access"
-                            ? "bg-purple-50 text-purple-700 border border-purple-200/60"
-                            : user.plan === "Medical Staff"
-                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200/60"
-                            : user.plan === "Clinic Partner"
-                            ? "bg-blue-50 text-blue-700 border border-blue-200/60"
-                            : user.plan === "Premium"
-                            ? "bg-magenta-50 text-magenta-700"
-                            : "bg-gray-100 text-gray-700"
+                          "inline-block px-3 py-1 rounded-full border text-xs font-semibold text-black whitespace-nowrap shrink-0",
+                          user.plan === "Admin Access" || user.plan === "Premium"
+                            ? "bg-magenta-50 border-magenta-200"
+                            : "bg-gray-100 border-gray-200"
                         )}
                       >
                         {user.plan}
                       </span>
                     </td>
 
-                    <td className="px-3 py-3.5 text-xs text-gray-600 whitespace-nowrap">
+                    <td className="px-5 py-5 text-sm text-black whitespace-nowrap">
                       {user.role === "admin" ? (
-                        <span className="text-gray-400 text-xs">N/A (Admin)</span>
+                        <span className="text-gray-600 text-xs">N/A (Admin)</span>
                       ) : user.role === "clinic" ? (
-                        <span className="text-gray-400 text-xs">N/A (Clinic)</span>
+                        <span className="text-gray-600 text-xs">N/A (Clinic)</span>
                       ) : user.role === "doctor" ? (
-                        <span className="text-gray-400 text-xs">N/A (Staff)</span>
+                        <span className="text-gray-600 text-xs">N/A (Staff)</span>
                       ) : user.plan === "Premium" || user.scansLimit === 999 ? (
-                        <span className="text-magenta-600 font-semibold text-xs">Unlimited</span>
+                        <span className="text-magenta-700 font-semibold text-sm">Unlimited</span>
                       ) : (
-                        <span className="font-medium text-gray-700">{user.scansUsed}/{user.scansLimit}</span>
+                        <span className="font-semibold text-black">{user.scansUsed}/{user.scansLimit}</span>
                       )}
                     </td>
 
-                    <td className="px-3 py-3.5 text-xs text-gray-500 whitespace-nowrap">{user.joinedAt}</td>
+                    <td className="px-5 py-5 text-sm text-black whitespace-nowrap">{user.joinedAt}</td>
 
-                    <td className="px-3 py-3.5 whitespace-nowrap">
-                      <span className={cn("inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize whitespace-nowrap shrink-0", statusBadge[user.status])}>
+                    <td className="px-5 py-5 whitespace-nowrap">
+                      <span className={cn("inline-block px-3 py-1 rounded-full border text-xs font-semibold capitalize whitespace-nowrap shrink-0", statusBadge[user.status])}>
                         {user.status}
                       </span>
                     </td>
 
-                    <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                    <td className="px-6 py-5 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end">
                         <button
                           onClick={() => setReviewModal(user.id)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-magenta-50 text-magenta-700 hover:bg-magenta-100 border border-magenta-200/70 text-xs font-semibold transition-all active:scale-95 shrink-0"
+                          className="px-4 py-2 rounded-lg border border-magenta-300 text-magenta-700 hover:bg-magenta-50 text-sm font-semibold transition-colors shrink-0 cursor-pointer"
                         >
-                          <Eye className="w-3.5 h-3.5" /> View & Manage
+                          View &amp; Manage
                         </button>
                       </div>
                     </td>
@@ -347,8 +346,9 @@ export default function AdminUserManagement() {
         </div>
 
         {filtered.length === 0 && (
-          <div className="p-12 text-center text-gray-400 text-sm">
-            No users found in this category
+          <div className="px-7 py-16 text-center">
+            <p className="text-base font-semibold text-black">No users found</p>
+            <p className="text-sm text-gray-600 mt-1">No users in this category.</p>
           </div>
         )}
       </div>
@@ -360,48 +360,49 @@ export default function AdminUserManagement() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
             onClick={() => setReviewModal(null)}
           >
             <motion.div
-              initial={{ opacity: 0, y: 30, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 30 }}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-[24px] p-6 sm:p-8 max-w-lg w-full max-h-[80vh] overflow-y-auto"
+              className="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl"
             >
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-display font-bold text-gray-900">
-                  User Details
+              <div className="flex items-center justify-between px-8 py-6 border-b border-gray-200">
+                <h2 className="text-xl font-display font-bold text-black">
+                  User details
                 </h2>
                 <button
                   onClick={() => setReviewModal(null)}
-                  className="p-2 rounded-full hover:bg-gray-100 transition-colors"
+                  className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                  aria-label="Close"
                 >
-                  <X className="w-5 h-5 text-gray-400" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <div className="space-y-4 mb-6">
+              <div className="px-8 py-6 space-y-5">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-400">Account Status</span>
-                  <span className={cn("px-3 py-1 rounded-full text-xs font-semibold capitalize", statusBadge[modalUser.status])}>
+                  <span className="text-sm text-gray-600">Account status</span>
+                  <span className={cn("px-3 py-1 rounded-full border text-xs font-semibold capitalize", statusBadge[modalUser.status])}>
                     {modalUser.status}
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-400">Platform Role</span>
+                  <span className="text-sm text-gray-600">Platform role</span>
                   {modalUser.id === currentAuthUser?.id ? (
-                    <span className={cn("inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border", roleBadge[modalUser.role]?.bg)}>
-                      <ShieldCheck className="w-3.5 h-3.5 text-purple-700" />
+                    <span className={cn("inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border", roleBadge[modalUser.role]?.bg)}>
+                      <ShieldCheck className="w-3.5 h-3.5 text-magenta-600" />
                       {roleBadge[modalUser.role]?.label || modalUser.role}
                     </span>
                   ) : (
                     <select
                       value={modalUser.role}
                       onChange={(e) => changeUserRole(modalUser.id, e.target.value as UserRole)}
-                      className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-200 bg-white text-gray-800 focus:outline-none focus:ring-1 focus:ring-magenta-500 cursor-pointer"
+                      className="px-3 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-black focus:outline-none focus:border-magenta-500 cursor-pointer"
                     >
                       <option value="patient">Patient</option>
                       <option value="clinic">Clinic Owner</option>
@@ -411,34 +412,36 @@ export default function AdminUserManagement() {
                   )}
                 </div>
 
-                {[
-                  { label: "Name", value: modalUser.name },
-                  { label: "Email", value: modalUser.email },
-                  { label: "Phone", value: modalUser.phone },
-                  { label: "Access / Plan", value: modalUser.plan },
-                  { label: "Joined", value: modalUser.joinedAt },
-                  {
-                    label: "Scans",
-                    value:
-                      modalUser.role === "admin"
-                        ? "N/A (Admin Access)"
-                        : modalUser.role === "clinic"
-                        ? "N/A (Clinic Partner Access)"
-                        : modalUser.role === "doctor"
-                        ? "N/A (Medical Staff Access)"
-                        : modalUser.plan === "Premium" || modalUser.scansLimit === 999
-                        ? "Unlimited (Premium Plan)"
-                        : `${modalUser.scansUsed}/${modalUser.scansLimit} scans used`,
-                  },
-                ].map((item) => (
-                  <div key={item.label}>
-                    <span className="text-xs text-gray-400">{item.label}</span>
-                    <p className="text-sm font-medium text-gray-900">{item.value}</p>
-                  </div>
-                ))}
+                <div className="rounded-xl border border-gray-200 bg-gray-50 divide-y divide-gray-200">
+                  {[
+                    { label: "Name", value: modalUser.name },
+                    { label: "Email", value: modalUser.email },
+                    { label: "Phone", value: modalUser.phone },
+                    { label: "Access / Plan", value: modalUser.plan },
+                    { label: "Joined", value: modalUser.joinedAt },
+                    {
+                      label: "Scans",
+                      value:
+                        modalUser.role === "admin"
+                          ? "N/A (Admin Access)"
+                          : modalUser.role === "clinic"
+                          ? "N/A (Clinic Partner Access)"
+                          : modalUser.role === "doctor"
+                          ? "N/A (Medical Staff Access)"
+                          : modalUser.plan === "Premium" || modalUser.scansLimit === 999
+                          ? "Unlimited (Premium Plan)"
+                          : `${modalUser.scansUsed}/${modalUser.scansLimit} scans used`,
+                    },
+                  ].map((item) => (
+                    <div key={item.label} className="px-5 py-3.5">
+                      <span className="text-xs text-gray-600">{item.label}</span>
+                      <p className="text-sm font-semibold text-black mt-0.5">{item.value}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-3 px-8 py-5 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
                 {modalUser.role !== "admin" && modalUser.id !== currentAuthUser?.id ? (
                   <>
                     {modalUser.status === "active" && (
@@ -447,9 +450,9 @@ export default function AdminUserManagement() {
                           suspendUser(modalUser.id);
                           setReviewModal(null);
                         }}
-                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-amber-50 text-amber-600 text-sm font-semibold hover:bg-amber-100 transition-colors"
+                        className="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 bg-white text-black text-sm font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
                       >
-                        <Lock className="w-4 h-4" /> Suspend
+                        Suspend
                       </button>
                     )}
                     {modalUser.status === "suspended" && (
@@ -458,9 +461,9 @@ export default function AdminUserManagement() {
                           unsuspendUser(modalUser.id);
                           setReviewModal(null);
                         }}
-                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-50 text-green-600 text-sm font-semibold hover:bg-green-100 transition-colors"
+                        className="flex-1 px-4 py-2.5 rounded-lg bg-magenta-600 text-white text-sm font-semibold hover:bg-magenta-700 transition-colors cursor-pointer"
                       >
-                        <Unlock className="w-4 h-4" /> Unsuspend
+                        Unsuspend
                       </button>
                     )}
                     {modalUser.status === "inactive" && (
@@ -469,9 +472,9 @@ export default function AdminUserManagement() {
                           reactivateUser(modalUser.id);
                           setReviewModal(null);
                         }}
-                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 text-sm font-semibold transition-colors cursor-pointer"
+                        className="flex-1 px-4 py-2.5 rounded-lg bg-magenta-600 text-white text-sm font-semibold hover:bg-magenta-700 transition-colors cursor-pointer"
                       >
-                        <UserCheck className="w-4 h-4" /> Reactivate Account
+                        Reactivate account
                       </button>
                     )}
                     {(modalUser.status === "active" || modalUser.status === "suspended") && (
@@ -480,21 +483,21 @@ export default function AdminUserManagement() {
                           deactivateUser(modalUser.id);
                           setReviewModal(null);
                         }}
-                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-gray-100 text-gray-600 text-sm font-semibold hover:bg-gray-200 transition-colors"
+                        className="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 bg-white text-black text-sm font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
                       >
-                        <UserX className="w-4 h-4" /> Deactivate
+                        Deactivate
                       </button>
                     )}
                   </>
                 ) : (
-                  <div className="flex-1 text-center py-2 text-xs font-semibold text-purple-700 bg-purple-50 rounded-lg border border-purple-200/80 flex items-center justify-center gap-1.5">
-                    <ShieldCheck className="w-4 h-4" /> Protected Administrator Account
+                  <div className="flex-1 py-2.5 text-sm font-semibold text-black bg-magenta-50 rounded-lg border border-magenta-200 flex items-center justify-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-magenta-600" /> Protected administrator account
                   </div>
                 )}
 
                 <button
                   onClick={() => setReviewModal(null)}
-                  className="px-6 py-2.5 rounded-lg bg-gray-100 text-gray-700 text-sm font-semibold hover:bg-gray-200 transition-colors"
+                  className="px-6 py-2.5 rounded-lg border border-gray-300 bg-white text-black text-sm font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
                 >
                   Close
                 </button>

@@ -13,8 +13,6 @@ import {
   Shield,
   Settings,
   HelpCircle,
-  CheckCircle2,
-  XCircle,
   Crown,
   Stethoscope,
 } from "lucide-react";
@@ -23,6 +21,9 @@ import { useState, useEffect, useRef, useCallback, type ReactNode } from "react"
 import Logo from "@/assets/logo2.png";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { withCacheBuster } from "@/lib/doctorAvatarService";
+import { AdminNotifications } from "@/pages/admin/AdminNotificationsPage";
+import { useRoleNotifications } from "@/lib/notificationService";
 
 interface AdminLayoutProps {
   children: ReactNode;
@@ -43,140 +44,143 @@ const sidebarLinks = [
   { label: "System Settings", path: "/admin/settings", icon: Settings },
 ];
 
-type RawNotif = {
-  id: string;
-  type: "clinic-pending" | "clinic-approved" | "clinic-rejected" | "new-subscription" | "new-ticket" | "broadcast";
-  title?: string;
-  clinicName?: string;
-  message: string;
-  timestamp: string;
-};
-
 export default function AdminLayout({ children }: AdminLayoutProps) {
   const { session, signOut } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
-  const [notifications, setNotifications] = useState<RawNotif[]>([]);
-  const [lastReadAt, setLastReadAt] = useState<string>(() => {
-    try {
-      return localStorage.getItem("dermai_admin_last_read_notifs") || new Date(0).toISOString();
-    } catch {
-      return new Date(0).toISOString();
-    }
-  });
   const bellRef = useRef<HTMLDivElement>(null);
 
+  const [photoError, setPhotoError] = useState(false);
+
+  const [adminPhoto, setAdminPhoto] = useState<string | null>(() => {
+    try {
+      const stored = localStorage.getItem("dermai_admin_profile");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.profilePicture) return parsed.profilePicture;
+      }
+    } catch {}
+    const meta = session?.user?.user_metadata || {};
+    return meta.avatar_url || meta.picture || null;
+  });
+
+  const [adminNameState, setAdminNameState] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem("dermai_admin_profile");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.fullName) return parsed.fullName;
+      }
+    } catch {}
+    const meta = session?.user?.user_metadata || {};
+    return meta.full_name || meta.name || session?.user?.email?.split("@")[0] || "Admin";
+  });
+
   const meta = session?.user?.user_metadata || {};
-  const adminName = meta.full_name || meta.name || session?.user?.email?.split("@")[0] || "Admin";
+  const adminName = adminNameState || meta.full_name || meta.name || session?.user?.email?.split("@")[0] || "Admin";
   const adminEmail = session?.user?.email || "admin@dermai.ph";
+
+  useEffect(() => {
+    setPhotoError(false);
+  }, [adminPhoto]);
+
+  const loadAdminProfile = useCallback(async () => {
+    let photo: string | null = null;
+    let name: string | null = null;
+
+    // 1. Authoritative: Database user table (primary source of truth)
+    const userId = session?.user?.id;
+    const userEmail = session?.user?.email || "dermaisupport@gmail.com";
+    if (userId || userEmail) {
+      try {
+        let query = supabase.from("user").select("user_id, full_name, avatar_url");
+        if (userId) {
+          query = query.or(`user_id.eq.${userId},email.eq.${userEmail}`);
+        } else {
+          query = query.eq("email", userEmail);
+        }
+        const { data: dbUser } = await query.maybeSingle();
+        if (dbUser) {
+          if (dbUser.avatar_url) {
+            photo = dbUser.avatar_url;
+          }
+          if (dbUser.full_name) {
+            name = dbUser.full_name;
+          }
+
+          // If dbUser has no avatar_url but OAuth metadata does, backfill DB
+          const currentMeta = session?.user?.user_metadata || {};
+          const metaPhoto = currentMeta.avatar_url || currentMeta.picture;
+          if (!dbUser.avatar_url && metaPhoto) {
+            photo = metaPhoto;
+            try {
+              await supabase
+                .from("user")
+                .update({ avatar_url: metaPhoto })
+                .eq("user_id", dbUser.user_id || userId);
+            } catch {}
+          }
+        }
+      } catch (err) {
+        console.warn("[AdminLayout] Error loading admin profile from DB:", err);
+      }
+    }
+
+    // 2. Auth metadata (Google OAuth) fallback
+    if (!photo) {
+      const currentMeta = session?.user?.user_metadata || {};
+      photo = currentMeta.avatar_url || currentMeta.picture || null;
+      if (!name) name = currentMeta.full_name || currentMeta.name || null;
+    }
+
+    // 3. LocalStorage fallback
+    if (!photo || !name) {
+      try {
+        const stored = localStorage.getItem("dermai_admin_profile");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (!photo && parsed.profilePicture) photo = parsed.profilePicture;
+          if (!name && parsed.fullName) name = parsed.fullName;
+        }
+      } catch {}
+    }
+
+    if (photo) {
+      setAdminPhoto(withCacheBuster(photo));
+      try {
+        const raw = localStorage.getItem("dermai_admin_profile");
+        const parsed = raw ? JSON.parse(raw) : {};
+        localStorage.setItem(
+          "dermai_admin_profile",
+          JSON.stringify({ ...parsed, profilePicture: photo, fullName: name || parsed.fullName || adminName })
+        );
+      } catch {}
+    }
+    if (name) {
+      setAdminNameState(name);
+    }
+  }, [session, adminName]);
+
+  useEffect(() => {
+    loadAdminProfile();
+
+    const handleUpdate = () => loadAdminProfile();
+    window.addEventListener("dermai_admin_profile_updated", handleUpdate);
+    window.addEventListener("storage", handleUpdate);
+    return () => {
+      window.removeEventListener("dermai_admin_profile_updated", handleUpdate);
+      window.removeEventListener("storage", handleUpdate);
+    };
+  }, [loadAdminProfile]);
 
   const handleLogout = async () => {
     await signOut();
     navigate("/", { replace: true });
   };
 
-  const fetchAdminNotifications = useCallback(async () => {
-    try {
-      const list: RawNotif[] = [];
-
-      // 1. Pending clinic registrations
-      const { data: pendingClinics } = await supabase
-        .from("clinic")
-        .select("clinic_id, name, created_at")
-        .eq("status", "pending")
-        .order("name")
-        .limit(10);
-
-      if (pendingClinics) {
-        pendingClinics.forEach((c: any) => {
-          list.push({
-            id: `clinic-${c.clinic_id}`,
-            type: "clinic-pending",
-            title: `New Clinic Application`,
-            clinicName: c.name,
-            message: `"${c.name}" submitted a registration application awaiting your review.`,
-            timestamp: c.created_at || new Date().toISOString(),
-          });
-        });
-      }
-
-      // 2. Open Support Tickets
-      const { data: tickets } = await supabase
-        .from("user_support_ticket")
-        .select("ticket_id, subject, message, created_at, status")
-        .order("created_at", { ascending: false })
-        .limit(10);
-
-      if (tickets) {
-        tickets.forEach((t: any) => {
-          list.push({
-            id: `ticket-${t.ticket_id}`,
-            type: "new-ticket",
-            title: `Support: ${t.subject || "Inquiry"}`,
-            message: t.message || "A user submitted a support request.",
-            timestamp: t.created_at,
-          });
-        });
-      }
-
-      // 3. User notifications
-      const { data: notifData } = await supabase
-        .from("user_notification")
-        .select("notif_id, type, title, body, created_at")
-        .order("created_at", { ascending: false })
-        .limit(15);
-
-      if (notifData) {
-        notifData.forEach((n: any) => {
-          let mappedType: RawNotif["type"] = "broadcast";
-          if (n.type?.includes("clinic")) {
-            mappedType = n.type.includes("reject") ? "clinic-rejected" : "clinic-approved";
-          } else if (n.type?.includes("sub") || n.type?.includes("plan")) {
-            mappedType = "new-subscription";
-          } else if (n.type?.includes("ticket")) {
-            mappedType = "new-ticket";
-          }
-          list.push({
-            id: n.notif_id,
-            type: mappedType,
-            title: n.title,
-            message: n.body || "",
-            timestamp: n.created_at,
-          });
-        });
-      }
-
-      // Sort newest first
-      list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      setNotifications(list);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchAdminNotifications();
-
-    // Realtime listeners for admin alerts
-    const channel = supabase
-      .channel("admin-layout-alerts")
-      .on("postgres_changes", { event: "*", schema: "public", table: "clinic" }, () => fetchAdminNotifications())
-      .on("postgres_changes", { event: "*", schema: "public", table: "user_support_ticket" }, () => fetchAdminNotifications())
-      .on("postgres_changes", { event: "*", schema: "public", table: "user_notification" }, () => fetchAdminNotifications())
-      .subscribe();
-
-    const handleTicketUpdate = () => fetchAdminNotifications();
-    window.addEventListener("dermai_tickets_updated", handleTicketUpdate);
-    window.addEventListener("storage", handleTicketUpdate);
-
-    return () => {
-      supabase.removeChannel(channel);
-      window.removeEventListener("dermai_tickets_updated", handleTicketUpdate);
-      window.removeEventListener("storage", handleTicketUpdate);
-    };
-  }, [fetchAdminNotifications]);
+  const { unreadCount } = useRoleNotifications("admin", {});
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -189,19 +193,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [bellOpen]);
-
-  const unreadCount = notifications.filter(
-    (n: RawNotif) => new Date(n.timestamp) > new Date(lastReadAt)
-  ).length;
-
-  const openBell = useCallback(() => {
-    setBellOpen((prev) => !prev);
-    // TODO: Mark notifications as read via Supabase
-    const now = new Date().toISOString();
-    setLastReadAt(now);
-  }, []);
-
-  const recentNotifs = notifications.slice(0, 8);
 
   const currentPage = sidebarLinks.find(
     (l) => l.path === location.pathname
@@ -269,9 +260,24 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         {/* Admin Profile + Logout */}
         <div className="px-3 py-4 border-t border-gray-100 space-y-2">
           <div className="flex items-center gap-3 px-4 py-2">
-            <div className="w-9 h-9 rounded-xl bg-magenta-500 flex items-center justify-center text-white text-sm font-bold">
-              {adminName[0]?.toUpperCase() || "A"}
-            </div>
+            {adminPhoto && !photoError ? (
+              <img
+                src={adminPhoto}
+                alt={adminName}
+                referrerPolicy="no-referrer"
+                className="w-9 h-9 rounded-xl object-cover border border-gray-200 shrink-0 shadow-2xs"
+                onError={() => {
+                  console.warn("[AdminLayout] Avatar failed to load, falling back to initial badge:", adminPhoto);
+                  setPhotoError(true);
+                }}
+              />
+            ) : (
+              <div
+                className="w-9 h-9 rounded-xl bg-magenta-500 flex items-center justify-center text-white text-sm font-bold shrink-0 shadow-2xs"
+              >
+                {adminName[0]?.toUpperCase() || "A"}
+              </div>
+            )}
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-gray-900 truncate">{adminName}</p>
               <p className="text-[11px] text-gray-400 truncate">{adminEmail}</p>
@@ -307,8 +313,8 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           <div className="flex items-center gap-2">
             <div className="relative" ref={bellRef}>
               <button
-                onClick={openBell}
-                className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors"
+                onClick={() => setBellOpen((prev) => !prev)}
+                className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer"
                 title="Notifications"
               >
                 <Bell className="w-5 h-5 text-gray-500" />
@@ -321,110 +327,8 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
               {/* Dropdown panel */}
               {bellOpen && (
-                <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden">
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/50">
-                    <div className="flex items-center gap-2">
-                      <Bell className="w-4 h-4 text-magenta-500" />
-                      <p className="text-sm font-semibold text-gray-900">Notifications</p>
-                    </div>
-                    {unreadCount > 0 ? (
-                      <button
-                        onClick={() => {
-                          const now = new Date().toISOString();
-                          setLastReadAt(now);
-                          try {
-                            localStorage.setItem("dermai_admin_last_read_notifs", now);
-                          } catch {}
-                        }}
-                        className="text-[11px] font-semibold text-magenta-600 hover:text-magenta-700"
-                      >
-                        Mark read
-                      </button>
-                    ) : (
-                      <span className="text-[11px] text-gray-400 font-medium">All caught up</span>
-                    )}
-                  </div>
-
-                  {recentNotifs.length === 0 ? (
-                    <div className="px-4 py-8 text-center">
-                      <Bell className="w-7 h-7 text-gray-300 mx-auto mb-2" />
-                      <p className="text-xs text-gray-400">No notifications yet.</p>
-                    </div>
-                  ) : (
-                    <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
-                      {recentNotifs.map((n: RawNotif) => {
-                        const isNew = new Date(n.timestamp) > new Date(lastReadAt);
-                        return (
-                          <div
-                            key={n.id}
-                            onClick={() => {
-                              setBellOpen(false);
-                              if (n.type === "clinic-pending") {
-                                navigate("/admin/clinics");
-                              } else if (n.type === "new-ticket") {
-                                navigate("/admin/support");
-                              } else {
-                                navigate("/admin/notifications");
-                              }
-                            }}
-                            className={cn(
-                              "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer",
-                              isNew && "bg-magenta-50/20"
-                            )}
-                          >
-                            <div
-                              className={cn(
-                                "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
-                                n.type === "clinic-pending"
-                                  ? "bg-amber-100 text-amber-600"
-                                  : n.type === "clinic-approved"
-                                  ? "bg-green-100 text-green-600"
-                                  : n.type === "new-subscription"
-                                  ? "bg-blue-100 text-blue-600"
-                                  : n.type === "new-ticket"
-                                  ? "bg-purple-100 text-purple-600"
-                                  : "bg-red-100 text-red-600"
-                              )}
-                            >
-                              {n.type === "new-subscription" ? (
-                                <CreditCard className="w-4 h-4 text-blue-600" />
-                              ) : n.type === "new-ticket" ? (
-                                <HelpCircle className="w-4 h-4 text-purple-600" />
-                              ) : n.type === "clinic-approved" || n.type === "clinic-pending" ? (
-                                <CheckCircle2 className="w-4 h-4" />
-                              ) : (
-                                <XCircle className="w-4 h-4" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-semibold text-gray-900 truncate">
-                                {n.title || n.clinicName || "Notification"}
-                              </p>
-                              <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2">{n.message}</p>
-                              <p className="text-[10px] text-gray-400 mt-1">
-                                {new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(n.timestamp).toLocaleDateString()}
-                              </p>
-                            </div>
-                            {isNew && (
-                              <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  <div className="border-t border-gray-100 px-4 py-2.5 bg-gray-50/50">
-                    <button
-                      onClick={() => {
-                        setBellOpen(false);
-                        navigate("/admin/notifications");
-                      }}
-                      className="w-full text-center text-xs font-semibold text-magenta-600 hover:text-magenta-800 transition-colors"
-                    >
-                      View all notifications →
-                    </button>
-                  </div>
+                <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden">
+                  <AdminNotifications isDropdown onClose={() => setBellOpen(false)} />
                 </div>
               )}
             </div>

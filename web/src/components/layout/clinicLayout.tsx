@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { LayoutDashboard, Calendar, Users, Bell, LogOut, Menu, ChevronRight, CheckCircle2, Settings, Stethoscope, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import Logo from "@/assets/logo2.png";
 interface ClinicLayoutProps {
@@ -17,16 +17,9 @@ const sidebarLinks = [
 import { useAuth } from "@/context/AuthContext";
 import { useNavigate } from "react-router-dom";
 
-import { supabase } from "@/lib/supabaseClient";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
-
-type ClinicNotif = {
-  id: string;
-  type: "appointment-pending" | "doctor-reviewed" | "broadcast";
-  title: string;
-  message: string;
-  time: string;
-};
+import ClinicNotifications from "@/pages/clinic/ClinicNotifications";
+import { useRoleNotifications } from "@/lib/notificationService";
 
 export default function ClinicLayout({ children }: ClinicLayoutProps) {
   const { signOut, user } = useAuth();
@@ -115,92 +108,11 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
   const displayLogo = localLogo || clinicLogo;
   const displayName = localName || clinicName || "Clinic Portal";
 
-  const [notifications, setNotifications] = useState<ClinicNotif[]>([]);
-  const [lastReadAt, setLastReadAt] = useState<string>(() => {
-    try {
-      return localStorage.getItem("dermai_clinic_last_read_notifs") || new Date(0).toISOString();
-    } catch {
-      return new Date(0).toISOString();
-    }
+  const { unreadCount } = useRoleNotifications("clinic", {
+    clinicId: clinicId || undefined,
+    userId: user?.id,
+    userEmail: user?.email,
   });
-
-  const loadClinicNotifications = useCallback(async () => {
-    if (!clinicId) return;
-    try {
-      const list: ClinicNotif[] = [];
-
-      // 1. Pending incoming appointments
-      const { data: pendingApps } = await supabase
-        .from("patient_appointment")
-        .select("appointment_id, patient_name, ai_condition_name, created_at, status")
-        .eq("clinic_id", clinicId)
-        .eq("status", "pending")
-        .order("created_at", { ascending: false })
-        .limit(10);
-      if (pendingApps) {
-        pendingApps.forEach((a: any) => {
-          list.push({
-            id: `app-${a.appointment_id}`,
-            type: "appointment-pending",
-            title: "New Appointment Request",
-            message: `${a.patient_name || "A patient"} requested an appointment${a.ai_condition_name ? ` for ${a.ai_condition_name}` : ""}.`,
-            time: a.created_at,
-          });
-        });
-      }
-
-      // 2. User notifications
-      if (user?.id) {
-        const { data: userNotifs } = await supabase
-          .from("user_notification")
-          .select("notif_id, type, title, body, created_at")
-          .eq("user_id", user.id)
-          .order("created_at", { ascending: false })
-          .limit(10);
-
-        if (userNotifs) {
-          userNotifs.forEach((n: any) => {
-            list.push({
-              id: n.notif_id,
-              type: "broadcast",
-              title: n.title,
-              message: n.body || "",
-              time: n.created_at,
-            });
-          });
-        }
-      }
-
-      list.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
-      setNotifications(list);
-    } catch {
-      /* ignore */
-    }
-  }, [clinicId, user?.id]);
-
-  useEffect(() => {
-    loadClinicNotifications();
-
-    let channel: any = null;
-    if (clinicId) {
-      channel = supabase
-        .channel(`clinic-layout-notifs-${clinicId}`)
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "patient_appointment", filter: `clinic_id=eq.${clinicId}` },
-          () => loadClinicNotifications()
-        )
-        .subscribe();
-    }
-
-    return () => {
-      if (channel) supabase.removeChannel(channel);
-    };
-  }, [clinicId, loadClinicNotifications]);
-
-  const unreadCount = notifications.filter(
-    (n) => new Date(n.time) > new Date(lastReadAt)
-  ).length;
 
   const handleLogout = async () => {
     try {
@@ -219,14 +131,6 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
-
-  const markAllRead = () => {
-    const now = new Date().toISOString();
-    setLastReadAt(now);
-    try {
-      localStorage.setItem("dermai_clinic_last_read_notifs", now);
-    } catch { }
-  };
   const currentPage = sidebarLinks.find((l) => l.path === location.pathname)?.label || "Dashboard";
   return (<div className="min-h-screen bg-gray-50/80 flex">
     {sidebarOpen && (<div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />)}
@@ -373,85 +277,11 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
               </span>)}
             </button>
 
-            {notifOpen && (<div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
-              {/* Header */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                <div className="flex items-center gap-2">
-                  <Bell className="w-4 h-4 text-magenta-500" />
-                  <span className="font-semibold text-gray-900 text-sm">Notifications</span>
-                </div>
-                {unreadCount > 0 && (<button onClick={markAllRead} className="text-[11px] text-magenta-500 hover:text-magenta-700 font-medium">
-                  Mark all read
-                </button>)}
+            {notifOpen && (
+              <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+                <ClinicNotifications isDropdown onClose={() => setNotifOpen(false)} />
               </div>
-
-              {/* Items */}
-              <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
-                {notifications.length === 0 ? (
-                  <div className="py-10 text-center">
-                    <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                    <p className="text-sm text-gray-400">No new notifications</p>
-                  </div>
-                ) : (
-                  notifications.map((n) => {
-                    const isNew = new Date(n.time) > new Date(lastReadAt);
-                    return (
-                      <div
-                        key={n.id}
-                        onClick={() => {
-                          setNotifOpen(false);
-                          markAllRead();
-                          navigate("/clinic/appointments");
-                        }}
-                        className={cn(
-                          "flex items-start gap-3 px-4 py-3 hover:bg-magenta-50/30 transition-colors cursor-pointer text-left",
-                          isNew && "bg-magenta-50/20"
-                        )}
-                      >
-                        <div
-                          className={cn(
-                            "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
-                            n.type === "appointment-pending"
-                              ? "bg-amber-100 text-amber-600"
-                              : "bg-magenta-100 text-magenta-600"
-                          )}
-                        >
-                          <Calendar className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-gray-900 truncate">
-                            {n.title}
-                          </p>
-                          <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 mt-0.5">
-                            {n.message}
-                          </p>
-                          <p className="text-[10px] text-gray-400 mt-1">
-                            {new Date(n.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(n.time).toLocaleDateString()}
-                          </p>
-                        </div>
-                        {isNew && (
-                          <span className="w-2 h-2 rounded-full bg-magenta-500 shrink-0 mt-2" />
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-
-              {/* Footer */}
-              <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50">
-                <Link
-                  to="/clinic/appointments"
-                  onClick={() => {
-                    setNotifOpen(false);
-                    markAllRead();
-                  }}
-                  className="block text-center text-sm font-semibold text-magenta-500 hover:text-magenta-700 transition-colors"
-                >
-                  View all appointments →
-                </Link>
-              </div>
-            </div>)}
+            )}
           </div>
         </div>
       </div>

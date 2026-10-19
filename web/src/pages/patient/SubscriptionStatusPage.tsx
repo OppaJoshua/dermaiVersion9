@@ -10,7 +10,7 @@ interface PlanFeature {
   feature_text: string;
 }
 
-interface PlanDetails {
+export interface PlanDetails {
   plan_id: string;
   name: string;
   description: string;
@@ -42,107 +42,27 @@ interface BillingTransaction {
 const DEFAULT_MAX_FREE_SCANS = 3;
 
 export default function SubscriptionStatusPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
-
-  const [freePlan, setFreePlan] = useState<PlanDetails | null>(null);
-
-  const [subscription, setSubscription] = useState<SubscriptionInfo>({
-    isPro: false,
-    planName: "Free Plan",
-    planDescription: "",
-    planFeatures: [],
-    maxScans: DEFAULT_MAX_FREE_SCANS,
-    scansUsed: 0,
-    remainingDays: null,
-  });
-
+  const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
   const [billingHistory, setBillingHistory] =
     useState<BillingTransaction[]>([]);
 
   useEffect(() => {
     let isMounted = true;
 
+    // Wait until auth is resolved to avoid false unauthenticated state
+    if (authLoading) return;
+
     const loadSubscriptionStatus = async () => {
       setLoading(true);
 
       try {
-        // ------------------------------------------------------------
-        // 1. Fetch the Free Plan and its Admin-managed features
-        // ------------------------------------------------------------
-        const {
-          data: freePlanData,
-          error: freePlanError,
-        } = await supabase
-          .from("plan")
-          .select(`
-            plan_id,
-            name,
-            description,
-            scan_limit,
-            plan_feature (
-              feature_id,
-              feature_text
-            )
-          `)
-          .or("price.eq.0,name.ilike.Free")
-          .limit(1)
-          .maybeSingle();
-
-        if (freePlanError) {
-          console.warn(
-            "Free plan could not be loaded:",
-            freePlanError.message
-          );
-        }
-
-        if (isMounted && freePlanData) {
-          setFreePlan(freePlanData as PlanDetails);
-        }
-
-        // ------------------------------------------------------------
-        // 2. If no user is logged in, use the Admin Free Plan
-        // ------------------------------------------------------------
         if (!user?.id) {
-          if (isMounted) {
-            const freePlan = freePlanData as PlanDetails | null;
-
-            setSubscription({
-              isPro: false,
-              planName: freePlan?.name ?? "Free Plan",
-              planDescription: freePlan?.description ?? "",
-              planFeatures:
-                freePlan?.plan_feature
-                  ?.map((feature) => feature.feature_text)
-                  .filter(Boolean) ?? [],
-              maxScans:
-                freePlan?.scan_limit === -1
-                  ? Infinity
-                  : freePlan?.scan_limit ?? DEFAULT_MAX_FREE_SCANS,
-              scansUsed: 0,
-              remainingDays: null,
-            });
-
-            setLoading(false);
-          }
-
-          return;
-        }
-
-        // ------------------------------------------------------------
-        // 3. Fetch active subscription and its complete plan details
-        // ------------------------------------------------------------
-        const { data: subData, error: subError } = await supabase
-          .from("user_plan_subscription")
-          .select(`
-            subscription_id,
-            status,
-            billing_cycle,
-            renews_at,
-            current_period_start,
-            current_period_end,
-            cancel_at_period_end,
-            plan:plan_id (
+          // If no user is logged in, fetch the active Free Plan
+          const { data: freePlanData } = await supabase
+            .from("plan")
+            .select(`
               plan_id,
               name,
               description,
@@ -151,193 +71,238 @@ export default function SubscriptionStatusPage() {
                 feature_id,
                 feature_text
               )
-            )
-          `)
-          .eq("user_id", user.id)
-          .in("status", ["active", "cancelling"])
-          .maybeSingle();
+            `)
+            .or("price.eq.0,name.ilike.Free")
+            .limit(1)
+            .maybeSingle();
 
-        const paidPeriodValid = Boolean(
-          subData?.current_period_end &&
-          new Date(subData.current_period_end).getTime() > Date.now()
-        );
+          if (!isMounted) return;
 
-        if (subError) {
-          console.warn(
-            "user_plan_subscription not available:",
-            subError.message
-          );
+          const freeFeatures = Array.isArray(freePlanData?.plan_feature)
+            ? freePlanData.plan_feature
+                .map((feature: any) => feature.feature_text)
+                .filter(Boolean)
+            : [];
+
+          setSubscription({
+            isPro: false,
+            planName: freePlanData?.name ?? "Free Plan",
+            planDescription: freePlanData?.description ?? "",
+            planFeatures: freeFeatures,
+            maxScans:
+              freePlanData?.scan_limit === -1
+                ? Infinity
+                : freePlanData?.scan_limit ?? DEFAULT_MAX_FREE_SCANS,
+            scansUsed: 0,
+            remainingDays: null,
+            cancelAtPeriodEnd: false,
+          });
+          setBillingHistory([]);
+          return;
         }
 
-        // ------------------------------------------------------------
-        // 4. Determine billing-cycle start
-        // ------------------------------------------------------------
-        const cycleStart: string = paidPeriodValid
-          ? (subData as any)?.current_period_start ||
-            new Date(
-              new Date().getFullYear(),
-              new Date().getMonth(),
-              1
-            ).toISOString()
-          : new Date(
-              new Date().getFullYear(),
-              new Date().getMonth(),
-              1
-            ).toISOString();
+        // Parallel fetch free plan, active subscription, and billing history
+        const [freePlanRes, subRes, payRes] = await Promise.all([
+          supabase
+            .from("plan")
+            .select(`
+              plan_id,
+              name,
+              description,
+              scan_limit,
+              plan_feature (
+                feature_id,
+                feature_text
+              )
+            `)
+            .or("price.eq.0,name.ilike.Free")
+            .limit(1)
+            .maybeSingle(),
 
-        // ------------------------------------------------------------
-        // 5. Count AI scans used during the current cycle
-        // ------------------------------------------------------------
-        const { count: usedScans, error: scanError } = await supabase
+          supabase
+            .from("user_plan_subscription")
+            .select(`
+              subscription_id,
+              started_at,
+              status,
+              billing_cycle,
+              renews_at,
+              current_period_start,
+              current_period_end,
+              cancel_at_period_end,
+              plan:plan_id (
+                plan_id,
+                name,
+                price,
+                description,
+                scan_limit,
+                plan_feature (
+                  feature_id,
+                  feature_text
+                )
+              )
+            `)
+            .eq("user_id", user.id)
+            .order("started_at", { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+
+          supabase
+            .from("user_payment")
+            .select(
+              "payment_id, payment_date, amount, status, plan:plan_id ( name )"
+            )
+            .eq("user_id", user.id)
+            .order("payment_date", { ascending: false })
+            .limit(10),
+        ]);
+
+        if (!isMounted) return;
+
+        const subData = subRes.data;
+        const planRaw: any = subData?.plan;
+        const plan = Array.isArray(planRaw) ? planRaw[0] : planRaw;
+
+        const periodEndRaw = subData?.current_period_end || subData?.renews_at;
+        const periodEnd = periodEndRaw ? new Date(periodEndRaw) : null;
+
+        const paidPeriodValid = Boolean(
+          (subData?.status === "active" ||
+            subData?.status === "cancelling" ||
+            subData?.status === "pending_downgrade") &&
+            periodEnd !== null &&
+            periodEnd.getTime() > Date.now()
+        );
+
+        const isPro = Boolean(
+          subData &&
+            plan &&
+            paidPeriodValid &&
+            (Number(plan.price) > 0 ||
+              plan.scan_limit === -1 ||
+              plan.name?.toLowerCase().includes("pro"))
+        );
+
+        // Determine cycleStart for AI scans
+        const cycleStart: string =
+          isPro && paidPeriodValid
+            ? subData?.current_period_start ||
+              subData?.started_at ||
+              new Date(
+                new Date().getFullYear(),
+                new Date().getMonth(),
+                1
+              ).toISOString()
+            : new Date(
+                new Date().getFullYear(),
+                new Date().getMonth(),
+                1
+              ).toISOString();
+
+        // Fetch AI scans used in this cycle
+        const { count: usedScans } = await supabase
           .from("ai_scan_result")
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id)
           .eq("status", "completed")
           .gte("scanned_at", cycleStart);
 
-        if (scanError) {
-          console.warn(
-            "ai_scan_result not available:",
-            scanError.message
-          );
-        }
-
-        // ------------------------------------------------------------
-        // 6. Fetch billing history
-        // ------------------------------------------------------------
-        const { data: payments, error: payError } = await supabase
-          .from("user_payment")
-          .select(
-            "payment_id, payment_date, amount, status, plan:plan_id ( name )"
-          )
-          .eq("user_id", user.id)
-          .order("payment_date", { ascending: false })
-          .limit(10);
-
-        if (payError) {
-          console.warn(
-            "user_payment not available:",
-            payError.message
-          );
-        }
-
         if (!isMounted) return;
 
-        // ------------------------------------------------------------
-        // 7. Build the patient's current plan
-        // ------------------------------------------------------------
-        if (subData && !subError && paidPeriodValid) {
-          const planRaw: any = subData.plan;
-          const plan = Array.isArray(planRaw)
-            ? planRaw[0]
-            : planRaw;
+        // Map billing transactions
+        const formattedPayments: BillingTransaction[] = (
+          payRes.data || []
+        ).map((p: any) => {
+          const planObj = Array.isArray(p.plan) ? p.plan[0] : p.plan;
 
-          const isPro = plan?.scan_limit === -1;
+          return {
+            id: p.payment_id,
+            date: new Date(p.payment_date).toLocaleDateString("en-PH", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            }),
+            description: planObj?.name ?? "Plan Payment",
+            amount: `₱${Number(p.amount).toLocaleString("en-PH", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}`,
+            status: (p.status === "success"
+              ? "paid"
+              : p.status === "failed"
+              ? "failed"
+              : "pending") as BillingTransaction["status"],
+          };
+        });
 
-          const periodEndRaw = subData.current_period_end || subData.renews_at;
-          const remainingDays = periodEndRaw
+        // Atomically set the resolved subscription state
+        if (isPro && plan) {
+          const remainingDays = periodEnd
             ? Math.max(
                 0,
                 Math.ceil(
-                  (new Date(periodEndRaw).getTime() -
-                    Date.now()) /
-                    86400000
+                  (periodEnd.getTime() - Date.now()) / 86400000
                 )
               )
             : null;
 
-          const planFeatures: string[] =
-            plan?.plan_feature
-              ?.map((feature: PlanFeature) => feature.feature_text)
-              .filter(Boolean) ?? [];
-
-          const renewalRaw = subData.renews_at || subData.current_period_end;
-          const renewsAtFormatted = renewalRaw
-            ? new Date(renewalRaw).toLocaleDateString("en-US", {
+          const renewsAtFormatted = periodEnd
+            ? periodEnd.toLocaleDateString("en-US", {
                 month: "short",
                 day: "numeric",
                 year: "numeric",
               })
             : undefined;
 
+          const planFeatures: string[] = Array.isArray(plan.plan_feature)
+            ? plan.plan_feature
+                .map((feature: any) => feature.feature_text)
+                .filter(Boolean)
+            : [];
+
           setSubscription({
-            isPro,
-            planName: plan?.name ?? "Free Plan",
-            planDescription: plan?.description ?? "",
+            isPro: true,
+            planName: plan.name ?? "Pro Plan",
+            planDescription: plan.description ?? "",
             planFeatures,
-            billingCycle:
-              subData.billing_cycle as "monthly" | "yearly",
+            billingCycle: (subData?.billing_cycle as "monthly" | "yearly") || "monthly",
             renewsAt: renewsAtFormatted,
             remainingDays,
-            cancelAtPeriodEnd: Boolean(subData.cancel_at_period_end),
+            cancelAtPeriodEnd: Boolean(
+              subData?.cancel_at_period_end || subData?.status === "cancelling"
+            ),
             maxScans:
-              plan?.scan_limit === -1
+              plan.scan_limit === -1
                 ? Infinity
-                : plan?.scan_limit ?? DEFAULT_MAX_FREE_SCANS,
+                : plan.scan_limit ?? Infinity,
             scansUsed: usedScans ?? 0,
           });
         } else {
-          // ----------------------------------------------------------
-          // 8. No active subscription → use Admin Free Plan
-          // ----------------------------------------------------------
-          const freePlan = freePlanData as PlanDetails | null;
+          const freePlanData = freePlanRes.data;
+          const freeFeatures = Array.isArray(freePlanData?.plan_feature)
+            ? freePlanData.plan_feature
+                .map((feature: any) => feature.feature_text)
+                .filter(Boolean)
+            : [];
 
           setSubscription({
             isPro: false,
-            planName: freePlan?.name ?? "Free Plan",
-            planDescription: freePlan?.description ?? "",
-            planFeatures:
-              freePlan?.plan_feature
-                ?.map((feature) => feature.feature_text)
-                .filter(Boolean) ?? [],
+            planName: freePlanData?.name ?? "Free Plan",
+            planDescription: freePlanData?.description ?? "",
+            planFeatures: freeFeatures,
             maxScans:
-              freePlan?.scan_limit === -1
+              freePlanData?.scan_limit === -1
                 ? Infinity
-                : freePlan?.scan_limit ?? DEFAULT_MAX_FREE_SCANS,
+                : freePlanData?.scan_limit ?? DEFAULT_MAX_FREE_SCANS,
             scansUsed: usedScans ?? 0,
             remainingDays: null,
+            cancelAtPeriodEnd: false,
           });
         }
 
-        // ------------------------------------------------------------
-        // 9. Format billing history
-        // ------------------------------------------------------------
-        if (!payError && payments) {
-          setBillingHistory(
-            payments.map((p: any) => {
-              const planObj = Array.isArray(p.plan)
-                ? p.plan[0]
-                : p.plan;
-
-              return {
-                id: p.payment_id,
-                date: new Date(
-                  p.payment_date
-                ).toLocaleDateString("en-PH", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                }),
-                description:
-                  planObj?.name ?? "Plan Payment",
-                amount: `₱${Number(
-                  p.amount
-                ).toLocaleString()}`,
-                status:
-                  (p.status === "success"
-                    ? "paid"
-                    : p.status === "failed"
-                    ? "failed"
-                    : "pending") as BillingTransaction["status"],
-              };
-            })
-          );
-        }
+        setBillingHistory(formattedPayments);
       } catch (err) {
-        console.error(
-          "Failed to load subscription status:",
-          err
-        );
+        console.error("Failed to load subscription status:", err);
       } finally {
         if (isMounted) {
           setLoading(false);
@@ -350,19 +315,17 @@ export default function SubscriptionStatusPage() {
     return () => {
       isMounted = false;
     };
-  }, [user]);
+  }, [user, authLoading]);
 
-  const {
-    isPro,
-    planName,
-    planDescription,
-    planFeatures,
-    maxScans,
-    scansUsed,
-    remainingDays,
-    renewsAt,
-    cancelAtPeriodEnd,
-  } = subscription;
+  const isPro = subscription?.isPro ?? false;
+  const planName = subscription?.planName ?? "Free Plan";
+  const planDescription = subscription?.planDescription;
+  const planFeatures = subscription?.planFeatures ?? [];
+  const maxScans = subscription?.maxScans ?? DEFAULT_MAX_FREE_SCANS;
+  const scansUsed = subscription?.scansUsed ?? 0;
+  const remainingDays = subscription?.remainingDays ?? null;
+  const renewsAt = subscription?.renewsAt;
+  const cancelAtPeriodEnd = subscription?.cancelAtPeriodEnd ?? false;
 
   const scansRemaining = isPro
     ? 999
@@ -378,17 +341,6 @@ export default function SubscriptionStatusPage() {
         )
       : 0;
 
-  // Use the fetched Free Plan as a fallback while the subscription
-  // information is being displayed.
-  const displayedFeatures =
-    planFeatures.length > 0
-      ? planFeatures
-      : !isPro && freePlan?.plan_feature
-      ? freePlan.plan_feature
-          .map((feature) => feature.feature_text)
-          .filter(Boolean)
-      : [];
-
   return (
     <div className="min-h-screen bg-white text-gray-900 pt-8 pb-20 px-4 font-sans antialiased">
       <div className="max-w-4xl mx-auto">
@@ -401,179 +353,227 @@ export default function SubscriptionStatusPage() {
           </p>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2 items-start">
-          {/* Current Plan Card */}
-          <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-xs flex flex-col items-center text-center"
-          >
-          
-            <h2 className="text-xl font-bold text-gray-900 mb-1">
-              {planName}
-            </h2>
+        {loading || !subscription ? (
+          <div className="grid gap-6 md:grid-cols-2 items-start">
+            {/* Current Plan Card Skeleton */}
+            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-xs flex flex-col items-center text-center animate-pulse">
+              <div className="h-7 w-32 bg-gray-200 rounded-lg mb-2" />
+              <div className="h-4 w-24 bg-gray-100 rounded mb-4" />
+              <div className="h-3.5 w-64 max-w-full bg-gray-100 rounded mb-2" />
+              <div className="h-3.5 w-48 max-w-full bg-gray-100 rounded mb-6" />
 
-            <p className="text-xs text-gray-500 mb-1 font-medium">
-              {isPro
-                ? remainingDays !== null &&
-                  remainingDays !== undefined
-                  ? `${remainingDays} days remaining`
-                  : "Active Subscription"
-                : "Free access"}
-            </p>
-
-            {isPro && renewsAt && (
-              <p className="text-[11px] text-gray-400 mb-3">
-                {cancelAtPeriodEnd
-                  ? `Access ends on ${renewsAt}`
-                  : `Next renewal: ${renewsAt}`}
-              </p>
-            )}
-
-            {/* Admin-managed plan description */}
-            {planDescription && (
-              <p className="text-xs text-gray-500 leading-relaxed max-w-sm mb-5">
-                {planDescription}
-              </p>
-            )}
-
-            {/* Admin-managed plan features */}
-            <div className="w-full space-y-3 text-left mb-8 pt-4 border-t border-gray-100">
-              {displayedFeatures.length > 0 ? (
-                displayedFeatures.map((feature, index) => (
-                  <div
-                    key={`${feature}-${index}`}
-                    className="flex items-center gap-3 text-xs text-gray-700"
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                    <span>{feature}</span>
+              <div className="w-full space-y-3.5 pt-4 border-t border-gray-100 mb-8">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <div className="w-4 h-4 rounded-full bg-gray-200 shrink-0" />
+                    <div
+                      className="h-3 bg-gray-100 rounded"
+                      style={{ width: `${55 + ((i * 13) % 35)}%` }}
+                    />
                   </div>
-                ))
-              ) : (
-                <p className="text-xs text-gray-400 italic">
-                  No plan features configured.
-                </p>
-              )}
-            </div>
-
-            {!isPro && (
-              <Link
-                to="/dashboard/upgrade"
-                className="w-full py-3 bg-magenta-600 text-white rounded-full font-semibold text-sm hover:bg-magenta-700 transition-all shadow-sm text-center active:scale-[0.98]"
-              >
-                Upgrade to Pro
-              </Link>
-            )}
-          </motion.div>
-
-          {/* Usage Card */}
-          <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.05 }}
-            className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-xs"
-          >
-            <h2 className="text-xl font-bold text-gray-900 mb-6">
-              Plan Usage
-            </h2>
-
-            <div className="space-y-6">
-              <div>
-                <div className="flex justify-between items-end mb-2">
-                  <span className="text-xs font-semibold text-gray-700">
-                    AI Skin Scans
-                  </span>
-
-                  <span className="text-xs text-gray-500 font-medium">
-                    {loading
-                      ? "Loading..."
-                      : isPro
-                      ? "Unlimited"
-                      : `${scansRemaining} remaining (${scansUsed}/${maxScans} used)`}
-                  </span>
-                </div>
-
-                <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-magenta-600 rounded-full transition-all duration-500"
-                    style={{
-                      width: `${remainingPercentage}%`,
-                    }}
-                  />
-                </div>
+                ))}
               </div>
 
-              {!isPro &&
-                scansRemaining <= 0 &&
-                !loading && (
-                  <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex gap-3 text-xs">
+              <div className="w-full h-11 bg-gray-100 rounded-full" />
+            </div>
 
+            {/* Plan Usage Card Skeleton */}
+            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-xs animate-pulse">
+              <div className="h-6 w-32 bg-gray-200 rounded-lg mb-6" />
+
+              <div className="space-y-6">
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <div className="h-3.5 w-24 bg-gray-200 rounded" />
+                    <div className="h-3.5 w-32 bg-gray-100 rounded" />
+                  </div>
+                  <div className="h-2 w-full bg-gray-100 rounded-full" />
+                </div>
+
+                <div className="pt-4 border-t border-gray-100">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="h-4 w-28 bg-gray-200 rounded" />
+                    <div className="h-3 w-16 bg-gray-100 rounded" />
+                  </div>
+                  <div className="space-y-2">
+                    {[1, 2, 3].map((i) => (
+                      <div
+                        key={i}
+                        className="h-14 rounded-2xl bg-gray-50 border border-gray-100"
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-6 md:grid-cols-2 items-start">
+            {/* Current Plan Card */}
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-xs flex flex-col items-center text-center"
+            >
+              <h2 className="text-xl font-bold text-gray-900 mb-1">
+                {planName}
+              </h2>
+
+              <p className="text-xs text-gray-500 mb-1 font-medium">
+                {isPro
+                  ? remainingDays !== null && remainingDays !== undefined
+                    ? `${remainingDays} ${remainingDays === 1 ? "day" : "days"} remaining`
+                    : "Active Subscription"
+                  : "Free access"}
+              </p>
+
+              {isPro && renewsAt && (
+                <p className="text-[11px] text-gray-400 mb-3">
+                  {cancelAtPeriodEnd
+                    ? `Access ends on ${renewsAt}`
+                    : `Next renewal: ${renewsAt}`}
+                </p>
+              )}
+
+              {/* Admin-managed plan description */}
+              {planDescription && (
+                <p className="text-xs text-gray-500 leading-relaxed max-w-sm mb-5">
+                  {planDescription}
+                </p>
+              )}
+
+              {/* Admin-managed plan features */}
+              <div className="w-full space-y-3 text-left mb-8 pt-4 border-t border-gray-100">
+                {planFeatures.length > 0 ? (
+                  planFeatures.map((feature, index) => (
+                    <div
+                      key={`${feature}-${index}`}
+                      className="flex items-center gap-3 text-xs text-gray-700"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                      <span>{feature}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-gray-400 italic">
+                    No plan features configured.
+                  </p>
+                )}
+              </div>
+
+              {!isPro && (
+                <Link
+                  to="/dashboard/upgrade"
+                  className="w-full py-3 bg-magenta-600 text-white rounded-full font-semibold text-sm hover:bg-magenta-700 transition-all shadow-sm text-center active:scale-[0.98]"
+                >
+                  Upgrade to Pro
+                </Link>
+              )}
+            </motion.div>
+
+            {/* Usage Card */}
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05 }}
+              className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-xs"
+            >
+              <h2 className="text-xl font-bold text-gray-900 mb-6">
+                Plan Usage
+              </h2>
+
+              <div className="space-y-6">
+                <div>
+                  <div className="flex justify-between items-end mb-2">
+                    <span className="text-xs font-semibold text-gray-700">
+                      AI Skin Scans
+                    </span>
+
+                    <span className="text-xs text-gray-500 font-medium">
+                      {isPro
+                        ? "Unlimited"
+                        : `${scansRemaining} remaining (${scansUsed}/${maxScans} used)`}
+                    </span>
+                  </div>
+
+                  <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-magenta-600 rounded-full transition-all duration-500"
+                      style={{
+                        width: `${remainingPercentage}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {!isPro && scansRemaining <= 0 && (
+                  <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex gap-3 text-xs">
                     <p className="text-amber-800 leading-relaxed">
-                      You've reached your limit for free AI scans.
-                      Upgrade to Pro for unlimited scans and
-                      priority booking.
+                      You've reached your limit for free AI scans. Upgrade to Pro
+                      for unlimited scans and priority booking.
                     </p>
                   </div>
                 )}
 
-              <div className="pt-4 border-t border-gray-100">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
-                    Billing History
-                  </h3>
+                <div className="pt-4 border-t border-gray-100">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
+                      Billing History
+                    </h3>
 
-                  {billingHistory.length > 0 && (
-                    <span className="text-[11px] text-gray-400 font-medium">
-                      {billingHistory.length} transaction
-                      {billingHistory.length !== 1 ? "s" : ""}
-                    </span>
+                    {billingHistory.length > 0 && (
+                      <span className="text-[11px] text-gray-400 font-medium">
+                        {billingHistory.length} transaction
+                        {billingHistory.length !== 1 ? "s" : ""}
+                      </span>
+                    )}
+                  </div>
+
+                  {billingHistory.length > 0 ? (
+                    <div className="space-y-2">
+                      {billingHistory.map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs"
+                        >
+                          <div>
+                            <p className="font-semibold text-gray-900">
+                              {item.description}
+                            </p>
+
+                            <p className="text-gray-400 text-[11px]">
+                              {item.date}
+                            </p>
+                          </div>
+
+                          <div className="text-right">
+                            <p className="font-bold text-gray-900">
+                              {item.amount}
+                            </p>
+
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                item.status === "paid"
+                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                  : "bg-gray-100 text-gray-600 border border-gray-200"
+                              }`}
+                            >
+                              {item.status.toUpperCase()}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-400 italic">
+                      No recent transactions found.
+                    </p>
                   )}
                 </div>
-
-                {billingHistory.length > 0 ? (
-                  <div className="space-y-2">
-                    {billingHistory.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs"
-                      >
-                        <div>
-                          <p className="font-semibold text-gray-900">
-                            {item.description}
-                          </p>
-
-                          <p className="text-gray-400 text-[11px]">
-                            {item.date}
-                          </p>
-                        </div>
-
-                        <div className="text-right">
-                          <p className="font-bold text-gray-900">
-                            {item.amount}
-                          </p>
-
-                          <span
-                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                              item.status === "paid"
-                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                : "bg-gray-100 text-gray-600 border border-gray-200"
-                            }`}
-                          >
-                            {item.status.toUpperCase()}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-xs text-gray-400 italic">
-                    No recent transactions found.
-                  </p>
-                )}
               </div>
-            </div>
-          </motion.div>
-        </div>
+            </motion.div>
+          </div>
+        )}
       </div>
     </div>
   );

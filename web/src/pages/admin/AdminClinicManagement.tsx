@@ -5,7 +5,6 @@ import {
   X,
   CheckCircle2,
   XCircle,
-  Eye,
   FileText,
   FileCheck,
   Building2,
@@ -53,9 +52,9 @@ interface ClinicApplication {
 type StatusType = "all" | "pending" | "verified" | "rejected";
 
 const statusBadge: Record<string, string> = {
-  verified: "bg-green-100 text-green-700",
-  pending: "bg-amber-100 text-amber-700",
-  rejected: "bg-red-100 text-red-700",
+  verified: "bg-gray-100 border-gray-300 text-black",
+  pending: "bg-magenta-50 border-magenta-200 text-black",
+  rejected: "bg-magenta-100 border-magenta-300 text-black",
 };
 
 function getInitialApplications(): ClinicApplication[] {
@@ -454,65 +453,52 @@ export default function AdminClinicManagement() {
   const rejectedCount = applications.filter((a) => a.status === "rejected").length;
 
   return (
-    <div>
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+    <div className="space-y-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-display font-bold text-gray-900">
+          <h1 className="text-2xl font-display font-bold text-black">
             Clinic Management
           </h1>
-          <p className="text-sm text-gray-400 mt-0.5">Review and manage clinic applications & credentials</p>
+          <p className="text-sm text-gray-600 mt-1">Review and manage clinic applications and credentials.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={loadClinics}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-all shadow-sm active:scale-95 disabled:opacity-50"
-            title="Refresh clinics from database"
-          >
-            <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin text-magenta-500")} />
-            Refresh
-          </button>
-        </div>
+        <button
+          onClick={loadClinics}
+          disabled={loading}
+          className="self-start sm:self-auto inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-white border border-gray-300 text-black text-sm font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
+          title="Refresh clinics from database"
+        >
+          <RefreshCw className={cn("w-4 h-4 text-magenta-600", loading && "animate-spin")} />
+          Refresh
+        </button>
       </div>
 
-      {/* Minimal Toast Notification */}
+      {/* Toast Notification */}
       <AnimatePresence>
         {toast && (
           <motion.div
-            initial={{ opacity: 0, y: -8, scale: 0.99 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.99 }}
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.15 }}
-            className={cn(
-              "mb-6 px-4 py-3 rounded-xl border flex items-center justify-between gap-4 text-xs shadow-xs transition-all",
-              toast.type === "success"
-                ? "bg-emerald-50/80 border-emerald-200 text-emerald-950"
-                : "bg-red-50/80 border-red-200 text-red-950"
-            )}
+            className="px-6 py-4 rounded-xl border border-gray-200 border-l-4 border-l-magenta-500 bg-white shadow-sm flex items-center justify-between gap-4 text-sm"
           >
             <div className="flex items-center gap-3">
-              <div
-                className={cn(
-                  "w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-xs",
-                  toast.type === "success" ? "bg-emerald-600 text-white" : "bg-red-600 text-white"
-                )}
-              >
-                {toast.type === "success" ? (
-                  <CheckCircle2 className="w-4 h-4" />
-                ) : (
-                  <XCircle className="w-4 h-4" />
-                )}
-              </div>
+              {toast.type === "success" ? (
+                <CheckCircle2 className="w-5 h-5 text-magenta-600 shrink-0" />
+              ) : (
+                <XCircle className="w-5 h-5 text-magenta-600 shrink-0" />
+              )}
               <div>
-                <p className="font-semibold text-gray-900">{toast.title}</p>
-                <p className="text-gray-500 mt-0.5">{toast.description}</p>
+                <p className="font-semibold text-black">{toast.title}</p>
+                <p className="text-gray-700 mt-0.5">{toast.description}</p>
               </div>
             </div>
 
             <button
               onClick={() => setToast(null)}
-              className="p-1 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-black/5 transition-colors shrink-0"
+              className="p-1.5 rounded-lg text-gray-500 hover:text-black hover:bg-gray-100 transition-colors shrink-0"
               title="Dismiss"
+              aria-label="Dismiss"
             >
               <X className="w-4 h-4" />
             </button>
@@ -520,8 +506,9 @@ export default function AdminClinicManagement() {
         )}
       </AnimatePresence>
 
-      {/* Tabs with Count Badges */}
-      <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
+      {/* Filters with counts */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-black mr-2">Status</span>
         {[
           { key: "all" as StatusType, label: "All", count: applications.length },
           { key: "pending" as StatusType, label: "Pending", count: pendingCount },
@@ -532,21 +519,21 @@ export default function AdminClinicManagement() {
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={cn(
-              "flex items-center gap-2 px-5 py-2 rounded-full text-sm font-semibold capitalize transition-all active:scale-[0.96] shrink-0",
+              "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer",
               activeTab === tab.key
-                ? "bg-magenta-500 text-white shadow-sm"
-                : "bg-white text-gray-600 hover:bg-gray-50 border border-gray-200"
+                ? "bg-magenta-600 text-white"
+                : "bg-gray-100 text-black hover:bg-gray-200"
             )}
           >
             <span>{tab.label}</span>
             <span
               className={cn(
-                "px-2 py-0.5 rounded-full text-[11px] font-bold",
+                "px-2 py-0.5 rounded-full text-xs font-bold leading-none",
                 activeTab === tab.key
                   ? "bg-white/20 text-white"
                   : tab.key === "pending" && tab.count > 0
-                    ? "bg-amber-100 text-amber-700"
-                    : "bg-gray-100 text-gray-600"
+                    ? "bg-magenta-50 text-black border border-magenta-200"
+                    : "bg-white text-black border border-gray-200"
               )}
             >
               {tab.count}
@@ -556,64 +543,67 @@ export default function AdminClinicManagement() {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-7 py-5 border-b border-gray-200 flex items-baseline justify-between">
+          <h2 className="text-lg font-semibold text-black">Clinic applications</h2>
+          <span className="text-sm text-gray-600">{filtered.length} shown</span>
+        </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full text-black">
             <thead>
-              <tr className="border-b border-gray-100">
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Clinic Name</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Location</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Contact</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Status</th>
-                <th className="text-right text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Actions</th>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Clinic name</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Location</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Contact</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Status</th>
+                <th className="text-right text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody className="divide-y divide-gray-100">
               {filtered.map((clinic) => (
-                <tr key={clinic.id} className="hover:bg-gray-50/50 transition-colors">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
+                <tr key={clinic.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-7 py-5">
+                    <div className="flex items-center gap-4">
                       {clinic.logo ? (
-                        <img src={clinic.logo} alt="" className="w-10 h-10 rounded-xl object-cover border border-gray-100" />
+                        <img src={clinic.logo} alt="" className="w-12 h-12 rounded-xl object-cover border border-gray-200" />
                       ) : (
-                        <div className="w-10 h-10 rounded-xl bg-magenta-50 flex items-center justify-center text-magenta-500 font-bold text-sm">
+                        <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center text-black font-bold text-base">
                           {clinic.name[0]}
                         </div>
                       )}
                       <div>
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <p className="text-sm font-semibold text-gray-900">{clinic.name}</p>
+                          <p className="text-sm font-semibold text-black">{clinic.name}</p>
                           {clinic.status === "verified" && (
                             <VerifiedBadge size={15} className="w-3.5 h-3.5" title="Verified Clinic" />
                           )}
                         </div>
-                        <p className="text-xs text-gray-400">{clinic.specialization}</p>
+                        <p className="text-xs text-gray-600 mt-0.5">{clinic.specialization}</p>
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-600">{clinic.location}</td>
-                  <td className="px-6 py-4 text-xs text-gray-600">
-                    <p className="font-semibold text-gray-900">{clinic.phone || "—"}</p>
-                    <p className="text-gray-400 truncate max-w-[140px]">{clinic.email || ""}</p>
+                  <td className="px-7 py-5 text-sm text-black">{clinic.location}</td>
+                  <td className="px-7 py-5 text-xs">
+                    <p className="text-sm font-semibold text-black">{clinic.phone || "—"}</p>
+                    <p className="text-gray-600 truncate max-w-[180px] mt-0.5">{clinic.email || ""}</p>
                   </td>
-                  <td className="px-6 py-4">
-                    <span className={cn("px-3 py-1 rounded-full text-xs font-semibold capitalize", statusBadge[clinic.status])}>
+                  <td className="px-7 py-5">
+                    <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold capitalize", statusBadge[clinic.status])}>
                       {clinic.status}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right">
+                  <td className="px-7 py-5 text-right">
                     <div className="flex items-center justify-end">
                       <button
                         onClick={() => setReviewModal(clinic.id)}
                         className={cn(
-                          "flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-[0.97]",
+                          "px-5 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer",
                           clinic.status === "pending"
-                            ? "bg-magenta-50 text-magenta-700 hover:bg-magenta-100 border border-magenta-200/60 shadow-xs"
-                            : "bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200/80"
+                            ? "bg-magenta-600 text-white hover:bg-magenta-700"
+                            : "border border-gray-300 bg-white text-black hover:bg-gray-50"
                         )}
                       >
-                        <Eye className="w-3.5 h-3.5" />
-                        {clinic.status === "pending" ? "View & Review" : "View Details"}
+                        {clinic.status === "pending" ? "View & review" : "View details"}
                       </button>
                     </div>
                   </td>
@@ -624,12 +614,10 @@ export default function AdminClinicManagement() {
         </div>
 
         {filtered.length === 0 && (
-          <div className="p-12 text-center">
-            <div className="w-12 h-12 rounded-2xl bg-gray-50 flex items-center justify-center mx-auto mb-3 text-gray-400">
-              <Building2 className="w-6 h-6" />
-            </div>
-            <p className="text-sm font-semibold text-gray-700">No clinics found in this category</p>
-            <p className="text-xs text-gray-400 mt-1 max-w-sm mx-auto">
+          <div className="px-7 py-16 text-center">
+            <Building2 className="w-8 h-8 text-magenta-600 mx-auto mb-3" />
+            <p className="text-base font-semibold text-black">No clinics found in this category</p>
+            <p className="text-sm text-gray-600 mt-1 max-w-sm mx-auto">
               {activeTab === "pending"
                 ? "There are currently no new clinic applications waiting for verification."
                 : "No registered clinics match the selected status filter."}
@@ -645,169 +633,162 @@ export default function AdminClinicManagement() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
             onClick={() => setReviewModal(null)}
           >
             <motion.div
-              initial={{ opacity: 0, y: 30, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 30 }}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-[24px] p-6 sm:p-8 max-w-xl w-full max-h-[85vh] overflow-y-auto shadow-2xl"
+              className="bg-white rounded-2xl max-w-2xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden"
             >
-              <div className="flex items-center justify-between mb-6 border-b pb-4">
+              <div className="flex items-center justify-between px-8 py-6 border-b border-gray-200 shrink-0">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-magenta-100 flex items-center justify-center">
-                    <Building2 className="w-5 h-5 text-magenta-600" />
-                  </div>
+                  <Building2 className="w-6 h-6 text-magenta-600" />
                   <div>
-                    <h2 className="text-lg font-display font-bold text-gray-900">
-                      Clinic Application Details
+                    <h2 className="text-xl font-display font-bold text-black">
+                      Clinic application details
                     </h2>
-                    <p className="text-xs text-gray-400">Review submitted verification documents</p>
+                    <p className="text-sm text-gray-600">Review submitted verification documents</p>
                   </div>
                 </div>
                 <button
                   onClick={() => setReviewModal(null)}
-                  className="p-2 rounded-full hover:bg-gray-100 transition-colors"
+                  className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                  aria-label="Close"
                 >
-                  <X className="w-5 h-5 text-gray-400" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <div className="space-y-4 mb-6">
+              <div className="px-8 py-6 space-y-6 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden flex-1">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-400">Verification Status</span>
-                  <span className={cn("px-3 py-1 rounded-full text-xs font-semibold capitalize", statusBadge[modalClinic.status])}>
+                  <span className="text-sm text-gray-600">Verification status</span>
+                  <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold capitalize", statusBadge[modalClinic.status])}>
                     {modalClinic.status}
                   </span>
                 </div>
 
                 {/* Logo & Header */}
-                <div className="flex items-center gap-4 p-4 rounded-2xl bg-gray-50 border border-gray-100">
+                <div className="flex items-center gap-5 p-5 rounded-xl bg-gray-50 border border-gray-200">
                   {modalClinic.logo ? (
-                    <img src={modalClinic.logo} alt="Clinic Logo" className="w-16 h-16 object-cover rounded-2xl border bg-white shadow-sm" />
+                    <img src={modalClinic.logo} alt="Clinic Logo" className="w-16 h-16 object-cover rounded-xl border border-gray-200 bg-white" />
                   ) : (
-                    <div className="w-16 h-16 bg-magenta-100 rounded-2xl flex items-center justify-center text-magenta-600 font-bold text-xl border">
+                    <div className="w-16 h-16 bg-white rounded-xl flex items-center justify-center text-black font-bold text-xl border border-gray-200">
                       {modalClinic.name[0]}
                     </div>
                   )}
                   <div>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <h3 className="text-base font-bold text-gray-900">{modalClinic.name}</h3>
+                      <h3 className="text-lg font-bold text-black">{modalClinic.name}</h3>
                       {modalClinic.status === "verified" && (
                         <VerifiedBadge size={16} className="w-4 h-4" title="Verified Clinic" />
                       )}
                     </div>
-                    <p className="text-xs text-magenta-600 font-medium">{modalClinic.specialization}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{modalClinic.address || modalClinic.location}</p>
+                    <p className="text-sm text-magenta-700 font-medium">{modalClinic.specialization}</p>
+                    <p className="text-sm text-gray-700 mt-0.5">{modalClinic.address || modalClinic.location}</p>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-                  <div className="p-3 bg-gray-50 rounded-xl">
-                    <span className="text-gray-400 block mb-0.5">Official Email</span>
-                    <p className="font-semibold text-gray-900 truncate">{modalClinic.email || "—"}</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                  <div className="p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                    <span className="text-xs text-gray-600 block mb-1">Official email</span>
+                    <p className="font-semibold text-black truncate">{modalClinic.email || "—"}</p>
                   </div>
-                  <div className="p-3 bg-gray-50 rounded-xl">
-                    <span className="text-gray-400 block mb-0.5">Contact Number</span>
-                    <p className="font-semibold text-gray-900">{modalClinic.phone || "—"}</p>
+                  <div className="p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                    <span className="text-xs text-gray-600 block mb-1">Contact number</span>
+                    <p className="font-semibold text-black">{modalClinic.phone || "—"}</p>
                   </div>
-                  <div className="p-3 bg-gray-50 rounded-xl">
-                    <span className="text-gray-400 block mb-0.5">Operating Hours</span>
-                    <p className="font-semibold text-gray-900">{modalClinic.operatingDays || "Mon - Sat"} ({formatTime12h(modalClinic.openTime || "08:00")} – {formatTime12h(modalClinic.closeTime || "17:00")})</p>
+                  <div className="p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                    <span className="text-xs text-gray-600 block mb-1">Operating hours</span>
+                    <p className="font-semibold text-black">{modalClinic.operatingDays || "Mon - Sat"} ({formatTime12h(modalClinic.openTime || "08:00")} – {formatTime12h(modalClinic.closeTime || "17:00")})</p>
                   </div>
                 </div>
 
                 {/* Services & Description */}
-                <div className="p-3 bg-gray-50 rounded-xl text-xs space-y-2">
+                <div className="p-5 bg-gray-50 border border-gray-200 rounded-xl text-sm space-y-3">
                   <div>
-                    <span className="text-gray-400 font-medium">Services Offered:</span>
-                    <p className="text-gray-900 font-semibold mt-0.5">{modalClinic.servicesOffered || "—"}</p>
+                    <span className="text-xs text-gray-600">Services offered</span>
+                    <p className="text-black font-semibold mt-0.5">{modalClinic.servicesOffered || "—"}</p>
                   </div>
                   {modalClinic.description && modalClinic.description !== "—" && (
                     <div>
-                      <span className="text-gray-400 font-medium">Description:</span>
-                      <p className="text-gray-700 mt-0.5 leading-relaxed">{modalClinic.description}</p>
+                      <span className="text-xs text-gray-600">Description</span>
+                      <p className="text-black mt-0.5 leading-relaxed">{modalClinic.description}</p>
                     </div>
                   )}
                 </div>
 
                 {/* Uploaded Documents */}
-                <div className="pt-2 border-t">
-                  <p className="text-xs font-bold text-gray-900 uppercase tracking-wider mb-2.5">
-                    Legal Business Verification Documents
+                <div className="pt-5 border-t border-gray-200">
+                  <p className="text-sm font-semibold text-black mb-3">
+                    Legal business verification documents
                   </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     {/* 1. Mayor's / Business Permit */}
-                    <div className="bg-magenta-50/60 border border-magenta-100 rounded-2xl p-3 flex flex-col justify-between">
-                      <div className="flex items-center gap-2.5 mb-2">
-                        <div className="w-8 h-8 rounded-xl bg-white flex items-center justify-center text-rose-500 shadow-sm border border-magenta-100">
-                          <FileText className="w-4 h-4" />
-                        </div>
-                        <div className="truncate">
-                          <p className="text-xs font-bold text-magenta-900 truncate">Mayor's Permit</p>
-                          <p className="text-[10px] text-magenta-500 truncate">{modalClinic.businessPermitName || "Business Permit"}</p>
+                    <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        <FileText className="w-5 h-5 text-magenta-600 shrink-0 mt-0.5" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-black truncate">Mayor's Permit</p>
+                          <p className="text-xs text-gray-600 truncate">{modalClinic.businessPermitName || "Business Permit"}</p>
                         </div>
                       </div>
                       {modalClinic.businessPermitUrl ? (
                         <button
                           type="button"
                           onClick={() => openDocument(modalClinic.businessPermitUrl!)}
-                          className="w-full py-1.5 px-3 rounded-lg bg-magenta-500 text-white text-[11px] font-semibold hover:bg-magenta-600 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                          className="w-full py-2 px-3 rounded-lg bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors cursor-pointer"
                         >
-                          <Eye className="w-3.5 h-3.5" /> View Permit
+                          View permit
                         </button>
                       ) : (
-                        <span className="text-[10px] text-gray-400 italic text-center py-1">No file attached</span>
+                        <span className="text-xs text-gray-600 italic text-center py-2">No file attached</span>
                       )}
                     </div>
 
                     {/* 2. DTI Certificate / SEC Registration */}
-                    <div className="bg-magenta-50/60 border border-magenta-100 rounded-2xl p-3 flex flex-col justify-between">
-                      <div className="flex items-center gap-2.5 mb-2">
-                        <div className="w-8 h-8 rounded-xl bg-white flex items-center justify-center text-blue-600 shadow-sm border border-magenta-100">
-                          <ShieldCheck className="w-4 h-4" />
-                        </div>
-                        <div className="truncate">
-                          <p className="text-xs font-bold text-magenta-900 truncate">DTI / SEC</p>
-                          <p className="text-[10px] text-magenta-500 truncate">{modalClinic.dtiSecName || "DTI/SEC Doc"}</p>
+                    <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        <ShieldCheck className="w-5 h-5 text-magenta-600 shrink-0 mt-0.5" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-black truncate">DTI / SEC</p>
+                          <p className="text-xs text-gray-600 truncate">{modalClinic.dtiSecName || "DTI/SEC Doc"}</p>
                         </div>
                       </div>
                       {modalClinic.dtiSecUrl ? (
                         <button
                           type="button"
                           onClick={() => openDocument(modalClinic.dtiSecUrl!)}
-                          className="w-full py-1.5 px-3 rounded-lg bg-magenta-500 text-white text-[11px] font-semibold hover:bg-magenta-600 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                          className="w-full py-2 px-3 rounded-lg bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors cursor-pointer"
                         >
-                          <Eye className="w-3.5 h-3.5" /> View DTI / SEC
+                          View DTI / SEC
                         </button>
                       ) : (
-                        <span className="text-[10px] text-gray-400 italic text-center py-1">No file attached</span>
+                        <span className="text-xs text-gray-600 italic text-center py-2">No file attached</span>
                       )}
                     </div>
 
                     {/* 3. BIR Form 2303 Certificate */}
-                    <div className="bg-magenta-50/60 border border-magenta-100 rounded-2xl p-3 flex flex-col justify-between">
-                      <div className="flex items-center gap-2.5 mb-2">
-                        <div className="w-8 h-8 rounded-xl bg-white flex items-center justify-center text-emerald-600 shadow-sm border border-magenta-100">
-                          <FileCheck className="w-4 h-4" />
-                        </div>
-                        <div className="truncate">
-                          <p className="text-xs font-bold text-magenta-900 truncate">BIR 2303</p>
-                          <p className="text-[10px] text-magenta-500 truncate">{modalClinic.birName || "BIR Certificate"}</p>
+                    <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        <FileCheck className="w-5 h-5 text-magenta-600 shrink-0 mt-0.5" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-black truncate">BIR 2303</p>
+                          <p className="text-xs text-gray-600 truncate">{modalClinic.birName || "BIR Certificate"}</p>
                         </div>
                       </div>
                       {modalClinic.birUrl ? (
                         <button
                           type="button"
                           onClick={() => openDocument(modalClinic.birUrl!)}
-                          className="w-full py-1.5 px-3 rounded-lg bg-magenta-500 text-white text-[11px] font-semibold hover:bg-magenta-600 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                          className="w-full py-2 px-3 rounded-lg bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors cursor-pointer"
                         >
-                          <Eye className="w-3.5 h-3.5" /> View BIR 2303
+                          View BIR 2303
                         </button>
                       ) : (
-                        <span className="text-[10px] text-gray-400 italic text-center py-1">Optional / Not added</span>
+                        <span className="text-xs text-gray-600 italic text-center py-2">Optional / Not added</span>
                       )}
                     </div>
                   </div>
@@ -815,11 +796,11 @@ export default function AdminClinicManagement() {
 
                 {/* Clinic Photos Gallery */}
                 {modalClinic.clinicPhotos && modalClinic.clinicPhotos.length > 0 && (
-                  <div className="pt-2 border-t">
-                    <p className="text-xs font-bold text-gray-900 uppercase tracking-wider mb-2">
-                      Clinic Photos Gallery ({modalClinic.clinicPhotos.length})
+                  <div className="pt-5 border-t border-gray-200">
+                    <p className="text-sm font-semibold text-black mb-3">
+                      Clinic photos ({modalClinic.clinicPhotos.length})
                     </p>
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className="grid grid-cols-4 gap-3">
                       {modalClinic.clinicPhotos.map((photo, i) => (
                         <div
                           key={i}
@@ -832,79 +813,81 @@ export default function AdminClinicManagement() {
                     </div>
                   </div>
                 )}
+
+                {/* Rejection Reason */}
+                {modalClinic.status === "pending" && (
+                  <div className="pt-5 border-t border-gray-200">
+                    <label className="block text-sm font-semibold text-black mb-2">
+                      Rejection reason <span className="font-normal text-gray-600">(required if rejecting)</span>
+                    </label>
+                    <textarea
+                      value={rejectReason}
+                      onChange={(e) => setRejectReason(e.target.value)}
+                      placeholder="e.g. Expired Business Permit, invalid PRC license ID, or missing address details..."
+                      rows={3}
+                      className="w-full px-4 py-3 rounded-xl border border-gray-300 text-sm text-black placeholder:text-gray-500 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/15 resize-none"
+                    />
+                  </div>
+                )}
               </div>
 
-              {/* Rejection Reason */}
-              {modalClinic.status === "pending" && (
-                <div className="mb-6">
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                    Rejection Reason (required if rejecting)
-                  </label>
-                  <textarea
-                    value={rejectReason}
-                    onChange={(e) => setRejectReason(e.target.value)}
-                    placeholder="e.g. Expired Business Permit, invalid PRC license ID, or missing address details..."
-                    rows={3}
-                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 placeholder:text-gray-400 outline-none focus:border-magenta-500 resize-none"
-                  />
-                </div>
-              )}
+              {/* Footer actions */}
+              <div className="px-8 py-5 border-t border-gray-200 bg-gray-50 rounded-b-2xl shrink-0">
+                {modalClinic.status === "pending" && (
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        approveClinic(modalClinic.id);
+                        setReviewModal(null);
+                      }}
+                      className="flex-1 py-3 rounded-lg bg-magenta-600 text-white font-semibold text-sm hover:bg-magenta-700 transition-colors cursor-pointer"
+                    >
+                      Approve &amp; verify
+                    </button>
+                    <button
+                      onClick={() => {
+                        rejectClinic(modalClinic.id);
+                      }}
+                      className="flex-1 py-3 rounded-lg border border-gray-300 bg-white text-black font-semibold text-sm hover:bg-gray-50 transition-colors cursor-pointer"
+                    >
+                      Reject application
+                    </button>
+                  </div>
+                )}
 
-              {/* Action Buttons */}
-              {modalClinic.status === "pending" && (
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => {
-                      approveClinic(modalClinic.id);
-                      setReviewModal(null);
-                    }}
-                    className="flex-1 py-3 rounded-full bg-green-500 text-white font-semibold text-sm hover:bg-green-600 transition-colors active:scale-[0.96] shadow"
-                  >
-                    Approve & Verify
-                  </button>
-                  <button
-                    onClick={() => {
-                      rejectClinic(modalClinic.id);
-                    }}
-                    className="flex-1 py-3 rounded-full bg-red-500 text-white font-semibold text-sm hover:bg-red-600 transition-colors active:scale-[0.96] shadow"
-                  >
-                    Reject Application
-                  </button>
-                </div>
-              )}
-
-              {modalClinic.status !== "pending" && (
-                <div className="space-y-3">
-                  {modalClinic.status === "verified" && (
-                    <div className="bg-emerald-50 border border-emerald-200/80 rounded-xl px-4 py-3 text-xs text-emerald-800 flex items-center gap-2.5">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span>Clinic is verified and active in the provider directory.</span>
-                    </div>
-                  )}
-                  {modalClinic.status === "rejected" && (
-                    <>
-                      <div className="bg-red-50 border border-red-150 rounded-xl px-4 py-3 text-xs text-red-700">
-                        <strong>Reason:</strong> {modalClinic.rejectionReason || "Incomplete or invalid requirements."}
+                {modalClinic.status !== "pending" && (
+                  <div className="space-y-3">
+                    {modalClinic.status === "verified" && (
+                      <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 text-sm text-black flex items-center gap-3">
+                        <CheckCircle2 className="w-5 h-5 text-magenta-600 shrink-0" />
+                        <span>Clinic is verified and active in the provider directory.</span>
                       </div>
-                      <button
-                        onClick={() => {
-                          approveClinic(modalClinic.id);
-                          setReviewModal(null);
-                        }}
-                        className="w-full py-2.5 rounded-xl bg-emerald-600 text-white font-semibold text-xs hover:bg-emerald-700 transition-colors"
-                      >
-                        Change Status to Verified
-                      </button>
-                    </>
-                  )}
-                  <button
-                    onClick={() => setReviewModal(null)}
-                    className="w-full py-2.5 rounded-xl bg-gray-900 text-white font-semibold text-xs hover:bg-black transition-colors"
-                  >
-                    Close
-                  </button>
-                </div>
-              )}
+                    )}
+                    {modalClinic.status === "rejected" && (
+                      <>
+                        <div className="bg-magenta-50 border border-magenta-200 rounded-xl px-5 py-4 text-sm text-black">
+                          <strong>Reason:</strong> {modalClinic.rejectionReason || "Incomplete or invalid requirements."}
+                        </div>
+                        <button
+                          onClick={() => {
+                            approveClinic(modalClinic.id);
+                            setReviewModal(null);
+                          }}
+                          className="w-full py-3 rounded-lg bg-magenta-600 text-white font-semibold text-sm hover:bg-magenta-700 transition-colors cursor-pointer"
+                        >
+                          Change status to verified
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() => setReviewModal(null)}
+                      className="w-full py-3 rounded-lg border border-gray-300 bg-white text-black font-semibold text-sm hover:bg-gray-50 transition-colors cursor-pointer"
+                    >
+                      Close
+                    </button>
+                  </div>
+                )}
+              </div>
             </motion.div>
           </motion.div>
         )}
@@ -917,7 +900,7 @@ export default function AdminClinicManagement() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
             onClick={() => setPreviewImage(null)}
           >
             <div className="relative max-w-3xl max-h-[85vh] bg-transparent rounded-2xl overflow-hidden">
@@ -925,6 +908,7 @@ export default function AdminClinicManagement() {
                 type="button"
                 onClick={() => setPreviewImage(null)}
                 className="absolute top-4 right-4 p-2 bg-black/60 text-white rounded-full hover:bg-black/80 transition-colors z-10"
+                aria-label="Close preview"
               >
                 <X className="w-5 h-5" />
               </button>

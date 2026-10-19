@@ -3,6 +3,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
+import { DoctorAvatar } from "@/components/common/DoctorAvatar";
 import {
   CheckCircle2,
   Clock,
@@ -524,7 +525,16 @@ function AppointmentCard({
           </div>
           <div>
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Doctor</p>
-            <p className="text-sm font-semibold text-gray-900 mt-0.5">{app.doctor || "To be assigned"}</p>
+            <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
+              {app.assignedDoctorId && app.doctor !== "To be assigned" ? (
+                <DoctorAvatar
+                  doctorId={app.assignedDoctorId}
+                  name={app.doctor}
+                  className="w-5 h-5 rounded-full border border-gray-200 shrink-0 text-[8px] font-bold"
+                />
+              ) : null}
+              <p className="text-sm font-semibold text-gray-900 truncate">{app.doctor || "To be assigned"}</p>
+            </div>
           </div>
           <div>
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
@@ -898,6 +908,7 @@ const AppointmentStatusPage: React.FC = () => {
 
     const handleSync = () => fetchAppointments();
     window.addEventListener("dermai_appointments_updated", handleSync);
+    window.addEventListener("dermai_doctor_avatar_updated", handleSync);
     window.addEventListener("appointmentCreated", handleSync);
     window.addEventListener("storage", handleSync);
     window.addEventListener("focus", handleSync);
@@ -905,6 +916,7 @@ const AppointmentStatusPage: React.FC = () => {
     return () => {
       if (channel) supabase.removeChannel(channel);
       window.removeEventListener("dermai_appointments_updated", handleSync);
+      window.removeEventListener("dermai_doctor_avatar_updated", handleSync);
       window.removeEventListener("appointmentCreated", handleSync);
       window.removeEventListener("storage", handleSync);
       window.removeEventListener("focus", handleSync);

@@ -30,6 +30,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useAuth } from "@/context/AuthContext";
+import { DoctorAvatar } from "@/components/common/DoctorAvatar";
 
 // Calculate geographical distance in kilometers using Haversine formula
 function calculateDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -105,7 +106,7 @@ export type ClinicItem = {
     district: string;
     lat: number | null;
     lng: number | null;
-    doctors: Array<{ name: string; specialization: string }>;
+    doctors: Array<{ id?: string; doctor_id?: string; name: string; specialization: string; photo_url?: string; photo?: string }>;
     conditionsTreated: string[];
     consultationFee: string;
     description: string;
@@ -289,7 +290,7 @@ function mapRawClinicToItem(
     }
 
     // Doctors
-    let docList: Array<{ name: string; specialization: string }> = [];
+    let docList: Array<{ id?: string; doctor_id?: string; name: string; specialization: string; photo_url?: string; photo?: string }> = [];
     const rawDocs = c.clinic_doctor || (doctorsMap ? doctorsMap.get(clinicId) : null);
     if (Array.isArray(rawDocs) && rawDocs.length > 0) {
         docList = rawDocs
@@ -299,14 +300,21 @@ function mapRawClinicToItem(
                     ? d.doctor_specializations.map((ds: any) => ds.specializations?.name || ds.specialization?.name).filter(Boolean).join(", ")
                     : "";
                 return {
+                    id: d.doctor_id || d.id,
+                    doctor_id: d.doctor_id || d.id,
                     name: d.doctor_name || d.name,
                     specialization: specFromJunction || d.specialization || c.specialization || "General Dermatology",
+                    photo_url: d.photo_url || d.photo,
+                    photo: d.photo_url || d.photo,
                 };
             });
     } else if (c.doctor || c.doctor_name) {
         docList = [{
+            id: c.doctor_id || c.doctorId,
             name: c.doctor || c.doctor_name,
             specialization: c.specialization || "General Dermatology",
+            photo_url: c.photo_url || c.photo,
+            photo: c.photo_url || c.photo,
         }];
     }
 
@@ -667,6 +675,7 @@ export default function FindClinicsPage() {
                         close_time
                     ),
                     clinic_doctor (
+                        doctor_id,
                         doctor_name,
                         prc_license,
                         photo_url,
@@ -1142,9 +1151,12 @@ export default function FindClinicsPage() {
                                         <div className="space-y-2">
                                             {selectedClinic.doctors.map((doc, idx) => (
                                                 <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 border border-gray-100">
-                                                    <div className="w-8 h-8 rounded-lg bg-white border border-gray-200 text-gray-700 flex items-center justify-center shrink-0">
-                                                        <Stethoscope className="w-4 h-4 text-magenta-600" />
-                                                    </div>
+                                                    <DoctorAvatar
+                                                        doctorId={doc.id || doc.doctor_id}
+                                                        doctor={doc}
+                                                        name={doc.name}
+                                                        className="w-9 h-9 rounded-xl border border-gray-200 shrink-0 text-xs font-bold"
+                                                    />
                                                     <div className="min-w-0 flex-1">
                                                         <p className="text-xs font-bold text-gray-900 truncate">{doc.name}</p>
                                                         <p className="text-[11px] text-gray-500 truncate">{doc.specialization}</p>

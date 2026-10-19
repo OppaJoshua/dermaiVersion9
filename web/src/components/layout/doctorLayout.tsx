@@ -8,7 +8,6 @@ import {
   ChevronRight,
   Stethoscope,
   History,
-  User,
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -17,18 +16,13 @@ import Logo from "@/assets/logo2.png";
 import { useAuth } from "@/context/AuthContext";
 
 import { supabase } from "@/lib/supabaseClient";
+import { DoctorAvatar } from "@/components/common/DoctorAvatar";
+import DoctorNotifications from "@/pages/doctor/DoctorNotifications";
+import { useRoleNotifications } from "@/lib/notificationService";
 
 interface DoctorLayoutProps {
   children: ReactNode;
 }
-
-type DoctorNotif = {
-  id: string;
-  title: string;
-  message: string;
-  time: string;
-  type: "assigned" | "system";
-};
 
 const sidebarMainLinks = [
   { label: "Dashboard", path: "/doctor", icon: LayoutDashboard },
@@ -49,189 +43,32 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
-  const [docProfile, setDocProfile] = useState<{ name: string; clinic: string; photo?: string }>({
-    name: "",
-    clinic: "",
-  });
-  const [notifications, setNotifications] = useState<DoctorNotif[]>([]);
-  const [lastReadAt, setLastReadAt] = useState<string>(() => {
+  const [docProfile, setDocProfile] = useState<{ id?: string; name: string; clinic: string; photo?: string }>(() => {
     try {
-      return localStorage.getItem("dermai_doctor_last_read_notifs") || new Date(0).toISOString();
-    } catch {
-      return new Date(0).toISOString();
-    }
+      const stored = localStorage.getItem("dermai_doctor_profile");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        return {
+          id: parsed.id || "",
+          name: parsed.fullName || parsed.name || "",
+          clinic: parsed.clinic || parsed.clinicName || "",
+          photo: parsed.photo !== undefined ? parsed.photo : (parsed.photo_url || ""),
+        };
+      }
+    } catch {}
+    return {
+      id: "",
+      name: "",
+      clinic: "",
+      photo: "",
+    };
   });
   const bellRef = useRef<HTMLDivElement>(null);
 
-  const loadDoctorNotifs = async () => {
-    if (!user) return;
-    try {
-      const list: DoctorNotif[] = [];
-      const userEmail = (user.email || "").trim().toLowerCase();
-      const docIds: string[] = [user.id];
-
-      // 1. Check clinic_doctor record
-      let foundClinicId: string | null = null;
-      const { data: docData } = await supabase
-        .from("clinic_doctor")
-        .select("doctor_id, doctor_name, clinic_id, email, user_id");
-
-      (docData || []).forEach((d) => {
-        const cdEmail = (d.email || "").trim().toLowerCase();
-        if (
-          d.user_id === user.id ||
-          (cdEmail && userEmail && cdEmail === userEmail)
-        ) {
-          if (d.doctor_id) docIds.push(d.doctor_id);
-          if (d.clinic_id) foundClinicId = d.clinic_id;
-        }
-      });
-
-      // Also check localStorage
-      try {
-        const storedClinicDocs = localStorage.getItem("dermai_clinic_doctors");
-        if (storedClinicDocs) {
-          const parsed = JSON.parse(storedClinicDocs);
-          if (Array.isArray(parsed)) {
-            const matched = parsed.find(
-              (d: any) =>
-                (d.email && d.email.toLowerCase() === userEmail) ||
-                (d.id && docIds.includes(d.id))
-            );
-            if (matched?.id) docIds.push(matched.id);
-            if (matched?.clinicId || matched?.clinic_id) foundClinicId = matched.clinicId || matched.clinic_id;
-          }
-        }
-      } catch { }
-
-      const uniqueDocIds = Array.from(new Set(docIds.filter(Boolean)));
-      const isUuid = (s?: string) => !!s && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
-      const validDocIds = uniqueDocIds.filter(isUuid);
-
-      try {
-        let appQuery = supabase
-          .from("patient_appointment")
-          .select("appointment_id, patient_name, clinic_id, assigned_doctor_id, date, time, status, created_at")
-          .order("created_at", { ascending: false })
-          .limit(10);
-
-        if (validDocIds.length > 0 && foundClinicId && isUuid(foundClinicId)) {
-          appQuery = appQuery.or(`assigned_doctor_id.in.(${validDocIds.join(",")}),clinic_id.eq.${foundClinicId}`);
-        } else if (validDocIds.length > 0) {
-          appQuery = appQuery.in("assigned_doctor_id", validDocIds);
-        } else if (foundClinicId && isUuid(foundClinicId)) {
-          appQuery = appQuery.eq("clinic_id", foundClinicId);
-        }
-
-        const { data: apps } = await appQuery;
-
-        if (apps && apps.length > 0) {
-          apps.forEach((a: any) => {
-            if (!a.created_at) return;
-            const isAssigned = validDocIds.includes(String(a.assigned_doctor_id));
-            list.push({
-              id: `doc-app-${a.appointment_id}`,
-              title: isAssigned ? "Assigned Consultation" : "Clinic Consultation",
-              message: isAssigned
-                ? `${a.patient_name || "Not provided"} was assigned to you for clinical review.`
-                : `${a.patient_name || "Not provided"} booked a consultation at your clinic.`,
-              time: a.created_at,
-              type: "assigned",
-            });
-          });
-        }
-      } catch { }
-
-      // Also check real local storage appointments
-      try {
-        const stored = localStorage.getItem("dermai_clinic_appointments");
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed)) {
-            parsed
-              .filter((a: any) => a.id && !String(a.id).startsWith("doc-seed-"))
-              .slice(0, 5)
-              .forEach((a: any) => {
-                if (!a.createdAt) return;
-                const alreadyExists = list.some((item) => item.id === `doc-app-${a.id}`);
-                if (!alreadyExists) {
-                  list.push({
-                    id: `doc-app-${a.id}`,
-                    title: a.doctorStatus === "approved" ? "Confirmed Consultation" : "New Assigned Patient",
-                    message: `${a.patientName || "Not provided"} is scheduled for ${a.conditionName || "Not provided"}.`,
-                    time: a.createdAt,
-                    type: "assigned",
-                  });
-                }
-              });
-          }
-        }
-      } catch { }
-
-      // 2. User notifications
-      const { data: notifs } = await supabase
-        .from("user_notification")
-        .select("notif_id, title, body, created_at")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(10);
-
-      if (notifs) {
-        notifs.forEach((n: any) => {
-          list.push({
-            id: n.notif_id,
-            title: n.title,
-            message: n.body || "",
-            time: n.created_at,
-            type: "system",
-          });
-        });
-      }
-
-      list.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
-      setNotifications(list);
-    } catch {
-      /* ignore */
-    }
-  };
-
-  useEffect(() => {
-    loadDoctorNotifs();
-
-    const channel = supabase
-      .channel(`doctor-notifs-${user?.id || "anon"}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "patient_appointment" },
-        () => {
-          loadDoctorNotifs();
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "user_notification" },
-        () => {
-          loadDoctorNotifs();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user]);
-
-  const unreadCount = notifications.filter(
-    (n) => new Date(n.time) > new Date(lastReadAt)
-  ).length;
-
-  const markAllRead = () => {
-    const now = new Date().toISOString();
-    setLastReadAt(now);
-    try {
-      localStorage.setItem("dermai_doctor_last_read_notifs", now);
-    } catch { }
-  };
+  const { unreadCount } = useRoleNotifications("doctor", {
+    userId: user?.id,
+    userEmail: user?.email,
+  });
 
   const loadProfile = useCallback(async () => {
     try {
@@ -239,18 +76,31 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
         const userEmail = (user.email || "").trim().toLowerCase();
         const { data: cd } = await supabase
           .from("clinic_doctor")
-          .select("doctor_name, clinic:clinic_id(name), photo_url")
+          .select("doctor_id, doctor_name, clinic:clinic_id(name), photo_url")
           .or(`user_id.eq.${user.id},email.ilike.${userEmail}`)
           .limit(1)
           .single();
 
         if (cd) {
           const clinicObj: any = Array.isArray(cd.clinic) ? cd.clinic[0] : cd.clinic;
-          setDocProfile((prev) => ({
-            name: cd.doctor_name || prev.name || "",
-            clinic: clinicObj?.name || prev.clinic || "",
-            photo: prev.photo || cd.photo_url,
-          }));
+          const newDoc = {
+            id: cd.doctor_id,
+            name: cd.doctor_name || "",
+            clinic: clinicObj?.name || "",
+            photo: cd.photo_url || "",
+          };
+          setDocProfile(newDoc);
+          try {
+            localStorage.setItem(
+              "dermai_doctor_profile",
+              JSON.stringify({
+                id: newDoc.id,
+                fullName: newDoc.name,
+                clinic: newDoc.clinic,
+                photo: newDoc.photo,
+              })
+            );
+          } catch {}
           return;
         }
       }
@@ -258,11 +108,12 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
       const stored = localStorage.getItem("dermai_doctor_profile");
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (parsed.fullName) {
+        if (parsed.fullName || parsed.id) {
           setDocProfile((prev) => ({
-            ...prev,
-            name: parsed.fullName,
-            photo: parsed.photo || prev.photo,
+            id: parsed.id || prev.id,
+            name: parsed.fullName || prev.name,
+            clinic: prev.clinic,
+            photo: parsed.photo !== undefined ? parsed.photo : prev.photo,
           }));
         }
       }
@@ -278,9 +129,10 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
 
           if (matched) {
             setDocProfile((prev) => ({
+              id: matched.doctor_id || matched.id || prev.id,
               name: matched.name || prev.name || "",
               clinic: matched.clinicName || prev.clinic || "",
-              photo: prev.photo || matched.photo,
+              photo: matched.photo !== undefined ? matched.photo : prev.photo,
             }));
           }
         }
@@ -307,12 +159,14 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
 
     window.addEventListener("storage", loadProfile);
     window.addEventListener("dermai_doctor_profile_updated", loadProfile);
+    window.addEventListener("dermai_doctor_avatar_updated", loadProfile);
     window.addEventListener("focus", loadProfile);
 
     return () => {
       supabase.removeChannel(channel);
       window.removeEventListener("storage", loadProfile);
       window.removeEventListener("dermai_doctor_profile_updated", loadProfile);
+      window.removeEventListener("dermai_doctor_avatar_updated", loadProfile);
       window.removeEventListener("focus", loadProfile);
     };
   }, [loadProfile]);
@@ -426,17 +280,13 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
         <div className="px-3 py-4 border-t border-slate-100 space-y-2 bg-white">
           <div className="px-3.5 py-3 rounded-2xl bg-slate-50 border border-slate-100/90">
             <div className="flex items-center gap-2.5">
-              {docProfile.photo ? (
-                <img
-                  src={docProfile.photo}
-                  alt={docProfile.name || ""}
-                  className="w-9 h-9 rounded-full object-cover border border-slate-200 shrink-0 shadow-2xs"
-                />
-              ) : (
-                <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0 font-bold text-base">
-                  <User className="w-4 h-4 text-blue-600" />
-                </div>
-              )}
+              <DoctorAvatar
+                doctorId={docProfile.id}
+                userId={user?.id}
+                doctor={{ photo_url: docProfile.photo, name: docProfile.name }}
+                name={docProfile.name}
+                className="w-9 h-9 rounded-full border border-slate-200 shrink-0 shadow-2xs"
+              />
               <div className="min-w-0">
                 <p className="text-base font-bold text-slate-900 truncate">
                   {docProfile.name || "Doctor"}
@@ -491,97 +341,21 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
               </button>
 
               {bellOpen && (
-                <div className="absolute right-0 top-full mt-2 w-84 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/50">
-                    <div className="flex items-center gap-2">
-                      <Bell className="w-4 h-4 text-blue-600" />
-                      <span className="font-bold text-slate-900 text-xs">Notifications</span>
-                    </div>
-                    {unreadCount > 0 && (
-                      <button
-                        onClick={markAllRead}
-                        className="text-[11px] font-bold text-blue-600 hover:text-blue-700 cursor-pointer"
-                      >
-                        Mark all read
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="max-h-80 overflow-y-auto divide-y divide-slate-50 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-                    {notifications.length === 0 ? (
-                      <div className="py-10 text-center">
-                        <Bell className="w-8 h-8 text-slate-200 mx-auto mb-2" />
-                        <p className="text-xs text-slate-400">No notifications yet</p>
-                      </div>
-                    ) : (
-                      notifications.map((n) => {
-                        const isNew = new Date(n.time) > new Date(lastReadAt);
-                        return (
-                          <div
-                            key={n.id}
-                            onClick={() => {
-                              setBellOpen(false);
-                              markAllRead();
-                              if (n.type === "assigned") {
-                                navigate("/doctor/scheduled");
-                              } else {
-                                navigate("/doctor/appointments");
-                              }
-                            }}
-                            className={cn(
-                              "flex items-start justify-between gap-3 px-4 py-3 hover:bg-blue-50/40 transition-colors cursor-pointer text-left",
-                              isNew && "bg-blue-50/20"
-                            )}
-                          >
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-bold text-slate-900 truncate">
-                                {n.title}
-                              </p>
-                              <p className="text-[11px] text-slate-500 leading-relaxed line-clamp-2 mt-0.5">
-                                {n.message}
-                              </p>
-                              <p className="text-[10px] text-slate-400 mt-1">
-                                {new Date(n.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} &bull; {new Date(n.time).toLocaleDateString()}
-                              </p>
-                            </div>
-                            {isNew && (
-                              <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0 mt-1" />
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-
-                  <div className="px-4 py-2.5 border-t border-slate-100 bg-slate-50/50">
-                    <Link
-                      to="/doctor/scheduled"
-                      onClick={() => {
-                        setBellOpen(false);
-                        markAllRead();
-                      }}
-                      className="block text-center text-xs font-bold text-blue-600 hover:text-blue-800 transition-colors"
-                    >
-                      View assigned appointments &rarr;
-                    </Link>
-                  </div>
+                <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                  <DoctorNotifications isDropdown onClose={() => setBellOpen(false)} />
                 </div>
               )}
             </div>
 
             {/* Doctor Avatar */}
             <div className="flex items-center gap-2 pl-1">
-              {docProfile.photo ? (
-                <img
-                  src={docProfile.photo}
-                  alt={docProfile.name || "Doctor"}
-                  className="w-9 h-9 rounded-full object-cover border border-slate-200 ring-2 ring-blue-50"
-                />
-              ) : (
-                <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs ring-2 ring-blue-50">
-                  {docProfile.name ? docProfile.name.charAt(0).toUpperCase() : "D"}
-                </div>
-              )}
+              <DoctorAvatar
+                doctorId={docProfile.id}
+                userId={user?.id}
+                doctor={{ photo_url: docProfile.photo, name: docProfile.name }}
+                name={docProfile.name}
+                className="w-9 h-9 rounded-full border border-slate-200 ring-2 ring-blue-50"
+              />
             </div>
           </div>
         </div>

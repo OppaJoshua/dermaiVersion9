@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { AlertTriangle, Bell, Palette, CheckCircle2, User, Mail, Phone, Calendar, MapPin, UserCircle, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
@@ -68,6 +68,8 @@ export default function AdminSystemSettingsPage() {
   // Platform & Notification Settings State
   const [platformSettings, setPlatformSettings] = useState<PlatformSettings>(getSavedPlatformSettings);
   const [saved, setSaved] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load Admin Profile from Supabase & localStorage on mount
   useEffect(() => {
@@ -98,14 +100,20 @@ export default function AdminSystemSettingsPage() {
         });
       }
 
-      // 2. Fetch fresh user record from Supabase if logged in
-      if (user?.id) {
+      // 2. Fetch fresh user record from Supabase (by ID or admin email)
+      const targetUserId = user?.id;
+      const targetEmail = user?.email || "dermaisupport@gmail.com";
+      if (targetUserId || targetEmail) {
         try {
-          const { data, error } = await supabase
+          let query = supabase
             .from("user")
-            .select("full_name, email, phone")
-            .eq("user_id", user.id)
-            .maybeSingle();
+            .select("full_name, email, phone, avatar_url");
+          if (targetUserId) {
+            query = query.or(`user_id.eq.${targetUserId},email.eq.${targetEmail}`);
+          } else {
+            query = query.eq("email", targetEmail);
+          }
+          const { data, error } = await query.maybeSingle();
 
           if (!error && data && !cancelled) {
             setAdminProfile((prev) => ({
@@ -113,6 +121,7 @@ export default function AdminSystemSettingsPage() {
               fullName: data.full_name || prev.fullName,
               email: data.email || prev.email,
               phone: data.phone || prev.phone,
+              profilePicture: data.avatar_url || prev.profilePicture,
             }));
           }
         } catch { }
@@ -130,6 +139,7 @@ export default function AdminSystemSettingsPage() {
   const handleProfilePicChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setSelectedFile(file);
       const reader = new FileReader();
       reader.onload = (ev) => {
         setAdminProfile((prev) => ({ ...prev, profilePicture: ev.target?.result as string }));
@@ -141,28 +151,75 @@ export default function AdminSystemSettingsPage() {
   const handleProfileSave = async () => {
     setProfileSaving(true);
     try {
-      // 1. Save to localStorage
-      localStorage.setItem("dermai_admin_profile", JSON.stringify(adminProfile));
+      let finalAvatarUrl: string = adminProfile.profilePicture || "";
 
-      // 2. Persist to Supabase if user is logged in
+      // If user uploaded a new image file, upload to Supabase Storage "avatars" bucket
+      if (selectedFile && user?.id) {
+        try {
+          const ext = selectedFile.name.split(".").pop() || "png";
+          const filePath = `${user.id}/${Date.now()}.${ext}`;
+          const { error: uploadError } = await supabase.storage
+            .from("avatars")
+            .upload(filePath, selectedFile, { upsert: true });
+
+          if (!uploadError) {
+            const { data: publicData } = supabase.storage
+              .from("avatars")
+              .getPublicUrl(filePath);
+            if (publicData?.publicUrl) {
+              finalAvatarUrl = publicData.publicUrl;
+              setAdminProfile((prev) => ({ ...prev, profilePicture: finalAvatarUrl }));
+            }
+          } else {
+            console.warn("Admin avatar storage upload failed:", uploadError.message);
+          }
+        } catch (uploadErr) {
+          console.warn("Admin avatar upload error:", uploadErr);
+        }
+      }
+
+      // 1. Save to localStorage
+      const updatedProfile = { ...adminProfile, profilePicture: finalAvatarUrl };
+      localStorage.setItem("dermai_admin_profile", JSON.stringify(updatedProfile));
+
+      // 2. Persist to Supabase
+      const targetUserId = user?.id;
+      const targetEmail = user?.email || "dermaisupport@gmail.com";
+      const dbUpdate = {
+        full_name: adminProfile.fullName,
+        phone: adminProfile.phone,
+        avatar_url: finalAvatarUrl || null,
+      };
+
+      try {
+        if (targetUserId) {
+          await supabase.from("user").update(dbUpdate).or(`user_id.eq.${targetUserId},email.eq.${targetEmail}`);
+        } else {
+          await supabase.from("user").update(dbUpdate).eq("email", targetEmail);
+        }
+      } catch (dbErr) {
+        console.warn("Error updating user record in DB:", dbErr);
+      }
+
       if (user?.id) {
-        await Promise.allSettled([
-          supabase.from("user").update({
-            full_name: adminProfile.fullName,
-            phone: adminProfile.phone,
-          }).eq("user_id", user.id),
-          supabase.auth.updateUser({
+        try {
+          await supabase.auth.updateUser({
             data: {
               full_name: adminProfile.fullName,
               gender: adminProfile.gender,
               birthday: adminProfile.birthday,
               district: adminProfile.district,
               address: adminProfile.address,
-              avatar_url: adminProfile.profilePicture,
+              avatar_url: finalAvatarUrl || null,
             },
-          }),
-        ]);
+          });
+        } catch (authErr) {
+          console.warn("Error updating auth metadata:", authErr);
+        }
       }
+
+      window.dispatchEvent(new CustomEvent("dermai_admin_profile_updated"));
+      window.dispatchEvent(new Event("storage"));
 
       setProfileSaved(true);
       setTimeout(() => setProfileSaved(false), 3000);
@@ -217,15 +274,45 @@ export default function AdminSystemSettingsPage() {
               {/* Profile Picture + Upload */}
               <div className="flex flex-col items-center md:items-start w-full md:w-1/4">
                 <div className="w-24 h-24 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden mb-2">
-                  {adminProfile.profilePicture ? (<img src={adminProfile.profilePicture} alt="Profile" className="w-full h-full object-cover"/>) : (<UserCircle className="w-16 h-16 text-gray-300"/>)}
+                  {adminProfile.profilePicture ? (
+                    <img
+                      src={adminProfile.profilePicture}
+                      alt="Profile"
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <UserCircle className="w-16 h-16 text-gray-300" />
+                  )}
                 </div>
                 <div className="font-semibold text-gray-800 text-base mt-1">Profile Picture</div>
                 <div className="flex gap-2 mt-1">
-                  <label className="inline-block">
-                    <input type="file" accept="image/*" onChange={handleProfilePicChange} className="hidden"/>
-                    <button type="button" className="px-3 py-1.5 rounded-lg bg-white border border-magenta-100 text-magenta-700 text-xs font-semibold hover:bg-magenta-50 transition-colors">Upload New</button>
-                  </label>
-                  {adminProfile.profilePicture && (<button type="button" className="px-3 py-1.5 rounded-lg bg-white border border-none text-red-500 text-xs font-semibold hover:underline transition-colors" onClick={() => { setAdminProfile(p => ({ ...p, profilePicture: "" })); }}>Remove</button>)}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleProfilePicChange}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-lg bg-white border border-magenta-100 text-magenta-700 text-xs font-semibold hover:bg-magenta-50 transition-colors cursor-pointer"
+                  >
+                    Upload New
+                  </button>
+                  {adminProfile.profilePicture && (
+                    <button
+                      type="button"
+                      className="px-3 py-1.5 rounded-lg bg-white border border-none text-red-500 text-xs font-semibold hover:underline transition-colors cursor-pointer"
+                      onClick={() => {
+                        setSelectedFile(null);
+                        setAdminProfile((p) => ({ ...p, profilePicture: "" }));
+                      }}
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
               </div>
               {/* Fields - 2 columns */}

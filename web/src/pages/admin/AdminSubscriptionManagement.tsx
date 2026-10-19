@@ -28,9 +28,9 @@ type Transaction = {
 };
 
 const statusClasses: Record<SubscriptionStatus, string> = {
-    active: "bg-green-100 text-green-700",
-    expired: "bg-amber-100 text-amber-700",
-    cancelled: "bg-red-100 text-red-700",
+    active: "bg-gray-100 border-gray-300 text-black",
+    expired: "bg-magenta-50 border-magenta-200 text-black",
+    cancelled: "bg-magenta-100 border-magenta-300 text-black",
 };
 
 const statusLabels: Record<SubscriptionStatus, string> = {
@@ -191,66 +191,74 @@ export default function AdminSubscriptionManagement() {
     const activeCount = premiumUsers.filter((u) => u.status === "active").length;
     const cancelledCount = premiumUsers.filter((u) => u.status === "cancelled").length;
 
-    return (<div className="space-y-6">
+    return (<div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-display font-bold text-gray-900">Subscription Management</h1>
-        <p className="text-sm text-gray-400 mt-0.5">
-          Subscriptions are managed automatically — Active on payment, Cancelled by patient, Expired on missed renewal.
+        <h1 className="text-2xl font-display font-bold text-black">Subscription Management</h1>
+        <p className="text-sm text-gray-600 mt-1">
+          Subscriptions are managed automatically: active on payment, cancelled by the patient, expired on a missed renewal.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-2xl p-4 border border-gray-100">
-          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Free Plan</p>
-          <p className="text-lg font-display font-bold text-gray-900 mt-1">₱0</p>
-          <p className="text-sm text-gray-500">1 free skin scan, then upgrade required</p>
+      {/* Plan cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm">
+          <p className="text-sm font-semibold text-black">Free plan</p>
+          <p className="text-3xl font-bold text-black mt-4">₱0</p>
+          <p className="text-sm text-gray-600 mt-2">1 free skin scan, then upgrade required</p>
         </div>
-        <div className="bg-white rounded-2xl p-4 border border-magenta-200">
-          <p className="text-xs font-semibold uppercase tracking-wider text-magenta-500">Premium Monthly</p>
-          <p className="text-lg font-display font-bold text-gray-900 mt-1">₱199 <span className="text-sm font-normal text-gray-400">/ month</span></p>
-          <p className="text-sm text-gray-500">Unlimited skin scans</p>
+        <div className="bg-white rounded-xl p-7 border border-magenta-200 shadow-sm">
+          <p className="text-sm font-semibold text-black">Premium monthly</p>
+          <p className="text-3xl font-bold text-black mt-4">₱199 <span className="text-base font-medium text-gray-600">/ month</span></p>
+          <p className="text-sm text-gray-600 mt-2">Unlimited skin scans</p>
         </div>
-        <div className="bg-white rounded-2xl p-4 border-2 border-magenta-400 relative overflow-hidden">
-          <span className="absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded-full bg-magenta-500 text-white">SAVE 16%</span>
-          <p className="text-xs font-semibold uppercase tracking-wider text-magenta-500">Premium Annual</p>
-          <p className="text-lg font-display font-bold text-gray-900 mt-1">₱1,999 <span className="text-sm font-normal text-gray-400">/ year</span></p>
-          <p className="text-sm text-gray-500">Unlimited skin scans · best value</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl p-4 border border-gray-100">
-          <div className="flex items-center gap-2 text-magenta-600 mb-2">
-            <CreditCard className="w-4 h-4"/>
-            <p className="text-xs font-semibold uppercase tracking-wider">Premium Users</p>
-          </div>
-          <p className="text-2xl font-display font-bold text-gray-900">{premiumUsers.length}</p>
-        </div>
-        <div className="bg-white rounded-2xl p-4 border border-gray-100">
-          <div className="flex items-center gap-2 text-green-700 mb-2">
-            <DollarSign className="w-4 h-4"/>
-            <p className="text-xs font-semibold uppercase tracking-wider">Revenue</p>
-          </div>
-          <p className="text-2xl font-display font-bold text-gray-900">{formatPhp(totalRevenue)}</p>
-        </div>
-        <div className="bg-white rounded-2xl p-4 border border-gray-100">
-          <div className="flex items-center gap-2 text-blue-700 mb-2">
-            <RefreshCcw className="w-4 h-4"/>
-            <p className="text-xs font-semibold uppercase tracking-wider">Active Plans</p>
-          </div>
-          <p className="text-2xl font-display font-bold text-gray-900">{activeCount}</p>
-        </div>
-        <div className="bg-white rounded-2xl p-4 border border-gray-100">
-          <div className="flex items-center gap-2 text-red-600 mb-2">
-            <XCircle className="w-4 h-4"/>
-            <p className="text-xs font-semibold uppercase tracking-wider">Cancelled Plans</p>
-          </div>
-          <p className="text-2xl font-display font-bold text-gray-900">{cancelledCount}</p>
+        <div className="bg-white rounded-xl p-7 border-2 border-magenta-500 shadow-sm relative">
+          <span className="absolute top-5 right-5 text-[11px] font-bold px-2.5 py-1 rounded-full bg-magenta-600 text-white">SAVE 16%</span>
+          <p className="text-sm font-semibold text-black">Premium annual</p>
+          <p className="text-3xl font-bold text-black mt-4">₱1,999 <span className="text-base font-medium text-gray-600">/ year</span></p>
+          <p className="text-sm text-gray-600 mt-2">Unlimited skin scans, best value</p>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-100 p-4">
-        <div className="flex flex-wrap gap-2">
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px]">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-black">Premium users</p>
+            <CreditCard className="w-5 h-5 text-magenta-600"/>
+          </div>
+          <p className="mt-5 text-4xl font-bold text-black tabular-nums">{premiumUsers.length}</p>
+          <p className="mt-2 text-sm text-gray-600">All subscriptions</p>
+        </div>
+        <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px]">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-black">Revenue</p>
+            <DollarSign className="w-5 h-5 text-magenta-600"/>
+          </div>
+          <p className="mt-5 text-4xl font-bold text-black tabular-nums">{formatPhp(totalRevenue)}</p>
+          <p className="mt-2 text-sm text-gray-600">Total paid transactions</p>
+        </div>
+        <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px]">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-black">Active plans</p>
+            <RefreshCcw className="w-5 h-5 text-magenta-600"/>
+          </div>
+          <p className="mt-5 text-4xl font-bold text-black tabular-nums">{activeCount}</p>
+          <p className="mt-2 text-sm text-gray-600">Currently renewing</p>
+        </div>
+        <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px]">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-black">Cancelled plans</p>
+            <XCircle className="w-5 h-5 text-magenta-600"/>
+          </div>
+          <p className="mt-5 text-4xl font-bold text-black tabular-nums">{cancelledCount}</p>
+          <p className="mt-2 text-sm text-gray-600">Will not renew</p>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-black mr-2">Status</span>
           {(["all", "active", "expired", "cancelled"] as const).map((status) => {
             const count = status === "all"
               ? premiumUsers.length
@@ -260,19 +268,19 @@ export default function AdminSubscriptionManagement() {
                 key={status}
                 onClick={() => setStatusFilter(status)}
                 className={cn(
-                  "px-4 py-2 rounded-full text-xs font-semibold transition-colors flex items-center gap-2",
+                  "px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 cursor-pointer",
                   statusFilter === status
-                    ? "bg-magenta-500 text-white shadow-xs"
-                    : "bg-gray-50 text-gray-600 hover:bg-gray-100"
+                    ? "bg-magenta-600 text-white"
+                    : "bg-gray-100 text-black hover:bg-gray-200"
                 )}
               >
                 <span>{status === "all" ? "All" : statusLabels[status]}</span>
                 <span
                   className={cn(
-                    "text-[10px] px-1.5 py-0.5 rounded-full font-bold leading-none",
+                    "text-xs px-2 py-0.5 rounded-full font-bold leading-none",
                     statusFilter === status
                       ? "bg-white/20 text-white"
-                      : "bg-gray-200 text-gray-700"
+                      : "bg-white text-black border border-gray-200"
                   )}
                 >
                   {count}
@@ -283,57 +291,59 @@ export default function AdminSubscriptionManagement() {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="font-display font-bold text-gray-900">Premium User Subscriptions</h3>
+      {/* Subscriptions table */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-7 py-5 border-b border-gray-200 flex items-baseline justify-between">
+          <h3 className="text-lg font-semibold text-black">Premium user subscriptions</h3>
+          <span className="text-sm text-gray-600">{visibleUsers.length} shown</span>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full text-black">
             <thead>
-              <tr className="border-b border-gray-100">
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">User</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Plan</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Start Date</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Renewal Date</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Status</th>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">User</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Plan</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Start date</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Renewal date</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Status</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-gray-100">
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-sm text-gray-400">
-                    <Loader2 className="w-8 h-8 text-magenta-500 animate-spin mx-auto mb-2" />
-                    Loading user subscriptions...
+                  <td colSpan={5} className="px-7 py-16 text-center text-sm text-gray-600">
+                    <Loader2 className="w-6 h-6 text-magenta-600 animate-spin mx-auto mb-3"/>
+                    Loading user subscriptions…
                   </td>
                 </tr>
               ) : visibleUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-sm text-gray-400">
+                  <td colSpan={5} className="px-7 py-16 text-center text-sm text-gray-600">
                     No subscriptions found.
                   </td>
                 </tr>
               ) : (
                 visibleUsers.map((user) => (
-                  <tr key={user.id} className="border-t border-gray-50 hover:bg-gray-50/70 transition-colors">
-                    <td className="px-6 py-4">
-                      <p className="text-sm font-semibold text-gray-900">{user.name}</p>
-                      <p className="text-xs text-gray-400">{user.email}</p>
+                  <tr key={user.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-7 py-5">
+                      <p className="text-sm font-semibold text-black">{user.name}</p>
+                      <p className="text-xs text-gray-600">{user.email}</p>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-700">
-                      <span className={cn("inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold", user.plan === "Premium Annual"
-                        ? "bg-magenta-100 text-magenta-700 border border-magenta-200"
+                    <td className="px-7 py-5 text-sm text-black">
+                      <span className={cn("inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border text-black", user.plan === "Premium Annual"
+                        ? "bg-magenta-50 border-magenta-300"
                         : user.plan === "Premium Monthly"
-                            ? "bg-pink-50 text-pink-700 border border-pink-100"
-                            : "bg-gray-100 text-gray-500")}>
+                            ? "bg-white border-magenta-200"
+                            : "bg-gray-100 border-gray-200")}>
                         {user.plan}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">{user.startedAt}</td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
+                    <td className="px-7 py-5 text-sm text-black">{user.startedAt}</td>
+                    <td className="px-7 py-5 text-sm text-black">
                       {user.status === "cancelled" ? (
                         <div>
                           <span>{user.renewsAt}</span>
-                          <span className="block text-[11px] text-red-500 font-medium">
+                          <span className="block text-xs text-gray-600 font-medium">
                             {user.isAccessActive ? "Access until date" : "Does not renew"}
                           </span>
                         </div>
@@ -341,18 +351,18 @@ export default function AdminSubscriptionManagement() {
                         user.renewsAt
                       )}
                     </td>
-                    <td className="px-6 py-4">
-                      <div className="flex flex-col items-start gap-1">
-                        <span className={cn("px-3 py-1 rounded-full text-xs font-semibold", statusClasses[user.status])}>
+                    <td className="px-7 py-5">
+                      <div className="flex flex-col items-start gap-1.5">
+                        <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold", statusClasses[user.status])}>
                           {statusLabels[user.status]}
                         </span>
                         {user.status === "cancelled" && user.isAccessActive && (
-                          <span className="text-[10px] text-amber-600 font-medium">
+                          <span className="text-xs text-gray-600 font-medium">
                             Active until period close
                           </span>
                         )}
                         {user.status === "cancelled" && !user.isAccessActive && user.cancelledAtDate && (
-                          <span className="text-[10px] text-gray-400">
+                          <span className="text-xs text-gray-600">
                             Cancelled {user.cancelledAtDate}
                           </span>
                         )}
@@ -366,48 +376,52 @@ export default function AdminSubscriptionManagement() {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="font-display font-bold text-gray-900">Transaction History</h3>
+      {/* Transactions table */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-7 py-5 border-b border-gray-200 flex items-baseline justify-between">
+          <h3 className="text-lg font-semibold text-black">Transaction history</h3>
+          <span className="text-sm text-gray-600">{transactions.length} transactions</span>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full text-black">
             <thead>
-              <tr className="border-b border-gray-100">
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Transaction ID</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">User</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Plan</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Amount</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Date</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Method</th>
-                <th className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-6 py-3">Status</th>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Transaction ID</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">User</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Plan</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Amount</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Date</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Method</th>
+                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Status</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-gray-100">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-sm text-gray-400">
-                    <Loader2 className="w-8 h-8 text-magenta-500 animate-spin mx-auto mb-2" />
-                    Loading payment transactions...
+                  <td colSpan={7} className="px-7 py-16 text-center text-sm text-gray-600">
+                    <Loader2 className="w-6 h-6 text-magenta-600 animate-spin mx-auto mb-3"/>
+                    Loading payment transactions…
                   </td>
                 </tr>
               ) : transactions.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-sm text-gray-400">
+                  <td colSpan={7} className="px-7 py-16 text-center text-sm text-gray-600">
                     No transactions recorded yet.
                   </td>
                 </tr>
               ) : (
                 transactions.map((txn) => (
-                  <tr key={txn.id} className="border-t border-gray-50 hover:bg-gray-50/70 transition-colors">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-700">{txn.id}</td>
-                    <td className="px-6 py-4 text-sm text-gray-700">{txn.user}</td>
-                    <td className="px-6 py-4 text-sm text-gray-500">{txn.plan}</td>
-                    <td className="px-6 py-4 text-sm text-gray-700">{formatPhp(txn.amount)}</td>
-                    <td className="px-6 py-4 text-sm text-gray-500">{txn.date}</td>
-                    <td className="px-6 py-4 text-sm text-gray-500">{txn.method}</td>
-                    <td className="px-6 py-4">
-                      <span className="px-3 py-1 rounded-full text-xs font-semibold capitalize bg-green-100 text-green-700">
+                  <tr key={txn.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-7 py-5">
+                      <span className="inline-block px-2.5 py-1 rounded-md bg-gray-100 font-mono text-xs font-semibold text-black">{txn.id}</span>
+                    </td>
+                    <td className="px-7 py-5 text-sm font-medium text-black">{txn.user}</td>
+                    <td className="px-7 py-5 text-sm text-black">{txn.plan}</td>
+                    <td className="px-7 py-5 text-sm font-semibold text-black">{formatPhp(txn.amount)}</td>
+                    <td className="px-7 py-5 text-sm text-black">{txn.date}</td>
+                    <td className="px-7 py-5 text-sm text-black">{txn.method}</td>
+                    <td className="px-7 py-5">
+                      <span className="inline-flex px-3 py-1 rounded-full border border-gray-300 bg-gray-100 text-xs font-semibold capitalize text-black">
                         {txn.status}
                       </span>
                     </td>

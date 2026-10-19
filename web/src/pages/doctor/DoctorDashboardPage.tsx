@@ -462,7 +462,6 @@ export default function DoctorDashboardPage() {
                   <thead>
                     <tr className="bg-[#F8F9FB] border-b border-slate-200/80 text-[12px] font-semibold text-slate-500">
                       <th className="py-3 px-4 font-semibold">Name</th>
-                      <th className="py-3 px-4 font-semibold">Ward No.</th>
                       <th className="py-3 px-4 font-semibold">Date</th>
                       <th className="py-3 px-4 font-semibold text-right">Action</th>
                     </tr>
@@ -480,8 +479,6 @@ export default function DoctorDashboardPage() {
                             day: "numeric",
                             year: "numeric",
                           });
-
-                      const caseRef = `#${appt.id.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
 
                       const ageText = appt.patientAge ? `${appt.patientAge} Years` : "Adult";
                       const genderText = appt.patientGender || "Patient";
@@ -510,11 +507,6 @@ export default function DoctorDashboardPage() {
                                 </p>
                               </div>
                             </div>
-                          </td>
-
-                          {/* Case Ref / Ward */}
-                          <td className="py-3.5 px-4 text-slate-500 font-medium text-sm">
-                            {caseRef}
                           </td>
 
                           {/* Date */}

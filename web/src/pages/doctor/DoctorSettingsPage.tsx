@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
-  User,
   Mail,
   Phone,
   CalendarDays,
@@ -16,6 +15,8 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { createHelpdeskTicketAsync } from "@/lib/store";
+import { DoctorAvatar } from "@/components/common/DoctorAvatar";
+import { updateDoctorAvatar, removeDoctorAvatar } from "@/lib/doctorAvatarService";
 
 function CaduceusIcon({ className = "w-7 h-7 text-[#5B6B82]" }: { className?: string }) {
   return (
@@ -126,7 +127,22 @@ const FAQS = [
 ];
 
 export default function DoctorSettingsPage() {
-  const [profile, setProfile] = useState<DoctorProfile>(INITIAL_PROFILE);
+  const [profile, setProfile] = useState<DoctorProfile>(() => {
+    try {
+      const stored = localStorage.getItem("dermai_doctor_profile");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        return {
+          ...INITIAL_PROFILE,
+          id: parsed.id || parsed.doctor_id || "",
+          fullName: parsed.fullName || parsed.name || "",
+          photo: parsed.photo || parsed.photo_url || "",
+          clinicName: parsed.clinic || parsed.clinicName || "",
+        };
+      }
+    } catch {}
+    return INITIAL_PROFILE;
+  });
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketMessage, setTicketMessage] = useState("");
@@ -178,18 +194,14 @@ export default function DoctorSettingsPage() {
     }
 
     try {
-      const photoUrl = await uploadDoctorPhoto(file);
+      const rawPhotoUrl = await uploadDoctorPhoto(file);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const sessionUserId = sessionData?.session?.user?.id;
 
-      const { error } = await supabase
-        .from("clinic_doctor")
-        .update({ photo_url: photoUrl })
-        .eq("doctor_id", profile.id);
+      // Update central doctor avatar with cache busting, localStorage sync, and global event dispatch
+      const updatedUrl = await updateDoctorAvatar(profile.id, rawPhotoUrl, sessionUserId);
 
-      if (error) {
-        throw error;
-      }
-
-      setProfile((prev) => ({ ...prev, photo: photoUrl }));
+      setProfile((prev) => ({ ...prev, photo: updatedUrl }));
       setPhotoSaved(true);
       setTimeout(() => setPhotoSaved(false), 3000);
     } catch (err) {
@@ -204,14 +216,10 @@ export default function DoctorSettingsPage() {
     }
 
     try {
-      const { error } = await supabase
-        .from("clinic_doctor")
-        .update({ photo_url: null })
-        .eq("doctor_id", profile.id);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const sessionUserId = sessionData?.session?.user?.id;
 
-      if (error) {
-        throw error;
-      }
+      await removeDoctorAvatar(profile.id, sessionUserId);
 
       setProfile((prev) => ({ ...prev, photo: "" }));
 
@@ -353,7 +361,7 @@ export default function DoctorSettingsPage() {
         .map((spec: any) => String(spec.name || "").trim())
         .filter(Boolean);
 
-      setProfile({
+      const updatedProfile: DoctorProfile = {
         id: docFound?.doctor_id || "",
         fullName: docFound?.doctor_name || "",
         email: docFound?.email || "",
@@ -364,7 +372,19 @@ export default function DoctorSettingsPage() {
         dutySchedule: parsedDutySchedule,
         clinicName: clinicObj?.name || "",
         photo: docFound?.photo_url || "",
-      });
+      };
+      setProfile(updatedProfile);
+      try {
+        localStorage.setItem(
+          "dermai_doctor_profile",
+          JSON.stringify({
+            id: updatedProfile.id,
+            fullName: updatedProfile.fullName,
+            clinic: updatedProfile.clinicName,
+            photo: updatedProfile.photo,
+          })
+        );
+      } catch {}
     } catch (err) {
       console.error("Error loading doctor profile:", err);
     }
@@ -386,11 +406,14 @@ export default function DoctorSettingsPage() {
 
 
     window.addEventListener("focus", loadData);
+    window.addEventListener("dermai_doctor_avatar_updated", loadData);
+    window.addEventListener("dermai_doctor_profile_updated", loadData);
 
     return () => {
       supabase.removeChannel(channel);
-
       window.removeEventListener("focus", loadData);
+      window.removeEventListener("dermai_doctor_avatar_updated", loadData);
+      window.removeEventListener("dermai_doctor_profile_updated", loadData);
     };
   }, [loadData]);
 
@@ -450,21 +473,18 @@ export default function DoctorSettingsPage() {
           {/* Left: Doctor Photo & Primary Info */}
           <div className="flex flex-col sm:flex-row items-center sm:items-start text-center sm:text-left gap-4 sm:gap-6 min-w-0">
             <div className="relative group shrink-0">
-              {profile.photo ? (
-                <img
-                  src={profile.photo}
-                  alt={profile.fullName}
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover border border-slate-100 shadow-xs cursor-pointer hover:opacity-95 transition-opacity"
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="cursor-pointer hover:opacity-95 transition-opacity"
+                title="Click to change photo"
+              >
+                <DoctorAvatar
+                  doctorId={profile.id}
+                  doctor={{ photo_url: profile.photo, name: profile.fullName }}
+                  name={profile.fullName}
+                  className="w-24 h-24 sm:w-28 sm:h-28 !rounded-2xl border border-slate-200/80 shadow-xs text-3xl font-bold"
                 />
-              ) : (
-                <div
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl bg-slate-100 text-slate-600 flex items-center justify-center border border-slate-200/80 shadow-xs cursor-pointer hover:bg-slate-200/70 transition-colors"
-                >
-                  <User className="w-12 h-12 text-slate-400" />
-                </div>
-              )}
+              </div>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}

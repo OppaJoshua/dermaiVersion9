@@ -24,6 +24,8 @@ import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 import { createPatientNotification } from "@/lib/notificationService";
+import { DoctorAvatar } from "@/components/common/DoctorAvatar";
+import { getDoctorAvatarUrl } from "@/lib/doctorAvatarService";
 import {
   type DoctorWeeklySchedule,
   type ConsultationSlot,
@@ -198,6 +200,10 @@ export function isDoctorMatch(d1: any, d2: any): boolean {
 
 export function getDoctorPhoto(doc?: { id?: string; doctor_id?: string; name?: string; email?: string; photo?: string; photo_url?: string } | null): string {
   if (!doc) return "";
+  const centralUrl = getDoctorAvatarUrl(doc.id || doc.doctor_id, doc);
+  if (centralUrl) {
+    return centralUrl;
+  }
   if (doc.photo && typeof doc.photo === "string" && doc.photo.trim().length > 0) {
     return doc.photo;
   }
@@ -2727,7 +2733,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                             const shiftSummaryText = docShifts.length > 0
                               ? docShifts.map((s) => `${formatTime12h(s.startTime)}–${formatTime12h(s.endTime)}`).join(", ")
                               : `${formatTime12h(doc.dutyStartTime || "08:00")} – ${formatTime12h(doc.dutyEndTime || "17:00")}`;
-                            const docPhoto = getDoctorPhoto(doc);
 
                             return (
                               <button
@@ -2740,17 +2745,12 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                     : "bg-white border-gray-200 hover:border-magenta-300 hover:bg-slate-50/50"
                                 }`}
                               >
-                                {docPhoto ? (
-                                  <img
-                                    src={docPhoto}
-                                    alt={doc.name}
-                                    className="w-12 h-12 rounded-2xl object-cover border border-magenta-200 shrink-0 shadow-2xs"
-                                  />
-                                ) : (
-                                  <div className="w-12 h-12 rounded-2xl bg-magenta-100 text-magenta-700 font-bold flex items-center justify-center text-sm shrink-0 border border-magenta-200/60 shadow-2xs">
-                                    {doc.name.replace(/^Dr\.?\s*/i, "").charAt(0) || "D"}
-                                  </div>
-                                )}
+                                <DoctorAvatar
+                                  doctorId={doc.id}
+                                  doctor={doc}
+                                  name={doc.name}
+                                  className="w-12 h-12 rounded-2xl border border-magenta-200 shrink-0 shadow-2xs text-base font-bold"
+                                />
 
                                 <div className="min-w-0 flex-1">
                                   <div className="flex items-center justify-between gap-1">
@@ -3160,13 +3160,12 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   <div className="space-y-1.5">
                     {selectedClinic.doctors.map((d) => (
                       <div key={d.id} className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 flex items-center gap-2.5">
-                        {d.photo ? (
-                          <img src={d.photo} alt={d.name} className="w-8 h-8 rounded-full object-cover" />
-                        ) : (
-                          <div className="w-8 h-8 rounded-full bg-magenta-100 text-magenta-700 font-bold flex items-center justify-center text-xs">
-                            {d.name.replace("Dr.", "").trim().charAt(0) || "D"}
-                          </div>
-                        )}
+                        <DoctorAvatar
+                          doctorId={d.id}
+                          doctor={d}
+                          name={d.name}
+                          className="w-8 h-8 rounded-full border border-magenta-200/60 shrink-0 text-xs font-bold"
+                        />
                         <div>
                           <p className="font-bold text-gray-900">{d.name}</p>
                           <p className="text-[10px] text-magenta-700 font-semibold">{d.specialization}</p>
