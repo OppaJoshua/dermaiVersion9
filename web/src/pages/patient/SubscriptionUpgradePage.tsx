@@ -516,15 +516,9 @@ const togglePrice = (type: "monthly" | "yearly") => {
                   <span className="font-semibold text-gray-900">{billingLabel}</span>
                 </div>
                 <div className="flex justify-between items-center text-gray-600">
-                  <span>Amount (excl. VAT)</span>
+                  <span>Price</span>
                   <span className="font-semibold text-gray-900">
-                    ₱{basePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center text-gray-600">
-                  <span>VAT (12%)</span>
-                  <span className="font-semibold text-gray-900">
-                    ₱{vatAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
                 <div className="pt-3 border-t border-gray-100 flex justify-between items-baseline">

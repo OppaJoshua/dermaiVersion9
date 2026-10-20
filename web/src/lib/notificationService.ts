@@ -1433,7 +1433,38 @@ export async function markAllNotificationsAsRead(
   role: NotificationRole,
   userId?: string
 ): Promise<void> {
-  saveAllReadIds(role, ids, userId);
+  let currentUserId = userId;
+  if (!currentUserId) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      currentUserId = data?.session?.user?.id;
+    } catch {}
+    if (!currentUserId) {
+      try {
+        const { data } = await supabase.auth.getUser();
+        currentUserId = data?.user?.id;
+      } catch {}
+    }
+  }
+
+  saveAllReadIds(role, ids, currentUserId);
+
+  // Exact required mutation:
+  // Persist change to public.user_notification scoped strictly to currentUserId
+  if (currentUserId) {
+    try {
+      const { error } = await supabase
+        .from("user_notification")
+        .update({ is_read: true })
+        .eq("user_id", currentUserId)
+        .eq("is_read", false);
+      if (error) {
+        console.warn("[markAllNotificationsAsRead] user_notification update warning:", error.message);
+      }
+    } catch (err) {
+      console.error("[markAllNotificationsAsRead] user_notification update error:", err);
+    }
+  }
 
   const uuidIds = ids.filter((id) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
@@ -1441,12 +1472,131 @@ export async function markAllNotificationsAsRead(
 
   if (uuidIds.length > 0) {
     try {
-      await supabase.from("user_notification").update({ is_read: true }).in("notif_id", uuidIds);
+      const query = supabase.from("user_notification").update({ is_read: true }).in("notif_id", uuidIds);
+      if (currentUserId) {
+        query.eq("user_id", currentUserId);
+      }
+      await query;
     } catch {}
     try {
       await supabase.from("admin_alert").update({ is_read: true }).in("notif_id", uuidIds);
     } catch {}
   }
+}
+
+/**
+ * ----------------------------------------------------------------------------
+ * Shared Global Reactive State for Role Notifications
+ * Ensures top header bell badges and notification pages remain in 100% sync
+ * ----------------------------------------------------------------------------
+ */
+interface RoleStoreState {
+  notifications: NotificationItem[];
+  loading: boolean;
+  unreadCount: number;
+}
+
+interface RoleStore {
+  state: RoleStoreState;
+  listeners: Set<() => void>;
+}
+
+const roleStores = new Map<string, RoleStore>();
+
+function getRoleStoreKey(role: NotificationRole, config: { userId?: string; clinicId?: string }): string {
+  if (role === "admin") {
+    return `admin:${config.userId || "global"}`;
+  }
+  if (role === "clinic") {
+    return `clinic:${config.clinicId || config.userId || "global"}`;
+  }
+  return `${role}:${config.userId || "global"}`;
+}
+
+function getOrCreateRoleStore(key: string): RoleStore {
+  let store = roleStores.get(key);
+  if (!store) {
+    store = {
+      state: {
+        notifications: [],
+        loading: true,
+        unreadCount: 0,
+      },
+      listeners: new Set(),
+    };
+    roleStores.set(key, store);
+  }
+  return store;
+}
+
+/**
+ * Optimistically clears unread count to 0 across all stores matching role/user
+ */
+export function broadcastMarkAllRead(role: NotificationRole, userId?: string, clinicId?: string) {
+  roleStores.forEach((store, key) => {
+    if (
+      key.startsWith(`${role}:`) ||
+      (userId && key.includes(userId)) ||
+      (clinicId && key.includes(clinicId))
+    ) {
+      store.state = {
+        ...store.state,
+        unreadCount: 0,
+        notifications: store.state.notifications.map((n) => ({ ...n, isRead: true })),
+      };
+      store.listeners.forEach((listener) => {
+        try {
+          listener();
+        } catch {}
+      });
+    }
+  });
+
+  window.dispatchEvent(
+    new CustomEvent("dermai_notifications_cleared", {
+      detail: { role, userId, clinicId },
+    })
+  );
+}
+
+/**
+ * Optimistically marks a single notification as read across matching stores
+ */
+export function broadcastMarkRead(id: string, role: NotificationRole, userId?: string, clinicId?: string) {
+  roleStores.forEach((store, key) => {
+    if (
+      key.startsWith(`${role}:`) ||
+      (userId && key.includes(userId)) ||
+      (clinicId && key.includes(clinicId))
+    ) {
+      let changed = false;
+      const updated = store.state.notifications.map((n) => {
+        if (n.id === id) {
+          if (!n.isRead) changed = true;
+          return { ...n, isRead: true };
+        }
+        return n;
+      });
+      if (changed) {
+        store.state = {
+          ...store.state,
+          unreadCount: Math.max(0, store.state.unreadCount - 1),
+          notifications: updated,
+        };
+        store.listeners.forEach((listener) => {
+          try {
+            listener();
+          } catch {}
+        });
+      }
+    }
+  });
+
+  window.dispatchEvent(
+    new CustomEvent("dermai_notifications_updated", {
+      detail: { role, userId, clinicId, id, action: "mark_read" },
+    })
+  );
 }
 
 /**
@@ -1459,9 +1609,10 @@ export function useRoleNotifications(
   config: { userId?: string; clinicId?: string; userEmail?: string }
 ) {
   const { userId, clinicId, userEmail } = config;
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const storeKey = getRoleStoreKey(role, { userId, clinicId });
+  const store = getOrCreateRoleStore(storeKey);
+
+  const [, setTick] = useState(0);
 
   const fetchFn = useCallback(async () => {
     try {
@@ -1475,14 +1626,35 @@ export function useRoleNotifications(
       } else if (role === "admin") {
         data = await fetchAdminNotifications();
       }
-      setNotifications(data);
-      setUnreadCount(data.filter((n) => !n.isRead).length);
-    } finally {
-      setLoading(false);
+      const unread = data.filter((n) => !n.isRead).length;
+      store.state = {
+        notifications: data,
+        unreadCount: unread,
+        loading: false,
+      };
+      store.listeners.forEach((l) => {
+        try {
+          l();
+        } catch {}
+      });
+    } catch (err) {
+      console.warn("[useRoleNotifications] fetch error:", err);
+      store.state = {
+        ...store.state,
+        loading: false,
+      };
+      store.listeners.forEach((l) => {
+        try {
+          l();
+        } catch {}
+      });
     }
-  }, [role, userId, clinicId, userEmail]);
+  }, [role, userId, clinicId, userEmail, store]);
 
   useEffect(() => {
+    const listener = () => setTick((t) => t + 1);
+    store.listeners.add(listener);
+
     fetchFn();
 
     // Setup Realtime Channel
@@ -1558,43 +1730,77 @@ export function useRoleNotifications(
 
     channel.subscribe();
 
-    const handleCustomUpdate = () => fetchFn();
+    const handleCleared = (e: Event) => {
+      const custom = e as CustomEvent;
+      const d = custom?.detail;
+      if (!d || d.role === role || (userId && d.userId === userId) || (clinicId && d.clinicId === clinicId)) {
+        store.state = {
+          ...store.state,
+          unreadCount: 0,
+          notifications: store.state.notifications.map((n) => ({ ...n, isRead: true })),
+        };
+        setTick((t) => t + 1);
+      }
+    };
+
+    const handleCustomUpdate = (e: Event) => {
+      const custom = e as CustomEvent;
+      if (custom?.detail?.action === "mark_all_read" || custom?.detail?.action === "mark_read") {
+        return;
+      }
+      fetchFn();
+    };
+    window.addEventListener("dermai_notifications_cleared", handleCleared);
     window.addEventListener("dermai_notifications_updated", handleCustomUpdate);
     window.addEventListener("storage", handleCustomUpdate);
 
     return () => {
+      store.listeners.delete(listener);
       supabase.removeChannel(channel);
+      window.removeEventListener("dermai_notifications_cleared", handleCleared);
       window.removeEventListener("dermai_notifications_updated", handleCustomUpdate);
       window.removeEventListener("storage", handleCustomUpdate);
     };
-  }, [fetchFn, role, userId, clinicId]);
+  }, [fetchFn, role, userId, clinicId, store]);
 
   const markRead = useCallback(
     async (id: string) => {
+      broadcastMarkRead(id, role, userId, clinicId);
       await markNotificationAsRead(id, role, userId);
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, isRead: true } : n))
-      );
-      setUnreadCount((prev) => Math.max(0, prev - 1));
     },
-    [role, userId]
+    [role, userId, clinicId]
   );
 
   const markAllRead = useCallback(async () => {
-    const ids = notifications.map((n) => n.id);
+    // 1. Immediate Frontend Badge Reset & List State Update (Optimistic UI)
+    const currentItems = store.state.notifications;
+    const ids = currentItems.map((n) => n.id);
+
+    broadcastMarkAllRead(role, userId, clinicId);
+
+    // 2. Database Mutation in Live Supabase:
+    // await supabase.from('user_notification').update({ is_read: true }).eq('user_id', currentUserId).eq('is_read', false);
     await markAllNotificationsAsRead(ids, role, userId);
-    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
-    setUnreadCount(0);
-  }, [notifications, role, userId]);
+  }, [role, userId, clinicId, store]);
 
   return {
-    notifications,
-    loading,
-    unreadCount,
+    notifications: store.state.notifications,
+    loading: store.state.loading,
+    unreadCount: store.state.unreadCount,
     refresh: fetchFn,
     markRead,
     markAllRead,
   };
+}
+
+/**
+ * Common alias for useRoleNotifications ensuring shared reactive context
+ */
+export function useNotifications(
+  role: NotificationRole = "patient",
+  config: { userId?: string; clinicId?: string; userEmail?: string } = {}
+) {
+  return useRoleNotifications(role, config);
 }
 
 /**

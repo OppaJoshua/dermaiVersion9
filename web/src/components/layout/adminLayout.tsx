@@ -180,7 +180,9 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     navigate("/", { replace: true });
   };
 
-  const { unreadCount } = useRoleNotifications("admin", {});
+  const { unreadCount } = useRoleNotifications("admin", {
+    userId: session?.user?.id,
+  });
 
   // Close dropdown on outside click
   useEffect(() => {

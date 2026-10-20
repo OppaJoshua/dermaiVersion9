@@ -2,34 +2,27 @@ import { createClient } from "@supabase/supabase-js";
 import { sendReceiptEmail } from "./emailReceipt.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-
-const supabaseServiceRoleKey = Deno.env.get(
-  "SUPABASE_SERVICE_ROLE_KEY"
-)!;
+const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const supabase = createClient(
   supabaseUrl,
-  supabaseServiceRoleKey
+  supabaseServiceRoleKey,
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  }
 );
 
-const webhookSecret = Deno.env.get(
-  "PAYMONGO_WEBHOOK_SECRET"
-);
-
+const webhookSecret = Deno.env.get("PAYMONGO_WEBHOOK_SECRET");
 if (!webhookSecret) {
-  throw new Error(
-    "PAYMONGO_WEBHOOK_SECRET is not configured"
-  );
+  throw new Error("PAYMONGO_WEBHOOK_SECRET is not configured");
 }
 
-const paymongoSecretKey = Deno.env.get(
-  "PAYMONGO_SECRET_KEY"
-);
-
+const paymongoSecretKey = Deno.env.get("PAYMONGO_SECRET_KEY");
 if (!paymongoSecretKey) {
-  throw new Error(
-    "PAYMONGO_SECRET_KEY is not configured"
-  );
+  throw new Error("PAYMONGO_SECRET_KEY is not configured");
 }
 
 const PAYMONGO_API = "https://api.paymongo.com/v1";
@@ -51,736 +44,482 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+/**
+ * Helper to record audit log events in system_audit_log
+ */
+async function recordAuditLog({
+  userId,
+  action,
+  target,
+  details,
+  metadata = {},
+}: {
+  userId?: string | null;
+  action: string;
+  target?: string;
+  details: string;
+  metadata?: Record<string, unknown>;
+}) {
+  try {
+    const metaString = Object.keys(metadata).length > 0 ? ` | Context: ${JSON.stringify(metadata)}` : "";
+    const validUserId = userId || null;
+
+    const { error: auditErr } = await supabase.from("system_audit_log").insert({
+      user_type: "patient",
+      action: action.trim(),
+      log_type: "subscription",
+      target: target || "PayMongo Webhook",
+      details: `${details}${metaString}`,
+      performer_name: "PayMongo Webhook Service",
+      user_id: validUserId,
+      timestamp: new Date().toISOString(),
+    });
+    if (auditErr) {
+      console.warn("[paymongo-webhook] Audit log insert error:", auditErr.message);
+    } else {
+      console.log("[paymongo-webhook] Audit log recorded successfully:", action);
+    }
+  } catch (err) {
+    console.warn("[paymongo-webhook] Non-blocking audit log insert error:", err);
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", {
-      headers: corsHeaders,
-    });
+    return new Response("ok", { headers: corsHeaders });
   }
 
   if (req.method !== "POST") {
-    return jsonResponse(
-      { error: "Method not allowed" },
-      405
-    );
+    return jsonResponse({ error: "Method not allowed" }, 405);
   }
 
   console.log("[webhook] PayMongo request received", {
-  method: req.method,
-  hasSignature: !!req.headers.get("Paymongo-Signature"),
-});
+    method: req.method,
+    hasSignature: !!req.headers.get("Paymongo-Signature"),
+  });
 
   let eventId: string | undefined;
 
   try {
     const signature = req.headers.get("Paymongo-Signature");
 
-if (!signature) {
-  return jsonResponse(
-    { error: "Missing Paymongo-Signature header" },
-    401
-  );
-}
-
-const rawBody = await req.text();
-
-const parts = signature.split(",");
-
-console.log(
-  "[webhook] Signature parts:",
-  parts.map((part) => part.split("=")[0])
-);
-
-const timestampPart = parts.find((part) =>
-  part.startsWith("t=")
-);
-
-const testSignaturePart = parts.find((part) =>
-  part.startsWith("te=")
-);
-
-if (!timestampPart || !testSignaturePart) {
-  return jsonResponse(
-    { error: "Invalid PayMongo signature format" },
-    401
-  );
-}
-
-const timestamp = timestampPart.substring(2);
-const receivedSignature = testSignaturePart.substring(3);
-
-console.log("[webhook] Signature timestamp:", timestamp);
-console.log("[webhook] Current time:", Math.floor(Date.now() / 1000));
-
-const signedPayload = `${timestamp}.${rawBody}`;
-
-
-const encoder = new TextEncoder();
-
-const key = await crypto.subtle.importKey(
-  "raw",
-  encoder.encode(webhookSecret),
-  {
-    name: "HMAC",
-    hash: "SHA-256",
-  },
-  false,
-  ["sign"]
-);
-
-const signatureBuffer = await crypto.subtle.sign(
-  "HMAC",
-  key,
-  encoder.encode(signedPayload)
-);
-
-const calculatedSignature = Array.from(
-  new Uint8Array(signatureBuffer)
-)
-  .map((byte) => byte.toString(16).padStart(2, "0"))
-  .join("");
-
-console.log("[webhook] Signature lengths:", {
-calculated: calculatedSignature.length,
-received: receivedSignature.length,
-});
-
-if (calculatedSignature !== receivedSignature) {
-  return jsonResponse(
-    { error: "Invalid PayMongo webhook signature" },
-    401
-  );
-}
-
-console.log("[webhook] Signature verification passed");
-
-    console.log(
-      "Received PayMongo webhook request."
-    );
-
-    console.log(
-      "Signature header present:",
-      !!signature
-    );
-
-  const event = JSON.parse(rawBody);
-
-console.log(
-  "Received PayMongo webhook event:",
-  event?.data?.attributes?.type
-);
-
-if (event?.data?.attributes?.type !== "payment.paid") {
-  return jsonResponse({
-    received: true,
-    message: "Event ignored.",
-    eventType: event?.data?.attributes?.type || "unknown",
-  });
-}
-
-eventId = event?.data?.id;
-
-if (!eventId) {
-  return jsonResponse(
-    { error: "Missing PayMongo event ID" },
-    400
-  );
-}
-
-console.log(
-  "PayMongo event ID:",
-  eventId
-);
-
-const { data: existingEvent, error: existingEventError } =
-  await supabase
-    .from("paymongo_webhook_event")
-    .select("event_id, status")
-    .eq("event_id", eventId)
-    .maybeSingle();
-
-if (existingEventError) {
-  console.error(
-    "Webhook event lookup error:",
-    existingEventError
-  );
-
-  throw new Error(
-    "Failed to check webhook event"
-  );
-}
-
-if (existingEvent?.status === "processed") {
-  console.log(
-    "Webhook event already processed:",
-    eventId
-  );
-
-  return jsonResponse({
-    received: true,
-    message: "Webhook event already processed.",
-    eventId,
-  });
-}
-
-if (existingEvent) {
-  console.log(
-    "Retrying previously received webhook event:",
-    {
-      eventId,
-      status: existingEvent.status,
+    if (!signature) {
+      return jsonResponse({ error: "Missing Paymongo-Signature header" }, 401);
     }
-  );
-}
 
-if (!existingEvent) {
-  const { error: insertEventError } =
-    await supabase
-      .from("paymongo_webhook_event")
-      .insert({
-        event_id: eventId,
-        event_type: "payment.paid",
-        status: "received",
-        payload: event,
+    const rawBody = await req.text();
+    const parts = signature.split(",");
+
+    console.log(
+      "[webhook] Signature parts:",
+      parts.map((part) => part.split("=")[0])
+    );
+
+    const timestampPart = parts.find((part) => part.startsWith("t="));
+    // Support both test signatures (te=) and live signatures (li=)
+    const signaturePart = parts.find(
+      (part) => part.startsWith("te=") || part.startsWith("li=")
+    );
+
+    if (!timestampPart || !signaturePart) {
+      console.error("[webhook] Signature missing required timestamp or signature part", {
+        parts: parts.map((p) => p.split("=")[0]),
       });
+      return jsonResponse({ error: "Invalid PayMongo signature format" }, 401);
+    }
 
-  if (insertEventError) {
-    console.error(
-      "Webhook event insert error:",
-      insertEventError
-    );
+    const timestamp = timestampPart.substring(2);
+    const prefix = signaturePart.startsWith("te=") ? "te=" : "li=";
+    const receivedSignature = signaturePart.substring(prefix.length);
 
-    throw new Error(
-      "Failed to record webhook event"
-    );
-  }
+    console.log("[webhook] Signature verification details:", {
+      timestamp,
+      signatureType: prefix.replace("=", ""),
+      currentTime: Math.floor(Date.now() / 1000),
+    });
 
-  console.log(
-    "Webhook event recorded:",
-    eventId
-  );
-}
+    const signedPayload = `${timestamp}.${rawBody}`;
+    const encoder = new TextEncoder();
 
-const paymentData =
-  event?.data?.attributes?.data;
-
-if (!paymentData?.id) {
-  throw new Error(
-    "Missing PayMongo Payment ID in webhook event"
-  );
-}
-
-const paymongoPaymentId =
-  paymentData.id;
-
-console.log(
-  "[webhook] Payment resource received:",
-  paymongoPaymentId
-);
-
-const paymentResource = paymentData;
-const paymentAttributes = paymentData?.attributes;
-
-if (!paymentAttributes) {
-  throw new Error(
-    "PayMongo webhook payment data is missing attributes"
-  );
-}
-
-console.log(
-  "[webhook] Payment resource structure:",
-  {
-    paymentId: paymentResource?.id ?? null,
-    paymentType: paymentResource?.type ?? null,
-    paymentStatus:
-      paymentAttributes?.status ?? null,
-    attributeKeys:
-      Object.keys(paymentAttributes),
-    relationshipKeys:
-      paymentResource?.relationships
-        ? Object.keys(paymentResource.relationships)
-        : [],
-    paymentIntentRelationship:
-      paymentResource?.relationships?.payment_intent
-        ? Object.keys(
-            paymentResource.relationships.payment_intent
-          )
-        : [],
-    paymentIntentRelationshipData:
-      paymentResource?.relationships?.payment_intent?.data
-        ? {
-            id:
-              paymentResource.relationships
-                .payment_intent.data.id ?? null,
-            type:
-              paymentResource.relationships
-                .payment_intent.data.type ?? null,
-          }
-        : null,
-  }
-);
-
-const paymentStatus =
-  paymentAttributes?.status;
-
-if (paymentStatus !== "paid") {
-  throw new Error(
-    `PayMongo payment is not paid: ${
-      paymentStatus || "unknown"
-    }`
-  );
-}
-
-console.log(
-  "PayMongo payment confirmed as paid."
-);
-
-const paymentIntentId =
-  paymentAttributes?.payment_intent_id ??
-  paymentResource?.relationships?.payment_intent?.data?.id ??
-  null;
-
-let metadata =
-  paymentAttributes?.metadata ?? {};
-
-console.log(
-  "[webhook] Payment resource metadata:",
-  {
-    hasUserId: !!metadata?.user_id,
-    hasPlanId: !!metadata?.plan_id,
-    hasBillingCycle: !!metadata?.billing_cycle,
-    paymentIntentId,
-  }
-);
-
-if (
-  !metadata?.user_id ||
-  !metadata?.plan_id ||
-  !metadata?.billing_cycle
-) {
-
-  const eventMetadata =
-    paymentData?.attributes?.metadata ??
-    {};
-
-  if (
-    eventMetadata?.user_id &&
-    eventMetadata?.plan_id &&
-    eventMetadata?.billing_cycle
-  ) {
-    metadata = eventMetadata;
-
-    console.log(
-      "[webhook] Using metadata from webhook payment data."
-    );
-  }
-}
-
-if (
-  (!metadata?.user_id ||
-    !metadata?.plan_id ||
-    !metadata?.billing_cycle) &&
-  paymentIntentId
-) {
-
-  const paymentIntentResponse =
-    await fetch(
-      `${PAYMONGO_API}/payment_intents/${paymentIntentId}`,
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(webhookSecret),
       {
-        method: "GET",
-        headers: {
-          Authorization:
-            "Basic " +
-            btoa(paymongoSecretKey + ":"),
-          "Content-Type": "application/json",
-        },
+        name: "HMAC",
+        hash: "SHA-256",
+      },
+      false,
+      ["sign"]
+    );
+
+    const signatureBuffer = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      encoder.encode(signedPayload)
+    );
+
+    const calculatedSignature = Array.from(new Uint8Array(signatureBuffer))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+
+    if (calculatedSignature !== receivedSignature) {
+      console.error("[webhook] Signature mismatch:", {
+        calculatedLen: calculatedSignature.length,
+        receivedLen: receivedSignature.length,
+      });
+      return jsonResponse({ error: "Invalid PayMongo webhook signature" }, 401);
+    }
+
+    console.log("[webhook] Signature verification passed successfully");
+
+    const event = JSON.parse(rawBody);
+    const eventType = event?.data?.attributes?.type;
+
+    console.log("Received PayMongo webhook event:", eventType);
+
+    // Support both payment.paid and checkout_session.payment.paid
+    const supportedEvents = ["payment.paid", "checkout_session.payment.paid"];
+    if (!supportedEvents.includes(eventType)) {
+      return jsonResponse({
+        received: true,
+        message: "Event ignored.",
+        eventType: eventType || "unknown",
+      });
+    }
+
+    eventId = event?.data?.id;
+
+    if (!eventId) {
+      return jsonResponse({ error: "Missing PayMongo event ID" }, 400);
+    }
+
+    console.log("PayMongo event ID:", eventId);
+
+    const { data: existingEvent, error: existingEventError } = await supabase
+      .from("paymongo_webhook_event")
+      .select("event_id, status")
+      .eq("event_id", eventId)
+      .maybeSingle();
+
+    if (existingEventError) {
+      console.error("Webhook event lookup error:", existingEventError);
+      throw new Error("Failed to check webhook event");
+    }
+
+    if (existingEvent?.status === "processed") {
+      console.log("Webhook event already processed:", eventId);
+      return jsonResponse({
+        received: true,
+        message: "Webhook event already processed.",
+        eventId,
+      });
+    }
+
+    if (!existingEvent) {
+      const { error: insertEventError } = await supabase
+        .from("paymongo_webhook_event")
+        .insert({
+          event_id: eventId,
+          event_type: eventType,
+          status: "received",
+          payload: event,
+        });
+
+      if (insertEventError) {
+        console.error("Webhook event insert error:", insertEventError);
       }
-    );
+    }
 
-  const paymentIntentJson =
-    await paymentIntentResponse.json();
+    // Resolve payment resource data
+    let paymentData = event?.data?.attributes?.data;
 
-  if (!paymentIntentResponse.ok) {
-    console.error(
-      "PayMongo Payment Intent lookup error:",
-      paymentIntentJson
-    );
+    // If event is checkout_session.payment.paid, payment data may be in attributes.payments
+    if (eventType === "checkout_session.payment.paid" && !paymentData?.id) {
+      const sessionPayments = event?.data?.attributes?.data?.attributes?.payments;
+      if (Array.isArray(sessionPayments) && sessionPayments.length > 0) {
+        paymentData = sessionPayments[0];
+      }
+    }
 
-    throw new Error(
-      paymentIntentJson?.errors?.[0]?.detail ||
-        "Failed to retrieve PayMongo Payment Intent"
-    );
-  }
+    if (!paymentData?.id) {
+      throw new Error("Missing PayMongo Payment ID in webhook event");
+    }
 
-  const paymentIntentResource =
-    paymentIntentJson?.data;
+    const paymongoPaymentId = paymentData.id;
+    const paymentResource = paymentData;
+    const paymentAttributes = paymentData?.attributes;
 
-  const paymentIntentAttributes =
-    paymentIntentResource?.attributes;
+    if (!paymentAttributes) {
+      throw new Error("PayMongo webhook payment data is missing attributes");
+    }
 
-  if (paymentIntentAttributes?.metadata) {
-    metadata =
-      paymentIntentAttributes.metadata;
+    const paymentStatus = paymentAttributes?.status;
+    if (paymentStatus !== "paid") {
+      throw new Error(`PayMongo payment is not paid: ${paymentStatus || "unknown"}`);
+    }
 
-    console.log(
-      "[webhook] Metadata retrieved from Payment Intent."
-    );
-  }
-}
+    const paymentIntentId =
+      paymentAttributes?.payment_intent_id ??
+      paymentResource?.relationships?.payment_intent?.data?.id ??
+      null;
 
-if (!metadata?.user_id) {
-  throw new Error(
-    "Payment metadata is missing user_id"
-  );
-}
+    let metadata = paymentAttributes?.metadata ?? {};
 
-if (!metadata?.plan_id) {
-  throw new Error(
-    "Payment metadata is missing plan_id"
-  );
-}
+    if (!metadata?.user_id || !metadata?.plan_id || !metadata?.billing_cycle) {
+      const eventMetadata = paymentData?.attributes?.metadata ?? {};
+      if (eventMetadata?.user_id && eventMetadata?.plan_id && eventMetadata?.billing_cycle) {
+        metadata = eventMetadata;
+      }
+    }
 
-if (
-  metadata?.billing_cycle !== "monthly" &&
-  metadata?.billing_cycle !== "yearly"
-) {
-  throw new Error(
-    "Payment metadata has an invalid billing_cycle"
-  );
-}
+    if (
+      (!metadata?.user_id || !metadata?.plan_id || !metadata?.billing_cycle) &&
+      paymentIntentId
+    ) {
+      const paymentIntentResponse = await fetch(
+        `${PAYMONGO_API}/payment_intents/${paymentIntentId}`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: "Basic " + btoa(paymongoSecretKey + ":"),
+            "Content-Type": "application/json",
+          },
+        }
+      );
 
-console.log(
-  "Payment metadata:",
-  {
-    user_id: metadata.user_id,
-    plan_id: metadata.plan_id,
-    billing_cycle:
-      metadata.billing_cycle,
-  }
-);
+      const paymentIntentJson = await paymentIntentResponse.json();
+      if (paymentIntentResponse.ok && paymentIntentJson?.data?.attributes?.metadata) {
+        metadata = paymentIntentJson.data.attributes.metadata;
+        console.log("[webhook] Metadata retrieved from Payment Intent.");
+      }
+    }
 
-const payment =
-  paymentResource;
+    if (!metadata?.user_id) {
+      throw new Error("Payment metadata is missing user_id");
+    }
 
-const amountInCentavos =
-  payment?.attributes?.amount;
-if (!paymongoPaymentId) {
-  throw new Error(
-    "PayMongo payment ID is missing"
-  );
-}
+    if (!metadata?.plan_id) {
+      throw new Error("Payment metadata is missing plan_id");
+    }
 
-if (
-  typeof amountInCentavos !== "number" ||
-  amountInCentavos <= 0
-) {
-  throw new Error(
-    "PayMongo payment amount is missing or invalid"
-  );
-}
+    const billingCycle = metadata?.billing_cycle;
+    if (billingCycle !== "monthly" && billingCycle !== "yearly") {
+      throw new Error("Payment metadata has a missing or invalid billing_cycle");
+    }
+    const amountInCentavos = paymentAttributes?.amount;
 
-const amount = amountInCentavos / 100;
+    if (typeof amountInCentavos !== "number" || amountInCentavos <= 0) {
+      throw new Error("PayMongo payment amount is missing or invalid");
+    }
 
-console.log(
-  "PayMongo payment details:",
-  {
-    paymentId: paymongoPaymentId,
-    amount,
-  }
-);
+    // Gross amount actually charged by PayMongo
+    const amount = amountInCentavos / 100;
+    const paymentDateIso = new Date().toISOString();
 
-const paymentMethodType =
-  payment?.attributes?.source?.type ||
-  payment?.attributes?.payment_method_details?.type ||
-  "unknown";
+    const paymentMethodType: string =
+      paymentAttributes?.source?.type ||
+      paymentAttributes?.payment_method_details?.type ||
+      metadata?.payment_method ||
+      "gcash";
 
-console.log(
-  "PayMongo payment method:",
-  paymentMethodType
-);
+    const paymentMethodLabel =
+      paymentMethodType === "paymaya" || paymentMethodType === "maya"
+        ? "Maya"
+        : paymentMethodType === "gcash"
+        ? "GCash"
+        : paymentMethodType;
 
-const { data: existingPayment, error: existingPaymentError } =
-  await supabase
-    .from("user_payment")
-    .select("payment_id")
-    .eq("paymongo_payment_id", paymongoPaymentId)
-    .maybeSingle();
+    // Read the purchased plan record (name and net price)
+    const { data: planRecord } = await supabase
+      .from("plan")
+      .select("plan_id, name, price")
+      .eq("plan_id", metadata.plan_id)
+      .maybeSingle();
 
-if (existingPaymentError) {
-  console.error(
-    "user_payment lookup error:",
-    existingPaymentError
-  );
+    let planName: string = planRecord?.name || metadata?.plan_name || "";
+    if (!planName) {
+      planName = billingCycle === "yearly" ? "Pro (Annual)" : "Pro";
+    }
 
-  throw new Error(
-    "Failed to check existing payment"
-  );
-}
+    const finalAmountPaid = amount;
 
-// Dynamically read base_price from the plan record to compute VAT and total amounts
-const { data: planRecord } = await supabase
-  .from("plan")
-  .select("plan_id, name, price")
-  .eq("plan_id", metadata.plan_id)
-  .maybeSingle();
+    // Check if user_payment is already recorded
+    const { data: existingPayment } = await supabase
+      .from("user_payment")
+      .select("payment_id")
+      .eq("paymongo_payment_id", paymongoPaymentId)
+      .maybeSingle();
 
-const basePrice = planRecord?.price != null
-  ? Number(planRecord.price)
-  : Number(metadata.base_amount ?? metadata.base_price ?? metadata.net_amount ?? (amount / 1.12));
-const vatAmount = Math.round(basePrice * 0.12 * 100) / 100;
-const totalPrice = Math.round((basePrice + vatAmount) * 100) / 100;
-const finalAmountPaid = amount > 0 ? (amount >= totalPrice ? amount : totalPrice) : totalPrice;
-const baseAmount = basePrice;
+    let isNewPayment = false;
 
-if (!existingPayment) {
-  const paymentRecord: Record<string, unknown> = {
-    amount: finalAmountPaid,
-    base_amount: baseAmount,
-    vat_amount: vatAmount,
-    total_amount: finalAmountPaid,
-    amount_paid: finalAmountPaid,
-    payment_date: new Date().toISOString(),
-    method: paymentMethodType,
-    status: "success",
-    user_id: metadata.user_id,
-    plan_id: metadata.plan_id,
-    billing_cycle: metadata.billing_cycle,
-    reference_number: paymongoPaymentId,
-    paymongo_payment_id: paymongoPaymentId,
-    paymongo_payment_intent_id: paymentIntentId,
-  };
+    if (!existingPayment) {
+      const paymentRecord = {
+        amount: finalAmountPaid,
+        payment_date: paymentDateIso,
+        method: paymentMethodType,
+        status: "success",
+        user_id: metadata.user_id,
+        plan_id: metadata.plan_id,
+        billing_cycle: billingCycle,
+        reference_number: paymongoPaymentId,
+        paymongo_payment_id: paymongoPaymentId,
+        paymongo_payment_intent_id: paymentIntentId,
+      };
 
-  let { error: paymentInsertError } = await supabase
-    .from("user_payment")
-    .insert(paymentRecord);
+      const { error: paymentInsertError } = await supabase
+        .from("user_payment")
+        .insert(paymentRecord);
 
-  // Fallback if newly added columns are not yet migrated in Supabase Cloud
-  if (paymentInsertError && paymentInsertError.message?.includes("does not exist")) {
-    const fallbackRecord = {
-      amount: finalAmountPaid,
-      payment_date: new Date().toISOString(),
-      method: paymentMethodType,
-      status: "success",
+      if (paymentInsertError) {
+        console.error("user_payment insert error:", paymentInsertError);
+      } else {
+        isNewPayment = true;
+        console.log("Successful payment recorded in user_payment:", paymongoPaymentId);
+      }
+    } else {
+      console.log("user_payment already exists for reference:", paymongoPaymentId);
+    }
+
+    // Activate subscription
+    const periodStart = new Date();
+    const periodEnd = new Date(periodStart);
+
+    if (billingCycle === "yearly") {
+      periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+    } else {
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
+    }
+
+    // Recipient: account email first (auth.users, then public.user), then the
+    // email attached to the payment intent. No other fallback.
+    let recipientEmail: string | null = null;
+
+    try {
+      const { data: authUser } = await supabase.auth.admin.getUserById(metadata.user_id);
+      recipientEmail = authUser?.user?.email || null;
+    } catch (authErr) {
+      console.warn("[webhook] admin.getUserById warning:", authErr);
+    }
+
+    if (!recipientEmail) {
+      try {
+        const { data: userRow } = await supabase
+          .from("user")
+          .select("email")
+          .eq("user_id", metadata.user_id)
+          .maybeSingle();
+        recipientEmail = userRow?.email || null;
+      } catch (uErr) {
+        console.warn("[webhook] user table lookup warning:", uErr);
+      }
+    }
+
+    if (!recipientEmail && metadata?.payment_email) {
+      recipientEmail = metadata.payment_email;
+    }
+
+    if (!recipientEmail) {
+      throw new Error("Missing recipient email address");
+    }
+
+    const subscriptionRecord = {
       user_id: metadata.user_id,
       plan_id: metadata.plan_id,
-      billing_cycle: metadata.billing_cycle,
-      reference_number: paymongoPaymentId,
-      paymongo_payment_id: paymongoPaymentId,
-      paymongo_payment_intent_id: paymentIntentId,
+      status: "active",
+      billing_cycle: billingCycle,
+      started_at: periodStart.toISOString(),
+      renews_at: periodEnd.toISOString(),
+      current_period_start: periodStart.toISOString(),
+      current_period_end: periodEnd.toISOString(),
+      payment_method: metadata.payment_method || paymentMethodType,
+      payment_full_name: metadata.payment_full_name || null,
+      payment_email: recipientEmail,
+      billing_address: metadata.billing_address || null,
+      payment_mobile_number: metadata.payment_mobile_number || null,
+      updated_at: new Date().toISOString(),
     };
-    const res = await supabase.from("user_payment").insert(fallbackRecord);
-    paymentInsertError = res.error;
-  }
 
-  if (paymentInsertError) {
-    console.error(
-      "user_payment insert error:",
-      paymentInsertError
-    );
+    const { error: subscriptionUpsertError } = await supabase
+      .from("user_plan_subscription")
+      .upsert(subscriptionRecord, { onConflict: "user_id" });
 
-    throw new Error(
-      "Failed to record successful payment"
-    );
-  }
+    if (subscriptionUpsertError) {
+      console.error("user_plan_subscription upsert error:", subscriptionUpsertError);
+    } else {
+      console.log("Subscription activated successfully:", metadata.user_id);
+    }
 
-  console.log(
-    "Successful payment recorded in user_payment:",
-    paymongoPaymentId
-  );
-} else {
-  console.log(
-    "Payment already exists in user_payment:",
-    paymongoPaymentId
-  );
-}
+    // Check if receipt email was already sent
+    const { data: alreadySentLog } = await supabase
+      .from("system_audit_log")
+      .select("log_id")
+      .eq("action", "Receipt Email Sent")
+      .ilike("details", `%${paymongoPaymentId}%`)
+      .maybeSingle();
 
-const periodStart = new Date();
-const periodEnd = new Date(periodStart);
+    if (alreadySentLog) {
+      console.log("[Webhook] Receipt email already sent previously for payment:", paymongoPaymentId);
+    } else {
+      try {
+        const emailResult = await sendReceiptEmail({
+          patientEmail: recipientEmail,
+          paymentMethod: paymentMethodLabel,
+          amount,
+          planName,
+          billingCycle,
+          paymentDate: paymentDateIso,
+          paymongoPaymentId,
+        });
 
-if (metadata.billing_cycle === "yearly") {
-  periodEnd.setFullYear(
-    periodEnd.getFullYear() + 1
-  );
-} else {
-  periodEnd.setMonth(
-    periodEnd.getMonth() + 1
-  );
-}
+        await recordAuditLog({
+          userId: metadata.user_id,
+          action: "Receipt Email Sent",
+          target: recipientEmail,
+          details: `Receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${amount.toFixed(2)}).`,
+          metadata: {
+            provider: emailResult.provider,
+            messageId: emailResult.messageId,
+            amount,
+            transactionId: paymongoPaymentId,
+          },
+        });
 
-console.log(
-  "Subscription period:",
-  {
-    start: periodStart.toISOString(),
-    end: periodEnd.toISOString(),
-    billing_cycle: metadata.billing_cycle,
-  }
-);
+        console.log("[Webhook] Receipt email sent successfully.");
+      } catch (emailError) {
+        const errMessage = emailError instanceof Error ? emailError.message : String(emailError);
+        console.error("[Webhook] Receipt email delivery failed:", errMessage);
 
-const subscriptionRecord: Record<string, unknown> = {
-  user_id: metadata.user_id,
-  plan_id: metadata.plan_id,
-  status: "active",
-  billing_cycle: metadata.billing_cycle,
-  started_at: periodStart.toISOString(),
-  renews_at: periodEnd.toISOString(),
-  current_period_start: periodStart.toISOString(),
-  current_period_end: periodEnd.toISOString(),
-  base_amount: baseAmount,
-  vat_amount: vatAmount,
-  total_amount: finalAmountPaid,
-  amount_paid: finalAmountPaid,
-  payment_method: metadata.payment_method,
-  payment_full_name: metadata.payment_full_name,
-  payment_email: metadata.payment_email,
-  billing_address: metadata.billing_address,
-  payment_mobile_number: metadata.payment_mobile_number,
-  updated_at: new Date().toISOString(),
-};
+        await recordAuditLog({
+          userId: metadata.user_id,
+          action: "Receipt Email Failed",
+          target: recipientEmail || "Unresolved recipient",
+          details: `Failed to deliver receipt email for payment ${paymongoPaymentId}: ${errMessage}`,
+          metadata: { error: errMessage, amount, transactionId: paymongoPaymentId },
+        });
+      }
+    }
 
-let { error: subscriptionUpsertError } = await supabase
-  .from("user_plan_subscription")
-  .upsert(subscriptionRecord, { onConflict: "user_id" });
+    // Mark webhook event processed
+    await supabase
+      .from("paymongo_webhook_event")
+      .update({
+        status: "processed",
+        processed_at: new Date().toISOString(),
+      })
+      .eq("event_id", eventId);
 
-// Fallback if newly added columns are not yet migrated in Supabase Cloud
-if (subscriptionUpsertError && subscriptionUpsertError.message?.includes("does not exist")) {
-  const fallbackSub = {
-    user_id: metadata.user_id,
-    plan_id: metadata.plan_id,
-    status: "active",
-    billing_cycle: metadata.billing_cycle,
-    started_at: periodStart.toISOString(),
-    renews_at: periodEnd.toISOString(),
-    current_period_start: periodStart.toISOString(),
-    current_period_end: periodEnd.toISOString(),
-    payment_method: metadata.payment_method,
-    payment_full_name: metadata.payment_full_name,
-    payment_email: metadata.payment_email,
-    billing_address: metadata.billing_address,
-    payment_mobile_number: metadata.payment_mobile_number,
-    updated_at: new Date().toISOString(),
-  };
-  const res = await supabase.from("user_plan_subscription").upsert(fallbackSub, { onConflict: "user_id" });
-  subscriptionUpsertError = res.error;
-}
+    return jsonResponse({
+      received: true,
+      message: "Payment and subscription processed successfully.",
+      eventId,
+      paymentIntentId,
+      paymongoPaymentId,
+    });
+  } catch (error) {
+    console.error("Webhook processing error:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unexpected server error";
 
-if (subscriptionUpsertError) {
-  console.error(
-    "user_plan_subscription upsert error:",
-    subscriptionUpsertError
-  );
-
-  throw new Error(
-    "Failed to activate subscription"
-  );
-}
-
-console.log(
-  "Subscription activated successfully:",
-  {
-    user_id: metadata.user_id,
-    plan_id: metadata.plan_id,
-    billing_cycle: metadata.billing_cycle,
-  }
-);
-
-// Send payment receipt email
-try {
-  const {
-    data: authUser,
-    error: authUserError,
-  } = await supabase.auth.admin.getUserById(
-    metadata.user_id
-  );
-
-  if (authUserError) {
-    throw new Error(
-      `Failed to get patient email: ${authUserError.message}`
-    );
-  }
-
-  const patientEmail = authUser.user?.email;
-
-  if (!patientEmail) {
-    throw new Error(
-      "Patient email address was not found"
-    );
-  }
-
-  const paymentMethodLabel =
-    paymentMethodType === "paymaya"
-      ? "Maya"
-      : paymentMethodType === "gcash"
-      ? "GCash"
-      : paymentMethodType;
-
-  await sendReceiptEmail({
-    patientEmail,
-    paymentMethod: paymentMethodLabel,
-    amount: finalAmountPaid,
-    baseAmount,
-    vatAmount,
-    paymentDate: new Date().toISOString(),
-    paymongoPaymentId,
-  });
-
-  console.log(
-    "[Webhook] Receipt email sent successfully."
-  );
-} catch (emailError) {
-  console.error(
-   "[Webhook] Receipt email failed, but payment remains successful:",
-    emailError instanceof Error
-      ? emailError.message
-      : JSON.stringify(emailError)
-  );
-}
-
-const { error: processedEventError } =
-  await supabase
-    .from("paymongo_webhook_event")
-    .update({
-      status: "processed",
-      processed_at: new Date().toISOString(),
-    })
-    .eq("event_id", eventId);
-
-if (processedEventError) {
-  console.error(
-    "Failed to mark webhook event as processed:",
-    processedEventError
-  );
-
-  throw new Error(
-    "Failed to mark webhook event as processed"
-  );
-}
-
-console.log(
-  "Webhook event marked as processed:",
-  eventId
-);
-
-return jsonResponse({
-  received: true,
-  message: "Payment and subscription processed successfully.",
-  eventId,
-  paymentIntentId,
-  paymongoPaymentId,
-});
-
-} catch (error) {
-  console.error(
-    "Webhook error:",
-    error
-  );
-
-  const errorMessage =
-    error instanceof Error
-      ? error.message
-      : "Unexpected server error";
-
-  if (typeof eventId === "string" && eventId) {
-    const { error: failedEventError } =
+    if (typeof eventId === "string" && eventId) {
       await supabase
         .from("paymongo_webhook_event")
         .update({
@@ -788,32 +527,8 @@ return jsonResponse({
           error_message: errorMessage,
         })
         .eq("event_id", eventId);
-
-    if (failedEventError) {
-      console.error(
-        "Failed to mark webhook event as failed:",
-        failedEventError
-      );
-    } else {
-      console.log(
-        "Webhook event marked as failed:",
-        eventId
-      );
     }
+
+    return jsonResponse({ error: errorMessage }, 500);
   }
-
-  return jsonResponse(
-    {
-      error: errorMessage,
-    },
-    500
-  );
-}
 });
-
-
-
-
-
-
-

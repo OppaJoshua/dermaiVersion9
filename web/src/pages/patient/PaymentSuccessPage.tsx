@@ -169,6 +169,26 @@ export default function PaymentSuccessPage() {
             method: methodType,
           },
         }).catch(() => {});
+
+        // Receipt dispatch is recorded in system_audit_log by the edge functions with the
+        // real recipient/transaction.
+        if (data?.fulfillment?.emailDispatched === false) {
+          console.warn(
+            "[PaymentSuccessPage] Receipt email was not dispatched initially, attempting retry...",
+            data?.fulfillment?.emailError || data?.fulfillment?.error
+          );
+          try {
+            await supabase.functions.invoke("paymongo-payment", {
+              body: {
+                action: "send_receipt_email",
+                paymentIntentId: intentId,
+                clientKey,
+              },
+            });
+          } catch (retryErr) {
+            console.error("[PaymentSuccessPage] Receipt retry failed:", retryErr);
+          }
+        }
       } catch (err: unknown) {
         console.error(
           "[PaymentSuccessPage] Verification failed:",
@@ -315,20 +335,22 @@ export default function PaymentSuccessPage() {
                 </dd>
               </div>
 
-              {/* VAT breakdown (receipt only) */}
-              <div className="flex justify-between gap-6 py-3.5">
-                <dt className="text-gray-500">Amount (excl. VAT)</dt>
-                <dd className="font-medium text-gray-900 text-right">
-                  ₱{formatAmount(netAmount)}
-                </dd>
-              </div>
-
-              <div className="flex justify-between gap-6 py-3.5">
-                <dt className="text-gray-500">VAT (12%)</dt>
-                <dd className="font-medium text-gray-900 text-right">
-                  ₱{formatAmount(vatAmount)}
-                </dd>
-              </div>
+              {netAmount != null && vatAmount != null && (
+                <>
+                  <div className="flex justify-between gap-6 py-3.5">
+                    <dt className="text-gray-500">Subtotal (Net of VAT)</dt>
+                    <dd className="font-medium text-gray-900 text-right">
+                      ₱{formatAmount(netAmount)}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-6 py-3.5">
+                    <dt className="text-gray-500">VAT (12%)</dt>
+                    <dd className="font-medium text-gray-900 text-right">
+                      ₱{formatAmount(vatAmount)}
+                    </dd>
+                  </div>
+                </>
+              )}
 
               <div className="flex justify-between gap-6 py-3.5">
                 <dt className="text-gray-500">Payment Method</dt>

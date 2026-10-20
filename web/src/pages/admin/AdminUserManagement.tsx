@@ -371,7 +371,7 @@ export default function AdminUserManagement() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
             onClick={() => setReviewModal(null)}
           >
             <motion.div
@@ -379,9 +379,9 @@ export default function AdminUserManagement() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl"
+              className="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
             >
-              <div className="flex items-center justify-between px-8 py-6 border-b border-gray-200">
+              <div className="flex items-center justify-between px-8 py-6 border-b border-gray-200 shrink-0">
                 <h2 className="text-xl font-display font-bold text-black">
                   User details
                 </h2>
@@ -394,7 +394,7 @@ export default function AdminUserManagement() {
                 </button>
               </div>
 
-              <div className="px-8 py-6 space-y-5">
+              <div className="px-8 py-6 space-y-5 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden flex-1">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600">Account status</span>
                   <span className={cn("px-3 py-1 rounded-full border text-xs font-semibold capitalize", statusBadge[modalUser.status])}>
@@ -452,7 +452,7 @@ export default function AdminUserManagement() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-3 px-8 py-5 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
+              <div className="flex flex-wrap gap-3 px-8 py-5 border-t border-gray-200 bg-gray-50 rounded-b-2xl shrink-0">
                 {modalUser.role !== "admin" && modalUser.id !== currentAuthUser?.id ? (
                   <>
                     {modalUser.status === "active" && (

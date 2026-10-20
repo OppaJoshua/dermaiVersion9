@@ -35,6 +35,7 @@ import PaymentSuccessPage from "./pages/patient/PaymentSuccessPage";
 import SubscriptionChoicePage from "./pages/patient/SubscriptionChoicePage";
 import HelpPage from "./pages/patient/settings/HelpPage";
 import BillingSettingsPage from "./pages/patient/settings/BillingSettingsPage";
+import PatientNotifications from "./pages/patient/PatientNotifications";
 
 // Clinic Pages
 import ClinicDashboardPage from "./pages/clinic/ClinicDashboardPage";
@@ -42,6 +43,7 @@ import ClinicAppointmentsPage from "./pages/clinic/ClinicAppointmentsPage";
 import ClinicPatientsPage from "./pages/clinic/ClinicPatientsPage";
 import ClinicDoctorsPage from "./pages/clinic/ClinicDoctorsPage";
 import ClinicSettingsPage from "./pages/clinic/ClinicSettingsPage";
+import ClinicNotifications from "./pages/clinic/ClinicNotifications";
 
 // Doctor Pages
 import DoctorDashboardPage from "./pages/doctor/DoctorDashboardPage";
@@ -49,6 +51,7 @@ import DoctorAppointmentsPage from "./pages/doctor/DoctorAppointmentsPage";
 import DoctorScheduledAppointmentsPage from "./pages/doctor/DoctorScheduledAppointmentsPage";
 import DoctorPatientHistoryPage from "./pages/doctor/DoctorPatientHistoryPage";
 import DoctorSettingsPage from "./pages/doctor/DoctorSettingsPage";
+import DoctorNotifications from "./pages/doctor/DoctorNotifications";
 
 // Admin Pages
 import AdminDashboardPage from "./pages/admin/AdminDashboardPage";
@@ -129,6 +132,8 @@ function App() {
         <Route path="/dashboard/settings/account" element={<Navigate to="/dashboard/profile" replace />} />
         <Route path="/dashboard/settings/help" element={<UserLayout><HelpPage /></UserLayout>} />
         <Route path="/dashboard/settings/billing" element={<UserLayout><BillingSettingsPage /></UserLayout>} />
+        <Route path="/dashboard/notifications" element={<UserLayout><PatientNotifications /></UserLayout>} />
+        <Route path="/patient/notifications" element={<Navigate to="/dashboard/notifications" replace />} />
 
         {/* Clinic Routes */}
         <Route path="/clinic" element={<ClinicLayout><ClinicDashboardPage /></ClinicLayout>} />
@@ -136,6 +141,7 @@ function App() {
         <Route path="/clinic/patients" element={<ClinicLayout><ClinicPatientsPage /></ClinicLayout>} />
         <Route path="/clinic/doctors" element={<ClinicLayout><ClinicDoctorsPage /></ClinicLayout>} />
         <Route path="/clinic/settings" element={<ClinicLayout><ClinicSettingsPage /></ClinicLayout>} />
+        <Route path="/clinic/notifications" element={<ClinicLayout><ClinicNotifications /></ClinicLayout>} />
 
         {/* Doctor Routes */}
         <Route path="/doctor" element={<DoctorLayout><DoctorDashboardPage /></DoctorLayout>} />
@@ -143,6 +149,7 @@ function App() {
         <Route path="/doctor/scheduled" element={<DoctorLayout><DoctorScheduledAppointmentsPage /></DoctorLayout>} />
         <Route path="/doctor/history" element={<DoctorLayout><DoctorPatientHistoryPage /></DoctorLayout>} />
         <Route path="/doctor/settings" element={<DoctorLayout><DoctorSettingsPage /></DoctorLayout>} />
+        <Route path="/doctor/notifications" element={<DoctorLayout><DoctorNotifications /></DoctorLayout>} />
 
         {/* Admin Routes */}
         <Route path="/admin" element={<AdminLayout><AdminDashboardPage /></AdminLayout>} />

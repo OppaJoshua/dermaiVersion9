@@ -476,7 +476,7 @@ export default function AdminHelpdeskPage() {
           <h2 className="text-lg font-semibold text-black">Tickets</h2>
           <span className="text-sm text-gray-600">{filteredTickets.length} shown</span>
         </div>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
           <table className="w-full text-left">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-black uppercase tracking-wider">
@@ -616,19 +616,19 @@ export default function AdminHelpdeskPage() {
       <AnimatePresence>
         {selectedTicket && (
           <div
-            className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 overflow-y-auto"
+            className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 pt-16 sm:pt-24 md:pt-28 pb-12 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
             onClick={() => setSelectedTicketId(null)}
           >
             <motion.div
-              initial={{ opacity: 0, y: 10 }}
+              initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
+              exit={{ opacity: 0, y: 15 }}
               transition={{ duration: 0.15 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-gray-100 my-8 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-gray-100 max-h-[82vh] flex flex-col overflow-hidden"
             >
               {/* Modal header */}
-              <div className="flex items-start justify-between gap-4 px-8 py-6 border-b border-gray-200">
+              <div className="flex items-start justify-between gap-4 px-6 sm:px-8 py-5 border-b border-gray-200 shrink-0">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="px-2.5 py-1 rounded-md bg-gray-100 font-mono text-xs font-semibold text-black">
@@ -645,7 +645,7 @@ export default function AdminHelpdeskPage() {
                       })}
                     </span>
                   </div>
-                  <h2 className="mt-3 text-xl font-display font-bold text-black">
+                  <h2 className="mt-2 text-xl font-display font-bold text-black">
                     {selectedTicket.subject}
                   </h2>
                 </div>
@@ -659,10 +659,10 @@ export default function AdminHelpdeskPage() {
                 </button>
               </div>
 
-              <div className="px-8 py-6 space-y-6">
+              <div className="px-6 sm:px-8 py-5 space-y-4 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden flex-1">
                 {/* Sender card */}
-                <div className="rounded-xl bg-gray-50 border border-gray-200 p-5 flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-4 min-w-0">
+                <div className="rounded-xl bg-gray-50 border border-gray-200 p-4 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3.5 min-w-0">
                     <SenderAvatar
                       name={selectedTicket.user}
                       avatarUrl={selectedTicket.avatarUrl}
@@ -680,15 +680,15 @@ export default function AdminHelpdeskPage() {
 
                 {/* Inquiry */}
                 <div>
-                  <p className="text-sm font-semibold text-black mb-2">Inquiry</p>
-                  <div className="rounded-xl bg-white border border-gray-200 px-5 py-4 text-sm text-black leading-relaxed whitespace-pre-wrap">
+                  <p className="text-sm font-semibold text-black mb-1.5">Inquiry</p>
+                  <div className="rounded-xl bg-white border border-gray-200 px-4 py-3 text-sm text-black leading-relaxed whitespace-pre-wrap">
                     {selectedTicket.message}
                   </div>
                 </div>
 
                 {/* Status selector */}
                 <div>
-                  <p className="text-sm font-semibold text-black mb-2">Status</p>
+                  <p className="text-sm font-semibold text-black mb-1.5">Status</p>
                   <div className="grid grid-cols-3 gap-3">
                     {(["open", "in_progress", "resolved"] as const).map((statusKey) => {
                       const active =
@@ -707,7 +707,7 @@ export default function AdminHelpdeskPage() {
                           type="button"
                           onClick={() => handleStatusChange(selectedTicket.id, statusKey)}
                           className={cn(
-                            "py-3 rounded-lg text-sm font-semibold border transition-colors cursor-pointer text-center",
+                            "py-2.5 rounded-lg text-sm font-semibold border transition-colors cursor-pointer text-center",
                             active
                               ? statusKey === "in_progress"
                                 ? "border-blue-500 bg-blue-50 text-blue-900 font-bold"
@@ -726,7 +726,7 @@ export default function AdminHelpdeskPage() {
 
                 {/* Response */}
                 <div>
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between mb-1.5">
                     <label htmlFor="admin-response" className="text-sm font-semibold text-black">
                       Response to user
                     </label>
@@ -741,17 +741,17 @@ export default function AdminHelpdeskPage() {
                   </div>
                   <textarea
                     id="admin-response"
-                    rows={4}
+                    rows={3}
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
                     placeholder="Write a resolution note or reply that will be shown to the user"
-                    className="w-full px-4 py-3 rounded-xl border border-gray-300 text-sm text-black placeholder:text-gray-500 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/15 resize-none"
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-sm text-black placeholder:text-gray-500 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/15 resize-none"
                   />
                 </div>
               </div>
 
               {/* Footer */}
-              <div className="flex flex-col-reverse sm:flex-row items-center justify-between gap-3 px-8 py-5 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
+              <div className="flex flex-col-reverse sm:flex-row items-center justify-between gap-3 px-6 sm:px-8 py-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl shrink-0">
                 <button
                   onClick={() => handleDeleteTicket(selectedTicket.id)}
                   className="w-full sm:w-auto px-4 py-2.5 rounded-lg text-sm font-semibold text-black hover:bg-gray-200/70 transition-colors cursor-pointer"

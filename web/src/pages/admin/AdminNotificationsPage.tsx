@@ -12,13 +12,13 @@ import {
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { logAuditEvent } from "@/utils/auditLogger";
 import { supabase } from "@/lib/supabaseClient";
 import {
   useRoleNotifications,
   dispatchAdminBroadcastNotification,
   type NotificationItem,
 } from "@/lib/notificationService";
+import { useAuth } from "@/context/AuthContext";
 
 function AdminNotifAvatar({ item }: { item: NotificationItem }) {
   const [imgError, setImgError] = useState(false);
@@ -63,7 +63,10 @@ export interface AdminNotificationsProps {
 }
 
 export function AdminNotifications({ onClose, isDropdown = false }: AdminNotificationsProps) {
-  const { notifications, loading, unreadCount, markRead, markAllRead } = useRoleNotifications("admin", {});
+  const { session } = useAuth();
+  const { notifications, loading, unreadCount, markRead, markAllRead } = useRoleNotifications("admin", {
+    userId: session?.user?.id,
+  });
 
   const [activeTab, setActiveTab] = useState<
     "all" | "clinic" | "ticket" | "scan" | "subscription" | "user"
@@ -115,7 +118,7 @@ export function AdminNotifications({ onClose, isDropdown = false }: AdminNotific
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer shrink-0"
           >
             <CheckCheck className="w-3.5 h-3.5" />
-            <span>Mark all read</span>
+            <span>Mark all as read</span>
           </button>
         )}
       </div>

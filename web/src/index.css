@@ -71,16 +71,28 @@ body {
   border-bottom: none !important;
 }
 
-/* Custom scrollbar utility for clean sidebars and horizontal tabs */
-.no-scrollbar::-webkit-scrollbar {
+/* Custom scrollbar utility for clean sidebars, modals, and horizontal tabs */
+.no-scrollbar::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar-button,
+.no-scrollbar::-webkit-scrollbar-thumb,
+.no-scrollbar::-webkit-scrollbar-track,
+.no-scrollbar::-webkit-scrollbar-corner {
   display: none !important;
   width: 0 !important;
   height: 0 !important;
+  opacity: 0 !important;
 }
 
 .no-scrollbar {
   -ms-overflow-style: none !important;
   scrollbar-width: none !important;
+}
+
+/* Universally remove ugly Windows scrollbar stepper buttons (up/down arrow buttons) */
+::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 /* Bento card styles */

@@ -239,10 +239,6 @@ export default function ScanSkinPage() {
     };
   }, [user]);
 
-  const isPro = subData.isPro;
-  const remainingScans = isPro ? Infinity : Math.max(0, subData.scanLimit - subData.scansUsed);
-  const canScan = isPro || remainingScans > 0;
-
   useEffect(() => {
     if (!showResult || !scanResult) return;
     const loadRecommendedClinics = async () => {
@@ -458,17 +454,18 @@ export default function ScanSkinPage() {
             console.warn("ai_skin_answer secondary write skipped:", secErr);
           }
 
+          const conditionLabel = aiResult.display_name || aiResult.predicted_class || "Skin Condition";
           logAuditEvent({
             userId: user.id,
             role: "patient",
             category: "Scan",
             action: "AI Skin Scan Completed",
-            target: `${aiResult.conditionName} (${aiResult.confidence}%)`,
-            details: `Patient completed AI skin analysis: identified ${aiResult.conditionName} with ${aiResult.confidence}% confidence.`,
+            target: `${conditionLabel} (${aiResult.confidence}%)`,
+            details: `Patient completed AI skin analysis: identified ${conditionLabel} with ${aiResult.confidence}% confidence.`,
             performerName: user.user_metadata?.full_name || user.email?.split("@")[0] || "Patient",
             metadata: {
               analysisId,
-              condition: aiResult.conditionName,
+              condition: conditionLabel,
               confidence: aiResult.confidence,
             },
           }).catch(() => {});

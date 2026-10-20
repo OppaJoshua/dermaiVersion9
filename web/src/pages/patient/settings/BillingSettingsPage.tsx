@@ -664,24 +664,7 @@ export default function BillingSettingsPage() {
                       DermAI Subscription
                     </dd>
                   </div>
-                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
-                    <dt className="shrink-0 text-gray-500">Amount (excl. VAT)</dt>
-                    <dd className="font-medium text-gray-900 sm:text-right">
-                      ₱{(selectedPayment.baseAmount ?? 177.68).toLocaleString("en-PH", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
-                    </dd>
-                  </div>
-                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
-                    <dt className="shrink-0 text-gray-500">VAT (12%)</dt>
-                    <dd className="font-medium text-gray-900 sm:text-right">
-                      ₱{(selectedPayment.vatAmount ?? 21.32).toLocaleString("en-PH", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
-                    </dd>
-                  </div>
+
                   <div className="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
                     <dt className="shrink-0 text-gray-500">Payment Method</dt>
                     <dd className="flex items-center gap-2 font-medium text-gray-900 sm:justify-end">

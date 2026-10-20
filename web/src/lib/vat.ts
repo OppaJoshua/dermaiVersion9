@@ -16,13 +16,13 @@ export const VAT_RATE = 0.12;
  */
 export function calculatePricing(basePrice: number) {
   const base = Math.round((Number(basePrice) || 0) * 100) / 100;
-  const vat = Math.round(base * VAT_RATE * 100) / 100;
-  const total = Math.round((base + vat) * 100) / 100;
+  const finalAmount = Math.round(base * (1 + VAT_RATE) * 100) / 100;
+  const vat = Math.round((finalAmount - base) * 100) / 100;
   return {
     basePrice: base,
     vatAmount: vat,
-    totalPrice: total,
-    amountInCentavos: Math.round(total * 100),
+    totalPrice: finalAmount,
+    amountInCentavos: Math.round(finalAmount * 100),
   };
 }
 
