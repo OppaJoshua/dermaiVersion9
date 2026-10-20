@@ -83,7 +83,7 @@ export function parseDoctorDutyDays(rawDays: any, rawSchedule?: any): string[] {
         if (Array.isArray(parsed)) {
           days = parsed.map(String).map((d) => d.replace(/["'{}]/g, "").trim()).filter(Boolean);
         }
-      } catch {}
+      } catch { }
     } else {
       days = trimmed
         .replace(/^\{|\}$/g, "")
@@ -98,7 +98,7 @@ export function parseDoctorDutyDays(rawDays: any, rawSchedule?: any): string[] {
     if (typeof rawSchedule === "string" && rawSchedule.trim().startsWith("{")) {
       try {
         schedObj = JSON.parse(rawSchedule);
-      } catch {}
+      } catch { }
     }
     if (schedObj && typeof schedObj === "object" && !Array.isArray(schedObj)) {
       if (schedObj.weeklyShifts && typeof schedObj.weeklyShifts === "object") {
@@ -205,7 +205,7 @@ export function getDoctorPhoto(doc?: { id?: string; doctor_id?: string; name?: s
         }
       }
     }
-  } catch {}
+  } catch { }
 
   // Cross-reference with logged in doctor profile
   try {
@@ -220,7 +220,7 @@ export function getDoctorPhoto(doc?: { id?: string; doctor_id?: string; name?: s
         }
       }
     }
-  } catch {}
+  } catch { }
 
   return "";
 }
@@ -288,7 +288,7 @@ function loadAppointmentDraft(): AppointmentDraft | null {
   try {
     const raw = sessionStorage.getItem("dermai_appointment_draft");
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch { }
   return null;
 }
 
@@ -310,7 +310,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     try {
       const raw = sessionStorage.getItem("dermai_scan_booking_context");
       if (raw) return JSON.parse(raw);
-    } catch {}
+    } catch { }
     return null;
   }, [isFromScan]);
 
@@ -464,7 +464,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   if (signedData?.signedUrl) {
                     displayUrl = signedData.signedUrl;
                   }
-                } catch {}
+                } catch { }
               }
 
               return {
@@ -549,7 +549,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       } else {
         sessionStorage.removeItem("dermai_booking_return_clinic");
       }
-    } catch {}
+    } catch { }
     const targetUrl = targetClinic
       ? `/dashboard/scan?fromAppointment=1&clinic=${encodeURIComponent(targetClinic)}`
       : `/dashboard/scan?fromAppointment=1`;
@@ -609,7 +609,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           fromScan: isFromScan,
         };
         sessionStorage.setItem("dermai_appointment_draft", JSON.stringify(fallbackData));
-      } catch {}
+      } catch { }
     }
   }, [
     patientName,
@@ -701,7 +701,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           }
         }
       }
-    } catch {}
+    } catch { }
   }, [activeDutyDoctor?.id, selectedClinic?.openTime, selectedClinic?.closeTime, selectedClinic?.operatingDays]);
 
   // Generate calendar days for the current calendarMonth (42 cells to support full 6 weeks)
@@ -958,7 +958,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               targetClinicId = anyClinic.clinic_id;
             }
           }
-        } catch {}
+        } catch { }
       }
 
       if (!targetClinicId) {
@@ -1042,7 +1042,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 }
               }
             }
-          } catch {}
+          } catch { }
         }
 
         // Map raw doctor rows to ClinicDoctorItem objects
@@ -1108,7 +1108,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   }
                 }
               }
-            } catch {}
+            } catch { }
 
             // If duty days are unconfigured, default to Mon-Fri
             if (pDays.length === 0) {
@@ -1199,7 +1199,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   if (matched?.operatingDays) clinicOpDays = matched.operatingDays;
                 }
               }
-            } catch {}
+            } catch { }
           }
 
           let clinicInterval = 30;
@@ -1232,7 +1232,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 if (sett.maxPatientsPerDay) clinicMaxPatients = Number(sett.maxPatientsPerDay);
               }
             }
-          } catch {}
+          } catch { }
 
           setSelectedClinic({
             id: String(data.clinic_id),
@@ -1279,7 +1279,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               if (pRows && pRows.length > 0) {
                 photosList = pRows.map((p: any) => p.photo_url).filter(Boolean);
               }
-            } catch {}
+            } catch { }
 
             try {
               const settRaw = localStorage.getItem("dermai_clinic_settings");
@@ -1297,7 +1297,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 if (sett.description) clinicDesc = sett.description;
                 if (sett.logo) logoUrl = sett.logo;
               }
-            } catch {}
+            } catch { }
 
             setSelectedClinic({
               id: String(simpleData.clinic_id),
@@ -1386,7 +1386,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         if (meta.emergency_contact_name) setEmergencyContactName((prev) => prev || meta.emergency_contact_name);
         if (meta.emergency_contact_phone) setEmergencyContactPhone((prev) => prev || meta.emergency_contact_phone);
         if (meta.emergency_relationship) setEmergencyRelationship((prev) => prev || meta.emergency_relationship);
-      } catch {}
+      } catch { }
     }
 
     loadUserProfile();
@@ -1509,10 +1509,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       doctorName: activeDutyDoctor?.name,
       scan: selectedScan
         ? {
-            id: selectedScan.id,
-            conditionName: selectedScan.conditionName,
-            confidence: selectedScan.confidence ? Number(selectedScan.confidence) : null,
-          }
+          id: selectedScan.id,
+          conditionName: selectedScan.conditionName,
+          confidence: selectedScan.confidence ? Number(selectedScan.confidence) : null,
+        }
         : null,
       patientName,
       patientEmail,
@@ -1638,28 +1638,56 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const targetClinicId = String(selectedClinic.id);
       const scheduledDateTimeIso = `${selectedDate}T${selectedTime || "09:00"}:00+08:00`;
 
-      let assignedDocId = activeDutyDoctor?.id && !activeDutyDoctor.id.startsWith("doc-")
-        ? activeDutyDoctor.id
-        : undefined;
+      const isValidUuid = (val?: string | null): boolean =>
+        Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(val).trim()));
 
-      // If activeDutyDoctor.id is temporary (e.g. doc-local-123), attempt to resolve real Supabase UUID
+      let assignedDocId: string | undefined = undefined;
+      if (isValidUuid(activeDutyDoctor?.id)) {
+        assignedDocId = activeDutyDoctor!.id;
+      }
+
+      // If activeDutyDoctor.id is temporary (e.g. doc-local-123) or not a UUID, attempt to resolve real Supabase UUID
       if (!assignedDocId && activeDutyDoctor?.name) {
         try {
           const cleanName = activeDutyDoctor.name.replace(/^Dr\.?\s*/i, "").trim();
-          const { data: dbDoc } = await supabase
+          let { data: dbDoc } = await supabase
             .from("clinic_doctor")
             .select("doctor_id")
+            .eq("clinic_id", targetClinicId)
             .ilike("doctor_name", `%${cleanName}%`)
             .maybeSingle();
-          if (dbDoc?.doctor_id) {
+
+          if (!dbDoc?.doctor_id) {
+            const { data: anyDoc } = await supabase
+              .from("clinic_doctor")
+              .select("doctor_id")
+              .ilike("doctor_name", `%${cleanName}%`)
+              .maybeSingle();
+            dbDoc = anyDoc;
+          }
+
+          if (dbDoc?.doctor_id && isValidUuid(dbDoc.doctor_id)) {
             assignedDocId = dbDoc.doctor_id;
           }
-        } catch {}
+        } catch { }
+      }
+
+      // Fallback: check selectedDoctorId if valid UUID
+      if (!assignedDocId && isValidUuid(selectedDoctorId)) {
+        assignedDocId = selectedDoctorId;
       }
 
       // Validate clinic operating days
-      if (selectedClinic?.operatingDays && !isClinicOpenOnDay(dayOfWeekForSelectedDate, selectedClinic.operatingDays)) {
-        setSubmitError(`The clinic is closed on ${dayOfWeekForSelectedDate}s (${selectedClinic.name} operating days: ${selectedClinic.operatingDays}). Please select another date.`);
+      if (
+        selectedClinic?.operatingDays &&
+        !isClinicOpenOnDay(
+          dayOfWeekForSelectedDate,
+          selectedClinic.operatingDays
+        )
+      ) {
+        setSubmitError(
+          `The clinic is closed on ${dayOfWeekForSelectedDate}s (${selectedClinic.name} operating days: ${selectedClinic.operatingDays}). Please select another date.`
+        );
         setSubmitting(false);
         return;
       }
@@ -1708,13 +1736,13 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const effectiveSettings = matchedShift
         ? getEffectiveShiftSettings(matchedShift, docSchedule, clinicDefaults)
         : {
-            interval: activeDutyDoctor?.slotIntervalMinutes || selectedClinic?.slotIntervalMinutes || 30,
-            effectiveCapacity: 999,
-            intervalSource: "clinic" as const,
-            capacitySource: "clinic" as const,
-            possibleSlots: 999,
-            capacity: 999,
-          };
+          interval: activeDutyDoctor?.slotIntervalMinutes || selectedClinic?.slotIntervalMinutes || 30,
+          effectiveCapacity: 999,
+          intervalSource: "clinic" as const,
+          capacitySource: "clinic" as const,
+          possibleSlots: 999,
+          capacity: 999,
+        };
 
       // Strict validation against clinic operating hours
       if (selectedClinic?.openTime && selectedClinic?.closeTime) {
@@ -1867,6 +1895,23 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const payerContact = paymentData?.mobileNumber || patientContact.trim() || "";
       const feeAmount = paymentData?.amount !== undefined ? paymentData.amount : Number(selectedClinic.consultationFee || 0);
 
+      let initialClinicNote: string | null = null;
+      const docDispName = activeDutyDoctor?.name
+        ? (activeDutyDoctor.name.startsWith("Dr") ? activeDutyDoctor.name : `Dr. ${activeDutyDoctor.name}`)
+        : null;
+
+      if (paymentData) {
+        const payMethodLabel = paymentData.method === "maya" ? "MAYA" : "GCASH";
+        const paySummary = `Paid Online (${payMethodLabel} Ref: ${paymentData.reference})`;
+        initialClinicNote = docDispName
+          ? `Assigned to ${docDispName} for pre-consultation review. | ${paySummary}`
+          : `Unassigned consultation request. | ${paySummary}`;
+      } else {
+        initialClinicNote = docDispName
+          ? `Assigned to ${docDispName} for pre-consultation review.`
+          : null;
+      }
+
       const apptPayload: Record<string, any> = {
         user_id: activeUserId,
         clinic_id: targetClinicId,
@@ -1884,13 +1929,13 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         emergency_contact_relationship: emergencyRelationship.trim() || null,
         questionnaire_answers: qAnswers || questionnaireData || null,
         notes: notes.trim() || null,
-        clinic_note: activeDutyDoctor?.name ? `Attending Doctor: ${activeDutyDoctor.name}` : null,
+        clinic_note: initialClinicNote,
         primary_scan_id: scanIdToSave,
         skin_photo_url: photoPath,
         ai_condition_name: conditionLabel,
         ai_confidence: confNum,
         condition_id: condId,
-        assigned_doctor_id: assignedDocId || null,
+        assigned_doctor_id: (assignedDocId && isValidUuid(assignedDocId)) ? assignedDocId : null,
         doctor_status: "pending-review",
         schedule_sent_to_doctor: true,
         queue_number: assignedQueueNum,
@@ -1905,62 +1950,82 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         apptPayload.paid_at = new Date().toISOString();
       }
 
-      // 3. Insert appointment request into Supabase
+      // 3. Insert appointment request into Supabase with resilient dynamic schema stripping loop
       let insertedApptId: string | null = null;
-      let { data: insertedData, error: insertError } = await supabase
-        .from("patient_appointment")
-        .insert(apptPayload)
-        .select("appointment_id, queue_number")
-        .maybeSingle();
+      const currentPayload: Record<string, any> = { ...apptPayload };
+      let lastInsertError: any = null;
 
-      if (insertedData?.appointment_id) {
-        insertedApptId = String(insertedData.appointment_id);
-      }
-      if (insertedData?.queue_number) {
-        assignedQueueNum = Number(insertedData.queue_number);
-      }
-
-      // Handle duplicate booking error gracefully
-      if (insertError && (insertError.message.includes("ERR_DUPLICATE_SLOT") || insertError.message.includes("exclusive_doctor_slot") || insertError.message.includes("duplicate"))) {
-        setSubmitError(`The ${selectedSlot?.timeRange || formatTime12h(selectedTime)} slot was just booked by another patient. Please choose another available consultation slot.`);
-        setSubmitting(false);
-        return;
-      }
-
-      // Resilient column fallback: If insert failed due to optional columns, retry safely
-      if (insertError) {
-        console.warn("[AppointmentPage] First insert attempt warning, retrying with stripped optional fields:", insertError.message);
-        const retryPayload = { ...apptPayload };
-        if (insertError.message.includes("is_walk_in")) delete retryPayload.is_walk_in;
-        if (insertError.message.includes("assigned_doctor_id")) delete retryPayload.assigned_doctor_id;
-        if (insertError.message.includes("doctor_status")) delete retryPayload.doctor_status;
-        if (insertError.message.includes("schedule_sent_to_doctor")) delete retryPayload.schedule_sent_to_doctor;
-        if (insertError.message.includes("queue_number")) delete retryPayload.queue_number;
-        if (insertError.message.includes("batch_time")) delete retryPayload.batch_time;
-        if (insertError.message.includes("check_in_status")) delete retryPayload.check_in_status;
-        if (insertError.message.includes("primary_scan_id")) delete retryPayload.primary_scan_id;
-        if (insertError.message.includes("payment_status")) delete retryPayload.payment_status;
-        if (insertError.message.includes("payment_reference")) delete retryPayload.payment_reference;
-        if (insertError.message.includes("payment_amount")) delete retryPayload.payment_amount;
-        if (insertError.message.includes("paid_at")) delete retryPayload.paid_at;
-
-        const retryRes = await supabase
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const { data: insertedData, error: insertError } = await supabase
           .from("patient_appointment")
-          .insert(retryPayload)
+          .insert(currentPayload)
           .select("appointment_id, queue_number")
           .maybeSingle();
 
-        insertError = retryRes.error;
-        if (retryRes.data?.appointment_id) {
-          insertedApptId = String(retryRes.data.appointment_id);
+        if (!insertError) {
+          if (insertedData?.appointment_id) {
+            insertedApptId = String(insertedData.appointment_id);
+          }
+          if (insertedData?.queue_number) {
+            assignedQueueNum = Number(insertedData.queue_number);
+          }
+          lastInsertError = null;
+          break;
         }
-        if (retryRes.data?.queue_number) {
-          assignedQueueNum = Number(retryRes.data.queue_number);
+
+        lastInsertError = insertError;
+
+        // Handle duplicate booking error gracefully
+        if (
+          insertError.message.includes("ERR_DUPLICATE_SLOT") ||
+          insertError.message.includes("exclusive_doctor_slot") ||
+          insertError.message.includes("duplicate")
+        ) {
+          setSubmitError(
+            `The ${selectedSlot?.timeRange || formatTime12h(selectedTime)} slot was just booked by another patient. Please choose another available consultation slot.`
+          );
+          setSubmitting(false);
+          return;
         }
+
+        // Schema cache missing column error (PGRST204) — extract column and strip from retry
+        const missingColMatch = insertError.message.match(/Could not find the '([^']+)' column/i);
+        if (missingColMatch && missingColMatch[1]) {
+          const badCol = missingColMatch[1];
+          console.warn(`[AppointmentPage] Unknown schema column '${badCol}', stripping and retrying insert...`);
+          delete currentPayload[badCol];
+          continue;
+        }
+
+        // Known optional columns fallback check
+        const candidateCols = [
+          "paid_at",
+          "payment_amount",
+          "payment_reference",
+          "payment_status",
+          "payment_hold_expires_at",
+          "is_walk_in",
+          "primary_scan_id",
+          "check_in_status",
+          "batch_time",
+        ];
+        let strippedCandidate = false;
+        for (const col of candidateCols) {
+          if (insertError.message.includes(col) && currentPayload[col] !== undefined) {
+            delete currentPayload[col];
+            strippedCandidate = true;
+          }
+        }
+        if (strippedCandidate) {
+          continue;
+        }
+
+        // Unrecoverable database error
+        break;
       }
 
-      if (insertError) {
-        console.warn("[AppointmentPage] Database insert fallback note:", insertError.message);
+      if (lastInsertError) {
+        console.warn("[AppointmentPage] Database insert fallback note:", lastInsertError.message);
       }
 
       // Log payment transaction into user_payment ledger table if paid online
@@ -2030,10 +2095,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           primaryScanId: scanIdToSave || undefined,
           conditionId: condId || undefined,
           notes: notes.trim() || "",
+          clinicNote: initialClinicNote || undefined,
           skinPhotoUrl: photoPath,
           aiConditionName: conditionLabel,
           aiConfidence: confNum,
-          assignedDoctorId: activeDutyDoctor?.id,
+          assignedDoctorId: (assignedDocId && isValidUuid(assignedDocId)) ? assignedDocId : activeDutyDoctor?.id,
           assignedDoctorName: activeDutyDoctor?.name || undefined,
           assignedDoctorPhoto: getDoctorPhoto(activeDutyDoctor) || undefined,
           assignedDoctorSpecialization: activeDutyDoctor?.specialization || undefined,
@@ -2080,7 +2146,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             appointmentTime: selectedTime,
             appointmentId: insertedApptId,
           },
-        }).catch(() => {});
+        }).catch(() => { });
       } catch { }
 
       if (paymentData) {
@@ -2104,7 +2170,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         sessionStorage.removeItem("dermai_selected_clinic_id");
         sessionStorage.removeItem("dermai_booking_return_clinic");
         sessionStorage.removeItem("dermai_scan_booking_context");
-      } catch {}
+      } catch { }
     } catch (err: any) {
       console.error("Submission error:", err);
       setSubmitError(err?.message || "An unexpected error occurred during submission.");
@@ -2138,9 +2204,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     setDemoCheckoutData((prev) =>
       prev
         ? {
-            ...prev,
-            outcome: "cancelled",
-          }
+          ...prev,
+          outcome: "cancelled",
+        }
         : null
     );
   };
@@ -2154,10 +2220,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     setDemoCheckoutData((prev) =>
       prev
         ? {
-            ...prev,
-            outcome: "idle",
-            errorMessage: undefined,
-          }
+          ...prev,
+          outcome: "idle",
+          errorMessage: undefined,
+        }
         : null
     );
   };
@@ -2200,8 +2266,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     const feeDisplay = paymentConfirmedDetails?.amount !== undefined
       ? `₱${Number(paymentConfirmedDetails.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       : selectedClinic?.consultationFee && !isNaN(Number(selectedClinic.consultationFee))
-      ? `₱${Number(selectedClinic.consultationFee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-      : "—";
+        ? `₱${Number(selectedClinic.consultationFee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : "—";
 
     return (
       <div className="min-h-screen bg-slate-50/60 py-12 px-4 sm:px-6 flex items-center justify-center">
@@ -2665,29 +2731,27 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                           const isSelected = selectedScanId === scan.id;
                           const scanDateStr = scan.scannedAt
                             ? new Date(scan.scannedAt).toLocaleDateString("en-US", {
-                                month: "short",
-                                day: "numeric",
-                                year: "numeric",
-                              })
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })
                             : "Recent";
 
                           return (
                             <div
                               key={scan.id}
                               onClick={() => setSelectedScanId(scan.id)}
-                              className={`relative rounded-2xl border p-3.5 transition-all cursor-pointer flex items-center justify-between gap-3 ${
-                                isSelected
+                              className={`relative rounded-2xl border p-3.5 transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
                                   ? "border-magenta-500 bg-magenta-50/30 ring-2 ring-magenta-500/20 shadow-xs"
                                   : "border-gray-200 bg-white hover:border-gray-300 hover:bg-slate-50/50"
-                              }`}
+                                }`}
                             >
                               <div className="flex items-center gap-3 min-w-0">
                                 <div
-                                  className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
-                                    isSelected
+                                  className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 transition-colors ${isSelected
                                       ? "border-magenta-600 bg-magenta-600 text-white"
                                       : "border-gray-300 bg-white"
-                                  }`}
+                                    }`}
                                 >
                                   {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
                                 </div>
@@ -2908,28 +2972,26 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                   }
                                 }
                               }}
-                              className={`min-h-[58px] sm:min-h-[64px] p-2 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${
-                                isSelected
+                              className={`min-h-[58px] sm:min-h-[64px] p-2 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${isSelected
                                   ? "border-2 border-magenta-600 bg-magenta-50/70 ring-2 ring-magenta-500/20 shadow-xs"
                                   : isDisabled
-                                  ? "border-gray-100 bg-slate-50/40 text-gray-300 cursor-not-allowed"
-                                  : isToday
-                                  ? "border-magenta-300 bg-pink-50/20 hover:border-magenta-400 hover:shadow-2xs cursor-pointer"
-                                  : "border-gray-200/80 bg-white hover:border-magenta-300 hover:bg-slate-50/40 hover:shadow-2xs cursor-pointer"
-                              }`}
+                                    ? "border-gray-100 bg-slate-50/40 text-gray-300 cursor-not-allowed"
+                                    : isToday
+                                      ? "border-magenta-300 bg-pink-50/20 hover:border-magenta-400 hover:shadow-2xs cursor-pointer"
+                                      : "border-gray-200/80 bg-white hover:border-magenta-300 hover:bg-slate-50/40 hover:shadow-2xs cursor-pointer"
+                                }`}
                             >
                               {/* Top row: Date Number & Today / Selected indicator */}
                               <div className="flex items-center justify-between w-full">
                                 <span
-                                  className={`text-xs sm:text-sm font-bold leading-none ${
-                                    isSelected
+                                  className={`text-xs sm:text-sm font-bold leading-none ${isSelected
                                       ? "text-magenta-800"
                                       : isToday
-                                      ? "text-magenta-600"
-                                      : !cell.inCurrentMonth || cell.isPast
-                                      ? "text-gray-300"
-                                      : "text-gray-800"
-                                  }`}
+                                        ? "text-magenta-600"
+                                        : !cell.inCurrentMonth || cell.isPast
+                                          ? "text-gray-300"
+                                          : "text-gray-800"
+                                    }`}
                                 >
                                   {cell.dayNum}
                                 </span>
@@ -2948,11 +3010,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                               {/* Doctor indicator - only shown when a doctor is actually on duty */}
                               <div className="w-full mt-1">
                                 {hasDoctors ? (
-                                  <div className={`px-1.5 py-0.5 rounded-lg flex items-center justify-center gap-1 transition-all ${
-                                    isSelected
+                                  <div className={`px-1.5 py-0.5 rounded-lg flex items-center justify-center gap-1 transition-all ${isSelected
                                       ? "bg-magenta-600 text-white font-semibold"
                                       : "bg-magenta-50 text-magenta-700 font-semibold border border-magenta-100/80"
-                                  }`}>
+                                    }`}>
                                     <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
                                     <span className="text-[9px] font-bold leading-none truncate">
                                       {cell.onDutyDocs.length === 1
@@ -3026,11 +3087,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                 key={doc.id}
                                 type="button"
                                 onClick={() => setSelectedDoctorId(doc.id)}
-                                className={`w-full p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-center gap-3 relative group ${
-                                  isDocSelected
+                                className={`w-full p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-center gap-3 relative group ${isDocSelected
                                     ? "bg-magenta-50/90 border-magenta-500 ring-2 ring-magenta-500/20 shadow-xs"
                                     : "bg-white border-gray-200 hover:border-magenta-300 hover:bg-slate-50/50"
-                                }`}
+                                  }`}
                               >
                                 <DoctorAvatar
                                   doctorId={doc.id}
@@ -3096,11 +3156,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         {dayShiftGroups.length > 0 && (
                           <div className="flex items-center gap-1.5">
                             <span
-                              className={`text-[10px] font-bold px-2.5 py-1 rounded-full border shadow-2xs ${
-                                isDailyCapacityReached
+                              className={`text-[10px] font-bold px-2.5 py-1 rounded-full border shadow-2xs ${isDailyCapacityReached
                                   ? "bg-rose-50 text-rose-700 border-rose-200"
                                   : "bg-emerald-50 text-emerald-700 border-emerald-200"
-                              }`}
+                                }`}
                             >
                               {isDailyCapacityReached
                                 ? "All Shifts at Capacity"
@@ -3141,11 +3200,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                             return (
                               <div
                                 key={group.shift.id}
-                                className={`p-3.5 rounded-2xl border transition-all ${
-                                  group.isCapacityReached
+                                className={`p-3.5 rounded-2xl border transition-all ${group.isCapacityReached
                                     ? "bg-rose-50/30 border-rose-200"
                                     : "bg-slate-50/40 border-gray-200/90"
-                                }`}
+                                  }`}
                               >
                                 {/* Shift Header */}
                                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 pb-2 border-b border-gray-100">
@@ -3163,13 +3221,12 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
                                   <div className="flex items-center gap-2">
                                     <span
-                                      className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${
-                                        group.isCapacityReached
+                                      className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${group.isCapacityReached
                                           ? "bg-rose-100 text-rose-700 border-rose-200"
                                           : group.remainingCapacity <= 2
-                                          ? "bg-amber-100 text-amber-700 border-amber-200"
-                                          : "bg-emerald-100 text-emerald-800 border-emerald-200"
-                                      }`}
+                                            ? "bg-amber-100 text-amber-700 border-amber-200"
+                                            : "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                        }`}
                                     >
                                       {group.isCapacityReached
                                         ? `Shift Full (${group.effectiveSettings.effectiveCapacity} slots)`
@@ -3209,21 +3266,19 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                               setSelectedTime(slot.slotTime);
                                             }
                                           }}
-                                          className={`py-2.5 sm:py-3 px-3 rounded-2xl border text-left transition-all relative flex items-center justify-between gap-1.5 ${
-                                            !isAvailable
+                                          className={`py-2.5 sm:py-3 px-3 rounded-2xl border text-left transition-all relative flex items-center justify-between gap-1.5 ${!isAvailable
                                               ? "bg-slate-50/70 border-gray-200 text-gray-400 cursor-not-allowed opacity-60"
                                               : isSlotSelected
-                                              ? "bg-magenta-50/90 border-2 border-magenta-600 text-magenta-950 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer font-bold"
-                                              : "bg-white border-gray-200 text-gray-800 hover:border-magenta-300 hover:bg-magenta-50/30 cursor-pointer shadow-2xs"
-                                          }`}
+                                                ? "bg-magenta-50/90 border-2 border-magenta-600 text-magenta-950 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer font-bold"
+                                                : "bg-white border-gray-200 text-gray-800 hover:border-magenta-300 hover:bg-magenta-50/30 cursor-pointer shadow-2xs"
+                                            }`}
                                         >
-                                          <span className={`text-xs sm:text-[13px] font-bold leading-tight ${
-                                            isSlotSelected
+                                          <span className={`text-xs sm:text-[13px] font-bold leading-tight ${isSlotSelected
                                               ? "text-magenta-950 font-extrabold"
                                               : !isAvailable
-                                              ? "text-gray-400"
-                                              : "text-gray-900"
-                                          }`}>
+                                                ? "text-gray-400"
+                                                : "text-gray-900"
+                                            }`}>
                                             {slot.label}
                                           </span>
 

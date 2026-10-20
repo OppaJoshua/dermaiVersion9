@@ -1,8 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
 import { Link, useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import {
-  Camera,
-  Image,
+  Upload,
   CheckCircle2,
   AlertTriangle,
   Sparkles,
@@ -72,12 +71,14 @@ interface ScanResultData {
     predicted_class?: string;
     display_name?: string;
     confidence?: number;
+    probabilities?: Record<string, number>;
     status?: string;
   } | null;
   supportingPrediction?: {
     predicted_class?: string;
     display_name?: string;
     confidence?: number;
+    probabilities?: Record<string, number>;
     status?: string;
     error?: string;
   } | null;
@@ -136,6 +137,7 @@ export default function ScanSkinPage() {
   const [currentStep, setCurrentStep] = useState(1);
   const [qIndex, setQIndex] = useState(0);
   const [isReviewing, setIsReviewing] = useState(false);
+  const [isEditingFromReview, setIsEditingFromReview] = useState(false);
 
   // Store answers as map of question ID to array of option IDs
   const [answers, setAnswers] = useState<Record<string, string[]>>(() => {
@@ -178,9 +180,7 @@ export default function ScanSkinPage() {
   }, [answers]);
 
   const closeUpInputRef = useRef<HTMLInputElement>(null);
-  const closeUpCameraRef = useRef<HTMLInputElement>(null);
   const wideInputRef = useRef<HTMLInputElement>(null);
-  const wideCameraRef = useRef<HTMLInputElement>(null);
   const [closeUpFile, setCloseUpFile] = useState<File | null>(null);
   const [closeUpImage, setCloseUpImage] = useState<string | null>(null);
   const [wideFile, setWideFile] = useState<File | null>(null);
@@ -211,7 +211,7 @@ export default function ScanSkinPage() {
         // Expired subscriptions use the current calendar month's Free scan cycle.
         const cycleStart: string = hasValidPaidPeriod
           ? subInfo.currentPeriodStart ||
-            new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
+          new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
           : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
 
         const { count: used } = await supabase
@@ -261,7 +261,16 @@ export default function ScanSkinPage() {
     });
   };
 
+  const returnToReview = () => {
+    setIsEditingFromReview(false);
+    setIsReviewing(true);
+  };
+
   const goNextQuestion = () => {
+    if (isEditingFromReview) {
+      returnToReview();
+      return;
+    }
     if (qIndex < QUESTIONNAIRE_QUESTIONS.length - 1) {
       setQIndex((i) => i + 1);
     } else {
@@ -270,7 +279,9 @@ export default function ScanSkinPage() {
   };
 
   const goPrevQuestion = () => {
-    if (isReviewing) {
+    if (isEditingFromReview) {
+      returnToReview();
+    } else if (isReviewing) {
       setIsReviewing(false);
       setQIndex(QUESTIONNAIRE_QUESTIONS.length - 1);
     } else if (qIndex > 0) {
@@ -281,6 +292,7 @@ export default function ScanSkinPage() {
   const jumpToQuestion = (index: number) => {
     setQIndex(index);
     setIsReviewing(false);
+    setIsEditingFromReview(true);
   };
 
   const handleFileChange = (slot: "closeup" | "wide") => (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -366,10 +378,19 @@ export default function ScanSkinPage() {
         throw new Error(errMsg, { cause: err });
       }
 
+      // Determine effective image confidence score:
+      // When both close-up and wide-view images are analyzed, apply the verified 70/30
+      // combined image evidence score; when only one image is analyzed (or wide-view failed),
+      // preserve the raw close-up confidence. Questionnaire answers NEVER alter this score.
+      const effectiveConfidence =
+        aiResult.is_combined && aiResult.combined_evidence_score != null
+          ? aiResult.combined_evidence_score
+          : aiResult.confidence;
+
       // 4. Compare AI prediction and Questionnaire support independently
       const comparison = compareAIAndQuestionnaire(
         aiResult.display_name,
-        aiResult.confidence,
+        effectiveConfidence,
         mappingResult
       );
 
@@ -412,7 +433,7 @@ export default function ScanSkinPage() {
           .from("ai_scan_result")
           .insert({
             user_id: user.id,
-            confidence_score: aiResult.confidence,
+            confidence_score: effectiveConfidence,
             status: "completed",
             condition_id: conditionUUID,
             photo_url: uploadedCloseUpPath || null,
@@ -456,21 +477,33 @@ export default function ScanSkinPage() {
             console.warn("ai_skin_answer secondary write skipped:", secErr);
           }
 
-          const conditionLabel = aiResult.display_name || aiResult.predicted_class || "Condition";
+          const conditionLabel =
+            aiResult.display_name || aiResult.predicted_class || "Condition";
+
           logAuditEvent({
             userId: user.id,
             role: "patient",
             category: "Scan",
             action: "AI Skin Scan Completed",
-            target: `${conditionLabel} (${aiResult.confidence}%)`,
-            details: `Patient completed AI skin analysis: identified ${conditionLabel} with ${aiResult.confidence}% confidence.`,
-            performerName: user.user_metadata?.full_name || user.email?.split("@")[0] || "Patient",
+            target: `${conditionLabel} (${effectiveConfidence}%)`,
+            details: `Patient completed AI skin analysis: identified ${conditionLabel} with ${effectiveConfidence}% confidence (Close-up: ${aiResult.confidence}%${aiResult.is_combined
+                ? `, Combined 70/30: ${effectiveConfidence}%`
+                : ""
+              }).`,
+            performerName:
+              user.user_metadata?.full_name ||
+              user.email?.split("@")[0] ||
+              "Patient",
             metadata: {
               analysisId,
               condition: conditionLabel,
-              confidence: aiResult.confidence,
+              confidence: effectiveConfidence,
+              rawCloseUpConfidence: aiResult.confidence,
+              isCombined: Boolean(aiResult.is_combined),
+              combinedEvidenceScore:
+                aiResult.combined_evidence_score ?? null,
             },
-          }).catch(() => {});
+          }).catch(() => { });
 
           // Deduct 1 scan from local allowance state only upon confirmed insert
           setSubData((prev) => ({
@@ -496,7 +529,7 @@ export default function ScanSkinPage() {
           JSON.stringify({
             predictedClass: aiResult.predicted_class,
             displayName: aiResult.display_name,
-            confidence: aiResult.confidence,
+            confidence: effectiveConfidence,
             severity: patientReportedImpact, // Preserves backward compatibility: explicitly patient-reported impact
             patientReportedImpact,
             questionnaire: questionnaireData,
@@ -517,7 +550,7 @@ export default function ScanSkinPage() {
         id: analysisId || `scan-${Date.now()}`,
         condition: aiResult.display_name,
         localName: conditionGuide?.filipinoName || aiResult.display_name,
-        confidence: aiResult.confidence,
+        confidence: effectiveConfidence,
         bodyPart: "Uploaded Photos & 15-Question Assessment",
         date: new Date().toLocaleDateString("en-PH", {
           month: "long",
@@ -546,6 +579,7 @@ export default function ScanSkinPage() {
           predicted_class: aiResult.predicted_class,
           display_name: aiResult.display_name,
           confidence: aiResult.confidence,
+          probabilities: aiResult.probabilities,
           status: "valid",
         },
         supportingPrediction: aiResult.supporting_prediction || null,
@@ -562,7 +596,7 @@ export default function ScanSkinPage() {
           userId: user.id,
           type: "scan-completed",
           title: "AI Skin Scan Complete",
-          body: `Preliminary assessment: ${aiResult.display_name} (${Math.round(aiResult.confidence || 0)}% confidence). View details in your skin history.`,
+          body: `Preliminary assessment: ${aiResult.display_name} (${Math.round(effectiveConfidence)}% confidence). View details in your skin history.`,
         });
       }
     } catch (err) {
@@ -635,25 +669,9 @@ export default function ScanSkinPage() {
           onChange={handleFileChange("closeup")}
         />
         <input
-          ref={closeUpCameraRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-          onChange={handleFileChange("closeup")}
-        />
-        <input
           ref={wideInputRef}
           type="file"
           accept="image/*"
-          className="hidden"
-          onChange={handleFileChange("wide")}
-        />
-        <input
-          ref={wideCameraRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
           className="hidden"
           onChange={handleFileChange("wide")}
         />
@@ -730,6 +748,22 @@ export default function ScanSkinPage() {
               className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 sm:p-8"
             >
               {/* Question header and progress */}
+              {isEditingFromReview && (
+                <div className="mb-4 p-3 rounded-2xl bg-magenta-50/90 border border-magenta-200/80 flex items-center justify-between text-xs text-magenta-950">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <Edit3 className="w-4 h-4 text-magenta-600 shrink-0" />
+                    <span>Editing Question {currentQuestion.number} only</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={returnToReview}
+                    className="text-xs font-bold text-magenta-700 hover:text-magenta-900 hover:underline cursor-pointer"
+                  >
+                    Cancel &amp; Return to Review
+                  </button>
+                </div>
+              )}
+
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-magenta-50 text-magenta-700 border border-magenta-100">
@@ -829,30 +863,58 @@ export default function ScanSkinPage() {
 
               {/* Navigation buttons */}
               <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={goPrevQuestion}
-                  disabled={qIndex === 0}
-                  className="px-5 py-3.5 rounded-full font-semibold text-sm border-2 border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5 cursor-pointer"
-                >
-                  <ArrowLeft className="w-4 h-4" /> Back
-                </button>
-                <button
-                  type="button"
-                  disabled={!hasAnsweredCurrent}
-                  onClick={goNextQuestion}
-                  className={cn(
-                    "flex-1 py-3.5 rounded-full font-semibold text-sm transition-all flex items-center justify-center gap-2",
-                    hasAnsweredCurrent
-                      ? "bg-magenta-600 text-white hover:bg-magenta-700 shadow-lg shadow-magenta-600/20 cursor-pointer active:scale-[0.98]"
-                      : "bg-slate-200 text-slate-400 cursor-not-allowed"
-                  )}
-                >
-                  <span>
-                    {qIndex < QUESTIONNAIRE_QUESTIONS.length - 1 ? "Next Question" : "Review All 15 Answers"}
-                  </span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+                {isEditingFromReview ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={returnToReview}
+                      className="px-5 py-3.5 rounded-full font-semibold text-sm border-2 border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <ArrowLeft className="w-4 h-4" /> Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!hasAnsweredCurrent}
+                      onClick={returnToReview}
+                      className={cn(
+                        "flex-1 py-3.5 rounded-full font-semibold text-sm transition-all flex items-center justify-center gap-2",
+                        hasAnsweredCurrent
+                          ? "bg-magenta-600 text-white hover:bg-magenta-700 shadow-lg shadow-magenta-600/20 cursor-pointer active:scale-[0.98]"
+                          : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                      )}
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Save &amp; Return to Review</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={goPrevQuestion}
+                      disabled={qIndex === 0}
+                      className="px-5 py-3.5 rounded-full font-semibold text-sm border-2 border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <ArrowLeft className="w-4 h-4" /> Back
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!hasAnsweredCurrent}
+                      onClick={goNextQuestion}
+                      className={cn(
+                        "flex-1 py-3.5 rounded-full font-semibold text-sm transition-all flex items-center justify-center gap-2",
+                        hasAnsweredCurrent
+                          ? "bg-magenta-600 text-white hover:bg-magenta-700 shadow-lg shadow-magenta-600/20 cursor-pointer active:scale-[0.98]"
+                          : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                      )}
+                    >
+                      <span>
+                        {qIndex < QUESTIONNAIRE_QUESTIONS.length - 1 ? "Next Question" : "Review All 15 Answers"}
+                      </span>
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
               </div>
             </motion.div>
           )}
@@ -970,6 +1032,7 @@ export default function ScanSkinPage() {
                 <button
                   type="button"
                   onClick={() => {
+                    setIsEditingFromReview(false);
                     setIsReviewing(false);
                     setCurrentStep(2);
                   }}
@@ -1051,7 +1114,6 @@ export default function ScanSkinPage() {
                       description: "Primary close-up of the affected area",
                       image: closeUpImage,
                       inputRef: closeUpInputRef,
-                      cameraRef: closeUpCameraRef,
                     },
                     {
                       slot: "wide" as const,
@@ -1059,13 +1121,20 @@ export default function ScanSkinPage() {
                       description: "Surrounding skin for spatial distribution",
                       image: wideImage,
                       inputRef: wideInputRef,
-                      cameraRef: wideCameraRef,
                     },
                   ]
                 ).map((p) => (
                   <div
                     key={p.slot}
-                    className="border-2 border-dashed border-slate-200 rounded-2xl p-4 flex flex-col items-center justify-center min-h-[220px] bg-slate-50/50 hover:bg-slate-50 transition-colors"
+                    onClick={() => {
+                      if (!p.image) {
+                        p.inputRef.current?.click();
+                      }
+                    }}
+                    className={cn(
+                      "border-2 border-dashed border-slate-200 rounded-2xl p-4 flex flex-col items-center justify-center min-h-[220px] bg-slate-50/50 hover:bg-slate-50 transition-colors",
+                      !p.image && "cursor-pointer hover:border-magenta-300"
+                    )}
                   >
                     {p.image ? (
                       <div className="relative w-full aspect-4/3 rounded-xl overflow-hidden border border-slate-200">
@@ -1076,7 +1145,10 @@ export default function ScanSkinPage() {
                         />
                         <button
                           type="button"
-                          onClick={() => clearPhoto(p.slot)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            clearPhoto(p.slot);
+                          }}
                           className="absolute top-2 right-2 px-2.5 py-1 rounded-full bg-slate-900/80 text-white text-xs font-semibold hover:bg-slate-900 transition-colors cursor-pointer"
                         >
                           Change
@@ -1085,24 +1157,20 @@ export default function ScanSkinPage() {
                     ) : (
                       <div className="text-center p-3">
                         <div className="w-12 h-12 rounded-full bg-magenta-50 text-magenta-600 flex items-center justify-center mx-auto mb-3">
-                          <Camera className="w-6 h-6" />
+                          <Upload className="w-6 h-6" />
                         </div>
                         <h3 className="text-sm font-bold text-slate-800 mb-0.5">{p.title}</h3>
                         <p className="text-xs text-slate-400 mb-4">{p.description}</p>
-                        <div className="flex gap-2 justify-center">
+                        <div className="flex justify-center">
                           <button
                             type="button"
-                            onClick={() => p.cameraRef.current?.click()}
-                            className="px-3 py-1.5 rounded-full bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors cursor-pointer flex items-center gap-1"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              p.inputRef.current?.click();
+                            }}
+                            className="px-5 py-2 rounded-full bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors cursor-pointer shadow-sm active:scale-[0.98]"
                           >
-                            <Camera className="w-3.5 h-3.5" /> Camera
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => p.inputRef.current?.click()}
-                            className="px-3 py-1.5 rounded-full border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-white transition-colors cursor-pointer flex items-center gap-1"
-                          >
-                            <Image className="w-3.5 h-3.5" /> Upload
+                            Upload from Device
                           </button>
                         </div>
                       </div>
@@ -1164,7 +1232,7 @@ export default function ScanSkinPage() {
                 Analyzing Skin Assessment…
               </h2>
               <p className="text-sm text-slate-500 max-w-md mx-auto mb-6">
-                Evaluating photo quality, running ResNet50 skin condition inference, and computing evidence-based rule mapping from your 15 questions.
+                Please wait a moment while we check your photos and review your answers. This usually takes just a few seconds.
               </p>
               <div className="w-48 h-2 bg-slate-100 rounded-full mx-auto overflow-hidden">
                 <motion.div
@@ -1193,14 +1261,8 @@ export default function ScanSkinPage() {
                   <div className="flex flex-wrap items-center gap-2 mb-3">
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 text-xs font-semibold border border-magenta-100">
                       <Sparkles className="w-3.5 h-3.5 text-magenta-600" />
-                      <span>AI-generated preliminary result</span>
+                      <span>AI Preliminary Assessment</span>
                     </div>
-                    {scanResult.patientReportedImpact && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-medium border border-slate-200">
-                        <span>Reported Daily-Life Impact:</span>
-                        <strong className="text-slate-900 font-semibold">{scanResult.patientReportedImpact}</strong>
-                      </span>
-                    )}
                   </div>
                   <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 mb-1">
                     Possible Condition: {scanResult.condition}
@@ -1212,16 +1274,13 @@ export default function ScanSkinPage() {
                   )}
                 </div>
 
-                {/* 1. ResNet50 Independent Confidence Score */}
+                {/* 1. ResNet50 / Image Evidence Confidence Score */}
                 <div className="px-6 sm:px-8 py-5 border-b border-slate-100 bg-slate-50/40">
                   <div className="flex items-center justify-between mb-1.5">
                     <div>
                       <span className="text-sm font-semibold text-slate-900">
-                        Image Model Confidence (ResNet50)
+                        AI Confidence Score
                       </span>
-                      <p className="text-[11px] text-slate-500">
-                        Solely from skin-image inference; untouched by questionnaire answers
-                      </p>
                     </div>
                     <span className="text-xl font-bold text-magenta-600">
                       {Math.round(scanResult.confidence)}%
@@ -1234,6 +1293,73 @@ export default function ScanSkinPage() {
                       animate={{ width: `${Math.round(scanResult.confidence)}%` }}
                       transition={{ duration: 1, delay: 0.2 }}
                     />
+                  </div>
+                </div>
+
+                {/* Uploaded Photos Card */}
+                <div className="p-6 sm:p-8 border-b border-slate-100">
+                  <h3 className="font-display font-bold text-slate-900 text-lg mb-4">
+                    Images Analyzed
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                        Close-Up Photo
+                      </span>
+                      <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
+                        <img
+                          src={scanResult.imageUrl || closeUpImage || undefined}
+                          alt="Close-up photo"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                        Wider-Area Photo
+                      </span>
+                      <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
+                        {scanResult.wideImageUrl || wideImage ? (
+                          <img
+                            src={scanResult.wideImageUrl || wideImage || undefined}
+                            alt="Wider photo"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-xs text-slate-400">
+                            No wide photo
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Supporting Image Feedback (Fix C) */}
+                  {scanResult.supportingPrediction?.status === "invalid" && (
+                    <div className="mt-3 p-3 rounded-xl bg-slate-100 border border-slate-200 text-xs text-slate-700 flex items-start gap-2">
+                      <Info className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                      <span>We couldn't read the wider-area photo clearly. This result is based only on your close-up photo.</span>
+                    </div>
+                  )}
+
+                  {scanResult.isCombined && scanResult.agreement === false && (
+                    <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>The AI noticed different things in your close-up and wider-area photos. Because of this, we highly recommend seeing a dermatologist to confirm the results.</span>
+                    </div>
+                  )}
+
+                  {scanResult.isCombined && scanResult.agreement === true && (
+                    <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-start gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <span>Both of your photos show similar signs, which supports this result.</span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 pt-4 px-1 text-xs text-slate-500">
+                    <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span>{scanResult.bodyPart}</span>
+                    <span className="ml-auto">{scanResult.date}</span>
                   </div>
                 </div>
 
@@ -1258,7 +1384,7 @@ export default function ScanSkinPage() {
                       <div className="text-xs leading-relaxed">
                         <p className="font-bold text-sm mb-1">
                           {scanResult.comparison.agreementStatus === "aligned"
-                            ? "Supportive Alignment Between Photo & Questionnaire"
+                            ? "Your photos and answers match."
                             : scanResult.comparison.agreementStatus === "differing"
                               ? "Assessment Discrepancy Noted"
                               : "Assessment Context"}
@@ -1278,7 +1404,7 @@ export default function ScanSkinPage() {
                         Questionnaire Evidence Support
                       </h3>
                       <p className="text-xs text-slate-500">
-                        Rule-based screening mapping grounded in AAD and DermNet guidelines (Version {scanResult.mappingResult.version})
+                        Based on standard dermatology guidelines.
                       </p>
                     </div>
                     {/* Support label badge for predicted condition */}
@@ -1357,7 +1483,9 @@ export default function ScanSkinPage() {
                   })()}
 
                   <p className="text-[11px] text-slate-400 italic">
-                    {scanResult.mappingResult.disclaimer}
+                    {scanResult.mappingResult.disclaimer?.includes("Cleveland")
+                      ? "This is a preliminary screening tool based on standard clinical guidelines. It is not a medical diagnosis and should not replace an evaluation by a doctor or dermatologist."
+                      : scanResult.mappingResult.disclaimer}
                   </p>
                 </div>
 
@@ -1394,78 +1522,11 @@ export default function ScanSkinPage() {
                   </div>
                 )}
 
-                {/* 5. Uploaded Photos Card */}
-                <div className="p-6 sm:p-8 border-b border-slate-100">
-                  <h3 className="font-display font-bold text-slate-900 text-lg mb-4">
-                    Uploaded Photos &amp; AI Evidence
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
-                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                        Close-Up Photo (Primary Image)
-                      </span>
-                      <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
-                        <img
-                          src={scanResult.imageUrl || closeUpImage || undefined}
-                          alt="Close-up photo"
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
-                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                        Wider-Area Photo (Context Image)
-                      </span>
-                      <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
-                        {scanResult.wideImageUrl || wideImage ? (
-                          <img
-                            src={scanResult.wideImageUrl || wideImage || undefined}
-                            alt="Wider photo"
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-xs text-slate-400">
-                            No wide photo
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Supporting Image Feedback (Fix C) */}
-                  {scanResult.supportingPrediction?.status === "invalid" && (
-                    <div className="mt-3 p-3 rounded-xl bg-slate-100 border border-slate-200 text-xs text-slate-700 flex items-start gap-2">
-                      <Info className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
-                      <span>The supporting photo could not be analyzed. This result is based on the close-up photo.</span>
-                    </div>
-                  )}
-
-                  {scanResult.isCombined && scanResult.agreement === false && (
-                    <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                      <span>The close-up and supporting photos produced different predictions. Please discuss the result with a dermatologist.</span>
-                    </div>
-                  )}
-
-                  {scanResult.isCombined && scanResult.agreement === true && (
-                    <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-start gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                      <span>The close-up and supporting photos produced consistent predictions.</span>
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2 pt-4 px-1 text-xs text-slate-500">
-                    <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
-                    <span>{scanResult.bodyPart}</span>
-                    <span className="ml-auto">{scanResult.date}</span>
-                  </div>
-                </div>
-
-                {/* 6. Condition Guide Details (Grounded in AAD, DermNet, Cleveland Clinic) */}
+                {/* Condition Guide Details (Grounded in AAD, DermNet, Cleveland Clinic) */}
                 <div className="p-6 sm:p-8 space-y-6">
                   <div>
                     <h3 className="font-display font-bold text-slate-900 text-lg mb-2">
-                      What is it? / Ano ito?
+                      What is it?
                     </h3>
                     <p className="text-sm text-slate-700 leading-relaxed">
                       {scanResult.description}
@@ -1474,7 +1535,7 @@ export default function ScanSkinPage() {
 
                   <div>
                     <h3 className="font-display font-bold text-slate-900 text-lg mb-2">
-                      Common Symptoms / Karaniwang Sintomas
+                      Common Symptoms
                     </h3>
                     <ul className="space-y-1.5">
                       {scanResult.symptoms.map((s, i) => (
@@ -1490,7 +1551,7 @@ export default function ScanSkinPage() {
                     <div className="flex items-center gap-2 mb-1.5">
                       <Users className="w-4 h-4 text-magenta-600" />
                       <h3 className="font-display font-bold text-slate-900 text-base">
-                        Who does it affect? / Sino ang naaapektuhan?
+                        Who does it affect?
                       </h3>
                     </div>
                     <p className="text-sm text-slate-700 leading-relaxed">{scanResult.whoAffected}</p>
@@ -1498,7 +1559,7 @@ export default function ScanSkinPage() {
 
                   <div>
                     <h3 className="font-display font-bold text-slate-900 text-lg mb-2">
-                      Evidence-Based Basic Care Tips
+                      Basic Care Tips
                     </h3>
                     <ul className="space-y-2">
                       {scanResult.careTips.map((tip, i) => (
@@ -1514,7 +1575,7 @@ export default function ScanSkinPage() {
                     <div className="flex items-center gap-2 mb-1.5">
                       <Stethoscope className="w-4 h-4 text-amber-700" />
                       <h3 className="font-display font-bold text-amber-950 text-base">
-                        When to See a Doctor / Kailan Dapat Magpatingin sa Doktor
+                        When to See a Doctor
                       </h3>
                     </div>
                     <p className="text-sm text-amber-900 leading-relaxed">{scanResult.whenToSeeDoctor}</p>
@@ -1612,6 +1673,7 @@ export default function ScanSkinPage() {
                     setCurrentStep(1);
                     setQIndex(0);
                     setIsReviewing(false);
+                    setIsEditingFromReview(false);
                     setShowResult(false);
                     clearPhoto("closeup");
                     clearPhoto("wide");

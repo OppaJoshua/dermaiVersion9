@@ -1828,7 +1828,24 @@ export function isAppointmentExcludedFromIncomingQueue(appt?: {
   // 4. Immediately exclude Cancelled or Rejected appointments
   if (st === "cancelled" || st === "rejected") return true;
 
-  // 5. Immediately exclude past appointments whose scheduled date and time have elapsed
+  // 5. Exclude appointments whose scheduled date and time have elapsed
+  // Keep pending review requests visible throughout today's operating hours so doctors and clinics can review and act
+  const isPendingReview = (st === "pending" || docSt === "pending-review") && st !== "cancelled" && st !== "rejected";
+  if (isPendingReview) {
+    const targetDateRaw = appt.rawDate || appt.date;
+    if (targetDateRaw) {
+      const apptDateKey = getManilaCalendarDate(targetDateRaw);
+      const manilaNow = getManilaNowParts();
+      if (apptDateKey && apptDateKey < manilaNow.dateKey) {
+        return true; // strictly past calendar date
+      }
+      if (apptDateKey === manilaNow.dateKey && manilaNow.totalMinutes >= 21 * 60) {
+        return true; // past end of clinic operating day (9:00 PM)
+      }
+      return false; // keep visible today and on upcoming dates
+    }
+  }
+
   if (isAppointmentPastScheduled(appt)) return true;
 
   return false;
