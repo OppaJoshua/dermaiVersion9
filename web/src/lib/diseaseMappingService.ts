@@ -643,7 +643,7 @@ export function evaluateDiseaseMapping(
     safetyAlert,
     contextualImpact,
     disclaimer:
-      "This evidence-based questionnaire mapping is a preliminary screening support tool based on clinical guidelines (AAD, DermNet, Cleveland Clinic). It is NOT a clinical diagnosis and does NOT replace professional medical evaluation by a licensed physician or dermatologist.",
+      "This is a preliminary screening tool based on standard clinical guidelines. It is not a medical diagnosis and should not replace an evaluation by a doctor or dermatologist.",
   };
 }
 
@@ -685,9 +685,10 @@ export function compareAIAndQuestionnaire(
 
   if (normalizedKey && questionnaireSupportForAIClass === "Strong support") {
     agreementStatus = "aligned";
-    summary = `Both the image analysis (ResNet50: ${aiPredictedCondition}) and reported questionnaire symptoms strongly support this condition.`;
+    summary =
+      "The AI noticed signs in your photo that match the symptoms you selected in the questionnaire. This consistency increases the accuracy of the result.";
     recommendation =
-      "Clinical presentation and patient-reported symptoms are consistent. Consult a dermatologist to confirm diagnosis and discuss tailored care.";
+      "Consult a dermatologist to confirm diagnosis and discuss tailored care.";
   } else if (normalizedKey && questionnaireSupportForAIClass === "Moderate support") {
     agreementStatus = "aligned";
     summary = `Image analysis indicated ${aiPredictedCondition}, and your reported symptoms provide moderate supporting alignment.`;

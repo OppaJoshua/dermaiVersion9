@@ -23,6 +23,8 @@ import {
   parseDoctorSchedule,
   formatTime12h,
   normalizeDayName,
+  isClinicCurrentlyOpen,
+  isDoctorCurrentlyOnDuty,
 } from "@/lib/schedulingService";
 
 /* ── Types ─────────────────────────────────────────────────── */
@@ -351,6 +353,22 @@ export default function ClinicDashboardPage() {
           }
         } catch { }
 
+        try {
+          const { data: opData } = await supabase
+            .from("clinic_operating_hours")
+            .select("open_time, close_time, day_of_week")
+            .eq("clinic_id", resolvedClinicId)
+            .maybeSingle();
+
+          if (opData && !cancelled) {
+            setClinicSchedule({
+              openTime: opData.open_time ? opData.open_time.slice(0, 5) : "08:00",
+              closeTime: opData.close_time ? opData.close_time.slice(0, 5) : "17:00",
+              operatingDays: opData.day_of_week || "Monday - Saturday",
+            });
+          }
+        } catch { }
+
         const { data, error } = await supabase
           .from("patient_appointment")
           .select(`
@@ -545,9 +563,33 @@ export default function ClinicDashboardPage() {
         .subscribe();
     }
 
-    const handleSync = () => loadAppointments();
+    const handleSync = (e?: any) => {
+      loadAppointments();
+      try {
+        if (e?.detail && (e.detail.openTime || e.detail.closeTime || e.detail.operatingDays)) {
+          setClinicSchedule({
+            openTime: e.detail.openTime || "08:00",
+            closeTime: e.detail.closeTime || "17:00",
+            operatingDays: e.detail.operatingDays || "Monday - Saturday",
+          });
+          return;
+        }
+        const raw = localStorage.getItem("dermai_clinic_settings");
+        if (raw) {
+          const s = JSON.parse(raw);
+          setClinicSchedule({
+            openTime: s.openTime || "08:00",
+            closeTime: s.closeTime || "17:00",
+            operatingDays: s.operatingDays || "Monday - Saturday",
+          });
+        }
+      } catch { }
+    };
     window.addEventListener("dermai_appointments_updated", handleSync);
     window.addEventListener("dermai_clinic_doctors_updated", handleSync);
+    window.addEventListener("dermai_doctors_updated", handleSync);
+    window.addEventListener("clinicSettingsUpdated", handleSync);
+    window.addEventListener("dermai_clinic_updated", handleSync);
     window.addEventListener("appointmentCreated", handleSync);
     window.addEventListener("storage", handleSync);
     window.addEventListener("focus", handleSync);
@@ -557,6 +599,9 @@ export default function ClinicDashboardPage() {
       if (channel) supabase.removeChannel(channel);
       window.removeEventListener("dermai_appointments_updated", handleSync);
       window.removeEventListener("dermai_clinic_doctors_updated", handleSync);
+      window.removeEventListener("dermai_doctors_updated", handleSync);
+      window.removeEventListener("clinicSettingsUpdated", handleSync);
+      window.removeEventListener("dermai_clinic_updated", handleSync);
       window.removeEventListener("appointmentCreated", handleSync);
       window.removeEventListener("storage", handleSync);
       window.removeEventListener("focus", handleSync);
@@ -630,6 +675,35 @@ export default function ClinicDashboardPage() {
     return 30;
   }, [doctors]);
 
+  // Current clinic operating schedule
+  const [clinicSchedule, setClinicSchedule] = useState(() => {
+    try {
+      const raw = localStorage.getItem("dermai_clinic_settings");
+      if (raw) {
+        const s = JSON.parse(raw);
+        return {
+          openTime: s.openTime || "08:00",
+          closeTime: s.closeTime || "17:00",
+          operatingDays: s.operatingDays || "Monday - Saturday",
+        };
+      }
+    } catch { }
+    return {
+      openTime: "08:00",
+      closeTime: "17:00",
+      operatingDays: "Monday - Saturday",
+    };
+  });
+
+  const clinicStatus = useMemo(() => {
+    return isClinicCurrentlyOpen({
+      openTime: clinicSchedule.openTime,
+      closeTime: clinicSchedule.closeTime,
+      operatingDays: clinicSchedule.operatingDays,
+      timezone: "Asia/Manila",
+    });
+  }, [clinicSchedule, nowMinutes]);
+
   // Current Day Name in Asia/Manila
   const todayDayName = useMemo(() => {
     return new Intl.DateTimeFormat("en-US", {
@@ -639,6 +713,7 @@ export default function ClinicDashboardPage() {
   }, []);
 
   // Compute doctors who are on duty today based on their active duty schedule
+  // Strictly respects clinic opening hours, operating days, shift validity, and current local time
   const onDutyDoctors = useMemo(() => {
     return doctors
       .filter((doc) => doc.status !== "Inactive")
@@ -700,7 +775,6 @@ export default function ClinicDashboardPage() {
         let workedMinutes = 0;
         let firstStart = Infinity;
         let lastEnd = -Infinity;
-        let inShiftNow = false;
 
         validShifts.forEach((s) => {
           const start = timeToMinutesSafe(s.startTime);
@@ -710,17 +784,29 @@ export default function ClinicDashboardPage() {
           workedMinutes += Math.min(Math.max(nowMinutes - start, 0), end - start);
           firstStart = Math.min(firstStart, start);
           lastEnd = Math.max(lastEnd, end);
-          if (nowMinutes >= start && nowMinutes < end) inShiftNow = true;
         });
 
         const progress = totalMinutes > 0 ? Math.round((workedMinutes / totalMinutes) * 100) : 0;
-        const dutyState: DutyState = inShiftNow
-          ? "on-duty"
-          : nowMinutes < firstStart
-            ? "upcoming"
-            : nowMinutes >= lastEnd
-              ? "finished"
-              : "on-break";
+
+        // Authoritative evaluation of duty status
+        const dutyRes = isDoctorCurrentlyOnDuty({
+          doctor: doc,
+          clinicSchedule,
+          timezone: "Asia/Manila",
+        });
+
+        let dutyState: DutyState = "finished";
+        if (dutyRes.isOnDuty) {
+          dutyState = "on-duty";
+        } else if (!clinicStatus.isOpen) {
+          dutyState = "finished";
+        } else if (nowMinutes < firstStart) {
+          dutyState = "upcoming";
+        } else if (nowMinutes >= lastEnd) {
+          dutyState = "finished";
+        } else {
+          dutyState = "on-break";
+        }
 
         const primarySpec =
           doc.specializations && doc.specializations.length > 0 && doc.specializations[0]?.name
@@ -744,7 +830,7 @@ export default function ClinicDashboardPage() {
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
-  }, [doctors, todayDayName, nowMinutes]);
+  }, [doctors, todayDayName, nowMinutes, clinicSchedule, clinicStatus]);
 
   // Shifts and patient count for the selected schedule date
   const scheduledShifts = useMemo(() => {

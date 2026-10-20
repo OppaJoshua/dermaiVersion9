@@ -47,6 +47,7 @@ import {
   validateDoctorShifts,
   getManilaNowParts,
   parseAppointmentTimeMinutes,
+  isDoctorCurrentlyOnDuty,
 } from "@/lib/schedulingService";
 
 /* ── Types ────────────────────────────────────────────────────────── */
@@ -358,6 +359,7 @@ function ModernTimeSelect({
 
   const effectiveOptions = options && options.length > 0 ? options : TIME_SLOT_OPTIONS;
   const selectedOpt = effectiveOptions.find((o) => o.value === value);
+  const isInvalid = Boolean(value && options && options.length > 0 && !selectedOpt);
 
   return (
     <div ref={containerRef} className="relative w-full">
@@ -371,15 +373,18 @@ function ModernTimeSelect({
         disabled={disabled}
         onClick={() => setOpen((prev) => !prev)}
         className={`w-full flex items-center justify-between ${compact ? "h-8 px-2 rounded-lg" : "px-3.5 py-2 rounded-xl"
-          } border bg-white text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${open
-            ? "border-[#c0166a] ring-2 ring-magenta-500/10 shadow-xs"
-            : "border-gray-200 hover:border-gray-300 hover:bg-gray-50/60"
+          } border bg-white text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+            isInvalid
+              ? "border-rose-300 bg-rose-50/30 text-rose-800"
+              : open
+              ? "border-[#c0166a] ring-2 ring-magenta-500/10 shadow-xs"
+              : "border-gray-200 hover:border-gray-300 hover:bg-gray-50/60"
           }`}
       >
         <div className="flex items-center gap-1.5 text-gray-900 truncate">
-          <Clock className={`${compact ? "w-3 h-3" : "w-3.5 h-3.5"} text-[#c0166a] shrink-0`} />
-          <span className="font-bold text-xs truncate">
-            {selectedOpt ? selectedOpt.label : value ? formatTime12h(value) : placeholder}
+          <Clock className={`${compact ? "w-3 h-3" : "w-3.5 h-3.5"} ${isInvalid ? "text-rose-500" : "text-[#c0166a]"} shrink-0`} />
+          <span className={`font-bold text-xs truncate ${isInvalid ? "text-rose-700" : ""}`}>
+            {selectedOpt ? selectedOpt.label : value ? `${formatTime12h(value)} (Invalid)` : placeholder}
           </span>
         </div>
         <ChevronDown
@@ -695,15 +700,16 @@ export default function ClinicDoctorsPage() {
         }
       } catch { }
     }
-    if (!targetClinicId) {
-      try {
-        const sett = localStorage.getItem("dermai_clinic_settings");
-        if (sett) {
-          const parsed = JSON.parse(sett);
-          if (parsed.id) targetClinicId = parsed.id;
-        }
-      } catch { }
-    }
+    try {
+      const sett = localStorage.getItem("dermai_clinic_settings");
+      if (sett) {
+        const parsed = JSON.parse(sett);
+        if (!targetClinicId && parsed.id) targetClinicId = parsed.id;
+        if (parsed.openTime) setClinicOpenTime(parsed.openTime);
+        if (parsed.closeTime) setClinicCloseTime(parsed.closeTime);
+        if (parsed.operatingDays) setClinicOperatingDays(parsed.operatingDays);
+      }
+    } catch { }
 
     if (targetClinicId && !targetClinicId.startsWith("temp_")) {
       try {
@@ -726,9 +732,11 @@ export default function ClinicDoctorsPage() {
     fetchClinicOperatingSettings();
     const handleSync = () => fetchClinicOperatingSettings();
     window.addEventListener("clinicSettingsUpdated", handleSync);
+    window.addEventListener("dermai_clinic_updated", handleSync);
     window.addEventListener("storage", handleSync);
     return () => {
       window.removeEventListener("clinicSettingsUpdated", handleSync);
+      window.removeEventListener("dermai_clinic_updated", handleSync);
       window.removeEventListener("storage", handleSync);
     };
   }, [fetchClinicOperatingSettings]);
@@ -937,86 +945,30 @@ export default function ClinicDoctorsPage() {
   }, [currentTick]);
 
   // Compute doctors who are on duty today based on their active duty schedule
-  // Excludes doctors whose duty hours/shifts for today have already concluded
+  // Strictly respects: clinic open hours, clinic open days, shift validity, and current local time
   const onDutyDoctors = useMemo(() => {
     const currentMinutes = nowParts.totalMinutes;
 
     return allDoctors
       .filter((doc) => doc.status !== "Inactive")
       .map((doc) => {
-        const docSched = parseDoctorSchedule(
-          doc.dutySchedule,
-          doc.dutyDays,
-          doc.dutyStartTime || "08:00",
-          doc.dutyEndTime || "17:00"
-        );
-
-        let shifts: DoctorShift[] = docSched.weeklyShifts[todayDayName] || [];
-
-        // Fallback 1: Check legacy dutySchedule[todayDayName] if weeklyShifts was empty
-        if (
-          shifts.length === 0 &&
-          doc.dutySchedule &&
-          typeof doc.dutySchedule === "object"
-        ) {
-          const dayData = doc.dutySchedule[todayDayName];
-          if (dayData && dayData.startTime && dayData.endTime) {
-            shifts = [
-              {
-                id: `shift-${todayDayName.toLowerCase()}-legacy`,
-                label: "Duty Shift",
-                startTime: dayData.startTime,
-                endTime: dayData.endTime,
-              },
-            ];
-          }
-        }
-
-        // Fallback 2: Check dutyDays array if weeklyShifts was empty
-        if (
-          shifts.length === 0 &&
-          doc.dutyDays &&
-          Array.isArray(doc.dutyDays) &&
-          doc.dutyDays.some((d) => d.toLowerCase().trim() === todayDayName.toLowerCase().trim())
-        ) {
-          shifts = [
-            {
-              id: `shift-${todayDayName.toLowerCase()}-default`,
-              label: "Duty Shift",
-              startTime: doc.dutyStartTime || "08:00",
-              endTime: doc.dutyEndTime || "17:00",
-            },
-          ];
-        }
-
-        const validShifts = shifts.filter((s) => s.startTime && s.endTime);
-        if (validShifts.length === 0) return null;
-
-        // Check duty hours against current time:
-        // A shift is active/upcoming if its end time has not passed yet.
-        const activeOrUpcomingShifts = validShifts.filter((shift) => {
-          const startM = parseAppointmentTimeMinutes(shift.startTime);
-          const endM = parseAppointmentTimeMinutes(shift.endTime);
-
-          if (endM === -1) return true; // Keep safe fallback if time format cannot be parsed
-
-          if (startM !== -1 && endM < startM) {
-            // Overnight shift (e.g. 22:00 to 02:00)
-            return currentMinutes >= startM || currentMinutes < endM;
-          }
-
-          // Standard daytime shift: duty is finished once current time reaches or passes endM
-          return endM > currentMinutes;
+        const dutyResult = isDoctorCurrentlyOnDuty({
+          doctor: doc,
+          clinicSchedule: {
+            openTime: clinicOpenTime,
+            closeTime: clinicCloseTime,
+            operatingDays: clinicOperatingDays,
+          },
+          timezone: "Asia/Manila",
+          currentTimeMs: currentTick,
         });
 
-        // If all scheduled duty shifts for today have finished/passed, doctor is no longer on duty today
-        if (activeOrUpcomingShifts.length === 0) {
+        if (!dutyResult.isOnDuty || !dutyResult.activeShift) {
           return null;
         }
 
-        const hoursDisplay = activeOrUpcomingShifts.length === 1
-          ? `${formatTime12h(activeOrUpcomingShifts[0].startTime)} – ${formatTime12h(activeOrUpcomingShifts[0].endTime)}`
-          : activeOrUpcomingShifts.map((s) => `${formatTime12h(s.startTime)} – ${formatTime12h(s.endTime)}`).join(", ");
+        const activeShift = dutyResult.activeShift;
+        const hoursDisplay = `${formatTime12h(activeShift.startTime)} – ${formatTime12h(activeShift.endTime)}`;
 
         const primarySpec =
           doc.specializations && doc.specializations.length > 0
@@ -1027,15 +979,6 @@ export default function ClinicDoctorsPage() {
 
         const cleanDocName = doc.name.trim();
         const displayName = cleanDocName.startsWith("Dr.") ? cleanDocName : `Dr. ${cleanDocName}`;
-
-        // Find active ongoing shift or the next upcoming shift
-        const activeShift = activeOrUpcomingShifts.find((s) => {
-          const sM = parseAppointmentTimeMinutes(s.startTime);
-          const eM = parseAppointmentTimeMinutes(s.endTime);
-          if (sM === -1 || eM === -1) return false;
-          if (eM < sM) return currentMinutes >= sM || currentMinutes < eM;
-          return currentMinutes >= sM && currentMinutes < eM;
-        }) || activeOrUpcomingShifts[0];
 
         const shiftProgress = calculateShiftProgress(
           activeShift?.startTime,
@@ -1048,13 +991,13 @@ export default function ClinicDoctorsPage() {
           displayName,
           primarySpec,
           hoursDisplay,
-          shifts: activeOrUpcomingShifts,
-          allTodayShifts: validShifts,
+          shifts: [activeShift],
+          allTodayShifts: [activeShift],
           shiftProgress,
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
-  }, [allDoctors, todayDayName, nowParts]);
+  }, [allDoctors, clinicOpenTime, clinicCloseTime, clinicOperatingDays, nowParts, currentTick]);
 
   const availableSpecialtyOptions = useMemo(() => {
     const specsSet = new Set<string>();
@@ -1742,10 +1685,10 @@ export default function ClinicDoctorsPage() {
     });
   };
 
-  const removeShiftFromDay = (day: string, shiftId: string) => {
+  const removeShiftFromDay = (day: string, shiftId?: string) => {
     setScheduleForm((prev) => {
       const currentShifts = prev.weeklyShifts[day] || [];
-      const updatedShifts = currentShifts.filter((s) => s.id !== shiftId);
+      const updatedShifts = currentShifts.filter((s) => (s.id || s.shiftId) !== shiftId);
       const updatedDays =
         updatedShifts.length === 0
           ? prev.dutyDays.filter((d) => d !== day)
@@ -1764,14 +1707,14 @@ export default function ClinicDoctorsPage() {
 
   const updateShiftInDay = (
     day: string,
-    shiftId: string,
+    shiftId: string | undefined,
     field: keyof DoctorShift,
     value: any
   ) => {
     setScheduleForm((prev) => {
       const currentShifts = prev.weeklyShifts[day] || [];
       const updatedShifts = currentShifts.map((s) => {
-        if (s.id !== shiftId) return s;
+        if ((s.id || s.shiftId) !== shiftId) return s;
         return { ...s, [field]: value };
       });
 
@@ -1867,7 +1810,7 @@ export default function ClinicDoctorsPage() {
         ];
       }
 
-      const errors = validateDoctorShifts(shifts, day, clinicOpenTime, clinicCloseTime);
+      const errors = validateDoctorShifts(shifts, day, clinicOpenTime, clinicCloseTime, clinicOperatingDays);
       if (errors.length > 0) {
         setScheduleError(errors[0].message);
         return;
@@ -1919,8 +1862,6 @@ export default function ClinicDoctorsPage() {
       try {
         localStorage.setItem("dermai_clinic_doctors", JSON.stringify(nextList));
         localStorage.setItem("dermai_selected_doctor_id", selectedDoctor.id);
-        window.dispatchEvent(new Event("storage"));
-        window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
       } catch { }
 
       // Persist to Supabase clinic_doctor table
@@ -1947,6 +1888,9 @@ export default function ClinicDoctorsPage() {
           .eq("doctor_id", selectedDoctor.id)
           .select("doctor_id");
       }
+
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
 
       const totalConfiguredShifts = Object.values(normalizedWeeklyShifts).flat().length;
 
@@ -3057,7 +3001,8 @@ export default function ClinicDoctorsPage() {
                             shifts,
                             day,
                             clinicOpenTime,
-                            clinicCloseTime
+                            clinicCloseTime,
+                            clinicOperatingDays
                           );
 
                           return (
@@ -3157,7 +3102,9 @@ export default function ClinicDoctorsPage() {
                                             <div className="w-[115px]">
                                               <ModernTimeSelect
                                                 value={shift.endTime}
-                                                options={clinicTimeOptions}
+                                                options={clinicTimeOptions.filter(
+                                                  (opt) => timeToMinutes(opt.value) > timeToMinutes(shift.startTime || "00:00")
+                                                )}
                                                 compact={true}
                                                 onChange={(val) =>
                                                   updateShiftInDay(day, shift.id, "endTime", val)

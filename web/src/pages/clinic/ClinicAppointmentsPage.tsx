@@ -444,8 +444,8 @@ export default function ClinicAppointmentsPage() {
           }
         } catch { }
       }
-      if (!docName && a.assigned_doctor_id && a.clinic_note) {
-        const match = a.clinic_note.match(/(?:Assigned to|Re-assigned to)\s+(?:Dr\.\s*)?([A-Za-z\s]+?)(?:\s+for|\s+accepted|\s+declined|\.|$)/i);
+      if (!docName && a.clinic_note) {
+        const match = a.clinic_note.match(/(?:Assigned to|Re-assigned to|Attending Doctor:|Attending:?)\s*(?:Dr\.\s*)?([A-Za-z\s]+?)(?:\s+for|\s+accepted|\s+declined|\||\.|$)/i);
         if (match && match[1] && match[1].trim().toLowerCase() !== "dr") {
           docName = match[1].trim();
         }

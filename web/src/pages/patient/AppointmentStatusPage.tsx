@@ -194,8 +194,8 @@ function StatusTracker({ app }: { app: Appointment }) {
               {app.checkInStatus === "no-show"
                 ? <span>You did not attend this scheduled consultation with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> on {app.date} at {app.time || "scheduled time"}. Please contact the clinic or schedule a new appointment.</span>
                 : app.status === "Rejected"
-                ? <span>Your appointment request with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> was declined.</span>
-                : <span>This appointment with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> was cancelled.</span>}
+                  ? <span>Your appointment request with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> was declined.</span>
+                  : <span>This appointment with <strong className="inline-flex items-center gap-1 font-semibold text-gray-900">{app.clinicName} <VerifiedBadge size={13} className="w-3.5 h-3.5" /></strong> was cancelled.</span>}
             </p>
             {app.doctorDiagnosis && (
               <div className="mt-2 rounded-lg bg-white border border-red-200 p-2.5 shadow-2xs">
@@ -249,10 +249,10 @@ function StatusTracker({ app }: { app: Appointment }) {
                   <div key={step} className="flex flex-col items-center gap-1.5 w-14">
                     <div
                       className={`w-5 h-5 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${isDone
-                          ? isActive
-                            ? "bg-magenta-600 border-magenta-500 scale-105 shadow-2xs"
-                            : "bg-magenta-500 border-magenta-400"
-                          : "bg-white border-gray-200"
+                        ? isActive
+                          ? "bg-magenta-600 border-magenta-500 scale-105 shadow-2xs"
+                          : "bg-magenta-500 border-magenta-400"
+                        : "bg-white border-gray-200"
                         }`}
                     >
                       {isDone ? (
@@ -421,19 +421,19 @@ function StatusTracker({ app }: { app: Appointment }) {
             {app.doctorDiagnosis &&
               !app.doctorDiagnosis.toLowerCase().includes("general dermatol") &&
               !app.doctorDiagnosis.toLowerCase().includes("general consult") && (
-              <div className="rounded-xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200 p-3.5 shadow-2xs">
-                <div className="flex items-center gap-1.5 text-blue-800 font-bold text-[10px] uppercase tracking-wider mb-1">
-                  <Stethoscope className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Dermatologist Clinical Assessment &amp; Diagnosis</span>
+                <div className="rounded-xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200 p-3.5 shadow-2xs">
+                  <div className="flex items-center gap-1.5 text-blue-800 font-bold text-[10px] uppercase tracking-wider mb-1">
+                    <Stethoscope className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Dermatologist Clinical Assessment &amp; Diagnosis</span>
+                  </div>
+                  <p className="text-sm font-bold text-blue-950">{app.doctorDiagnosis}</p>
+                  {app.doctorNote && (
+                    <p className="text-xs text-blue-800/90 mt-1 pt-1 border-t border-blue-200/60 leading-relaxed">
+                      <span className="font-semibold text-blue-900">Clinical Notes / Advice:</span> {app.doctorNote}
+                    </p>
+                  )}
                 </div>
-                <p className="text-sm font-bold text-blue-950">{app.doctorDiagnosis}</p>
-                {app.doctorNote && (
-                  <p className="text-xs text-blue-800/90 mt-1 pt-1 border-t border-blue-200/60 leading-relaxed">
-                    <span className="font-semibold text-blue-900">Clinical Notes / Advice:</span> {app.doctorNote}
-                  </p>
-                )}
-              </div>
-            )}
+              )}
 
             {app.clinicNote && !isCancelled && (
               <div className="text-[11px] text-gray-600 bg-white border border-gray-200/80 rounded-xl px-3 py-2">
@@ -735,7 +735,7 @@ const AppointmentStatusPage: React.FC = () => {
             if (clinicRows) {
               clinicRows.forEach((c: any) => clinicNameMap.set(String(c.clinic_id), c.name));
             }
-          } catch {}
+          } catch { }
         }
 
         const mapped: Appointment[] = data.map((a: any) => {
@@ -769,8 +769,8 @@ const AppointmentStatusPage: React.FC = () => {
           const docName = (a.assigned_doctor_id && !isDocRejected && docNameMap.has(a.assigned_doctor_id))
             ? `Dr. ${docNameMap.get(a.assigned_doctor_id)!.replace(/^dr\.\s*/i, "")}`
             : (a.assigned_doctor_id && !isDocRejected)
-            ? "Doctor Assigned"
-            : "To be assigned";
+              ? "Doctor Assigned"
+              : "To be assigned";
 
           let docDiagnosis = "";
           let docNoteClean = "";
@@ -845,7 +845,7 @@ const AppointmentStatusPage: React.FC = () => {
                 if (!existing) {
                   const pDate = localItem.date ? new Date(localItem.date) : null;
                   const isValid = pDate && !isNaN(pDate.getTime());
-                  
+
                   let formattedLocalTime = "Time pending";
                   if (localItem.time && localItem.time !== "Time pending") {
                     if (localItem.time.includes("AM") || localItem.time.includes("PM")) {
@@ -903,7 +903,7 @@ const AppointmentStatusPage: React.FC = () => {
               });
             }
           }
-        } catch {}
+        } catch { }
 
         // Exclude temporary unpaid holds and expired holds from active status list
         const confirmedAppointments = mapped.filter((a) => {
@@ -1023,14 +1023,14 @@ const AppointmentStatusPage: React.FC = () => {
             const next = parsed.map((item: any) =>
               item.id === rescheduleModalAppt.id || item.appointment_id === rescheduleModalAppt.id
                 ? {
-                    ...item,
-                    rescheduleRequested: true,
-                    rescheduleDate,
-                    rescheduleTime,
-                    rescheduleReason: rescheduleReason.trim(),
-                    needsPatientReschedule: false,
-                    appointmentHistory: updatedHistory,
-                  }
+                  ...item,
+                  rescheduleRequested: true,
+                  rescheduleDate,
+                  rescheduleTime,
+                  rescheduleReason: rescheduleReason.trim(),
+                  needsPatientReschedule: false,
+                  appointmentHistory: updatedHistory,
+                }
                 : item
             );
             localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
@@ -1045,14 +1045,14 @@ const AppointmentStatusPage: React.FC = () => {
         prev.map((a) =>
           a.id === rescheduleModalAppt.id
             ? {
-                ...a,
-                rescheduleRequested: true,
-                rescheduleDate,
-                rescheduleTime,
-                rescheduleReason: rescheduleReason.trim(),
-                needsPatientReschedule: false,
-                appointmentHistory: updatedHistory,
-              }
+              ...a,
+              rescheduleRequested: true,
+              rescheduleDate,
+              rescheduleTime,
+              rescheduleReason: rescheduleReason.trim(),
+              needsPatientReschedule: false,
+              appointmentHistory: updatedHistory,
+            }
             : a
         )
       );
@@ -1075,7 +1075,7 @@ const AppointmentStatusPage: React.FC = () => {
           requestedDate: rescheduleDate,
           requestedTime: rescheduleTime,
         },
-      }).catch(() => {});
+      }).catch(() => { });
 
       setRescheduleModalAppt(null);
       setSuccessToast(
@@ -1133,13 +1133,13 @@ const AppointmentStatusPage: React.FC = () => {
             const next = parsed.map((item: any) =>
               item.id === target.id || item.appointment_id === target.id
                 ? {
-                    ...item,
-                    rescheduleRequested: false,
-                    rescheduleDate: undefined,
-                    rescheduleTime: undefined,
-                    rescheduleReason: undefined,
-                    appointmentHistory: updatedHistory,
-                  }
+                  ...item,
+                  rescheduleRequested: false,
+                  rescheduleDate: undefined,
+                  rescheduleTime: undefined,
+                  rescheduleReason: undefined,
+                  appointmentHistory: updatedHistory,
+                }
                 : item
             );
             localStorage.setItem("dermai_clinic_appointments", JSON.stringify(next));
@@ -1153,13 +1153,13 @@ const AppointmentStatusPage: React.FC = () => {
         prev.map((a) =>
           a.id === target.id
             ? {
-                ...a,
-                rescheduleRequested: false,
-                rescheduleDate: undefined,
-                rescheduleTime: undefined,
-                rescheduleReason: undefined,
-                appointmentHistory: updatedHistory,
-              }
+              ...a,
+              rescheduleRequested: false,
+              rescheduleDate: undefined,
+              rescheduleTime: undefined,
+              rescheduleReason: undefined,
+              appointmentHistory: updatedHistory,
+            }
             : a
         )
       );
@@ -1241,7 +1241,7 @@ const AppointmentStatusPage: React.FC = () => {
           date: target.date,
           time: target.time,
         },
-      }).catch(() => {});
+      }).catch(() => { });
 
       setCancellingAppt(null);
       setSuccessToast("Appointment cancelled successfully. It has been moved to your Past tab.");
@@ -1413,7 +1413,7 @@ const AppointmentStatusPage: React.FC = () => {
 
             {/* Rule 1 & Rule 2 Protection Guarantee */}
             <div className="mt-3 p-3 rounded-2xl bg-purple-50/80 border border-purple-200/70 text-purple-900 text-[11px] leading-relaxed">
-              🔒 <strong>Patient Protection:</strong> Submitting this request does not alter your existing scheduled date or time without mutual clinic agreement. Your slot remains reserved until the clinic reviews and approves your requested slot.
+              <strong>Patient Protection:</strong> Submitting this request does not alter your existing scheduled date or time without mutual clinic agreement. Your slot remains reserved until the clinic reviews and approves your requested slot.
             </div>
 
             {rescheduleError && (
@@ -1472,11 +1472,10 @@ const AppointmentStatusPage: React.FC = () => {
                         setRescheduleTime(slot.value);
                         setRescheduleError("");
                       }}
-                      className={`py-2 px-1 text-center rounded-xl text-xs font-semibold transition border cursor-pointer ${
-                        isSelected
+                      className={`py-2 px-1 text-center rounded-xl text-xs font-semibold transition border cursor-pointer ${isSelected
                           ? "bg-magenta-600 border-magenta-600 text-white shadow-2xs"
                           : "bg-gray-50 border-gray-200 text-gray-700 hover:bg-magenta-50 hover:border-magenta-200"
-                      }`}
+                        }`}
                     >
                       {slot.label}
                     </button>
@@ -1504,11 +1503,10 @@ const AppointmentStatusPage: React.FC = () => {
                       setRescheduleReason(preset);
                       setRescheduleError("");
                     }}
-                    className={`w-full text-left px-3 py-1.5 rounded-xl text-xs transition border cursor-pointer ${
-                      rescheduleReason === preset
+                    className={`w-full text-left px-3 py-1.5 rounded-xl text-xs transition border cursor-pointer ${rescheduleReason === preset
                         ? "bg-magenta-50 border-magenta-200 text-magenta-800 font-semibold"
                         : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
-                    }`}
+                      }`}
                   >
                     • {preset}
                   </button>

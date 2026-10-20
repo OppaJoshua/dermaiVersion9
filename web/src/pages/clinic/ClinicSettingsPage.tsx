@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertCircle,
@@ -16,6 +16,13 @@ import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { createHelpdeskTicketAsync } from "@/lib/store";
 import LocationPickerMap from "@/components/common/LocationPickerMap";
+import {
+  findConflictingDoctorSchedules,
+  generateClinicOpenTimeOptions,
+  generateClinicCloseTimeOptions,
+  validateClinicOperatingHours,
+  type ScheduleConflict,
+} from "@/lib/schedulingService";
 
 /* ── Study-scoped service options ─────────────────────────── */
 const SERVICES_OPTIONS = [
@@ -65,6 +72,7 @@ export type ClinicDoctorSummary = {
 };
 
 type ClinicSettings = {
+  id?: string;
   logo: string;
   name: string;
   email: string;
@@ -74,6 +82,7 @@ type ClinicSettings = {
   operatingDays: string;
   openTime: string;
   closeTime: string;
+  hours?: string;
   doctors: ClinicDoctorSummary[];
   servicesOffered: string;
   consultationFee: string;
@@ -83,6 +92,8 @@ type ClinicSettings = {
   status: "pending" | "verified" | "rejected";
   slotIntervalMinutes?: number;
   maxPatientsPerDay?: number;
+  conflictingDoctorIds?: string[];
+  scheduleConflictsCount?: number;
 };
 
 const DEFAULT_SETTINGS: ClinicSettings = {
@@ -106,43 +117,7 @@ const DEFAULT_SETTINGS: ClinicSettings = {
   maxPatientsPerDay: 20,
 };
 
-const TIME_SLOT_OPTIONS = [
-  { value: "06:00", label: "6:00 AM" },
-  { value: "06:30", label: "6:30 AM" },
-  { value: "07:00", label: "7:00 AM" },
-  { value: "07:30", label: "7:30 AM" },
-  { value: "08:00", label: "8:00 AM" },
-  { value: "08:30", label: "8:30 AM" },
-  { value: "09:00", label: "9:00 AM" },
-  { value: "09:30", label: "9:30 AM" },
-  { value: "10:00", label: "10:00 AM" },
-  { value: "10:30", label: "10:30 AM" },
-  { value: "11:00", label: "11:00 AM" },
-  { value: "11:30", label: "11:30 AM" },
-  { value: "12:00", label: "12:00 PM (Noon)" },
-  { value: "12:30", label: "12:30 PM" },
-  { value: "13:00", label: "1:00 PM" },
-  { value: "13:30", label: "1:30 PM" },
-  { value: "14:00", label: "2:00 PM" },
-  { value: "14:30", label: "2:30 PM" },
-  { value: "15:00", label: "3:00 PM" },
-  { value: "15:30", label: "3:30 PM" },
-  { value: "16:00", label: "4:00 PM" },
-  { value: "16:30", label: "4:30 PM" },
-  { value: "17:00", label: "5:00 PM" },
-  { value: "17:30", label: "5:30 PM" },
-  { value: "18:00", label: "6:00 PM" },
-  { value: "18:30", label: "6:30 PM" },
-  { value: "19:00", label: "7:00 PM" },
-  { value: "19:30", label: "7:30 PM" },
-  { value: "20:00", label: "8:00 PM" },
-  { value: "20:30", label: "8:30 PM" },
-  { value: "21:00", label: "9:00 PM" },
-  { value: "21:30", label: "9:30 PM" },
-  { value: "22:00", label: "10:00 PM" },
-  { value: "22:30", label: "10:30 PM" },
-  { value: "23:00", label: "11:00 PM" },
-];
+
 
 function formatTime12h(timeStr?: string): string {
   if (!timeStr) return "";
@@ -264,6 +239,43 @@ export default function ClinicSettingsPage() {
   const [dbClinicId, setDbClinicId] = useState<string | null>(null);
   // UI Mode: Always allow editing so the clinic can test and customize their UI
   const isPending = false;
+  const isSavingRef = useRef(false);
+
+  const [scheduleSaveError, setScheduleSaveError] = useState<string | null>(null);
+  const [clinicDoctors, setClinicDoctors] = useState<any[]>(() => {
+    try {
+      const cached = localStorage.getItem("dermai_clinic_doctors");
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return [];
+  });
+
+  // Revalidate all existing doctor schedules dynamically whenever clinic hours or operating days change
+  const scheduleConflicts = useMemo<ScheduleConflict[]>(() => {
+    return findConflictingDoctorSchedules({
+      doctors: clinicDoctors,
+      clinicOpenTime: settings.openTime,
+      clinicCloseTime: settings.closeTime,
+      clinicOperatingDays: settings.operatingDays,
+    });
+  }, [clinicDoctors, settings.openTime, settings.closeTime, settings.operatingDays]);
+
+  // Clinic opening time options (06:00 to 22:30 in 30-min intervals)
+  const openTimeOptions = useMemo(() => {
+    return generateClinicOpenTimeOptions(30, "06:00", "22:30");
+  }, []);
+
+  // Dynamically recalculate closing time options strictly later than selected opening time
+  const closeTimeOptions = useMemo(() => {
+    return generateClinicCloseTimeOptions(settings.openTime, 30, "23:00");
+  }, [settings.openTime]);
+
+  // Real-time operating hours validation
+  const operatingHoursValidation = useMemo(() => {
+    return validateClinicOperatingHours(settings.openTime, settings.closeTime);
+  }, [settings.openTime, settings.closeTime]);
+
+  const isCloseTimeInvalid = !operatingHoursValidation.isValid;
 
   // Live-sync with clinic verification profile hook
   useEffect(() => {
@@ -429,7 +441,7 @@ export default function ClinicSettingsPage() {
           }
         }
 
-        if (cancelled) return;
+        if (cancelled || isSavingRef.current) return;
 
         if (dbClinic) {
           if (dbClinic.clinic_id) {
@@ -440,11 +452,15 @@ export default function ClinicSettingsPage() {
           if (dbClinic.clinic_id) {
             const { data: docList } = await supabase
               .from("clinic_doctor")
-              .select("doctor_id, doctor_name, email, status, specialization")
+              .select("doctor_id, doctor_name, email, status, specialization, duty_schedule, duty_days, duty_start_time, duty_end_time")
               .eq("clinic_id", dbClinic.clinic_id)
               .neq("status", "Inactive");
 
             if (docList && docList.length > 0) {
+              setClinicDoctors(docList);
+              try {
+                localStorage.setItem("dermai_clinic_doctors", JSON.stringify(docList));
+              } catch {}
               loadedDoctors = docList.map((d: any) => ({
                 id: d.doctor_id,
                 name: d.doctor_name,
@@ -453,7 +469,7 @@ export default function ClinicSettingsPage() {
             }
           }
 
-          if (cancelled) return;
+          if (cancelled || isSavingRef.current) return;
 
           setSettings((prev) => {
             let loadedOperatingDays = prev.operatingDays;
@@ -559,37 +575,68 @@ export default function ClinicSettingsPage() {
     loadData();
 
     // Listen to profile / settings update events
-    const handleSync = () => {
+    const handleSync = (e?: any) => {
+      if (isSavingRef.current) return;
+      if (e?.detail?.source === "ClinicSettingsPage") return;
+      try {
+        const cached = localStorage.getItem("dermai_clinic_doctors");
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setClinicDoctors(parsed);
+          }
+        }
+      } catch {}
       loadData();
     };
     window.addEventListener("dermai_clinic_profile_updated", handleSync);
     window.addEventListener("dermai_clinic_updated", handleSync);
+    window.addEventListener("dermai_doctors_updated", handleSync);
+    window.addEventListener("storage", handleSync);
 
     return () => {
       cancelled = true;
       window.removeEventListener("dermai_clinic_profile_updated", handleSync);
       window.removeEventListener("dermai_clinic_updated", handleSync);
+      window.removeEventListener("dermai_doctors_updated", handleSync);
+      window.removeEventListener("storage", handleSync);
     };
   }, [clinicId, loading]);
 
   const onSave = async () => {
+    setScheduleSaveError(null);
     const targetClinicId = clinicId || dbClinicId;
     const isCurrentlyVerified =
       verificationStatus === "verified" ||
       settings.status === "verified";
 
-    // 1. Save settings to localStorage for instant 0ms synchronization
-    const settingsToSave = {
+    const hoursValidation = validateClinicOperatingHours(settings.openTime, settings.closeTime);
+    if (!hoursValidation.isValid) {
+      setScheduleSaveError(
+        hoursValidation.error || "Clinic closing time must be later than opening time."
+      );
+      return;
+    }
+
+    isSavingRef.current = true;
+
+    // 1. Prepare settings and update local state and localStorage for instant 0ms synchronization
+    const settingsToSave: ClinicSettings = {
       ...settings,
       status: isCurrentlyVerified ? "verified" : settings.status,
-      id: targetClinicId || undefined,
+      id: targetClinicId || settings.id || undefined,
       consultationFee: settings.consultationFee || "",
       servicesOffered: JSON.stringify(selectedServices),
       hours: `${settings.operatingDays || "Monday - Saturday"}: ${formatTime12h(settings.openTime || "08:00")} – ${formatTime12h(settings.closeTime || "17:00")}`,
       slotIntervalMinutes: settings.slotIntervalMinutes || 30,
+      conflictingDoctorIds: Array.from(new Set(scheduleConflicts.map((c) => c.doctorId))),
+      scheduleConflictsCount: scheduleConflicts.length,
     };
-    localStorage.setItem("dermai_clinic_settings", JSON.stringify(settingsToSave));
-    window.dispatchEvent(new Event("storage"));
+
+    setSettings(settingsToSave);
+    try {
+      localStorage.setItem("dermai_clinic_settings", JSON.stringify(settingsToSave));
+    } catch {}
 
     // Also update matching clinic application cache for search and booking
     try {
@@ -630,13 +677,6 @@ export default function ClinicSettingsPage() {
         }
       }
     } catch {}
-
-    window.dispatchEvent(new Event("storage"));
-    window.dispatchEvent(new CustomEvent("clinicSettingsUpdated", { detail: settingsToSave }));
-    window.dispatchEvent(new CustomEvent("dermai_clinic_updated"));
-
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
 
     // 2. Synchronize clinic details, operating hours, consultation fee and services to Supabase
     try {
@@ -680,6 +720,10 @@ export default function ClinicSettingsPage() {
         const effectiveClinicId = targetClinicId || updatedClinic?.clinic_id;
 
         if (effectiveClinicId) {
+          if (!dbClinicId) {
+            setDbClinicId(effectiveClinicId);
+          }
+
           // Update operating hours
           try {
             await supabase.from("clinic_operating_hours").delete().eq("clinic_id", effectiveClinicId);
@@ -727,7 +771,18 @@ export default function ClinicSettingsPage() {
       }).catch(() => {});
     } catch (cErr) {
       console.error("Error syncing clinic to Supabase:", cErr);
+    } finally {
+      isSavingRef.current = false;
     }
+
+    // 3. Dispatch global sync events only AFTER all database and storage writes have completed
+    window.dispatchEvent(new Event("storage"));
+    window.dispatchEvent(new CustomEvent("clinicSettingsUpdated", { detail: settingsToSave }));
+    window.dispatchEvent(new CustomEvent("dermai_clinic_updated", { detail: { source: "ClinicSettingsPage" } }));
+    window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
+
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
   };
 
   const toggleService = (svc: string) => {
@@ -1119,6 +1174,13 @@ export default function ClinicSettingsPage() {
         </div>
 
         <div>
+          {scheduleSaveError && (
+            <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
+              <XCircle className="w-4 h-4 shrink-0 text-red-500" />
+              <span>{scheduleSaveError}</span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-start">
             <div>
               <label className="block text-[13px] font-semibold text-gray-700 mb-1.5">Operating days</label>
@@ -1137,10 +1199,13 @@ export default function ClinicSettingsPage() {
               <select
                 disabled={isPending}
                 value={settings.openTime}
-                onChange={(e) => setSettings((prev) => ({ ...prev, openTime: e.target.value }))}
+                onChange={(e) => {
+                  setSettings((prev) => ({ ...prev, openTime: e.target.value }));
+                  setScheduleSaveError(null);
+                }}
                 className="w-full px-3.5 py-2 rounded-xl border border-gray-200 text-[13px] font-medium text-gray-900 outline-none focus:border-magenta-500 focus:ring-1 focus:ring-magenta-500 disabled:bg-gray-50 bg-white cursor-pointer"
               >
-                {TIME_SLOT_OPTIONS.map((opt) => (
+                {openTimeOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
@@ -1149,14 +1214,33 @@ export default function ClinicSettingsPage() {
             </div>
 
             <div>
-              <label className="block text-[13px] font-semibold text-gray-700 mb-1.5">Close time</label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-[13px] font-semibold text-gray-700">Close time</label>
+                {isCloseTimeInvalid && (
+                  <span className="text-[11px] font-semibold text-rose-600">Requires later time</span>
+                )}
+              </div>
               <select
                 disabled={isPending}
                 value={settings.closeTime}
-                onChange={(e) => setSettings((prev) => ({ ...prev, closeTime: e.target.value }))}
-                className="w-full px-3.5 py-2 rounded-xl border border-gray-200 text-[13px] font-medium text-gray-900 outline-none focus:border-magenta-500 focus:ring-1 focus:ring-magenta-500 disabled:bg-gray-50 bg-white cursor-pointer"
+                onChange={(e) => {
+                  setSettings((prev) => ({ ...prev, closeTime: e.target.value }));
+                  setScheduleSaveError(null);
+                }}
+                className={`w-full px-3.5 py-2 rounded-xl border text-[13px] font-medium outline-none disabled:bg-gray-50 bg-white cursor-pointer transition-colors ${
+                  isCloseTimeInvalid
+                    ? "border-rose-400 text-rose-900 bg-rose-50/20 focus:border-rose-500 focus:ring-1 focus:ring-rose-500"
+                    : "border-gray-200 text-gray-900 focus:border-magenta-500 focus:ring-1 focus:ring-magenta-500"
+                }`}
               >
-                {TIME_SLOT_OPTIONS.map((opt) => (
+                {isCloseTimeInvalid && (
+                  <option value={settings.closeTime} disabled>
+                    {settings.closeTime
+                      ? `${formatTime12h(settings.closeTime)} (Invalid — must be later than open time)`
+                      : "-- Select valid closing time --"}
+                  </option>
+                )}
+                {closeTimeOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
@@ -1192,6 +1276,101 @@ export default function ClinicSettingsPage() {
               About {Math.round(60 / (settings.slotIntervalMinutes || 20))} slots per hour. Doctors use this unless they set their own in the duty roster.
             </p>
           </div>
+
+          {isCloseTimeInvalid && (
+            <div className="mt-3 p-3 sm:p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2.5 shadow-2xs">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-500 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-bold text-rose-900">Operating Hours Validation Error</p>
+                <p className="mt-0.5 text-rose-700">
+                  {operatingHoursValidation.error ||
+                    `Closing time (${formatTime12h(settings.closeTime)}) must be later than opening time (${formatTime12h(settings.openTime)}). Please select a valid closing time before saving.`}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {scheduleConflicts.length > 0 && (
+            <div className="mt-4 p-4 sm:p-5 rounded-2xl bg-amber-50/95 border border-amber-300/80 text-amber-900 shadow-xs space-y-3">
+              <div className="flex items-start gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-amber-100 flex items-center justify-center shrink-0 border border-amber-200 mt-0.5">
+                  <AlertCircle className="w-4 h-4 text-amber-700" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-sm font-bold text-amber-950">
+                    Schedule Conflict Warning ({scheduleConflicts.length} assigned shift{scheduleConflicts.length > 1 ? "s" : ""} affected)
+                  </h3>
+                  <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
+                    The updated clinic schedule ({formatTime12h(settings.openTime)} – {formatTime12h(settings.closeTime)}, {settings.operatingDays || "Operating days"}) conflicts with assigned doctor shifts. Conflicting shifts are excluded from patient booking availability until resolved in Doctor Shifts:
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1.5 overscroll-contain">
+                {scheduleConflicts.map((c, i) => (
+                  <div
+                    key={`${c.doctorId}-${c.day}-${c.shiftId || i}`}
+                    className="text-xs bg-white rounded-xl p-3 sm:p-3.5 border border-amber-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2.5"
+                  >
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-gray-900 text-xs sm:text-[13px]">
+                          {c.doctorName.startsWith("Dr.") ? c.doctorName : `Dr. ${c.doctorName}`}
+                        </span>
+                        <span className="text-gray-400">•</span>
+                        <span className="text-amber-900 font-semibold text-xs bg-amber-100/70 px-2 py-0.5 rounded-md">
+                          {c.day}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 text-xs pt-0.5">
+                        <p className="text-gray-700">
+                          <span className="text-gray-500 font-medium">Assigned Shift: </span>
+                          <strong className="text-amber-950 font-semibold">
+                            {formatTime12h(c.shiftStart)} – {formatTime12h(c.shiftEnd)}
+                          </strong>
+                          {c.shiftLabel && (
+                            <span className="text-gray-500 font-normal"> ({c.shiftLabel})</span>
+                          )}
+                        </p>
+                        <p className="text-gray-700">
+                          <span className="text-gray-500 font-medium">Clinic Hours: </span>
+                          <strong className="text-gray-900 font-semibold">
+                            {formatTime12h(settings.openTime)} – {formatTime12h(settings.closeTime)}
+                          </strong>
+                          <span className="text-gray-500"> ({settings.operatingDays || "Operating days"})</span>
+                        </p>
+                      </div>
+
+                      {c.message && (
+                        <p className="text-[11px] text-amber-800 font-medium pt-0.5 leading-relaxed">
+                          {c.message}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="sm:self-start shrink-0">
+                      <span
+                        className={`inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border ${
+                          c.reason === "closed_day"
+                            ? "bg-rose-50 text-rose-700 border-rose-200"
+                            : c.reason === "outside_hours"
+                            ? "bg-amber-100 text-amber-800 border-amber-300"
+                            : "bg-orange-50 text-orange-800 border-orange-200"
+                        }`}
+                      >
+                        {c.reason === "closed_day"
+                          ? "Closed Day"
+                          : c.reason === "outside_hours"
+                          ? "Outside Hours"
+                          : "Invalid Shift"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1204,8 +1383,13 @@ export default function ClinicSettingsPage() {
 
         <button
           onClick={onSave}
-          disabled={isPending}
-          className="px-6 py-2.5 rounded-xl bg-[#881337] hover:bg-[#70102d] text-white text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+          disabled={isPending || isCloseTimeInvalid}
+          title={isCloseTimeInvalid ? "Please select a valid closing time before saving" : "Save settings"}
+          className={`px-6 py-2.5 rounded-xl text-white text-xs font-bold transition-all shadow-xs ${
+            isPending || isCloseTimeInvalid
+              ? "bg-gray-400 cursor-not-allowed opacity-60"
+              : "bg-[#881337] hover:bg-[#70102d] cursor-pointer"
+          }`}
         >
           Save settings
         </button>

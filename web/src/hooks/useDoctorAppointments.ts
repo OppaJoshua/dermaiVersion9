@@ -145,10 +145,16 @@ export function useDoctorAppointments() {
               clinicDoctorsMap.set(String(cd.doctor_id), cd.doctor_name);
             }
             const cdEmail = (cd.email || "").trim().toLowerCase();
-            // Match only by authoritative account identifiers.
+            const cdNameClean = (cd.doctor_name || "").replace(/^Dr\.?\s*/i, "").trim().toLowerCase();
+            const currentDocClean = (docDisplayName || user?.user_metadata?.full_name || user?.user_metadata?.name || "").replace(/^Dr\.?\s*/i, "").trim().toLowerCase();
+            const isNameMatch = Boolean(
+              cdNameClean && currentDocClean && (cdNameClean === currentDocClean || currentDocClean.includes(cdNameClean) || cdNameClean.includes(currentDocClean))
+            );
+
             const isSelfMatch = Boolean(
               (user?.id && cd.user_id === user.id) ||
-              (cdEmail && userEmail && cdEmail === userEmail)
+              (cdEmail && userEmail && cdEmail === userEmail) ||
+              isNameMatch
             );
 
             if (isSelfMatch) {
@@ -272,11 +278,21 @@ export function useDoctorAppointments() {
             const rawAssignedDoc = row.assigned_doctor_id ? String(row.assigned_doctor_id) : "";
             const rowClinicId = row.clinic_id ? String(row.clinic_id) : "";
 
-            const isDirectDocMatch =
-              Boolean(rawAssignedDoc && uniqueDoctorIds.includes(rawAssignedDoc));
+            const isDirectDocMatch = Boolean(
+              rawAssignedDoc &&
+              uniqueDoctorIds.some((id) => String(id).toLowerCase().trim() === rawAssignedDoc.toLowerCase().trim())
+            );
 
             const isClinicMatch = Boolean(
-              foundClinicId && rowClinicId && rowClinicId === String(foundClinicId)
+              foundClinicId && rowClinicId && rowClinicId.toLowerCase().trim() === String(foundClinicId).toLowerCase().trim()
+            );
+
+            // Also check if clinic note mentions this doctor explicitly
+            const isNoteDoctorMatch = Boolean(
+              !rawAssignedDoc &&
+              row.clinic_note &&
+              docDisplayName &&
+              row.clinic_note.toLowerCase().includes(docDisplayName.replace(/^Dr\.?\s*/i, "").trim().toLowerCase())
             );
 
             // Exclude temporary unpaid holds or expired/failed payment holds from doctor views
@@ -289,7 +305,7 @@ export function useDoctorAppointments() {
             if (rawAssignedDoc && !isDirectDocMatch) {
               continue;
             }
-            if (!rawAssignedDoc && !isClinicMatch) {
+            if (!rawAssignedDoc && !isClinicMatch && !isNoteDoctorMatch) {
               continue;
             }
 

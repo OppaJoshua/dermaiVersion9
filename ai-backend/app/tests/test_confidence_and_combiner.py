@@ -127,7 +127,8 @@ class TestConfidenceAndCombiner(unittest.TestCase):
         self.assertEqual(combined["confidence"], 75.00)
         self.assertTrue(combined["is_combined"])
         self.assertFalse(combined["agreement"])
-        self.assertIsNotNone(combined["combined_evidence_score"])
+        # 0.70 * 75.00 + 0.30 * 15.00 = 52.50 + 4.50 = 57.00
+        self.assertEqual(combined["combined_evidence_score"], 57.00)
 
     def test_combiner_agreement(self):
         """When images agree, agreement flag is true and score is fused."""
@@ -155,6 +156,46 @@ class TestConfidenceAndCombiner(unittest.TestCase):
         # 0.7 * 85 + 0.3 * 80 = 59.5 + 24.0 = 83.5
         self.assertEqual(combined["combined_evidence_score"], 83.50)
 
+    def test_combiner_single_image_none(self):
+        """When supporting_result is None, combiner returns pure primary result."""
+        primary_result = {
+            "predicted_class": "Vitiligo",
+            "display_name": "Vitiligo",
+            "confidence": 92.40,
+            "confidence_level": "high",
+            "probabilities": {"Acne_Vulgaris": 1.0, "Melasma": 2.0, "Vitiligo": 92.40, "Atopic_Dermatitis": 2.3, "Contact_Dermatitis": 2.3},
+        }
+        combined = combine_image_predictions(primary_result, None)
+
+        self.assertEqual(combined["predicted_class"], "Vitiligo")
+        self.assertEqual(combined["confidence"], 92.40)
+        self.assertFalse(combined["is_combined"])
+        self.assertIsNone(combined["agreement"])
+        self.assertIsNone(combined["combined_evidence_score"])
+        self.assertIsNone(combined["supporting_prediction"])
+
+    def test_combiner_probabilities_sum(self):
+        """Fused probabilities vector must sum to approximately 100.0%."""
+        primary_result = {
+            "predicted_class": "Acne_Vulgaris",
+            "display_name": "Acne Vulgaris",
+            "confidence": 70.00,
+            "confidence_level": "medium",
+            "probabilities": {"Acne_Vulgaris": 70.00, "Melasma": 10.00, "Vitiligo": 5.00, "Atopic_Dermatitis": 10.00, "Contact_Dermatitis": 5.00},
+        }
+        supporting_result = {
+            "status": "valid",
+            "predicted_class": "Acne_Vulgaris",
+            "display_name": "Acne Vulgaris",
+            "confidence": 65.00,
+            "confidence_level": "medium",
+            "probabilities": {"Acne_Vulgaris": 65.00, "Melasma": 15.00, "Vitiligo": 5.00, "Atopic_Dermatitis": 10.00, "Contact_Dermatitis": 5.00},
+        }
+        combined = combine_image_predictions(primary_result, supporting_result)
+        total_prob = sum(combined["probabilities"].values())
+        self.assertAlmostEqual(total_prob, 100.0, places=1)
+
 
 if __name__ == "__main__":
     unittest.main()
+
