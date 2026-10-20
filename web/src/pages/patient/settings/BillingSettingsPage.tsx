@@ -5,9 +5,13 @@ import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { withVat, splitVat, calculatePricing } from "@/lib/vat";
+import { validateAndSyncSubscription } from "@/lib/subscriptionService";
+import { cn } from "@/lib/utils";
 
 interface SubData {
   isPro: boolean;
+  isExpired?: boolean;
+  status?: "active" | "expired" | "cancelled" | "free";
   planName?: string;
   billingCycle?: "monthly" | "yearly";
   renewsAt?: string;
@@ -97,7 +101,10 @@ export default function BillingSettingsPage() {
           : freePlanData.scan_limit,
     });
   }
-      // 2. Load the patient's active subscription
+      // 2. Dynamically validate, expire and synchronize the patient's subscription
+      const subInfo = await validateAndSyncSubscription(user.id);
+
+      // Load the patient's active subscription details
       const { data: activeSubscription } = await supabase
         .from("user_plan_subscription")
         .select(`
@@ -133,17 +140,11 @@ export default function BillingSettingsPage() {
         ? activeSubscription.plan[0]
         : activeSubscription?.plan;
 
-            // Pro entitlement is valid only while the paid period is still active.
-      const currentPeriodEnd = activeSubscription?.current_period_end
-        ? new Date(activeSubscription.current_period_end)
-        : null;
-
-      const hasActivePaidPeriod =
-        (activeSubscription?.status === "active" ||
-          activeSubscription?.status === "cancelling" ||
-          activeSubscription?.status === "pending_downgrade") &&
-        currentPeriodEnd !== null &&
-        currentPeriodEnd.getTime() > Date.now();
+      const periodEndRaw = activeSubscription?.current_period_end || activeSubscription?.renews_at;
+      const periodEndMs = periodEndRaw ? new Date(periodEndRaw).getTime() : null;
+      const isPeriodLapsed = periodEndMs !== null ? periodEndMs <= Date.now() : false;
+      const isExpired = subInfo.isExpired || isPeriodLapsed || activeSubscription?.status === "expired";
+      const hasActivePaidPeriod = subInfo.isPro && !isExpired && activeSubscription?.status === "active";
 
       // Only a paid subscription with an unexpired current period is Pro.
       if (
@@ -162,6 +163,8 @@ export default function BillingSettingsPage() {
 
         setSub({
           isPro: true,
+          isExpired: false,
+          status: "active",
           planName: plan.name || "Pro Plan",
           billingCycle:
             activeSubscription.billing_cycle === "yearly"
@@ -195,8 +198,22 @@ export default function BillingSettingsPage() {
             plan.scan_limit === -1 ? null : plan.scan_limit,
         });
       } else {
-        // No active paid subscription = Free Plan
-        setSub({ isPro: false });
+        // Expired or Free Plan
+        setSub({
+          isPro: false,
+          isExpired: isExpired,
+          status: isExpired ? "expired" : "free",
+          planName: "Free Plan",
+          subscriptionId: activeSubscription?.subscription_id,
+          currentPeriodEnd: activeSubscription?.current_period_end,
+          renewsAt: activeSubscription?.current_period_end
+            ? new Date(activeSubscription.current_period_end).toLocaleDateString("en-US", {
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+              })
+            : undefined,
+        });
       }
 
       // 2. Load payment transactions
@@ -405,8 +422,17 @@ export default function BillingSettingsPage() {
           <h2 className="text-sm font-semibold text-gray-900">Current Plan</h2>
 
           {!loading && (
-            <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${sub.isPro ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20" : "bg-gray-50 text-gray-600 ring-gray-500/20"}`}>
-              {sub.isPro ? "Active" : "Free"}
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset",
+                sub.isPro
+                  ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20"
+                  : sub.isExpired
+                  ? "bg-rose-50 text-rose-700 ring-rose-600/20"
+                  : "bg-gray-50 text-gray-600 ring-gray-500/20"
+              )}
+            >
+              {sub.isPro ? "Active" : sub.isExpired ? "Expired" : "Free"}
             </span>
           )}
         </div>
@@ -422,9 +448,7 @@ export default function BillingSettingsPage() {
               <div>
                 <dt className="text-xs font-medium text-gray-500">Plan</dt>
                 <dd className="mt-1.5 text-base font-semibold text-gray-900">
-                  {sub.isPro
-                    ? (sub.planName || "Pro Plan")
-                    : (freePlan.planName || "Free Plan")}
+                  {sub.isPro ? (sub.planName || "Pro Plan") : "Free Plan"}
                 </dd>
               </div>
 
@@ -486,12 +510,21 @@ export default function BillingSettingsPage() {
                 </div>
               )
             ) : (
-              <div className="flex justify-end border-t border-gray-200 bg-gray-50 px-6 py-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-t border-gray-200 bg-gray-50 px-6 py-4">
+                {sub.isExpired ? (
+                  <p className="text-sm text-rose-700 font-medium">
+                    Your Pro plan has expired. Upgrade or renew anytime to regain full Pro access and unlimited scans.
+                  </p>
+                ) : (
+                  <p className="text-sm text-gray-500">
+                    You are on the Free plan. Upgrade to Pro for unlimited AI scans and priority booking.
+                  </p>
+                )}
                 <Link
                   to="/dashboard/upgrade"
-                  className="inline-flex items-center justify-center rounded-md bg-[#A21D5C] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#7E1448] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#A21D5C] focus-visible:ring-offset-2"
+                  className="inline-flex shrink-0 items-center justify-center rounded-md bg-[#A21D5C] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#7E1448] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#A21D5C] focus-visible:ring-offset-2"
                 >
-                  Upgrade to Pro
+                  {sub.isExpired ? "Renew Subscription" : "Upgrade to Pro"}
                 </Link>
               </div>
             )}

@@ -1278,11 +1278,12 @@ export async function fetchAdminNotifications(): Promise<NotificationItem[]> {
         subscription_id,
         status,
         current_period_end,
-        created_at,
+        renews_at,
+        started_at,
         plan:plan_id (name, price),
         user:user_id (user_id, full_name, email, avatar_url)
       `)
-      .order("created_at", { ascending: false })
+      .order("started_at", { ascending: false })
       .limit(10);
 
     if (subs) {
@@ -1294,22 +1295,26 @@ export async function fetchAdminNotifications(): Promise<NotificationItem[]> {
         const notifId = `admin-sub-${sub.subscription_id}`;
         const avatar = resolveUserAvatar(uObj, userName);
 
+        const periodEndRaw = sub.current_period_end || sub.renews_at;
+        const isLapsed = periodEndRaw && new Date(periodEndRaw).getTime() <= Date.now();
+        const effectiveStatus = (sub.status === "active" && isLapsed) ? "expired" : sub.status;
+
         let subTitle = "Subscription Event";
         let subMsg = `${userName} subscription update (${planName}).`;
-        if (sub.status === "active") {
+        if (effectiveStatus === "active") {
           subTitle = "New Subscription Payment";
           subMsg = `${userName} upgraded to ${planName} successfully.`;
-        } else if (sub.status === "cancelled") {
+        } else if (effectiveStatus === "cancelled") {
           subTitle = "Subscription Cancelled";
           subMsg = `${userName} cancelled renewal for ${planName}.`;
-        } else if (sub.status === "expired") {
+        } else if (effectiveStatus === "expired") {
           subTitle = "Subscription Expired";
           subMsg = `${userName}'s ${planName} subscription has expired.`;
         }
 
         items.push({
           id: notifId,
-          type: `subscription-${sub.status}`,
+          type: `subscription-${effectiveStatus}`,
           category: "subscription",
           title: subTitle,
           message: subMsg,
@@ -1317,7 +1322,7 @@ export async function fetchAdminNotifications(): Promise<NotificationItem[]> {
           senderType: "user",
           senderAvatar: avatar,
           link: "/admin/subscriptions",
-          timestamp: sub.created_at || new Date().toISOString(),
+          timestamp: sub.started_at || new Date().toISOString(),
           isRead: readSet.has(notifId),
           metadata: { subscription_id: sub.subscription_id },
         });

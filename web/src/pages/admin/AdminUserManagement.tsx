@@ -5,6 +5,7 @@ import { X, ShieldCheck } from "lucide-react";
 import { logAdminAction } from "@/lib/auditLog";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
+import { syncAllExpiredSubscriptions } from "@/lib/subscriptionService";
 
 type UserStatus = "active" | "suspended" | "inactive";
 type UserRole = "admin" | "patient" | "clinic" | "doctor";
@@ -58,6 +59,9 @@ export default function AdminUserManagement() {
     let cancelled = false;
     async function loadUsers() {
       try {
+        // First sync any expired subscriptions across the database
+        await syncAllExpiredSubscriptions().catch(() => {});
+
         const [
           { data: usersData, error: usersError },
           { data: scansData },
@@ -73,7 +77,7 @@ export default function AdminUserManagement() {
             .eq("status", "completed"),
           supabase
             .from("user_plan_subscription")
-            .select("user_id, status, plan:plan_id(name, scan_limit)")
+            .select("user_id, status, current_period_end, renews_at, plan:plan_id(name, scan_limit)")
             .eq("status", "active")
         ]);
 
@@ -111,6 +115,13 @@ export default function AdminUserManagement() {
 
           const userSub = subMap.get(u.user_id);
           const planObj: any = Array.isArray(userSub?.plan) ? userSub.plan[0] : userSub?.plan;
+          const periodEndRaw = userSub?.current_period_end || userSub?.renews_at;
+          const periodEndMs = periodEndRaw ? new Date(periodEndRaw).getTime() : null;
+          const isSubscriptionActive =
+            userSub &&
+            userSub.status === "active" &&
+            periodEndMs !== null &&
+            periodEndMs > Date.now();
 
           let displayPlan: User["plan"] = "Free";
           let limit = 3;
@@ -124,7 +135,7 @@ export default function AdminUserManagement() {
           } else if (userRole === "doctor") {
             displayPlan = "Medical Staff";
             limit = 999;
-          } else if (planObj?.name) {
+          } else if (isSubscriptionActive && planObj?.name) {
             displayPlan = (planObj.name.includes("Pro") || planObj.name.includes("Premium")) ? "Premium" : "Free";
             limit = planObj.scan_limit === -1 ? 999 : (planObj.scan_limit || 3);
           }

@@ -6,6 +6,8 @@ import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 import { withVat } from "@/lib/vat";
 
+import { validateAndSyncSubscription } from "@/lib/subscriptionService";
+
 interface PlanFeature {
   feature_id: string;
   feature_text: string;
@@ -21,6 +23,7 @@ export interface PlanDetails {
 
 interface SubscriptionInfo {
   isPro: boolean;
+  isExpired?: boolean;
   planName: string;
   planDescription?: string;
   planFeatures: string[];
@@ -102,8 +105,9 @@ export default function SubscriptionStatusPage() {
           return;
         }
 
-        // Parallel fetch free plan, active subscription, and billing history
-        const [freePlanRes, subRes, payRes] = await Promise.all([
+        // Dynamically validate, expire and synchronize the patient's subscription
+        const [subInfo, freePlanRes, payRes] = await Promise.all([
+          validateAndSyncSubscription(user.id),
           supabase
             .from("plan")
             .select(`
@@ -119,35 +123,6 @@ export default function SubscriptionStatusPage() {
             .or("price.eq.0,name.ilike.Free")
             .limit(1)
             .maybeSingle(),
-
-          supabase
-            .from("user_plan_subscription")
-            .select(`
-              subscription_id,
-              started_at,
-              status,
-              billing_cycle,
-              renews_at,
-              current_period_start,
-              current_period_end,
-              cancel_at_period_end,
-              plan:plan_id (
-                plan_id,
-                name,
-                price,
-                description,
-                scan_limit,
-                plan_feature (
-                  feature_id,
-                  feature_text
-                )
-              )
-            `)
-            .eq("user_id", user.id)
-            .order("started_at", { ascending: false })
-            .limit(1)
-            .maybeSingle(),
-
           supabase
             .from("user_payment")
             .select(
@@ -160,33 +135,15 @@ export default function SubscriptionStatusPage() {
 
         if (!isMounted) return;
 
-        const subData = subRes.data;
-        const planRaw: any = subData?.plan;
-        const plan = Array.isArray(planRaw) ? planRaw[0] : planRaw;
-
-        const periodEndRaw = subData?.current_period_end || subData?.renews_at;
+        const subData = subInfo.subscription;
+        const plan = subInfo.plan;
+        const isPro = subInfo.isPro;
+        const periodEndRaw = subInfo.currentPeriodEnd;
         const periodEnd = periodEndRaw ? new Date(periodEndRaw) : null;
-
-        const paidPeriodValid = Boolean(
-          (subData?.status === "active" ||
-            subData?.status === "cancelling" ||
-            subData?.status === "pending_downgrade") &&
-            periodEnd !== null &&
-            periodEnd.getTime() > Date.now()
-        );
-
-        const isPro = Boolean(
-          subData &&
-            plan &&
-            paidPeriodValid &&
-            (Number(plan.price) > 0 ||
-              plan.scan_limit === -1 ||
-              plan.name?.toLowerCase().includes("pro"))
-        );
 
         // Determine cycleStart for AI scans
         const cycleStart: string =
-          isPro && paidPeriodValid
+          isPro
             ? subData?.current_period_start ||
               subData?.started_at ||
               new Date(
@@ -300,7 +257,8 @@ export default function SubscriptionStatusPage() {
 
           setSubscription({
             isPro: false,
-            planName: freePlanData?.name ?? "Free Plan",
+            isExpired: subInfo.isExpired,
+            planName: "Free Plan",
             planDescription: freePlanData?.description ?? "",
             planFeatures: freeFeatures,
             maxScans:
@@ -325,8 +283,15 @@ export default function SubscriptionStatusPage() {
 
     loadSubscriptionStatus();
 
+    const handleSubUpdated = () => {
+      loadSubscriptionStatus();
+    };
+
+    window.addEventListener("dermai_subscription_updated", handleSubUpdated);
+
     return () => {
       isMounted = false;
+      window.removeEventListener("dermai_subscription_updated", handleSubUpdated);
     };
   }, [user, authLoading]);
 
@@ -437,6 +402,8 @@ export default function SubscriptionStatusPage() {
                   ? remainingDays !== null && remainingDays !== undefined
                     ? `${remainingDays} ${remainingDays === 1 ? "day" : "days"} remaining`
                     : "Active Subscription"
+                  : subscription?.isExpired
+                  ? "Subscription Expired"
                   : "Free access"}
               </p>
 
@@ -479,7 +446,7 @@ export default function SubscriptionStatusPage() {
                   to="/dashboard/upgrade"
                   className="w-full py-3 bg-magenta-600 text-white rounded-full font-semibold text-sm hover:bg-magenta-700 transition-all shadow-sm text-center active:scale-[0.98]"
                 >
-                  Upgrade to Pro
+                  {subscription?.isExpired ? "Renew / Upgrade to Pro" : "Upgrade to Pro"}
                 </Link>
               )}
             </motion.div>

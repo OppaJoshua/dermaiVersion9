@@ -3,6 +3,7 @@ import { CreditCard, RefreshCcw, DollarSign, Loader2, XCircle } from "lucide-rea
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 import { withVat } from "@/lib/vat";
+import { syncAllExpiredSubscriptions } from "@/lib/subscriptionService";
 
 type SubscriptionStatus = "active" | "expired" | "cancelled";
 
@@ -58,6 +59,9 @@ export default function AdminSubscriptionManagement() {
         async function loadData() {
             setLoading(true);
             try {
+                // Proactively synchronize any expired subscriptions in the database
+                await syncAllExpiredSubscriptions().catch(() => {});
+
                 // 1. Load subscriptions
                 const { data: subsData } = await supabase
                     .from("user_plan_subscription")

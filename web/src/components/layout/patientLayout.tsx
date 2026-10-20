@@ -21,6 +21,7 @@ import { useAuth } from "../../context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import PatientNotifications from "@/pages/patient/PatientNotifications";
 import { useRoleNotifications } from "@/lib/notificationService";
+import { validateAndSyncSubscription } from "@/lib/subscriptionService";
 
 // ---------------------------------------------------------------------------
 // TYPES
@@ -404,32 +405,11 @@ export default function UserLayout({
       /* ignore */
     }
 
-    // 2. Fetch membership tier
+    // 2. Fetch and synchronize membership tier dynamically
     let tier = "Free Plan";
     try {
-      const { data: subData } = await supabase
-        .from("user_plan_subscription")
-        .select(`
-          status,
-          current_period_end,
-          plan:plan_id (
-            name,
-            price
-          )
-        `)
-        .eq("user_id", user.id)
-        .eq("status", "active")
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (
-        subData?.current_period_end &&
-        new Date(subData.current_period_end).getTime() > Date.now()
-      ) {
-        const planObj: any = Array.isArray(subData.plan) ? subData.plan[0] : subData.plan;
-        tier = planObj?.name || "Pro Plan";
-      }
+      const subInfo = await validateAndSyncSubscription(user.id);
+      tier = subInfo.tierLabel;
     } catch {
       /* ignore */
     }
@@ -460,6 +440,7 @@ export default function UserLayout({
           ...parsedExisting,
           fullName: name,
           profilePicture: picture,
+          membershipTier: tier,
         })
       );
     } catch {}
@@ -473,13 +454,33 @@ export default function UserLayout({
     };
 
     window.addEventListener("derm_profile_updated", handleProfileUpdate);
+    window.addEventListener("dermai_subscription_updated", handleProfileUpdate);
     window.addEventListener("storage", handleProfileUpdate);
 
+    // Realtime listener for subscription updates
+    const channel = supabase
+      .channel(`patient-layout-sub-${user?.id || "anon"}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "user_plan_subscription",
+          filter: user?.id ? `user_id=eq.${user.id}` : undefined,
+        },
+        () => {
+          loadUserData();
+        }
+      )
+      .subscribe();
+
     return () => {
+      supabase.removeChannel(channel);
       window.removeEventListener("derm_profile_updated", handleProfileUpdate);
+      window.removeEventListener("dermai_subscription_updated", handleProfileUpdate);
       window.removeEventListener("storage", handleProfileUpdate);
     };
-  }, [loadUserData]);
+  }, [loadUserData, user?.id]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {

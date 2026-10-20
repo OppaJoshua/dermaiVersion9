@@ -24,6 +24,7 @@ import { supabase } from "../../lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { predictSkinCondition, getConditionUUID, AIPredictionError } from "../../lib/aiApi";
 import { createPatientNotification } from "../../lib/notificationService";
+import { validateAndSyncSubscription } from "@/lib/subscriptionService";
 import {
   QUESTIONNAIRE_QUESTIONS,
   toggleOptionSelection,
@@ -202,27 +203,15 @@ export default function ScanSkinPage() {
           return;
         }
 
-        const { data: sub } = await supabase
-          .from("user_plan_subscription")
-          .select("status, started_at, current_period_start, current_period_end, plan:plan_id(scan_limit)")
-          .eq("user_id", user.id)
-          .eq("status", "active")
-          .maybeSingle();
-
-        const hasValidPaidPeriod = Boolean(
-          sub?.current_period_end &&
-          new Date(sub.current_period_end).getTime() > Date.now()
-        );
-        const planScanLimit: number = hasValidPaidPeriod
-          ? (sub?.plan as any)?.scan_limit ?? 3
-          : 3;
-        const isPro = hasValidPaidPeriod && planScanLimit === -1;
+        const subInfo = await validateAndSyncSubscription(user.id);
+        const hasValidPaidPeriod = subInfo.isPro;
+        const planScanLimit: number = subInfo.isPro ? -1 : 3;
+        const isPro = subInfo.isPro;
 
         // Expired subscriptions use the current calendar month's Free scan cycle.
         const cycleStart: string = hasValidPaidPeriod
-          ? (sub as any)?.current_period_start ||
-          (sub as any)?.started_at ||
-          new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
+          ? subInfo.currentPeriodStart ||
+            new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
           : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
 
         const { count: used } = await supabase
@@ -242,6 +231,12 @@ export default function ScanSkinPage() {
       }
     };
     loadSubscription();
+
+    const handleSubUpdate = () => loadSubscription();
+    window.addEventListener("dermai_subscription_updated", handleSubUpdate);
+    return () => {
+      window.removeEventListener("dermai_subscription_updated", handleSubUpdate);
+    };
   }, [user]);
 
   const isPro = subData.isPro;
@@ -320,7 +315,14 @@ export default function ScanSkinPage() {
       setAnalyzeError("You must be signed in to analyze and save your skin scan.");
       return;
     }
-    if (!isPro && !canScan) {
+
+    // Dynamic verification against current timestamp on scan action
+    const freshSub = await validateAndSyncSubscription(user.id);
+    const freshIsPro = freshSub.isPro;
+    const freshCanScan = freshIsPro || (subData.scanLimit - subData.scansUsed > 0);
+
+    if (!freshIsPro && !freshCanScan) {
+      setAnalyzeError("Your free scans have been used up. Please upgrade to Pro for unlimited scans.");
       navigate("/dashboard/upgrade");
       return;
     }

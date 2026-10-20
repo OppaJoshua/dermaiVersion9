@@ -10,6 +10,7 @@ import { withVat, calculatePricing } from "@/lib/vat";
 import gcashLogo from "@/assets/gcash.png";
 import mayaLogo from "@/assets/maya.png";
 import SubscriptionAgreementModal from "../../components/common/SubscriptionAgreementModal";
+import { validateAndSyncSubscription } from "@/lib/subscriptionService";
 
 // PayMongo is handled by the Supabase Edge Function.
 const PAYMONGO_PUBLIC_KEY = import.meta.env.VITE_PAYMONGO_PUBLIC_KEY || "";
@@ -306,45 +307,12 @@ const togglePrice = (type: "monthly" | "yearly") => {
     setError(null);
 
     try {
-    // Frontend guard: do not start a new payment while an existing
-    // paid Pro subscription is still within its current billing period.
-    const { data: existingSubscription, error: subscriptionError } =
-      await supabase
-        .from("user_plan_subscription")
-        .select(`
-          status,
-          current_period_end,
-          cancel_at_period_end,
-          plan:plan_id (
-            price
-          )
-        `)
-        .eq("user_id", user.id)
-        .eq("status", "active")
-        .order("current_period_end", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+    // Frontend guard: validate and auto-synchronize subscription status
+    const subInfo = await validateAndSyncSubscription(user.id);
+    const existingSubscription = subInfo.subscription;
 
-    if (subscriptionError) {
-      throw new Error("Unable to check your current subscription. Please try again.");
-    }
-
-    const existingPeriodEnd = existingSubscription?.current_period_end
-      ? new Date(existingSubscription.current_period_end)
-      : null;
-
-    const existingPlan = Array.isArray(existingSubscription?.plan)
-      ? existingSubscription.plan[0]
-      : existingSubscription?.plan;
-
-    const hasActivePaidPeriod =
-      existingSubscription?.status === "active" &&
-      Number(existingPlan?.price ?? 0) > 0 &&
-      existingPeriodEnd !== null &&
-      existingPeriodEnd.getTime() > Date.now();
-
-    if (hasActivePaidPeriod) {
-      if (existingSubscription.cancel_at_period_end) {
+    if (subInfo.isPro) {
+      if (existingSubscription?.cancel_at_period_end) {
         throw new Error(
           "Your Pro subscription is still active until the end of your current billing period. Resume your subscription from Billing Settings instead of purchasing again."
         );
