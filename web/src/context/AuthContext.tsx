@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabaseClient";
+import { logAuditEvent } from "../lib/auditLog";
 
 export type UserRole = "patient" | "doctor" | "clinic" | "admin";
 export type AccountStatus = "active" | "suspended" | "inactive";
@@ -95,11 +96,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
 
+    let lastLoggedSignInUserId: string | null = null;
     // Keep session in sync across the app (login, logout, token refresh).
     const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
       const email = (newSession?.user?.email || "").toLowerCase().trim();
+      let detectedRole: UserRole = "patient";
       if (email === "dermaisupport@gmail.com") {
+        detectedRole = "admin";
         setRole("admin");
         setAccountStatus("active");
         setRoleLoading(false);
@@ -110,8 +114,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         const cachedRole = localStorage.getItem(`derm_role_${newSession.user.id}`) as UserRole | null;
         if (cachedRole && ["admin", "clinic", "doctor", "patient"].includes(cachedRole)) {
+          detectedRole = cachedRole;
           setRole(cachedRole);
         }
+      }
+
+      if (_event === "SIGNED_IN" && newSession?.user && lastLoggedSignInUserId !== newSession.user.id) {
+        lastLoggedSignInUserId = newSession.user.id;
+        const displayName =
+          newSession.user.user_metadata?.full_name ||
+          newSession.user.user_metadata?.name ||
+          email.split("@")[0] ||
+          "User";
+        logAuditEvent({
+          userId: newSession.user.id,
+          role: detectedRole,
+          category: "user",
+          action: "User Login",
+          target: `${detectedRole.charAt(0).toUpperCase() + detectedRole.slice(1)} Portal`,
+          details: `${displayName} (${email}) logged in successfully.`,
+          performerName: displayName,
+        }).catch(() => {});
       }
     });
 
@@ -462,6 +485,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
+    if (session?.user) {
+      const email = session.user.email || "";
+      const displayName =
+        session.user.user_metadata?.full_name ||
+        session.user.user_metadata?.name ||
+        email.split("@")[0] ||
+        "User";
+      logAuditEvent({
+        userId: session.user.id,
+        role: role || "patient",
+        category: "user",
+        action: "User Logout",
+        target: "Authentication",
+        details: `${displayName} (${email}) logged out.`,
+        performerName: displayName,
+      }).catch(() => {});
+    }
+
     try {
       localStorage.removeItem("dermai_patient_profile");
       localStorage.removeItem("dermai_doctor_profile");

@@ -12,7 +12,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { logAdminAction } from "@/lib/auditLog";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { supabase } from "@/lib/supabaseClient";
 import { useRoleNotifications, type NotificationItem } from "@/lib/notificationService";
 
@@ -262,7 +262,17 @@ export default function AdminNotificationsPage() {
         sentAt: new Date().toISOString(),
       };
       setBroadcasts((prev) => [newBroadcast, ...prev]);
-      logAdminAction("Broadcast Sent", audience, `"${title.trim()}" sent to ${audience}.`, "system");
+      logAuditEvent({
+        role: "admin",
+        category: "System",
+        action: "Broadcast Announcement",
+        target: `Audience: ${audience}`,
+        details: `Admin broadcast announcement "${title.trim()}" to ${audience}.`,
+        metadata: {
+          title: title.trim(),
+          audience,
+        },
+      }).catch(() => {});
       setTitle("");
       setMessage("");
       setAudience("All Users");

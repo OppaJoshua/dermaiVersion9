@@ -21,6 +21,7 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { useAuth } from "@/context/AuthContext";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 import { createPatientNotification } from "@/lib/notificationService";
@@ -1930,6 +1931,23 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         }
         window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
         window.dispatchEvent(new Event("appointmentCreated"));
+
+        logAuditEvent({
+          userId: user?.id,
+          role: "patient",
+          category: "Appointment",
+          action: "Appointment Booked",
+          target: `${selectedClinic?.name || "Clinic"} - ${selectedDate} ${selectedTime}`,
+          details: `${patientName.trim() || "Patient"} requested consultation at ${selectedClinic?.name || "Clinic"} on ${selectedDate} at ${selectedTime}.`,
+          performerName: patientName.trim() || user?.user_metadata?.full_name || "Patient",
+          metadata: {
+            clinicId: targetClinicId,
+            clinicName: selectedClinic?.name,
+            appointmentDate: selectedDate,
+            appointmentTime: selectedTime,
+            appointmentId: insertedApptId,
+          },
+        }).catch(() => {});
       } catch { }
       setSubmitted(true);
       try {

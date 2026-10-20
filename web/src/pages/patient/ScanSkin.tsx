@@ -21,6 +21,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "../../lib/utils";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { predictSkinCondition, getConditionUUID, AIPredictionError } from "../../lib/aiApi";
 import { createPatientNotification } from "../../lib/notificationService";
 import {
@@ -454,6 +455,21 @@ export default function ScanSkinPage() {
           } catch (secErr) {
             console.warn("ai_skin_answer secondary write skipped:", secErr);
           }
+
+          logAuditEvent({
+            userId: user.id,
+            role: "patient",
+            category: "Scan",
+            action: "AI Skin Scan Completed",
+            target: `${aiResult.conditionName} (${aiResult.confidence}%)`,
+            details: `Patient completed AI skin analysis: identified ${aiResult.conditionName} with ${aiResult.confidence}% confidence.`,
+            performerName: user.user_metadata?.full_name || user.email?.split("@")[0] || "Patient",
+            metadata: {
+              analysisId,
+              condition: aiResult.conditionName,
+              confidence: aiResult.confidence,
+            },
+          }).catch(() => {});
 
           // Deduct 1 scan from local allowance state only upon confirmed insert
           setSubData((prev) => ({

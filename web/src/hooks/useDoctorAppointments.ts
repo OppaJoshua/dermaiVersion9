@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { createPatientNotification } from "@/lib/notificationService";
 import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 
@@ -783,6 +784,24 @@ export function useDoctorAppointments() {
         });
       }
 
+      logAuditEvent({
+        userId: user?.id,
+        role: "doctor",
+        category: "Appointment",
+        action: isApproved ? "Appointment Accepted" : "Appointment Rejected",
+        target: `Appointment #${appointmentId.slice(0, 8)}`,
+        details: isApproved
+          ? `Dr. ${doctorName || "Doctor"} accepted and confirmed consultation schedule.`
+          : `Dr. ${doctorName || "Doctor"} declined consultation schedule: "${note || "Schedule conflict"}".`,
+        performerName: doctorName || "Doctor",
+        metadata: {
+          appointmentId,
+          decision,
+          diagnosis,
+          note,
+        },
+      }).catch(() => {});
+
       await fetchAppointments();
     } catch (e) {
       console.error("[useDoctorAppointments] submitDoctorReview error:", e);
@@ -863,6 +882,39 @@ export function useDoctorAppointments() {
         });
       }
 
+      logAuditEvent({
+        userId: user?.id,
+        role: "doctor",
+        category: "Appointment",
+        action: "Consultation Completed",
+        target: `Appointment #${appointmentId.slice(0, 8)}`,
+        details: `Dr. ${doctorName || "Doctor"} completed consultation.${finalDiagnosis ? ` Diagnosis: ${finalDiagnosis}.` : ""}${consultationNote ? ` Notes: ${consultationNote}` : ""}`,
+        performerName: doctorName || "Doctor",
+        metadata: {
+          appointmentId,
+          finalDiagnosis,
+          consultationNote,
+        },
+      }).catch(() => {});
+
+      if (targetAppt?.aiConditionName) {
+        logAuditEvent({
+          userId: user?.id,
+          role: "doctor",
+          category: "Scan",
+          action: "AI Skin Scan Reviewed",
+          target: `Scan for ${targetAppt.patientName || "Patient"}`,
+          details: `Dr. ${doctorName || "Doctor"} reviewed and signed off on AI scan prediction (${targetAppt.aiConditionName}). Final clinical diagnosis: ${finalDiagnosis || "Confirmed"}.`,
+          performerName: doctorName || "Doctor",
+          metadata: {
+            appointmentId,
+            aiConditionName: targetAppt.aiConditionName,
+            aiConfidence: targetAppt.aiConfidence,
+            finalDiagnosis,
+          },
+        }).catch(() => {});
+      }
+
       await fetchAppointments();
     } catch (e) {
       console.error("[useDoctorAppointments] markAppointmentDone error:", e);
@@ -881,6 +933,19 @@ export function useDoctorAppointments() {
         prev.map((a) => (a.id === appointmentId ? { ...a, checkInStatus: "in-consultation" } : a))
       );
 
+      logAuditEvent({
+        userId: user?.id,
+        role: "doctor",
+        category: "Appointment",
+        action: "Consultation Started",
+        target: `Appointment #${appointmentId.slice(0, 8)}`,
+        details: `Dr. ${doctorName || "Doctor"} started consultation session for appointment #${appointmentId.slice(0, 8)}.`,
+        performerName: doctorName || "Doctor",
+        metadata: {
+          appointmentId,
+        },
+      }).catch(() => {});
+
       try {
         const raw = localStorage.getItem("dermai_clinic_appointments");
         if (raw) {
@@ -897,7 +962,7 @@ export function useDoctorAppointments() {
     } catch (err: any) {
       console.error("[useDoctorAppointments] callPatientToConsultation error:", err?.message);
     }
-  }, []);
+  }, [user?.id, doctorName]);
 
   return {
     loading,

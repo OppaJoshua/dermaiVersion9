@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { createHelpdeskTicketAsync } from "@/lib/store";
 import LocationPickerMap from "@/components/common/LocationPickerMap";
 
@@ -710,6 +711,20 @@ export default function ClinicSettingsPage() {
           }
         }
       }
+
+      logAuditEvent({
+        role: "clinic",
+        category: "Clinic",
+        action: "Clinic Profile Updated",
+        target: settings.name || "Clinic Profile",
+        details: `Updated clinic settings for "${settings.name}": operating hours (${settings.operatingDays || "Mon-Sat"} ${settings.openTime || "08:00"}-${settings.closeTime || "17:00"}), fee (₱${settings.consultationFee || "0"}), location: ${settings.location || settings.address}.`,
+        metadata: {
+          clinicName: settings.name,
+          consultationFee: settings.consultationFee,
+          operatingDays: settings.operatingDays,
+          location: settings.location || settings.address,
+        },
+      }).catch(() => {});
     } catch (cErr) {
       console.error("Error syncing clinic to Supabase:", cErr);
     }

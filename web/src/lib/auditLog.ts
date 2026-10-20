@@ -1,6 +1,12 @@
-// Placeholder audit log. TODO: replace with real Supabase-backed audit trail.
+export {
+  logAuditEvent,
+  normalizeActorType,
+  normalizeCategory,
+  type AuditActorType,
+  type AuditCategory,
+  type AuditEventParams,
+} from "@/utils/auditLogger";
 
-export type AuditActorType = "admin" | "patient" | "clinic" | "system";
 export type AuditEntryType = "user" | "subscription" | "clinic" | "system" | "scan" | "appointment";
 
 export type AuditEntry = {
@@ -10,14 +16,42 @@ export type AuditEntry = {
   target: string;
   details: string;
   performedBy: string;
-  actorType: AuditActorType;
+  actorType: import("@/utils/auditLogger").AuditActorType;
   type: AuditEntryType;
 };
 
-// TODO: POST /api/admin/audit-log
+export type LogAuditParams = import("@/utils/auditLogger").AuditEventParams;
+
+/**
+ * Standardizes log category into known AuditEntryType
+ */
+export function normalizeEntryType(category?: string | null): AuditEntryType {
+  if (!category) return "system";
+  const c = category.toLowerCase().trim();
+  if (c === "user") return "user";
+  if (c === "subscription") return "subscription";
+  if (c === "clinic") return "clinic";
+  if (c === "scan") return "scan";
+  if (c === "appointment") return "appointment";
+  return "system";
+}
+
+/**
+ * Backwards-compatible helper for existing admin actions.
+ */
 export function logAdminAction(
-  _action: string,
-  _target: string,
-  _details: string,
-  _type: AuditEntryType
-): void {}
+  action: string,
+  target: string,
+  details: string,
+  type: AuditEntryType = "system"
+): void {
+  import("@/utils/auditLogger").then(({ logAuditEvent }) => {
+    logAuditEvent({
+      role: "admin",
+      category: type,
+      action,
+      target,
+      details,
+    }).catch(() => {});
+  });
+}

@@ -3,6 +3,7 @@ import { Calendar, CalendarDays, CheckCircle2, CreditCard, XCircle, X, Loader2 }
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { withVat } from "@/lib/vat";
 
 interface SubData {
@@ -265,6 +266,19 @@ export default function BillingSettingsPage() {
       }
 
       await loadBillingData();
+
+      logAuditEvent({
+        userId: user?.id,
+        role: "patient",
+        category: "Subscription",
+        action: "Subscription Cancelled",
+        target: sub.planName || "Subscription Plan",
+        details: `Patient cancelled renewal for "${sub.planName || "Subscription Plan"}" plan. Active until period end (${sub.currentPeriodEnd || "end of billing cycle"}).`,
+        metadata: {
+          subscriptionId: sub.subscriptionId,
+          planName: sub.planName,
+        },
+      }).catch(() => {});
     } catch (error) {
       console.error("Failed to schedule subscription cancellation:", error);
     } finally {
@@ -304,6 +318,19 @@ export default function BillingSettingsPage() {
       }
 
       await loadBillingData();
+
+      logAuditEvent({
+        userId: user?.id,
+        role: "patient",
+        category: "Subscription",
+        action: "Subscription Resumed",
+        target: sub.planName || "Subscription Plan",
+        details: `Patient resumed renewal for "${sub.planName || "Subscription Plan"}" plan.`,
+        metadata: {
+          subscriptionId: sub.subscriptionId,
+          planName: sub.planName,
+        },
+      }).catch(() => {});
     } catch (error) {
       console.error("Failed to resume subscription:", error);
     } finally {

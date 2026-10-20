@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CreditCard, CalendarDays, AlertCircle, CheckCircle2 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { useAuth } from "@/context/AuthContext";
 import { splitVat } from "@/lib/vat";
 
@@ -128,6 +129,20 @@ setPaymentId(paymongoPaymentId);
         sessionStorage.removeItem(
           "dermai_pending_payment_intent_client_key"
         );
+
+        logAuditEvent({
+          userId: user?.id,
+          role: "patient",
+          category: "Subscription",
+          action: "Payment Completed",
+          target: `PayMongo ID: ${paymongoPaymentId}`,
+          details: `Patient completed payment of ₱${(typeof amountInCentavos === "number" ? amountInCentavos / 100 : 0).toLocaleString()} via ${methodType === "paymaya" ? "Maya" : methodType === "gcash" ? "GCash" : methodType || "Online Payment"}.`,
+          metadata: {
+            paymentId: paymongoPaymentId,
+            amount: typeof amountInCentavos === "number" ? amountInCentavos / 100 : null,
+            method: methodType,
+          },
+        }).catch(() => {});
       } catch (err: unknown) {
         console.error(
           "[PaymentSuccessPage] Verification failed:",

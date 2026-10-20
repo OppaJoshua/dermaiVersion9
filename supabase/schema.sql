@@ -602,13 +602,15 @@ create table if not exists admin_broadcast (
 -- 29. SYSTEM_AUDIT_LOG
 -- ----------------------------------------------------------------------------
 create table if not exists system_audit_log (
-  log_id      uuid primary key default gen_random_uuid(),
-  user_type   varchar(50) not null,
-  action      varchar(200) not null,
-  log_type    varchar(50) not null,
-  details     text,
-  "timestamp" timestamptz not null default now(),
-  user_id     uuid references "user"(user_id) on delete set null
+  log_id         uuid primary key default gen_random_uuid(),
+  user_type      varchar(50) not null,
+  action         varchar(200) not null,
+  log_type       varchar(50) not null,
+  target         varchar(255),
+  details        text,
+  performer_name varchar(255),
+  "timestamp"    timestamptz not null default now(),
+  user_id        uuid references "user"(user_id) on delete set null
 );
 
 -- ----------------------------------------------------------------------------
@@ -1079,7 +1081,9 @@ create policy "broadcast_admin_all"   on admin_broadcast for all    using (is_ad
 
 -- system_audit_log
 drop policy if exists "audit_admin_read" on system_audit_log;
-create policy "audit_admin_read" on system_audit_log for select using (is_admin());
+create policy "audit_admin_read" on system_audit_log for select using (true);
+drop policy if exists "audit_insert_all" on system_audit_log;
+create policy "audit_insert_all" on system_audit_log for insert with check (true);
 
 -- user_notification
 drop policy if exists "notif_user_read"   on user_notification;
@@ -1623,7 +1627,7 @@ grant execute on function is_clinic_doctor to authenticated, anon, service_role;
 do $$
 begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
-    alter publication supabase_realtime add table patient_appointment, clinic, clinic_doctor, user_notification;
+    alter publication supabase_realtime add table patient_appointment, clinic, clinic_doctor, user_notification, system_audit_log;
   end if;
 exception when others then
   null;

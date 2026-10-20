@@ -22,6 +22,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
 import { createPatientNotification } from "@/lib/notificationService";
@@ -1274,6 +1275,20 @@ export default function ClinicAppointmentsPage() {
       } catch { }
       return next;
     });
+
+    logAuditEvent({
+      role: "clinic",
+      category: "Appointment",
+      action: assignDoctorModal.isReassign ? "Doctor Reassigned" : "Doctor Assigned",
+      target: `Appointment #${assignDoctorModal.appointmentId.slice(0, 8)}`,
+      details: `Clinic ${assignDoctorModal.isReassign ? "reassigned" : "assigned"} Dr. ${doc.name} to patient appointment #${assignDoctorModal.appointmentId.slice(0, 8)}.`,
+      metadata: {
+        appointmentId: assignDoctorModal.appointmentId,
+        doctorId: doc.id,
+        doctorName: doc.name,
+        isReassign: assignDoctorModal.isReassign,
+      },
+    }).catch(() => {});
 
     setAssignDoctorModal(null);
     setSelectedDoctorId("");

@@ -12,6 +12,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { logAuditEvent } from "@/utils/auditLogger";
 import { sendClinicApprovalEmail, sendClinicRejectionEmail } from "@/lib/emailService";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 
@@ -296,6 +297,19 @@ export default function AdminClinicManagement() {
       description: `${target.name} has been approved. Clinic permissions and directory listings are now active.`,
     });
 
+    logAuditEvent({
+      role: "admin",
+      category: "Clinic",
+      action: "Clinic Approved",
+      target: target.name,
+      details: `Admin approved clinic application for "${target.name}". Directory listings and doctor assignments activated.`,
+      metadata: {
+        clinicId: id,
+        clinicName: target.name,
+        location: target.location,
+      },
+    }).catch(() => {});
+
     // 2. Background database synchronization & Notification trigger
     try {
       // Step A: Update clinic status to approved and verified
@@ -452,6 +466,19 @@ export default function AdminClinicManagement() {
 
       setReviewModal(null);
       setRejectReason("");
+
+      logAuditEvent({
+        role: "admin",
+        category: "Clinic",
+        action: "Clinic Rejected",
+        target: target.name,
+        details: `Admin rejected clinic application for "${target.name}". Reason: "${reason || "Requirements not met"}".`,
+        metadata: {
+          clinicId: id,
+          clinicName: target.name,
+          reason,
+        },
+      }).catch(() => {});
     } catch (err: any) {
       console.error("Failed to reject clinic:", err.message);
     } finally {
