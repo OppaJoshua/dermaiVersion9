@@ -12,7 +12,6 @@ import {
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { logAuditEvent } from "@/utils/auditLogger";
 import { supabase } from "@/lib/supabaseClient";
 import {
   useRoleNotifications,

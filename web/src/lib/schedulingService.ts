@@ -4,8 +4,10 @@
 // ============================================================================
 
 export interface DoctorShift {
-  id: string;                  // Unique shift ID within doctor (e.g. "shift-mon-1")
-  label: string;               // e.g. "Morning Shift", "Afternoon Shift"
+  id?: string;                  // Unique shift ID within doctor (e.g. "shift-mon-1")
+  shiftId?: string;             // Alternate property name for shift ID
+  label?: string;               // e.g. "Morning Shift", "Afternoon Shift"
+  shiftLabel?: string;          // Alternate property name for shift label
   startTime: string;           // "08:00" (HH:mm in 24h format)
   endTime: string;             // "12:00" (HH:mm in 24h format)
   slotIntervalMinutes?: number;// Optional shift-specific override
@@ -108,26 +110,88 @@ export function normalizeDayName(rawDay: string): string {
   return rawDay.trim();
 }
 
+/**
+ * Accurately parses clinic operating days strings (e.g. "Monday - Saturday", "Mon-Fri", "All Week", "Mon, Wed, Fri")
+ * into a typed array of DayOfWeek without hardcoding.
+ */
+export function parseClinicOperatingDays(operatingDaysStr?: string | null): DayOfWeek[] {
+  if (!operatingDaysStr || !operatingDaysStr.trim()) {
+    return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  }
+
+  const raw = operatingDaysStr.trim().toLowerCase();
+  if (raw === "all week" || raw === "every day" || raw === "everyday" || raw === "daily" || raw === "7 days") {
+    return [...ALL_DAYS_OF_WEEK];
+  }
+
+  const resultDays = new Set<DayOfWeek>();
+  const segments = raw.split(/[,;/+]+/).map((s) => s.trim()).filter(Boolean);
+
+  for (const seg of segments) {
+    const rangeMatch = seg.match(/^([a-z]+)\s*(?:-|–|—|to)\s*([a-z]+)$/i);
+    if (rangeMatch) {
+      const startDay = normalizeDayName(rangeMatch[1]) as DayOfWeek;
+      const endDay = normalizeDayName(rangeMatch[2]) as DayOfWeek;
+      const startIdx = ALL_DAYS_OF_WEEK.indexOf(startDay);
+      const endIdx = ALL_DAYS_OF_WEEK.indexOf(endDay);
+
+      if (startIdx !== -1 && endIdx !== -1) {
+        if (startIdx <= endIdx) {
+          for (let i = startIdx; i <= endIdx; i++) {
+            resultDays.add(ALL_DAYS_OF_WEEK[i]);
+          }
+        } else {
+          for (let i = startIdx; i < ALL_DAYS_OF_WEEK.length; i++) {
+            resultDays.add(ALL_DAYS_OF_WEEK[i]);
+          }
+          for (let i = 0; i <= endIdx; i++) {
+            resultDays.add(ALL_DAYS_OF_WEEK[i]);
+          }
+        }
+        continue;
+      }
+    }
+
+    const norm = normalizeDayName(seg) as DayOfWeek;
+    if (ALL_DAYS_OF_WEEK.includes(norm)) {
+      resultDays.add(norm);
+    }
+  }
+
+  if (resultDays.size === 0) {
+    return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  }
+
+  return ALL_DAYS_OF_WEEK.filter((d) => resultDays.has(d));
+}
+
+/**
+ * Checks whether the clinic is configured to operate on the specified day of week.
+ */
+export function isClinicOpenOnDay(dayOfWeek: string, operatingDaysStr?: string | null): boolean {
+  if (!dayOfWeek) return false;
+  const norm = normalizeDayName(dayOfWeek) as DayOfWeek;
+  const activeDays = parseClinicOperatingDays(operatingDaysStr);
+  return activeDays.includes(norm);
+}
+
 /* ── Dynamic Time Options Bounded by Clinic Operating Hours ────────── */
 
 /**
  * Generates selectable time options strictly bounded by the clinic's operating window.
- * For example, if clinic opens at 8:00 AM and closes at 9:00 PM (21:00),
- * this yields ["08:00", "08:30", ..., "21:00"].
+ * For example, if clinic opens at 8:00 AM (08:00) and closes at 5:00 PM (17:00),
+ * this yields ["08:00", "08:30", ..., "17:00"].
  */
 export function generateTimeOptionsForClinicHours(
-  openTime = "07:30",
-  closeTime = "21:00",
+  openTime = "08:00",
+  closeTime = "17:00",
   stepMinutes = 30
 ): { value: string; label: string }[] {
-  let openM = timeToMinutes(openTime);
+  const openM = timeToMinutes(openTime);
   let closeM = timeToMinutes(closeTime);
   if (closeM <= openM) {
     closeM = Math.min(24 * 60, openM + 8 * 60);
   }
-  // Ensure the options cover at least standard clinic range 07:00 to 22:00 so shifts are never cut off
-  openM = Math.min(openM, 7 * 60);
-  closeM = Math.max(closeM, 21 * 60 + 30);
 
   const options: { value: string; label: string }[] = [];
   for (let m = openM; m <= closeM; m += stepMinutes) {
@@ -138,6 +202,82 @@ export function generateTimeOptionsForClinicHours(
     });
   }
   return options;
+}
+
+/**
+ * Generates clinic opening time options (e.g. from 06:00 to 22:30 in 30-minute intervals).
+ */
+export function generateClinicOpenTimeOptions(
+  stepMinutes = 30,
+  minTime = "06:00",
+  maxTime = "22:30"
+): { value: string; label: string }[] {
+  const minM = timeToMinutes(minTime);
+  const maxM = timeToMinutes(maxTime);
+  const options: { value: string; label: string }[] = [];
+  for (let m = minM; m <= maxM; m += stepMinutes) {
+    const timeStr = minutesToTime(m);
+    const label = timeStr === "12:00" ? "12:00 PM (Noon)" : formatTime12h(timeStr);
+    options.push({ value: timeStr, label });
+  }
+  return options;
+}
+
+/**
+ * Generates clinic closing time options strictly later than the selected opening time.
+ * If opening time is 08:00, options begin at 08:30 and continue up to maxTime ("23:00").
+ */
+export function generateClinicCloseTimeOptions(
+  openTime = "08:00",
+  stepMinutes = 30,
+  maxTime = "23:00"
+): { value: string; label: string }[] {
+  const openM = timeToMinutes(openTime);
+  const maxM = timeToMinutes(maxTime);
+  const options: { value: string; label: string }[] = [];
+  const startM = Math.max(openM + stepMinutes, Math.ceil((openM + 1) / stepMinutes) * stepMinutes);
+  for (let m = startM; m <= maxM; m += stepMinutes) {
+    const timeStr = minutesToTime(m);
+    const label = timeStr === "12:00" ? "12:00 PM (Noon)" : formatTime12h(timeStr);
+    options.push({ value: timeStr, label });
+  }
+  return options;
+}
+
+export interface ClinicOperatingHoursValidation {
+  isValid: boolean;
+  error?: string;
+}
+
+/**
+ * Validates clinic operating hours.
+ * Enforces that opening and closing times are specified and that closing time is strictly later than opening time.
+ */
+export function validateClinicOperatingHours(
+  openTime?: string,
+  closeTime?: string
+): ClinicOperatingHoursValidation {
+  if (!openTime || !openTime.trim()) {
+    return {
+      isValid: false,
+      error: "Please select a clinic opening time.",
+    };
+  }
+  if (!closeTime || !closeTime.trim()) {
+    return {
+      isValid: false,
+      error: "Please select a clinic closing time.",
+    };
+  }
+  const openM = timeToMinutes(openTime);
+  const closeM = timeToMinutes(closeTime);
+  if (closeM <= openM) {
+    return {
+      isValid: false,
+      error: `Closing time (${formatTime12h(closeTime)}) must be later than opening time (${formatTime12h(openTime)}). Please select a valid closing time before saving.`,
+    };
+  }
+  return { isValid: true };
 }
 
 /* ── Settings Hierarchy & Inheritance ─────────────────────────────── */
@@ -305,6 +445,7 @@ export function parseDoctorSchedule(
               endTime: s.endTime,
               slotIntervalMinutes: s.slotIntervalMinutes ? Number(s.slotIntervalMinutes) : undefined,
               maxPatientsPerShift: s.maxPatientsPerShift ? Number(s.maxPatientsPerShift) : undefined,
+              breaks: Array.isArray(s.breaks) ? s.breaks : undefined,
             }));
         }
       });
@@ -321,6 +462,7 @@ export function parseDoctorSchedule(
               endTime: s.endTime || fallbackEnd,
               slotIntervalMinutes: s.slotIntervalMinutes ? Number(s.slotIntervalMinutes) : undefined,
               maxPatientsPerShift: s.maxPatientsPerShift ? Number(s.maxPatientsPerShift) : undefined,
+              breaks: Array.isArray(s.breaks) ? s.breaks : undefined,
             }));
           } else if (typeof dayVal === "object" && dayVal.startTime && dayVal.endTime) {
             weeklyShifts[day] = [
@@ -331,6 +473,7 @@ export function parseDoctorSchedule(
                 endTime: dayVal.endTime,
                 slotIntervalMinutes: dayVal.slotIntervalMinutes ? Number(dayVal.slotIntervalMinutes) : undefined,
                 maxPatientsPerShift: dayVal.maxPatientsPerShift ? Number(dayVal.maxPatientsPerShift) : undefined,
+                breaks: Array.isArray(dayVal.breaks) ? dayVal.breaks : undefined,
               },
             ];
           }
@@ -417,24 +560,48 @@ export interface ShiftValidationError {
   message: string;
 }
 
+export interface ScheduleConflict {
+  doctorId: string;
+  doctorName: string;
+  day: string;
+  shiftId: string;
+  shiftLabel: string;
+  shiftStart: string;
+  shiftEnd: string;
+  clinicOpenTime: string;
+  clinicCloseTime: string;
+  clinicOperatingDays?: string;
+  reason: "outside_hours" | "closed_day" | "invalid_times";
+  message: string;
+}
+
 /**
  * Validates shifts for a doctor:
  * 1. Start time must be earlier than End time.
- * 2. Shift must fit completely within clinic operating hours.
- * 3. Shifts on the same day cannot overlap.
+ * 2. Shift must fit strictly within clinic operating hours.
+ * 3. Day must be an operating day for the clinic (if operatingDays provided).
+ * 4. Shifts on the same day cannot overlap.
  */
 export function validateDoctorShifts(
   shifts: DoctorShift[],
   day: string,
-  clinicOpenTime = "07:30",
-  clinicCloseTime = "21:00"
+  clinicOpenTime = "08:00",
+  clinicCloseTime = "17:00",
+  clinicOperatingDays?: string
 ): ShiftValidationError[] {
   const errors: ShiftValidationError[] = [];
   const rawOpenM = timeToMinutes(clinicOpenTime);
   const rawCloseM = timeToMinutes(clinicCloseTime);
-  // Allow doctors to work anywhere within the extended clinic service envelope
-  const clinicOpenM = Math.min(rawOpenM, 7 * 60);
-  const clinicCloseM = Math.max(rawCloseM, 21 * 60 + 30);
+
+  // Check if clinic is open on this day
+  if (clinicOperatingDays && !isClinicOpenOnDay(day, clinicOperatingDays)) {
+    errors.push({
+      day,
+      shiftIndex: 0,
+      message: `On ${day}, the clinic is closed (${clinicOperatingDays}). Doctors cannot be scheduled on non-operating days.`,
+    });
+    return errors;
+  }
 
   shifts.forEach((shift, idx) => {
     const startM = timeToMinutes(shift.startTime);
@@ -449,11 +616,11 @@ export function validateDoctorShifts(
       return;
     }
 
-    if (startM < clinicOpenM || endM > clinicCloseM) {
+    if (startM < rawOpenM || endM > rawCloseM) {
       errors.push({
         day,
         shiftIndex: idx,
-        message: `On ${day}, ${shift.label || `Shift ${idx + 1}`} (${formatTime12h(shift.startTime)} – ${formatTime12h(shift.endTime)}) must fit within clinic hours (${formatTime12h(minutesToTime(clinicOpenM))} – ${formatTime12h(minutesToTime(clinicCloseM))}).`,
+        message: `On ${day}, ${shift.label || `Shift ${idx + 1}`} (${formatTime12h(shift.startTime)} – ${formatTime12h(shift.endTime)}) must fit within clinic hours (${formatTime12h(clinicOpenTime)} – ${formatTime12h(clinicCloseTime)}).`,
       });
     }
   });
@@ -474,13 +641,409 @@ export function validateDoctorShifts(
         errors.push({
           day,
           shiftIndex: j,
-          message: `On ${day}, ${s1.label} (${s1.startTime}–${s1.endTime}) overlaps with ${s2.label} (${s2.startTime}–${s2.endTime}). Same doctor shifts cannot overlap.`,
+          message: `On ${day}, ${s1.label || `Shift ${i + 1}`} (${formatTime12h(s1.startTime)} – ${formatTime12h(s1.endTime)}) overlaps with ${s2.label || `Shift ${j + 1}`} (${formatTime12h(s2.startTime)} – ${formatTime12h(s2.endTime)}). Same doctor shifts cannot overlap.`,
         });
       }
     }
   }
 
   return errors;
+}
+
+/**
+ * Revalidates existing doctor schedules against new or existing clinic operating hours and days.
+ * Identifies affected doctors, days, assigned shifts, and clinic hours.
+ */
+export function findConflictingDoctorSchedules(
+  optionsOrDoctors:
+    | {
+        doctors: any[];
+        clinicOpenTime?: string;
+        clinicCloseTime?: string;
+        clinicOperatingDays?: string;
+      }
+    | any[],
+  argClinicOpenTime?: string,
+  argClinicCloseTime?: string,
+  argClinicOperatingDays?: string
+): ScheduleConflict[] {
+  let doctors: any[] = [];
+  let clinicOpenTime = "08:00";
+  let clinicCloseTime = "17:00";
+  let clinicOperatingDays: string | undefined;
+
+  if (Array.isArray(optionsOrDoctors)) {
+    doctors = optionsOrDoctors;
+    if (argClinicOpenTime) clinicOpenTime = argClinicOpenTime;
+    if (argClinicCloseTime) clinicCloseTime = argClinicCloseTime;
+    if (argClinicOperatingDays) clinicOperatingDays = argClinicOperatingDays;
+  } else if (optionsOrDoctors && typeof optionsOrDoctors === "object") {
+    doctors = optionsOrDoctors.doctors || [];
+    if (optionsOrDoctors.clinicOpenTime) clinicOpenTime = optionsOrDoctors.clinicOpenTime;
+    if (optionsOrDoctors.clinicCloseTime) clinicCloseTime = optionsOrDoctors.clinicCloseTime;
+    if (optionsOrDoctors.clinicOperatingDays) clinicOperatingDays = optionsOrDoctors.clinicOperatingDays;
+  }
+
+  const conflicts: ScheduleConflict[] = [];
+  const openM = timeToMinutes(clinicOpenTime);
+  const closeM = timeToMinutes(clinicCloseTime);
+  const activeClinicDays = parseClinicOperatingDays(clinicOperatingDays);
+
+  if (!Array.isArray(doctors)) return conflicts;
+
+  doctors.forEach((doc) => {
+    if (!doc) return;
+    const docStatus = String(doc.status || "Active").toLowerCase();
+    if (docStatus === "inactive") return;
+
+    const docId = String(doc.id || doc.doctor_id || "");
+    const docName = String(doc.name || doc.doctor_name || "Doctor");
+
+    const schedule: DoctorWeeklySchedule =
+      doc.weeklySchedule ||
+      parseDoctorSchedule(
+        doc.dutySchedule || doc.duty_schedule,
+        doc.dutyDays || doc.duty_days,
+        doc.dutyStartTime || doc.duty_start_time || clinicOpenTime,
+        doc.dutyEndTime || doc.duty_end_time || clinicCloseTime
+      );
+
+    ALL_DAYS_OF_WEEK.forEach((day) => {
+      const shifts = schedule.weeklyShifts[day] || [];
+      if (shifts.length === 0) return;
+
+      // 1. Is clinic closed on this day?
+      if (!activeClinicDays.includes(day)) {
+        shifts.forEach((s) => {
+          conflicts.push({
+            doctorId: docId,
+            doctorName: docName,
+            day,
+            shiftId: s.id || s.shiftId || "",
+            shiftLabel: s.label || s.shiftLabel || "Shift",
+            shiftStart: s.startTime,
+            shiftEnd: s.endTime,
+            clinicOpenTime,
+            clinicCloseTime,
+            clinicOperatingDays,
+            reason: "closed_day",
+            message: `Dr. ${docName.replace(/^Dr\.\s*/i, "")} is scheduled on ${day} (${formatTime12h(s.startTime)} – ${formatTime12h(s.endTime)}), but the clinic is closed on ${day}s (${clinicOperatingDays || "Operating days"}).`,
+          });
+        });
+        return;
+      }
+
+      // 2. Are shifts within clinic operating hours?
+      shifts.forEach((s) => {
+        const sStartM = timeToMinutes(s.startTime);
+        const sEndM = timeToMinutes(s.endTime);
+
+        if (sEndM <= sStartM) {
+          conflicts.push({
+            doctorId: docId,
+            doctorName: docName,
+            day,
+            shiftId: s.id || s.shiftId || "",
+            shiftLabel: s.label || s.shiftLabel || "Shift",
+            shiftStart: s.startTime,
+            shiftEnd: s.endTime,
+            clinicOpenTime,
+            clinicCloseTime,
+            clinicOperatingDays,
+            reason: "invalid_times",
+            message: `Dr. ${docName.replace(/^Dr\.\s*/i, "")} has an invalid shift on ${day}: end time (${formatTime12h(s.endTime)}) must be later than start time (${formatTime12h(s.startTime)}).`,
+          });
+          return;
+        }
+
+        if (sStartM < openM || sEndM > closeM) {
+          conflicts.push({
+            doctorId: docId,
+            doctorName: docName,
+            day,
+            shiftId: s.id || s.shiftId || "",
+            shiftLabel: s.label || s.shiftLabel || "Shift",
+            shiftStart: s.startTime,
+            shiftEnd: s.endTime,
+            clinicOpenTime,
+            clinicCloseTime,
+            clinicOperatingDays,
+            reason: "outside_hours",
+            message: `Dr. ${docName.replace(/^Dr\.\s*/i, "")}'s shift on ${day} (${formatTime12h(s.startTime)} – ${formatTime12h(s.endTime)}) conflicts with clinic hours (${formatTime12h(clinicOpenTime)} – ${formatTime12h(clinicCloseTime)}).`,
+          });
+        }
+      });
+    });
+  });
+
+  return conflicts;
+}
+
+/**
+ * Evaluates whether the clinic is currently open right now according to its
+ * configured operating days, opening/closing hours, and timezone (Asia/Manila, UTC+8).
+ */
+export function isClinicCurrentlyOpen({
+  openTime = "08:00",
+  closeTime = "17:00",
+  operatingDays = "Monday - Saturday",
+  timezone = "Asia/Manila",
+  currentTimeMs,
+  referenceDate,
+}: {
+  openTime?: string;
+  closeTime?: string;
+  operatingDays?: string;
+  timezone?: string;
+  currentTimeMs?: number;
+  referenceDate?: Date;
+}): {
+  isOpen: boolean;
+  dayOfWeek: string;
+  currentMinutes: number;
+  openMinutes: number;
+  closeMinutes: number;
+  reason?: string;
+} {
+  const targetDate = referenceDate ? referenceDate : (currentTimeMs ? new Date(currentTimeMs) : new Date());
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone || "Asia/Manila",
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(targetDate);
+
+  const lookup: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== "literal") lookup[p.type] = p.value;
+  }
+
+  const dayOfWeek = normalizeDayName(lookup.weekday || "");
+  let hour = parseInt(lookup.hour, 10) || 0;
+  if (hour === 24) hour = 0;
+  const minute = parseInt(lookup.minute, 10) || 0;
+  const currentMinutes = hour * 60 + minute;
+
+  const openMinutes = timeToMinutes(openTime || "08:00");
+  const closeMinutes = timeToMinutes(closeTime || "17:00");
+
+  // 1. Is clinic open on this day of week?
+  if (!isClinicOpenOnDay(dayOfWeek, operatingDays)) {
+    return {
+      isOpen: false,
+      dayOfWeek,
+      currentMinutes,
+      openMinutes,
+      closeMinutes,
+      reason: `Clinic is closed on ${dayOfWeek}s (${operatingDays || "Operating days"}).`,
+    };
+  }
+
+  // 2. Is current time within opening and closing hours?
+  let withinHours = false;
+  if (closeMinutes > openMinutes) {
+    withinHours = currentMinutes >= openMinutes && currentMinutes < closeMinutes;
+  } else if (closeMinutes < openMinutes) {
+    // Overnight clinic
+    withinHours = currentMinutes >= openMinutes || currentMinutes < closeMinutes;
+  }
+
+  if (!withinHours) {
+    const statusText = currentMinutes < openMinutes ? "not open yet" : "already closed";
+    return {
+      isOpen: false,
+      dayOfWeek,
+      currentMinutes,
+      openMinutes,
+      closeMinutes,
+      reason: `Clinic is ${statusText} (hours: ${formatTime12h(openTime)} – ${formatTime12h(closeTime)}).`,
+    };
+  }
+
+  return {
+    isOpen: true,
+    dayOfWeek,
+    currentMinutes,
+    openMinutes,
+    closeMinutes,
+  };
+}
+
+/**
+ * Authoritative evaluation of a doctor's "On Duty" status.
+ *
+ * A doctor may be displayed as "On Duty" ONLY when all 4 conditions are met:
+ * 1. The clinic is currently open according to its configured hours and operating days.
+ * 2. The current local time (in clinic timezone, Asia/Manila) falls within the doctor's assigned duty interval.
+ * 3. The doctor's shift is valid against the applicable clinic operating hours.
+ * 4. The doctor is active and not on a scheduled break or otherwise unavailable.
+ */
+export function isDoctorCurrentlyOnDuty({
+  doctor,
+  clinicSchedule,
+  timezone = "Asia/Manila",
+  currentTimeMs,
+  referenceDate,
+}: {
+  doctor: any;
+  clinicSchedule?: {
+    openTime?: string;
+    closeTime?: string;
+    operatingDays?: string;
+  } | null;
+  timezone?: string;
+  currentTimeMs?: number;
+  referenceDate?: Date;
+}): {
+  isOnDuty: boolean;
+  activeShift?: DoctorShift;
+  reason?: string;
+} {
+  if (!doctor) {
+    return { isOnDuty: false, reason: "No doctor provided." };
+  }
+
+  const docStatus = String(doctor.status || "Active").toLowerCase().trim();
+  if (docStatus === "inactive") {
+    return { isOnDuty: false, reason: "Doctor is marked as Inactive." };
+  }
+
+  const openTime = clinicSchedule?.openTime || "08:00";
+  const closeTime = clinicSchedule?.closeTime || "17:00";
+  const operatingDays = clinicSchedule?.operatingDays || "Monday - Saturday";
+
+  // Condition 1: The clinic is currently open according to its configured hours and days
+  const clinicStatus = isClinicCurrentlyOpen({
+    openTime,
+    closeTime,
+    operatingDays,
+    timezone,
+    currentTimeMs,
+    referenceDate,
+  });
+
+  if (!clinicStatus.isOpen) {
+    return {
+      isOnDuty: false,
+      reason: clinicStatus.reason || "Clinic is currently closed.",
+    };
+  }
+
+  const todayDayName = clinicStatus.dayOfWeek;
+  const currentMinutes = clinicStatus.currentMinutes;
+  const clinicOpenM = clinicStatus.openMinutes;
+  const clinicCloseM = clinicStatus.closeMinutes;
+
+  // Resolve doctor schedule
+  const docSched: DoctorWeeklySchedule =
+    doctor.weeklySchedule ||
+    parseDoctorSchedule(
+      doctor.dutySchedule || doctor.duty_schedule,
+      doctor.dutyDays || doctor.duty_days,
+      doctor.dutyStartTime || doctor.duty_start_time || openTime,
+      doctor.dutyEndTime || doctor.duty_end_time || closeTime
+    );
+
+  const shiftsForToday = docSched.weeklyShifts[todayDayName] || [];
+  if (shiftsForToday.length === 0) {
+    return {
+      isOnDuty: false,
+      reason: `Doctor has no shifts scheduled on ${todayDayName}.`,
+    };
+  }
+
+  // Condition 3: Doctor's shift must be valid against clinic operating hours
+  // Condition 2: Current local time must fall within doctor's assigned duty interval
+  // Condition 4: Doctor must not be on a scheduled break
+  for (const shift of shiftsForToday) {
+    const sStartM = timeToMinutes(shift.startTime);
+    const sEndM = timeToMinutes(shift.endTime);
+
+    if (sEndM <= sStartM) continue;
+
+    // Conflicting shift: shift exceeds clinic hours
+    if (sStartM < clinicOpenM || sEndM > clinicCloseM) {
+      continue;
+    }
+
+    // Check if current time falls within this valid shift: [sStartM, sEndM)
+    if (currentMinutes >= sStartM && currentMinutes < sEndM) {
+      // Check breaks
+      if (Array.isArray(shift.breaks)) {
+        const onBreak = shift.breaks.some((brk) => {
+          const bStart = timeToMinutes(brk.startTime);
+          const bEnd = timeToMinutes(brk.endTime);
+          return currentMinutes >= bStart && currentMinutes < bEnd;
+        });
+        if (onBreak) {
+          return { isOnDuty: false, reason: "Doctor is currently on a scheduled break." };
+        }
+      }
+
+      return { isOnDuty: true, activeShift: shift };
+    }
+  }
+
+  return {
+    isOnDuty: false,
+    reason: "Current time is outside the doctor's scheduled shift hours.",
+  };
+}
+
+/**
+ * Evaluates whether a doctor is scheduled and valid to work on a specific day of the week,
+ * strictly verifying clinic operating days, doctor duty days, and overlap with clinic hours.
+ */
+export function isDoctorOnDutyOnDay(
+  doc: any | null | undefined,
+  dayOfWeek: string,
+  clinicSchedule?: { openTime?: string; closeTime?: string; operatingDays?: string } | null
+): boolean {
+  if (!doc) return false;
+  const status = String(doc.status || "Active").toLowerCase().trim();
+  if (status === "inactive") return false;
+  const target = normalizeDayName(dayOfWeek);
+  if (!target) return false;
+
+  // Strict check: if clinic operating days are known, verify clinic is open on this day
+  if (clinicSchedule?.operatingDays && !isClinicOpenOnDay(target, clinicSchedule.operatingDays)) {
+    return false;
+  }
+
+  // Strict check: If doc.dutyDays is defined and has days, target day must be in dutyDays
+  const dutyDays = doc.dutyDays || doc.duty_days;
+  if (Array.isArray(dutyDays) && dutyDays.length > 0) {
+    const isDayIncluded = dutyDays.some((d: string) => normalizeDayName(d) === target);
+    if (!isDayIncluded) return false;
+  }
+
+  // Resolve shifts for this day
+  const docSched: DoctorWeeklySchedule =
+    doc.weeklySchedule ||
+    parseDoctorSchedule(
+      doc.dutySchedule || doc.duty_schedule,
+      dutyDays,
+      doc.dutyStartTime || doc.duty_start_time || clinicSchedule?.openTime || "08:00",
+      doc.dutyEndTime || doc.duty_end_time || clinicSchedule?.closeTime || "17:00"
+    );
+
+  const shifts = docSched.weeklyShifts[target] || [];
+  if (shifts.length === 0) return false;
+
+  // If clinic hours are specified, verify doctor has at least one shift that overlaps clinic hours
+  if (clinicSchedule?.openTime && clinicSchedule?.closeTime) {
+    const openM = timeToMinutes(clinicSchedule.openTime);
+    const closeM = timeToMinutes(clinicSchedule.closeTime);
+    const hasValidShift = shifts.some((s) => {
+      const sStart = timeToMinutes(s.startTime);
+      const sEnd = timeToMinutes(s.endTime);
+      return sEnd > sStart && sStart < closeM && sEnd > openM;
+    });
+    return hasValidShift;
+  }
+
+  return true;
 }
 
 /* ── Complete Slot Generation Engine ───────────────────────────────── */
@@ -619,8 +1182,8 @@ export function generateSlotsForShift({
     const isAvailable = !isBooked && !isPast && !isCapacityFull;
 
     slots.push({
-      shiftId: shift.id,
-      shiftLabel: shift.label,
+      shiftId: shift.id || shift.shiftId || `shift-${slotIndex}`,
+      shiftLabel: shift.label || shift.shiftLabel || "Consultation",
       slotIndex,
       slotTime: slotTimeStr,
       endTime: endTimeStr,
@@ -675,19 +1238,40 @@ export function generateDaySlotsForDoctor({
     defaultMaxPatientsPerShift?: number;
     openTime?: string;
     closeTime?: string;
+    operatingDays?: string;
   } | null;
   existingAppointments?: any[];
   isToday?: boolean;
   currentMinutesNow?: number;
 }): DayShiftSlotsGroup[] {
   const normDay = normalizeDayName(dayOfWeek);
-  const shiftsForDay = doctorSchedule.weeklyShifts[normDay] || [];
 
+  // If clinic operating days are configured and clinic is closed on this day, no slots!
+  if (clinicDefaults?.operatingDays && !isClinicOpenOnDay(normDay, clinicDefaults.operatingDays)) {
+    return [];
+  }
+
+  const shiftsForDay = doctorSchedule.weeklyShifts[normDay] || [];
   if (shiftsForDay.length === 0) {
     return [];
   }
 
-  return shiftsForDay.map((shift) => {
+  const clinicOpenM = clinicDefaults?.openTime ? timeToMinutes(clinicDefaults.openTime) : 0;
+  const clinicCloseM = clinicDefaults?.closeTime ? timeToMinutes(clinicDefaults.closeTime) : 24 * 60;
+
+  // Filter out shifts completely outside clinic hours
+  const eligibleShifts = shiftsForDay.filter((shift) => {
+    const sStart = timeToMinutes(shift.startTime);
+    const sEnd = timeToMinutes(shift.endTime);
+    if (sEnd <= sStart) return false;
+    return sStart < clinicCloseM && sEnd > clinicOpenM;
+  });
+
+  if (eligibleShifts.length === 0) {
+    return [];
+  }
+
+  return eligibleShifts.map((shift) => {
     const res = generateSlotsForShift({
       shift,
       doctorSchedule,
@@ -780,6 +1364,7 @@ export function validateDoctorReassignment({
     defaultMaxPatientsPerShift?: number;
     openTime?: string;
     closeTime?: string;
+    operatingDays?: string;
   } | null;
 }): DoctorReassignmentValidation {
   if (!doctor) {
@@ -804,6 +1389,14 @@ export function validateDoctorReassignment({
   const dayName = dateObj.toLocaleDateString("en-US", { weekday: "long" });
   const normDay = normalizeDayName(dayName);
 
+  // Check clinic operating days
+  if (clinicDefaults?.operatingDays && !isClinicOpenOnDay(normDay, clinicDefaults.operatingDays)) {
+    return {
+      isAvailable: false,
+      reason: `Clinic is closed on ${normDay}s (${clinicDefaults.operatingDays}).`,
+    };
+  }
+
   // Normalize appointment time to 24h HH:mm
   let cleanTime = (appointmentTime || "").trim();
   if (cleanTime.toLowerCase().includes("am") || cleanTime.toLowerCase().includes("pm")) {
@@ -820,6 +1413,16 @@ export function validateDoctorReassignment({
     cleanTime = cleanTime.slice(0, 5);
   }
   const apptMinutes = timeToMinutes(cleanTime);
+
+  // Check clinic operating hours
+  const clinicOpenM = clinicDefaults?.openTime ? timeToMinutes(clinicDefaults.openTime) : 0;
+  const clinicCloseM = clinicDefaults?.closeTime ? timeToMinutes(clinicDefaults.closeTime) : 24 * 60;
+  if (apptMinutes < clinicOpenM || apptMinutes >= clinicCloseM) {
+    return {
+      isAvailable: false,
+      reason: `Time (${formatTime12h(cleanTime)}) is outside clinic hours (${formatTime12h(clinicDefaults?.openTime || "08:00")} – ${formatTime12h(clinicDefaults?.closeTime || "17:00")}).`,
+    };
+  }
 
   // 2. Schedule availability check
   const schedule: DoctorWeeklySchedule =

@@ -43,6 +43,8 @@ import {
   getEffectiveShiftSettings,
   generateDaySlotsForDoctor,
   computeNextQueueNumber,
+  isClinicOpenOnDay,
+  isDoctorOnDutyOnDay,
 } from "@/lib/schedulingService";
 import {
   type DemoCheckoutData,
@@ -144,41 +146,7 @@ export function parseDoctorDutySchedule(rawSched: any): Record<string, { startTi
   return undefined;
 }
 
-export function isDoctorOnDutyOnDay(doc: ClinicDoctorItem | null | undefined, dayOfWeek: string): boolean {
-  if (!doc) return false;
-  if (doc.status === "Inactive") return false;
-  const target = normalizeDayName(dayOfWeek);
-  if (!target) return false;
-
-  // Strict check: If doc.dutyDays is defined and has days, target day must be in dutyDays
-  if (Array.isArray(doc.dutyDays) && doc.dutyDays.length > 0) {
-    const isDayIncluded = doc.dutyDays.some((d: string) => normalizeDayName(d) === target);
-    if (!isDayIncluded) return false;
-  }
-
-  // 1. Check weeklySchedule if available
-  if (doc.weeklySchedule?.weeklyShifts) {
-    const shifts = doc.weeklySchedule.weeklyShifts[target];
-    if (Array.isArray(shifts) && shifts.length > 0) return true;
-  }
-
-  // 2. Check dutySchedule JSON
-  if (doc.dutySchedule && typeof doc.dutySchedule === "object") {
-    if (doc.dutySchedule.weeklyShifts && typeof doc.dutySchedule.weeklyShifts === "object") {
-      const shifts = doc.dutySchedule.weeklyShifts[target];
-      if (Array.isArray(shifts) && shifts.length > 0) return true;
-    }
-    const schedDays = Object.keys(doc.dutySchedule).map(normalizeDayName);
-    if (schedDays.includes(target)) return true;
-  }
-
-  // 3. Fallback to dutyDays array
-  if (Array.isArray(doc.dutyDays) && doc.dutyDays.length > 0) {
-    return doc.dutyDays.some((d: string) => normalizeDayName(d) === target);
-  }
-
-  return false;
-}
+export { isDoctorOnDutyOnDay };
 
 function cleanDocName(name?: string): string {
   if (!name) return "";
@@ -714,13 +682,19 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const dt = new Date(y, m - 1, d);
       const currentDayOfWeek = dt.toLocaleDateString("en-US", { weekday: "long" });
 
-      if (!isDoctorOnDutyOnDay(activeDutyDoctor, currentDayOfWeek)) {
+      const clinicSchedule = {
+        openTime: selectedClinic?.openTime,
+        closeTime: selectedClinic?.closeTime,
+        operatingDays: selectedClinic?.operatingDays,
+      };
+
+      if (!isDoctorOnDutyOnDay(activeDutyDoctor, currentDayOfWeek, clinicSchedule)) {
         const start = new Date();
         for (let i = 1; i <= 45; i++) {
           const cand = new Date(start);
           cand.setDate(start.getDate() + i);
           const candDay = cand.toLocaleDateString("en-US", { weekday: "long" });
-          if (isDoctorOnDutyOnDay(activeDutyDoctor, candDay)) {
+          if (isDoctorOnDutyOnDay(activeDutyDoctor, candDay, clinicSchedule)) {
             const candStr = `${cand.getFullYear()}-${String(cand.getMonth() + 1).padStart(2, "0")}-${String(cand.getDate()).padStart(2, "0")}`;
             setSelectedDate(candStr);
             break;
@@ -728,7 +702,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         }
       }
     } catch {}
-  }, [activeDutyDoctor?.id]);
+  }, [activeDutyDoctor?.id, selectedClinic?.openTime, selectedClinic?.closeTime, selectedClinic?.operatingDays]);
 
   // Generate calendar days for the current calendarMonth (42 cells to support full 6 weeks)
   const calendarDays = useMemo(() => {
@@ -745,6 +719,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     maxDate.setDate(maxDate.getDate() + 60);
 
     const doctors = selectedClinic?.doctors || [];
+    const clinicSchedule = {
+      openTime: selectedClinic?.openTime,
+      closeTime: selectedClinic?.closeTime,
+      operatingDays: selectedClinic?.operatingDays,
+    };
 
     return Array.from({ length: 42 }, (_, i) => {
       const d = new Date(gridStart);
@@ -756,11 +735,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const isToday = dateStr === todayStr;
 
       const dayOfWeek = d.toLocaleDateString("en-US", { weekday: "long" });
-      const onDutyDocs = doctors.filter((doc) => isDoctorOnDutyOnDay(doc, dayOfWeek));
+      const onDutyDocs = doctors.filter((doc) => isDoctorOnDutyOnDay(doc, dayOfWeek, clinicSchedule));
 
       // Strictly evaluate availability based on the SELECTED doctor's schedule!
       const isSelectedDocOnDuty = activeDutyDoctor
-        ? isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeek)
+        ? isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeek, clinicSchedule)
         : onDutyDocs.length > 0;
 
       const isDisabled = isPast || isTooFar || !isSelectedDocOnDuty;
@@ -777,17 +756,23 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         hasDoctorsOnDuty: isSelectedDocOnDuty,
       };
     });
-  }, [calendarMonth, selectedClinic?.doctors, activeDutyDoctor]);
+  }, [calendarMonth, selectedClinic?.doctors, activeDutyDoctor, selectedClinic?.openTime, selectedClinic?.closeTime, selectedClinic?.operatingDays]);
 
   // Filter doctors who are on duty on this day of week
   const onDutyDoctorsForDate = useMemo(() => {
     if (!selectedClinic?.doctors || selectedClinic.doctors.length === 0) return [];
     if (!dayOfWeekForSelectedDate) return [];
 
+    const clinicSchedule = {
+      openTime: selectedClinic.openTime,
+      closeTime: selectedClinic.closeTime,
+      operatingDays: selectedClinic.operatingDays,
+    };
+
     return selectedClinic.doctors.filter((doc) =>
-      isDoctorOnDutyOnDay(doc, dayOfWeekForSelectedDate)
+      isDoctorOnDutyOnDay(doc, dayOfWeekForSelectedDate, clinicSchedule)
     );
-  }, [selectedClinic?.doctors, dayOfWeekForSelectedDate]);
+  }, [selectedClinic?.doctors, dayOfWeekForSelectedDate, selectedClinic?.openTime, selectedClinic?.closeTime, selectedClinic?.operatingDays]);
 
   // Doctor consultation schedule hours summary for selected date
   const activeDoctorHours = useMemo(() => {
@@ -853,7 +838,12 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   // Dynamically generate consecutive consultation slots grouped by shift using unified schedulingService
   const dayShiftGroups = useMemo<DayShiftSlotsGroup[]>(() => {
     if (!activeDutyDoctor || !selectedDate || !dayOfWeekForSelectedDate) return [];
-    if (!isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate)) return [];
+    const clinicSchedule = {
+      openTime: selectedClinic?.openTime,
+      closeTime: selectedClinic?.closeTime,
+      operatingDays: selectedClinic?.operatingDays,
+    };
+    if (!isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate, clinicSchedule)) return [];
 
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -868,6 +858,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       defaultSlotIntervalMinutes: selectedClinic?.slotIntervalMinutes || 30,
       openTime: selectedClinic?.openTime,
       closeTime: selectedClinic?.closeTime,
+      operatingDays: selectedClinic?.operatingDays,
     };
 
     return generateDaySlotsForDoctor({
@@ -1666,7 +1657,20 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         } catch {}
       }
 
-      // Validate that doctor is scheduled to work on this weekday
+      // Validate clinic operating days
+      if (selectedClinic?.operatingDays && !isClinicOpenOnDay(dayOfWeekForSelectedDate, selectedClinic.operatingDays)) {
+        setSubmitError(`The clinic is closed on ${dayOfWeekForSelectedDate}s (${selectedClinic.name} operating days: ${selectedClinic.operatingDays}). Please select another date.`);
+        setSubmitting(false);
+        return;
+      }
+
+      const clinicSchedule = {
+        openTime: selectedClinic?.openTime,
+        closeTime: selectedClinic?.closeTime,
+        operatingDays: selectedClinic?.operatingDays,
+      };
+
+      // Validate that doctor is scheduled to work on this weekday and respects clinic operating hours
       const targetDay = normalizeDayName(dayOfWeekForSelectedDate);
       const docSchedule =
         activeDutyDoctor?.weeklySchedule ||
@@ -1674,8 +1678,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const doctorShifts = docSchedule?.weeklyShifts[targetDay] || [];
 
       if (activeDutyDoctor) {
-        if (doctorShifts.length === 0 && !isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate)) {
-          setSubmitError(`Dr. ${activeDutyDoctor.name} is not scheduled to work on ${dayOfWeekForSelectedDate}.`);
+        if (!isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate, clinicSchedule)) {
+          setSubmitError(`Dr. ${activeDutyDoctor.name} is not available or scheduled to work on ${dayOfWeekForSelectedDate}.`);
           setSubmitting(false);
           return;
         }
@@ -1698,6 +1702,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         defaultSlotIntervalMinutes: selectedClinic?.slotIntervalMinutes || 30,
         openTime: selectedClinic?.openTime,
         closeTime: selectedClinic?.closeTime,
+        operatingDays: selectedClinic?.operatingDays,
       };
 
       const effectiveSettings = matchedShift
@@ -1710,6 +1715,20 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             possibleSlots: 999,
             capacity: 999,
           };
+
+      // Strict validation against clinic operating hours
+      if (selectedClinic?.openTime && selectedClinic?.closeTime) {
+        const clinicOpenM = timeToMinutes(selectedClinic.openTime);
+        const clinicCloseM = timeToMinutes(selectedClinic.closeTime);
+        const interval = effectiveSettings.interval;
+        if (reqStartM < clinicOpenM || reqStartM + interval > clinicCloseM) {
+          setSubmitError(
+            `The selected appointment time (${formatTime12h(selectedTime)}) is outside the clinic's operating hours (${formatTime12h(selectedClinic.openTime)} – ${formatTime12h(selectedClinic.closeTime)}).`
+          );
+          setSubmitting(false);
+          return;
+        }
+      }
 
       if (matchedShift) {
         const shiftStartM = timeToMinutes(matchedShift.startTime);
@@ -3094,7 +3113,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       {/* Shift groups rendering */}
                       {dayShiftGroups.length === 0 ? (
                         <div className="p-5 text-center text-xs border border-dashed border-gray-200 rounded-2xl bg-slate-50/50 space-y-1.5 min-h-[220px] flex flex-col justify-center items-center">
-                          {activeDutyDoctor && !isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate) ? (
+                          {activeDutyDoctor && !isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate, {
+                            openTime: selectedClinic?.openTime,
+                            closeTime: selectedClinic?.closeTime,
+                            operatingDays: selectedClinic?.operatingDays,
+                          }) ? (
                             <>
                               <p className="font-bold text-gray-800">
                                 Dr. {activeDutyDoctor.name} is not on duty on {dayOfWeekForSelectedDate}.
