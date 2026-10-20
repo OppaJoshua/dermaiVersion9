@@ -1499,6 +1499,8 @@ interface RoleStoreState {
 interface RoleStore {
   state: RoleStoreState;
   listeners: Set<() => void>;
+  channel?: any;
+  refCount?: number;
 }
 
 const roleStores = new Map<string, RoleStore>();
@@ -1523,6 +1525,7 @@ function getOrCreateRoleStore(key: string): RoleStore {
         unreadCount: 0,
       },
       listeners: new Set(),
+      refCount: 0,
     };
     roleStores.set(key, store);
   }
@@ -1657,78 +1660,82 @@ export function useRoleNotifications(
 
     fetchFn();
 
-    // Setup Realtime Channel
-    const channelId = `role-notifs-${role}-${userId || clinicId || "admin"}-${Date.now()}`;
-    const channel = supabase.channel(channelId);
+    // Setup Shared Realtime Channel with reference counting per store
+    store.refCount = (store.refCount || 0) + 1;
+    if (!store.channel) {
+      const channelId = `role-notifs-${role}-${userId || clinicId || "admin"}-${Math.random().toString(36).slice(2, 9)}`;
+      const channel = supabase.channel(channelId);
 
-    // Subscribe to all relevant tables based on role
-    if (role === "patient" && userId) {
-      channel
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "patient_appointment", filter: `user_id=eq.${userId}` },
-          () => fetchFn()
-        )
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "user_notification", filter: `user_id=eq.${userId}` },
-          () => fetchFn()
-        )
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "user_support_ticket", filter: `user_id=eq.${userId}` },
-          () => fetchFn()
-        )
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "admin_broadcast" },
-          () => fetchFn()
-        );
-    } else if (role === "doctor") {
-      channel
-        .on("postgres_changes", { event: "*", schema: "public", table: "patient_appointment" }, () => fetchFn())
-        .on("postgres_changes", { event: "*", schema: "public", table: "user_notification" }, () => fetchFn())
-        .on("postgres_changes", { event: "*", schema: "public", table: "admin_broadcast" }, () => fetchFn());
-    } else if (role === "clinic") {
-      if (clinicId) {
-        channel.on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "patient_appointment", filter: `clinic_id=eq.${clinicId}` },
-          () => fetchFn()
-        );
-      } else {
-        channel.on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "patient_appointment" },
-          () => fetchFn()
-        );
+      // Subscribe to all relevant tables based on role
+      if (role === "patient" && userId) {
+        channel
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "patient_appointment", filter: `user_id=eq.${userId}` },
+            () => fetchFn()
+          )
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "user_notification", filter: `user_id=eq.${userId}` },
+            () => fetchFn()
+          )
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "user_support_ticket", filter: `user_id=eq.${userId}` },
+            () => fetchFn()
+          )
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "admin_broadcast" },
+            () => fetchFn()
+          );
+      } else if (role === "doctor") {
+        channel
+          .on("postgres_changes", { event: "*", schema: "public", table: "patient_appointment" }, () => fetchFn())
+          .on("postgres_changes", { event: "*", schema: "public", table: "user_notification" }, () => fetchFn())
+          .on("postgres_changes", { event: "*", schema: "public", table: "admin_broadcast" }, () => fetchFn());
+      } else if (role === "clinic") {
+        if (clinicId) {
+          channel.on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "patient_appointment", filter: `clinic_id=eq.${clinicId}` },
+            () => fetchFn()
+          );
+        } else {
+          channel.on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "patient_appointment" },
+            () => fetchFn()
+          );
+        }
+        if (userId) {
+          channel.on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "user_notification", filter: `user_id=eq.${userId}` },
+            () => fetchFn()
+          );
+        } else {
+          channel.on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "user_notification" },
+            () => fetchFn()
+          );
+        }
+        channel
+          .on("postgres_changes", { event: "*", schema: "public", table: "clinic" }, () => fetchFn())
+          .on("postgres_changes", { event: "*", schema: "public", table: "admin_broadcast" }, () => fetchFn());
+      } else if (role === "admin") {
+        channel
+          .on("postgres_changes", { event: "*", schema: "public", table: "clinic" }, () => fetchFn())
+          .on("postgres_changes", { event: "*", schema: "public", table: "user_support_ticket" }, () => fetchFn())
+          .on("postgres_changes", { event: "*", schema: "public", table: "patient_appointment" }, () => fetchFn())
+          .on("postgres_changes", { event: "*", schema: "public", table: "user_plan_subscription" }, () => fetchFn())
+          .on("postgres_changes", { event: "*", schema: "public", table: "user" }, () => fetchFn());
       }
-      if (userId) {
-        channel.on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "user_notification", filter: `user_id=eq.${userId}` },
-          () => fetchFn()
-        );
-      } else {
-        channel.on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "user_notification" },
-          () => fetchFn()
-        );
-      }
-      channel
-        .on("postgres_changes", { event: "*", schema: "public", table: "clinic" }, () => fetchFn())
-        .on("postgres_changes", { event: "*", schema: "public", table: "admin_broadcast" }, () => fetchFn());
-    } else if (role === "admin") {
-      channel
-        .on("postgres_changes", { event: "*", schema: "public", table: "clinic" }, () => fetchFn())
-        .on("postgres_changes", { event: "*", schema: "public", table: "user_support_ticket" }, () => fetchFn())
-        .on("postgres_changes", { event: "*", schema: "public", table: "patient_appointment" }, () => fetchFn())
-        .on("postgres_changes", { event: "*", schema: "public", table: "user_plan_subscription" }, () => fetchFn())
-        .on("postgres_changes", { event: "*", schema: "public", table: "user" }, () => fetchFn());
+
+      channel.subscribe();
+      store.channel = channel;
     }
-
-    channel.subscribe();
 
     const handleCleared = (e: Event) => {
       const custom = e as CustomEvent;
@@ -1756,7 +1763,13 @@ export function useRoleNotifications(
 
     return () => {
       store.listeners.delete(listener);
-      supabase.removeChannel(channel);
+      store.refCount = Math.max(0, (store.refCount || 1) - 1);
+      if (store.refCount === 0 && store.channel) {
+        try {
+          supabase.removeChannel(store.channel);
+        } catch {}
+        store.channel = undefined;
+      }
       window.removeEventListener("dermai_notifications_cleared", handleCleared);
       window.removeEventListener("dermai_notifications_updated", handleCustomUpdate);
       window.removeEventListener("storage", handleCustomUpdate);
