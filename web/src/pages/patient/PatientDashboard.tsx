@@ -7,10 +7,6 @@ import {
   User,
   TrendingUp,
   Shield,
-  Bell,
-  CheckCircle2,
-  XCircle,
-  X,
   ArrowUpRight,
   Stethoscope,
 } from "lucide-react";
@@ -20,7 +16,6 @@ import { useEffect, useState, useMemo } from "react";
 import { skinConditions } from "../public/SkinLibrary";
 import { supabase } from "@/lib/supabaseClient";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
-import { getCachedPatientNotifications } from "@/lib/notificationService";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 import { useAuth } from "@/context/AuthContext";
 
@@ -62,16 +57,6 @@ type QuickStats = {
   lastScan: string;
 };
 
-type PatientNotif = {
-  id: string;
-  type: "appointment-scheduled" | "appointment-rejected";
-  title: string;
-  message: string;
-  clinicName?: string;
-  timestamp: string;
-  read: boolean;
-};
-
 const skinTips = [
   {
     title: "Daily Sunscreen",
@@ -99,50 +84,6 @@ export default function PatientDashboard() {
     lastScan: "—",
   });
   const [loading, setLoading] = useState(true);
-  const [notifications, setNotifications] = useState<PatientNotif[]>([]);
-
-  const dismissNotif = async (id: string) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
-    try {
-      const { data: { session: sess } } = await supabase.auth.getSession();
-      if (sess?.user?.id) {
-        const key = `dermai_patient_notifications_${sess.user.id}`;
-        const raw = localStorage.getItem(key);
-        if (raw) {
-          const list = JSON.parse(raw);
-          if (Array.isArray(list)) {
-            const patched = list.map((item: any) =>
-              item.id === id ? { ...item, isRead: true } : item
-            );
-            localStorage.setItem(key, JSON.stringify(patched));
-          }
-        }
-      }
-    } catch { }
-    await supabase.from("user_notification").update({ is_read: true }).eq("notif_id", id);
-  };
-
-  const clearAllNotifs = async () => {
-    const ids = notifications.map((n) => n.id);
-    setNotifications([]);
-    try {
-      const { data: { session: sess } } = await supabase.auth.getSession();
-      if (sess?.user?.id) {
-        const key = `dermai_patient_notifications_${sess.user.id}`;
-        const raw = localStorage.getItem(key);
-        if (raw) {
-          const list = JSON.parse(raw);
-          if (Array.isArray(list)) {
-            const patched = list.map((item: any) => ({ ...item, isRead: true }));
-            localStorage.setItem(key, JSON.stringify(patched));
-          }
-        }
-      }
-    } catch { }
-    if (ids.length > 0) {
-      await supabase.from("user_notification").update({ is_read: true }).in("notif_id", ids);
-    }
-  };
 
   useEffect(() => {
     const loadDashboardData = async () => {
@@ -405,46 +346,6 @@ export default function PatientDashboard() {
           clinicsSaved: String(savedCount ?? 0),
           lastScan,
         });
-
-        // Fetch notifications ordered by created_at descending
-        const { data: notifRows, error: notifErr } = await supabase
-          .from("user_notification")
-          .select("notif_id, type, subtype, title, body, is_read, created_at")
-          .eq("user_id", userId)
-          .eq("is_read", false)
-          .order("created_at", { ascending: false })
-          .limit(10);
-
-        if (!notifErr && notifRows && notifRows.length > 0) {
-          setNotifications(notifRows.map((n: {
-            notif_id: string;
-            type: string;
-            subtype: string | null;
-            title: string;
-            body: string | null;
-            is_read: boolean;
-            created_at: string;
-          }) => ({
-            id: n.notif_id,
-            type: (n.type === "appointment-rejected" ? "appointment-rejected" : "appointment-scheduled") as PatientNotif["type"],
-            title: n.title,
-            message: n.body || n.subtype || "",
-            timestamp: n.created_at || new Date().toISOString(),
-            read: n.is_read,
-          })));
-        } else {
-          // Fallback to local cached unread notifications
-          const cached = getCachedPatientNotifications(userId);
-          const unreadCached = (Array.isArray(cached) ? cached : []).filter((n: any) => !n.isRead);
-          setNotifications(unreadCached.map((n: any) => ({
-            id: n.id,
-            type: (n.type === "appointment-rejected" ? "appointment-rejected" : "appointment-scheduled") as PatientNotif["type"],
-            title: n.title,
-            message: n.body || n.subtype || "",
-            timestamp: n.createdAt || new Date().toISOString(),
-            read: Boolean(n.isRead),
-          })));
-        }
       } catch (err) {
         console.error("Failed to load dashboard data:", err);
       } finally {
@@ -516,76 +417,6 @@ export default function PatientDashboard() {
             </p>
           </div>
         </motion.div>
-
-        {/* Clinic Notifications */}
-        {notifications.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className={cn(card, "mb-4 p-5")}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <Bell className="w-4 h-4 text-[#c0166a]" />
-                <span className="text-sm font-bold text-gray-800">Clinic Notifications</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#c0166a] text-white font-bold">
-                  {notifications.length}
-                </span>
-              </div>
-              <button
-                onClick={clearAllNotifs}
-                className="text-xs text-gray-400 hover:text-gray-600 font-medium cursor-pointer"
-              >
-                Clear all
-              </button>
-            </div>
-            <div className="space-y-2">
-              {notifications.map((notif) => (
-                <div
-                  key={notif.id}
-                  className={`flex items-start gap-3 p-4 rounded-2xl border ${notif.type === "appointment-scheduled"
-                    ? "bg-green-50 border-green-200"
-                    : "bg-red-50 border-red-200"
-                    }`}
-                >
-                  {notif.type === "appointment-scheduled" ? (
-                    <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
-                  ) : (
-                    <XCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className={`text-sm font-bold ${notif.type === "appointment-scheduled" ? "text-green-800" : "text-red-800"
-                        }`}
-                    >
-                      {notif.title}
-                    </p>
-                    <p className="text-xs text-gray-600 mt-0.5">{notif.message}</p>
-                    <p className="text-[11px] text-gray-400 mt-1">
-                      {new Date(notif.timestamp).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                      {" · "}
-                      {new Date(notif.timestamp).toLocaleTimeString("en-US", {
-                        hour: "numeric",
-                        minute: "2-digit",
-                        hour12: true,
-                      })}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => dismissNotif(notif.id)}
-                    className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center hover:bg-black/10 transition-colors cursor-pointer"
-                  >
-                    <X className="w-3.5 h-3.5 text-gray-500" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </motion.div>
-        )}
 
         {/* Bento grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">

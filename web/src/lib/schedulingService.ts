@@ -501,6 +501,49 @@ export interface GenerateShiftSlotsParams {
 }
 
 /**
+ * Checks whether an appointment reservation or hold is currently active and occupying a slot.
+ * - 'paid', 'exempt', or legacy records (payment_status is null/undefined) are active reservations (unless cancelled/rejected).
+ * - 'pending_hold' is active ONLY IF payment_hold_expires_at is in the future.
+ * - 'expired', 'failed', 'cancelled' holds do NOT occupy slots.
+ */
+export function isAppointmentHoldOrReservationActive(
+  appt?: {
+    status?: string | null;
+    doctor_status?: string | null;
+    doctorStatus?: string | null;
+    payment_status?: string | null;
+    paymentStatus?: string | null;
+    payment_hold_expires_at?: string | null;
+    paymentHoldExpiresAt?: string | null;
+  } | null,
+  currentTimeMs?: number
+): boolean {
+  if (!appt) return false;
+  const st = String(appt.status || "").toLowerCase().trim();
+  if (st === "cancelled" || st === "rejected" || st === "declined") return false;
+  const docSt = String(appt.doctor_status || appt.doctorStatus || "").toLowerCase().trim();
+  if (docSt === "rejected" || docSt === "declined") return false;
+
+  const paySt = String(appt.payment_status || appt.paymentStatus || "").toLowerCase().trim();
+  if (paySt === "expired" || paySt === "cancelled" || paySt === "failed") {
+    return false;
+  }
+
+  if (paySt === "pending_hold") {
+    const rawExp = appt.payment_hold_expires_at || appt.paymentHoldExpiresAt;
+    if (!rawExp) return false;
+    const expTime = new Date(rawExp).getTime();
+    if (isNaN(expTime)) return false;
+    const nowMs = currentTimeMs ?? Date.now();
+    if (expTime <= nowMs) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * Generates all valid consecutive consultation slots for a specific doctor shift.
  */
 export function generateSlotsForShift({
@@ -536,8 +579,7 @@ export function generateSlotsForShift({
 
   // Filter active appointments that belong to this shift and this doctor
   const activeBookingsInShift = activeAppointments.filter((appt) => {
-    const st = String(appt.status || "").toLowerCase().trim();
-    if (st === "cancelled" || st === "rejected" || st === "declined") return false;
+    if (!isAppointmentHoldOrReservationActive(appt)) return false;
 
     // Doctor match
     if (doctorId && appt.assigned_doctor_id && String(appt.assigned_doctor_id) !== String(doctorId)) {
@@ -814,8 +856,7 @@ export function validateDoctorReassignment({
   // 3. Slot conflict check: does this doctor already have an appointment on this date & time?
   const dateStringYmd = appointmentDate.split("T")[0];
   const hasConflict = existingAppointments.some((appt) => {
-    const apptStatus = String(appt.status || "").toLowerCase().trim();
-    if (apptStatus === "cancelled" || apptStatus === "rejected" || apptStatus === "declined") {
+    if (!isAppointmentHoldOrReservationActive(appt)) {
       return false;
     }
     const apptDocId =
@@ -1161,22 +1202,30 @@ export function isAppointmentExcludedFromIncomingQueue(appt?: {
   time?: string | null;
   batch_time?: string | null;
   batchTime?: string | null;
+  payment_status?: string | null;
+  paymentStatus?: string | null;
 } | null): boolean {
   if (!appt) return true;
 
-  // 1. Immediately exclude No-Show appointments
+  // 1. Immediately exclude unpaid temporary holds or expired holds
+  const paySt = String(appt.payment_status || (appt as any).paymentStatus || "").toLowerCase().trim();
+  if (paySt === "pending_hold" || paySt === "expired" || paySt === "failed" || paySt === "cancelled") {
+    return true;
+  }
+
+  // 2. Immediately exclude No-Show appointments
   const checkIn = String(appt.checkInStatus || appt.check_in_status || "").toLowerCase().trim();
   const st = String(appt.status || "").toLowerCase().trim();
   const docSt = String(appt.doctorStatus || "").toLowerCase().trim();
   if (checkIn === "no-show" || st === "no-show" || docSt === "no-show") return true;
 
-  // 2. Immediately exclude Completed appointments
+  // 3. Immediately exclude Completed appointments
   if (st === "completed" || checkIn === "completed") return true;
 
-  // 3. Immediately exclude Cancelled or Rejected appointments
+  // 4. Immediately exclude Cancelled or Rejected appointments
   if (st === "cancelled" || st === "rejected") return true;
 
-  // 4. Immediately exclude past appointments whose scheduled date and time have elapsed
+  // 5. Immediately exclude past appointments whose scheduled date and time have elapsed
   if (isAppointmentPastScheduled(appt)) return true;
 
   return false;
@@ -1201,6 +1250,10 @@ export function computeNextQueueNumber(
 
   const sameDayAppts = existingAppointments.filter((a) => {
     if (!a) return false;
+    const paySt = String(a.payment_status || a.paymentStatus || "").toLowerCase().trim();
+    if (paySt === "pending_hold" || paySt === "expired" || paySt === "failed" || paySt === "cancelled") {
+      return false;
+    }
     const aDateKey = getManilaCalendarDate(a.date);
     if (targetDateKey && aDateKey !== targetDateKey) return false;
 
@@ -1246,9 +1299,7 @@ export function isSlotBookedForDoctor(
       return false;
     }
 
-    const st = String(appt.status || "").toLowerCase().trim();
-    if (st === "cancelled" || st === "rejected" || st === "declined") return false;
-    if (appt.doctor_status === "rejected" || appt.doctorStatus === "rejected") return false;
+    if (!isAppointmentHoldOrReservationActive(appt)) return false;
 
     // Check doctor match
     const docId = appt.assigned_doctor_id || appt.assignedDoctorId;

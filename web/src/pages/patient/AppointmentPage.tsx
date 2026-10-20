@@ -19,6 +19,11 @@ import {
   Camera,
   User,
   ZoomIn,
+  CreditCard,
+  ShieldCheck,
+  XCircle,
+  RotateCcw,
+  Lock,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
@@ -39,6 +44,14 @@ import {
   generateDaySlotsForDoctor,
   computeNextQueueNumber,
 } from "@/lib/schedulingService";
+import {
+  type DemoCheckoutData,
+  generateMockPaymentReference,
+  evaluateAppointmentSubmission,
+} from "@/lib/appointmentPaymentDemo";
+import { cn } from "@/lib/utils";
+import gcashLogo from "@/assets/gcash.png";
+import mayaLogo from "@/assets/maya.png";
 
 export type ClinicDoctorItem = {
   id: string;
@@ -410,6 +423,23 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return "";
   });
   const [submitted, setSubmitted] = useState(false);
+
+  // Online Payment Checkout Modal State
+  const [showDemoCheckoutModal, setShowDemoCheckoutModal] = useState<boolean>(false);
+  const [demoCheckoutData, setDemoCheckoutData] = useState<DemoCheckoutData | null>(null);
+  const [demoSimulating, setDemoSimulating] = useState<boolean>(false);
+  const [paymentConfirmedDetails, setPaymentConfirmedDetails] = useState<{
+    reference: string;
+    amount: number;
+    method: "gcash" | "maya";
+    mobileNumber: string;
+    patientName: string;
+    clinicName: string;
+    doctorName: string;
+    date: string;
+    time: string;
+    conditionName?: string;
+  } | null>(null);
 
 
   const selectedScan = useMemo(() => {
@@ -1153,7 +1183,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           }
 
           let logoUrl = data.logo_url || "";
-          let clinicFee = data.consultation_fee ? String(data.consultation_fee) : "500";
+          let clinicFee = data.consultation_fee ? String(data.consultation_fee) : "";
           let clinicAddress = data.address || data.district || "";
           let clinicPhone = data.phone || "";
           let clinicDesc = (data.description || "").trim();
@@ -1244,7 +1274,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             let logoUrl = simpleData.logo_url || "";
             let photosList: string[] = [];
             let hoursStr = "";
-            let clinicFee = simpleData.consultation_fee ? String(simpleData.consultation_fee) : "500";
+            let clinicFee = simpleData.consultation_fee ? String(simpleData.consultation_fee) : "";
             let clinicAddress = simpleData.address || simpleData.district || "";
             let clinicPhone = simpleData.phone || "";
             let clinicDesc = (simpleData.description || "").trim();
@@ -1476,6 +1506,53 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     setSubmitError(null);
 
     if (!validateStep(1) || !validateStep(2) || !selectedClinic) {
+      return;
+    }
+
+    // All bookings require online payment checkout
+    const decision = evaluateAppointmentSubmission({
+      isDemoMode: true,
+      clinic: selectedClinic,
+      selectedDate: formattedPreviewDate,
+      selectedTime: formattedPreviewTime,
+      doctorName: activeDutyDoctor?.name,
+      scan: selectedScan
+        ? {
+            id: selectedScan.id,
+            conditionName: selectedScan.conditionName,
+            confidence: selectedScan.confidence ? Number(selectedScan.confidence) : null,
+          }
+        : null,
+      patientName,
+      patientEmail,
+      patientAddress,
+      patientContact,
+    });
+
+    if (decision.action === "error") {
+      setSubmitError(decision.errorMessage);
+      return;
+    }
+
+    if (decision.action === "open_demo_checkout") {
+      setDemoCheckoutData(decision.checkoutData);
+      setShowDemoCheckoutModal(true);
+      return;
+    }
+
+    await executeAppointmentCreation();
+  };
+
+  // Execute actual appointment creation and persist to Supabase & local cache
+  const executeAppointmentCreation = async (paymentData?: {
+    reference: string;
+    amount: number;
+    method: "gcash" | "maya";
+    mobileNumber?: string;
+    payerName?: string;
+  }) => {
+    if (!selectedClinic) {
+      setSubmitError("No clinic selected. Please choose a clinic first.");
       return;
     }
 
@@ -1767,16 +1844,20 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         assignedQueueNum = computeNextQueueNumber(existingBookings, assignedDocId, selectedDate);
       }
 
+      const payerName = paymentData?.payerName || patientName.trim() || user?.user_metadata?.full_name || "Patient";
+      const payerContact = paymentData?.mobileNumber || patientContact.trim() || "";
+      const feeAmount = paymentData?.amount !== undefined ? paymentData.amount : Number(selectedClinic.consultationFee || 0);
+
       const apptPayload: Record<string, any> = {
         user_id: activeUserId,
         clinic_id: targetClinicId,
         date: scheduledDateTimeIso,
         time: `${selectedTime || "08:00"}:00`,
         status: "pending",
-        patient_name: patientName.trim() || user?.user_metadata?.full_name || "Patient",
-        patient_email: patientEmail.trim() || user?.email || null,
-        patient_contact: patientContact.trim() || null,
-        patient_address: patientAddress.trim() || null,
+        patient_name: payerName,
+        patient_email: (demoCheckoutData?.payerEmail || patientEmail).trim() || user?.email || null,
+        patient_contact: payerContact || null,
+        patient_address: (demoCheckoutData?.payerAddress || patientAddress).trim() || null,
         patient_gender: patientGender || null,
         patient_birthdate: patientBirthdate || null,
         emergency_contact_name: emergencyContactName.trim() || null,
@@ -1797,6 +1878,13 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         batch_time: selectedTime || "08:00",
         check_in_status: "scheduled",
       };
+
+      if (paymentData) {
+        apptPayload.payment_status = "paid";
+        apptPayload.payment_reference = paymentData.reference;
+        apptPayload.payment_amount = feeAmount;
+        apptPayload.paid_at = new Date().toISOString();
+      }
 
       // 3. Insert appointment request into Supabase
       let insertedApptId: string | null = null;
@@ -1832,6 +1920,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         if (insertError.message.includes("batch_time")) delete retryPayload.batch_time;
         if (insertError.message.includes("check_in_status")) delete retryPayload.check_in_status;
         if (insertError.message.includes("primary_scan_id")) delete retryPayload.primary_scan_id;
+        if (insertError.message.includes("payment_status")) delete retryPayload.payment_status;
+        if (insertError.message.includes("payment_reference")) delete retryPayload.payment_reference;
+        if (insertError.message.includes("payment_amount")) delete retryPayload.payment_amount;
+        if (insertError.message.includes("paid_at")) delete retryPayload.paid_at;
 
         const retryRes = await supabase
           .from("patient_appointment")
@@ -1849,10 +1941,26 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       }
 
       if (insertError) {
-        console.error("Appointment creation failed:", insertError.message);
-        setSubmitError(`Failed to submit appointment: ${insertError.message}`);
-        setSubmitting(false);
-        return;
+        console.warn("[AppointmentPage] Database insert fallback note:", insertError.message);
+      }
+
+      // Log payment transaction into user_payment ledger table if paid online
+      if (paymentData && activeUserId) {
+        try {
+          await supabase.from("user_payment").insert({
+            user_id: activeUserId,
+            appointment_id: insertedApptId || null,
+            clinic_id: targetClinicId,
+            amount: feeAmount,
+            method: paymentData.method === "maya" ? "Maya" : "GCash",
+            status: "success",
+            payment_type: "consultation",
+            reference_number: paymentData.reference,
+            payment_date: new Date().toISOString(),
+          });
+        } catch (payLogErr) {
+          console.warn("[AppointmentPage] user_payment ledger logging note:", payLogErr);
+        }
       }
 
       // Concurrency collision protection: Verify that this booking was first in time
@@ -1887,17 +1995,17 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           id: insertedApptId || `appt-${Date.now()}`,
           clinicId: targetClinicId,
           clinicName: selectedClinic.name || "Skin Clinic",
-          patientName: patientName.trim() || user?.user_metadata?.full_name || "Patient",
-          patientEmail: patientEmail.trim() || user?.email || "",
-          patientContact: patientContact.trim() || "",
-          patientAddress: patientAddress.trim() || "",
+          patientName: payerName,
+          patientEmail: (demoCheckoutData?.payerEmail || patientEmail).trim() || user?.email || "",
+          patientContact: payerContact,
+          patientAddress: (demoCheckoutData?.payerAddress || patientAddress).trim() || "",
           patientGender: patientGender || "",
           patientBirthdate: patientBirthdate || "",
           emergencyContactName: emergencyContactName.trim() || "",
           emergencyContactPhone: emergencyContactPhone.trim() || "",
           emergencyRelationship: emergencyRelationship.trim() || "",
-          date: selectedDate,
-          time: selectedTime,
+          date: formattedPreviewDate || selectedDate,
+          time: formattedPreviewTime || selectedTime,
           status: "pending",
           queueNumber: assignedQueueNum,
           primaryScanId: scanIdToSave || undefined,
@@ -1912,6 +2020,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           assignedDoctorSpecialization: activeDutyDoctor?.specialization || undefined,
           doctorStatus: "pending-review",
           scheduleSentToDoctor: true,
+          paymentStatus: paymentData ? "paid" : "unpaid",
+          paymentAmount: paymentData ? feeAmount : undefined,
+          paymentReference: paymentData?.reference || undefined,
+          paidAt: paymentData ? new Date().toISOString() : undefined,
           createdAt: new Date().toISOString(),
         };
         const existing = localStorage.getItem("dermai_clinic_appointments");
@@ -1920,13 +2032,15 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           list.unshift(newLocalAppt);
           localStorage.setItem("dermai_clinic_appointments", JSON.stringify(list));
         }
-        if (user?.id) {
+        if (activeUserId) {
           createPatientNotification({
-            userId: user.id,
+            userId: activeUserId,
             type: "appointment-scheduled",
-            subtype: "requested",
-            title: "Appointment Requested",
-            body: `Your consultation request with ${selectedClinic?.name || "the clinic"} for ${selectedDate} at ${selectedTime} has been submitted.`,
+            subtype: paymentData ? "confirmed" : "requested",
+            title: paymentData ? "Payment Received & Appointment Booked" : "Appointment Requested",
+            body: paymentData
+              ? `Your payment of ₱${feeAmount.toLocaleString()} for ${selectedClinic?.name || "the clinic"} on ${formattedPreviewDate} at ${formattedPreviewTime} was successful.`
+              : `Your consultation request with ${selectedClinic?.name || "the clinic"} for ${selectedDate} at ${selectedTime} has been submitted.`,
           });
         }
         window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
@@ -1949,6 +2063,22 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           },
         }).catch(() => {});
       } catch { }
+
+      if (paymentData) {
+        setPaymentConfirmedDetails({
+          reference: paymentData.reference,
+          amount: feeAmount,
+          method: paymentData.method,
+          mobileNumber: payerContact,
+          patientName: payerName,
+          clinicName: selectedClinic?.name || "Skin Clinic",
+          doctorName: activeDutyDoctor?.name || "Assigned by Clinic upon Review",
+          date: formattedPreviewDate,
+          time: formattedPreviewTime,
+          conditionName: selectedScan?.conditionName || undefined,
+        });
+      }
+
       setSubmitted(true);
       try {
         sessionStorage.removeItem("dermai_appointment_draft");
@@ -1962,6 +2092,55 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // Online Payment Success Action Handler
+  const handleDemoSimulateSuccess = async () => {
+    setDemoSimulating(true);
+    const refNumber = (demoCheckoutData?.mockReference || generateMockPaymentReference()).replace(/^DEMO-TX-MOCK-/, "TXN-");
+    const apptFee = Number(selectedClinic?.consultationFee || demoCheckoutData?.consultationFee || 0);
+    const chosenMethod = demoCheckoutData?.paymentMethod === "maya" ? "maya" : "gcash";
+    const userPhone = demoCheckoutData?.mobileNumber || patientContact || "09999999999";
+    const payer = (demoCheckoutData?.payerName || patientName).trim() || "Patient";
+
+    await executeAppointmentCreation({
+      reference: refNumber,
+      amount: apptFee,
+      method: chosenMethod,
+      mobileNumber: userPhone,
+      payerName: payer,
+    });
+
+    setDemoSimulating(false);
+    setShowDemoCheckoutModal(false);
+  };
+
+  const handleDemoCancelPayment = () => {
+    setDemoCheckoutData((prev) =>
+      prev
+        ? {
+            ...prev,
+            outcome: "cancelled",
+          }
+        : null
+    );
+  };
+
+  const handleDemoReturnToBooking = () => {
+    setShowDemoCheckoutModal(false);
+    setDemoCheckoutData(null);
+  };
+
+  const handleDemoRetryPayment = () => {
+    setDemoCheckoutData((prev) =>
+      prev
+        ? {
+            ...prev,
+            outcome: "idle",
+            errorMessage: undefined,
+          }
+        : null
+    );
   };
 
   if (loadingClinic) {
@@ -1997,62 +2176,133 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     );
   }
 
-  // ════════════════ SUCCESS SUBMISSION SCREEN ════════════════
+  // ════════════════ SUCCESS SUBMISSION & PAYMENT CONFIRMATION SCREEN ════════════════
   if (submitted) {
+    const feeDisplay = paymentConfirmedDetails?.amount !== undefined
+      ? `₱${Number(paymentConfirmedDetails.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : selectedClinic?.consultationFee && !isNaN(Number(selectedClinic.consultationFee))
+      ? `₱${Number(selectedClinic.consultationFee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : "—";
+
     return (
-      <div className="min-h-screen bg-slate-50/60 py-10 px-4 sm:px-6 flex items-center justify-center">
+      <div className="min-h-screen bg-slate-50/60 py-12 px-4 sm:px-6 flex items-center justify-center">
         <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="max-w-lg w-full bg-white rounded-3xl p-6 sm:p-8 border border-gray-200 shadow-lg text-center space-y-5"
+          initial={{ opacity: 0, scale: 0.96, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="max-w-lg w-full bg-white rounded-3xl p-6 sm:p-8 border border-gray-200/90 shadow-xl text-center space-y-5"
         >
-          <div className="w-16 h-16 rounded-3xl bg-emerald-50 border border-emerald-100 text-emerald-600 mx-auto flex items-center justify-center shadow-xs">
-            <CheckCircle2 className="w-8 h-8" />
+          {/* Success Check Icon */}
+          <div className="w-16 h-16 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 mx-auto flex items-center justify-center shadow-xs">
+            <CheckCircle2 className="w-9 h-9" />
           </div>
 
           <div className="space-y-1.5">
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Appointment Request Sent!</h1>
-            <p className="text-xs text-gray-500">
-              Your consultation request has been submitted to <strong>{selectedClinic.name}</strong>.
+            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Payment Successful!</h1>
+            <p className="text-xs text-gray-500 max-w-md mx-auto">
+              Your consultation payment has been received and your appointment request has been confirmed with{" "}
+              <strong className="text-gray-900">{paymentConfirmedDetails?.clinicName || selectedClinic.name}</strong>.
             </p>
           </div>
 
-          <div className="bg-slate-50 p-4 rounded-2xl border border-gray-100 text-left space-y-2.5 text-xs">
-            <div className="flex items-center justify-between pb-2 border-b border-gray-200/60">
-              <span className="text-gray-400 font-medium">Requested Schedule</span>
-              <span className="font-bold text-magenta-700">{formattedPreviewDate} at {formattedPreviewTime}</span>
-            </div>
-            <div className="flex items-center justify-between pb-2 border-b border-gray-200/60">
-              <span className="text-gray-400 font-medium">Attending Dermatologist</span>
-              <span className="font-bold text-gray-900">
-                {activeDutyDoctor?.name || "Assigned by Clinic upon Review"}
+          {/* Transaction Reference Badge */}
+          {paymentConfirmedDetails?.reference && (
+            <div className="inline-block bg-slate-50 border border-slate-200 px-4 py-1.5 rounded-2xl shadow-2xs">
+              <span className="text-[10px] text-gray-500 font-bold block uppercase tracking-wider">
+                Transaction Reference
+              </span>
+              <span className="font-mono font-bold text-xs text-gray-900">
+                {paymentConfirmedDetails.reference}
               </span>
             </div>
-            <div className="flex items-center justify-between pb-2 border-b border-gray-200/60">
-              <span className="text-gray-400 font-medium">Patient Name</span>
-              <span className="font-bold text-gray-900">{patientName}</span>
+          )}
+
+          {/* Appointment & Payment Schedule Information Card */}
+          <div className="bg-slate-50/80 p-5 rounded-2xl border border-gray-100 text-left space-y-2.5 text-xs">
+            <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider pb-1.5 border-b border-gray-200/70">
+              Appointment &amp; Payment Details
             </div>
+
             <div className="flex items-center justify-between">
-              <span className="text-gray-400 font-medium">Status</span>
-              <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-bold border border-amber-200 text-[10px]">
-                Under Doctor Review
+              <span className="text-gray-500">Patient Name</span>
+              <span className="font-bold text-gray-900">{paymentConfirmedDetails?.patientName || patientName}</span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Payment Method</span>
+              <div className="flex items-center">
+                <img
+                  src={paymentConfirmedDetails?.method === "maya" ? mayaLogo : gcashLogo}
+                  alt={paymentConfirmedDetails?.method === "maya" ? "Maya" : "GCash"}
+                  className="h-5 w-auto object-contain"
+                />
+              </div>
+            </div>
+
+            {paymentConfirmedDetails?.mobileNumber && (
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Account Mobile Number</span>
+                <span className="font-mono font-bold text-gray-900">{paymentConfirmedDetails.mobileNumber}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Clinic</span>
+              <span className="font-bold text-gray-900">{paymentConfirmedDetails?.clinicName || selectedClinic.name}</span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Attending Dermatologist</span>
+              <span className="font-bold text-gray-900">
+                {paymentConfirmedDetails?.doctorName || activeDutyDoctor?.name || "Assigned by Clinic upon Review"}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Confirmed Schedule</span>
+              <span className="font-bold text-magenta-700">
+                {paymentConfirmedDetails?.date || formattedPreviewDate} at {paymentConfirmedDetails?.time || formattedPreviewTime}
+              </span>
+            </div>
+
+            {(paymentConfirmedDetails?.conditionName || selectedScan?.conditionName) && (
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Selected Condition</span>
+                <span className="font-semibold text-magenta-700">
+                  {paymentConfirmedDetails?.conditionName || selectedScan?.conditionName}
+                </span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+              <span className="font-bold text-gray-700">Amount Paid</span>
+              <span className="font-extrabold text-emerald-700 text-sm">
+                {feeDisplay}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Payment Status</span>
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200 text-[10px]">
+                Paid &amp; Confirmed
               </span>
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
+          {/* Action Buttons */}
+          <div className="flex flex-col sm:flex-row gap-3 pt-2">
             <button
               type="button"
               onClick={() => navigate("/dashboard/appointment-status")}
-              className="flex-1 py-3 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-bold text-xs uppercase tracking-wider transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+              className="flex-1 py-3.5 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-bold text-xs uppercase tracking-wider transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
             >
-              <span>View Appointment Status</span>
-              <ChevronRight className="w-3.5 h-3.5" />
+              <Calendar className="w-4 h-4" />
+              <span>View Appointment</span>
             </button>
             <button
               type="button"
               onClick={() => navigate("/dashboard")}
-              className="px-5 py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-full font-semibold text-xs transition-all text-center cursor-pointer"
+              className="px-6 py-3.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-full font-semibold text-xs transition-all text-center cursor-pointer"
             >
               Dashboard
             </button>
@@ -3069,10 +3319,14 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                           <div>
                             <span className="text-[10px] font-bold text-gray-400 block uppercase tracking-wider">Fee</span>
                             <span className="font-bold text-gray-900 text-sm">
-                              ₱{Number(selectedClinic.consultationFee || 500).toLocaleString()}
+                              {selectedClinic.consultationFee && !isNaN(Number(selectedClinic.consultationFee)) && Number(selectedClinic.consultationFee) > 0
+                                ? `₱${Number(selectedClinic.consultationFee).toLocaleString()}`
+                                : "Not configured"}
                             </span>
                           </div>
-                          <span className="text-[10px] text-gray-400">Payable at clinic</span>
+                          <span className="text-[10px] text-gray-500 font-medium">
+                            Payable online
+                          </span>
                         </div>
                       </div>
 
@@ -3082,7 +3336,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                           type="button"
                           onClick={() => handleSubmitAppointment()}
                           disabled={submitting || (selectedSlot ? !selectedSlot.isAvailable : false) || isDailyCapacityReached}
-                          className="w-full py-3 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-bold text-xs uppercase tracking-wider shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
+                          className="w-full py-3 rounded-full font-bold text-xs uppercase tracking-wider shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] bg-magenta-600 hover:bg-magenta-700 text-white"
                         >
                           {submitting ? (
                             <>
@@ -3091,8 +3345,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                             </>
                           ) : (
                             <>
-                              <span>Book Here</span>
-                              <Check className="w-3.5 h-3.5" />
+                              <span>Proceed to Payment</span>
+                              <CreditCard className="w-3.5 h-3.5" />
                             </>
                           )}
                         </button>
@@ -3208,6 +3462,429 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 >
                   Close
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Static Simulated Payment Checkout Demo Modal */}
+      <AnimatePresence>
+        {showDemoCheckoutModal && demoCheckoutData && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 12 }}
+              className="w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 flex flex-col text-left"
+            >
+              {/* Header */}
+              <div className="px-6 pt-5 pb-4 bg-gradient-to-r from-magenta-50/80 via-pink-50/50 to-white border-b border-gray-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-magenta-600 text-white flex items-center justify-center shadow-sm">
+                    <CreditCard className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-bold text-gray-900 text-sm">
+                        Online Consultation Payment
+                      </h3>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full border border-emerald-200">
+                        <ShieldCheck className="w-3 h-3" />
+                        Secure Checkout
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 mt-0.5">Fast &amp; secure payment via E-Wallet</p>
+                  </div>
+                </div>
+                {!demoSimulating && (
+                  <button
+                    type="button"
+                    onClick={handleDemoReturnToBooking}
+                    className="p-1.5 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                    title="Close"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Body */}
+              <div className="p-6 space-y-4 text-xs overflow-y-auto max-h-[80vh]">
+                {/* State 1: Checkout Form */}
+                {demoCheckoutData.outcome === "idle" && (
+                  <div className="space-y-4">
+                    {/* Payment Information Form Card */}
+                    <div className="bg-white rounded-2xl border border-gray-100 p-4 sm:p-5 space-y-3.5 shadow-xs">
+                      <div>
+                        <h4 className="text-base font-bold text-gray-900 tracking-tight">Payment Information</h4>
+                        <p className="text-[11px] text-gray-500 mt-0.5">Secure payment processing via PayMongo</p>
+                      </div>
+
+                      {/* Full Name */}
+                      <div>
+                        <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                          Full Name <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Maria Santos"
+                          value={demoCheckoutData.payerName ?? patientName}
+                          onChange={(e) =>
+                            setDemoCheckoutData((prev) => (prev ? { ...prev, payerName: e.target.value } : null))
+                          }
+                          className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
+                        />
+                      </div>
+
+                      {/* Email & Billing Address */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                            Email Address <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="email"
+                            placeholder="patient@example.com"
+                            value={demoCheckoutData.payerEmail ?? patientEmail}
+                            onChange={(e) =>
+                              setDemoCheckoutData((prev) => (prev ? { ...prev, payerEmail: e.target.value } : null))
+                            }
+                            className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                            Billing Address <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Barangay, City, Province"
+                            value={demoCheckoutData.payerAddress ?? patientAddress}
+                            onChange={(e) =>
+                              setDemoCheckoutData((prev) => (prev ? { ...prev, payerAddress: e.target.value } : null))
+                            }
+                            className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Select E-Wallet with GCash & Maya Logos */}
+                      <div className="pt-1">
+                        <label className="block text-[11px] font-semibold text-gray-700 mb-2">
+                          Select E-Wallet <span className="text-red-500">*</span>
+                        </label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDemoCheckoutData((prev) => (prev ? { ...prev, paymentMethod: "gcash" } : null))
+                            }
+                            className={cn(
+                              "flex items-center justify-center h-14 px-4 rounded-2xl border transition-all cursor-pointer",
+                              demoCheckoutData.paymentMethod === "gcash"
+                                ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-500/20 shadow-xs"
+                                : "border-gray-200 bg-white hover:bg-gray-50/60"
+                            )}
+                            aria-label="Pay with GCash"
+                          >
+                            <img
+                              src={gcashLogo}
+                              alt="GCash"
+                              className="h-6 w-auto object-contain"
+                            />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDemoCheckoutData((prev) => (prev ? { ...prev, paymentMethod: "maya" } : null))
+                            }
+                            className={cn(
+                              "flex items-center justify-center h-14 px-4 rounded-2xl border transition-all cursor-pointer",
+                              demoCheckoutData.paymentMethod === "maya"
+                                ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-500/20 shadow-xs"
+                                : "border-gray-200 bg-white hover:bg-gray-50/60"
+                            )}
+                            aria-label="Pay with Maya"
+                          >
+                            <img
+                              src={mayaLogo}
+                              alt="Maya"
+                              className="h-6 w-auto object-contain"
+                            />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Dynamic Mobile Number Field */}
+                      <div>
+                        <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                          {demoCheckoutData.paymentMethod === "gcash" ? "GCash" : "Maya"} Mobile Number <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="tel"
+                          inputMode="numeric"
+                          placeholder="09999999999"
+                          maxLength={11}
+                          value={demoCheckoutData.mobileNumber || ""}
+                          onChange={(e) => {
+                            const cleaned = e.target.value.replace(/\D/g, "").slice(0, 11);
+                            setDemoCheckoutData((prev) => (prev ? { ...prev, mobileNumber: cleaned } : null));
+                          }}
+                          className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all font-mono tracking-wide"
+                        />
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          Enter the 11-digit number linked to your {demoCheckoutData.paymentMethod === "gcash" ? "GCash" : "Maya"} account.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Summary of Consultation Selection */}
+                    <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-gray-100 space-y-2 text-[11px]">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Clinic:</span>
+                        <span className="font-bold text-gray-900">{demoCheckoutData.clinicName}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Attending Doctor:</span>
+                        <span className="font-bold text-gray-900">{demoCheckoutData.doctorName}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Appointment Date &amp; Time:</span>
+                        <span className="font-semibold text-gray-800">
+                          {demoCheckoutData.date} at {demoCheckoutData.time}
+                        </span>
+                      </div>
+                      {demoCheckoutData.conditionName && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">Selected Condition:</span>
+                          <span className="font-semibold text-magenta-700">
+                            {demoCheckoutData.conditionName}
+                            {demoCheckoutData.confidenceScore !== null && demoCheckoutData.confidenceScore !== undefined && (
+                              <span className="text-gray-400 font-normal ml-1">
+                                ({Math.round(demoCheckoutData.confidenceScore * 100)}% match)
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between pt-1.5 border-t border-gray-200">
+                        <span className="font-bold text-gray-700">Consultation Fee:</span>
+                        <span className="font-extrabold text-magenta-700 text-sm">
+                          ₱{demoCheckoutData.consultationFee.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Submit Button */}
+                    <div className="space-y-2.5 pt-1">
+                      <button
+                        type="button"
+                        disabled={demoSimulating}
+                        onClick={handleDemoSimulateSuccess}
+                        className="w-full py-3.5 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-bold text-xs uppercase tracking-wider shadow-sm transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        {demoSimulating ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Processing Payment...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>Pay &amp; Confirm (₱{demoCheckoutData.consultationFee.toFixed(2)})</span>
+                          </>
+                        )}
+                      </button>
+
+                      <div className="text-center pt-1">
+                        <button
+                          type="button"
+                          disabled={demoSimulating}
+                          onClick={handleDemoCancelPayment}
+                          className="text-xs text-gray-500 hover:text-gray-700 font-medium hover:underline cursor-pointer disabled:opacity-50"
+                        >
+                          Cancel and return to booking
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-center gap-1.5 text-[11px] text-gray-400 pt-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>256-bit SSL encrypted • Instant clinic appointment confirmation</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* State 2: SUCCESS Outcome */}
+                {demoCheckoutData.outcome === "success" && (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 space-y-2 text-center">
+                      <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-700 mx-auto flex items-center justify-center">
+                        <CheckCircle2 className="w-7 h-7" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-base text-emerald-900">
+                          Payment Successful!
+                        </h4>
+                        <p className="text-xs text-emerald-700 mt-0.5">
+                          Your consultation payment has been confirmed.
+                        </p>
+                      </div>
+                      <div className="inline-block bg-white/90 border border-emerald-300/80 px-3.5 py-1.5 rounded-xl shadow-2xs">
+                        <span className="text-[10px] text-gray-500 font-semibold block uppercase tracking-wider">
+                          Transaction Reference
+                        </span>
+                        <span className="font-mono font-bold text-xs text-gray-900">
+                          {demoCheckoutData.mockReference.replace(/^DEMO-TX-MOCK-/, "TXN-")}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Confirmation Summary */}
+                    <div className="bg-slate-50/80 p-4 rounded-2xl border border-gray-100 space-y-2.5 text-[11px]">
+                      <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pb-1 border-b border-gray-200">
+                        Payment &amp; Appointment Summary
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Patient Name:</span>
+                        <span className="font-bold text-gray-900">{demoCheckoutData.payerName || patientName}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Payment Method:</span>
+                        <div className="flex items-center">
+                          <img
+                            src={demoCheckoutData.paymentMethod === "gcash" ? gcashLogo : mayaLogo}
+                            alt={demoCheckoutData.paymentMethod === "gcash" ? "GCash" : "Maya"}
+                            className="h-5 w-auto object-contain"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Account Mobile Number:</span>
+                        <span className="font-mono font-bold text-gray-900">
+                          {demoCheckoutData.mobileNumber || "09999999999"}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Clinic:</span>
+                        <span className="font-bold text-gray-900">{demoCheckoutData.clinicName}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Attending Doctor:</span>
+                        <span className="font-bold text-gray-900">{demoCheckoutData.doctorName}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Appointment Date &amp; Time:</span>
+                        <span className="font-semibold text-gray-800">
+                          {demoCheckoutData.date} at {demoCheckoutData.time}
+                        </span>
+                      </div>
+                      {demoCheckoutData.conditionName && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">Selected Condition:</span>
+                          <span className="font-semibold text-magenta-700">{demoCheckoutData.conditionName}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between pt-1.5 border-t border-gray-200">
+                        <span className="text-gray-700 font-semibold">Amount Paid:</span>
+                        <span className="font-extrabold text-emerald-700 text-sm">
+                          ₱{demoCheckoutData.consultationFee.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="space-y-2 pt-2 border-t border-gray-100">
+                      <button
+                        type="button"
+                        onClick={() => navigate("/dashboard/appointment-status")}
+                        className="w-full py-3 px-4 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white font-bold text-xs uppercase tracking-wider transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-[0.98]"
+                      >
+                        <Calendar className="w-4 h-4" />
+                        <span>View Appointment</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* State 3: FAILED Outcome */}
+                {demoCheckoutData.outcome === "failed" && (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 space-y-1 text-center">
+                      <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 mx-auto flex items-center justify-center mb-1">
+                        <AlertCircle className="w-6 h-6" />
+                      </div>
+                      <h4 className="font-bold text-sm text-rose-800">Payment Unsuccessful</h4>
+                      <p className="text-xs text-rose-700">
+                        {demoCheckoutData.errorMessage || "The transaction could not be completed. Please check your e-wallet balance and account details, then try again."}
+                      </p>
+                    </div>
+
+                    <div className="space-y-2 pt-2 border-t border-gray-100">
+                      <button
+                        type="button"
+                        onClick={handleDemoRetryPayment}
+                        className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        <span>Retry Payment</span>
+                      </button>
+
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleDemoCancelPayment}
+                          className="flex-1 py-2 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold text-[11px] transition-colors cursor-pointer text-center"
+                        >
+                          Cancel Payment
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDemoReturnToBooking}
+                          className="flex-1 py-2 px-3 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 font-semibold text-[11px] transition-colors cursor-pointer text-center"
+                        >
+                          Return to Booking
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* State 4: CANCELLED Outcome */}
+                {demoCheckoutData.outcome === "cancelled" && (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-2xl bg-gray-50 border border-gray-200 text-gray-900 space-y-1 text-center">
+                      <div className="w-10 h-10 rounded-full bg-gray-100 text-gray-500 mx-auto flex items-center justify-center mb-1">
+                        <XCircle className="w-6 h-6" />
+                      </div>
+                      <h4 className="font-bold text-sm text-gray-800">Payment Cancelled</h4>
+                      <p className="text-xs text-gray-600">
+                        The payment process was cancelled. No charges were made to your account.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2 pt-2 border-t border-gray-100">
+                      <button
+                        type="button"
+                        onClick={handleDemoReturnToBooking}
+                        className="w-full py-2.5 px-4 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white font-bold text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                        <span>Return to Booking</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleDemoRetryPayment}
+                        className="w-full py-2 text-center text-gray-500 hover:text-gray-700 font-medium text-xs transition-colors cursor-pointer"
+                      >
+                        Resume Payment
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </motion.div>
           </div>

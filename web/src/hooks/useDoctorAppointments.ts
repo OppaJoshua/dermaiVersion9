@@ -279,6 +279,12 @@ export function useDoctorAppointments() {
               foundClinicId && rowClinicId && rowClinicId === String(foundClinicId)
             );
 
+            // Exclude temporary unpaid holds or expired/failed payment holds from doctor views
+            const paySt = String(row.payment_status || "").toLowerCase().trim();
+            if (paySt === "pending_hold" || paySt === "expired" || paySt === "failed" || paySt === "cancelled") {
+              continue;
+            }
+
             // Doctors only see appointments explicitly assigned to THEM (or unassigned clinic queue requests)
             if (rawAssignedDoc && !isDirectDocMatch) {
               continue;

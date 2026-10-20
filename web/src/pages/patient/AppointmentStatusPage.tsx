@@ -49,6 +49,10 @@ interface Appointment {
   rescheduleReason?: string;
   needsPatientReschedule?: boolean;
   appointmentHistory?: AppointmentHistoryEntry[];
+  paymentStatus?: "pending_hold" | "paid" | "failed" | "cancelled" | "expired" | "exempt";
+  paymentAmount?: number;
+  paymentReference?: string;
+  paidAt?: string;
 }
 
 const STEPS = ["Request Sent", "Doctor Review", "Scheduled", "Completed"];
@@ -549,6 +553,14 @@ function AppointmentCard({
             </p>
             <p className="text-sm font-semibold text-gray-900 mt-0.5">{app.time}</p>
           </div>
+          {app.paymentReference && (
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Payment</p>
+              <p className="text-xs font-semibold text-emerald-700 mt-0.5">
+                Paid Online {app.paymentAmount ? `(₱${app.paymentAmount.toFixed(2)})` : ""}
+              </p>
+            </div>
+          )}
         </div>
 
         <StatusTracker app={app} />
@@ -613,6 +625,9 @@ const AppointmentStatusPage: React.FC = () => {
   // Reschedule Modal State
   const [rescheduleModalAppt, setRescheduleModalAppt] = useState<Appointment | null>(null);
   const [rescheduleDate, setRescheduleDate] = useState("");
+  const [minRescheduleDate] = useState(() =>
+    new Date(Date.now() + 86400000).toISOString().split("T")[0]
+  );
   const [rescheduleTime, setRescheduleTime] = useState("");
   const [rescheduleReason, setRescheduleReason] = useState("");
   const [rescheduleSaving, setRescheduleSaving] = useState(false);
@@ -812,6 +827,10 @@ const AppointmentStatusPage: React.FC = () => {
             rescheduleReason: rReason,
             needsPatientReschedule,
             appointmentHistory,
+            paymentStatus: a.payment_status || (displayStatus === "Completed" || displayStatus === "Scheduled" ? "paid" : undefined),
+            paymentAmount: a.payment_amount ? Number(a.payment_amount) : undefined,
+            paymentReference: a.payment_reference || undefined,
+            paidAt: a.paid_at || undefined,
           };
         });
 
@@ -875,6 +894,10 @@ const AppointmentStatusPage: React.FC = () => {
                     rescheduleReason: localItem.rescheduleReason || localItem.reschedule_reason,
                     needsPatientReschedule: Boolean(localItem.needsPatientReschedule || localItem.needs_patient_reschedule),
                     appointmentHistory: localItem.appointmentHistory || localItem.appointment_history || [],
+                    paymentStatus: localItem.paymentStatus || "paid",
+                    paymentAmount: localItem.paymentAmount ? Number(localItem.paymentAmount) : undefined,
+                    paymentReference: localItem.paymentReference || undefined,
+                    paidAt: localItem.paidAt || undefined,
                   });
                 }
               });
@@ -882,7 +905,13 @@ const AppointmentStatusPage: React.FC = () => {
           }
         } catch {}
 
-        setAllAppointments(mapped);
+        // Exclude temporary unpaid holds and expired holds from active status list
+        const confirmedAppointments = mapped.filter((a) => {
+          const paySt = String(a.paymentStatus || "").toLowerCase().trim();
+          return paySt !== "pending_hold" && paySt !== "expired" && paySt !== "failed";
+        });
+
+        setAllAppointments(confirmedAppointments);
       }
     } catch (err) {
       console.error("Failed to load appointments:", err);
@@ -1401,7 +1430,7 @@ const AppointmentStatusPage: React.FC = () => {
               <input
                 type="date"
                 value={rescheduleDate}
-                min={new Date(Date.now() + 86400000).toISOString().split("T")[0]}
+                min={minRescheduleDate}
                 onChange={(e) => {
                   setRescheduleDate(e.target.value);
                   setRescheduleError("");

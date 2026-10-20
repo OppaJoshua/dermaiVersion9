@@ -386,8 +386,13 @@ export default function ClinicAppointmentsPage() {
       }
     }
 
-    // Map database records (do not generate signed URLs during list load)
-    const mapped: AppointmentRecord[] = dbAppts.map((a: any) => {
+    // Map database records (excluding temporary holds and expired reservations)
+    const mapped: AppointmentRecord[] = dbAppts
+      .filter((a: any) => {
+        const paySt = String(a.payment_status || "").toLowerCase().trim();
+        return paySt !== "pending_hold" && paySt !== "expired" && paySt !== "failed" && paySt !== "cancelled";
+      })
+      .map((a: any) => {
       const photoUrl = a.skin_photo_url || undefined;
 
       const apptDate = a.date ? new Date(a.date) : null;
