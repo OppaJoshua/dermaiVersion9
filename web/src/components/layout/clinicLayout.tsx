@@ -133,9 +133,9 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
   }, []);
   const currentPage = sidebarLinks.find((l) => l.path === location.pathname)?.label || "Dashboard";
   return (<div className="min-h-screen bg-gray-50/80 flex">
-    {sidebarOpen && (<div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />)}
+    {sidebarOpen && (<div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[1090] lg:hidden" onClick={() => setSidebarOpen(false)} />)}
 
-    <aside className={cn("flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300 text-[14px]", sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0")}>
+    <aside className={cn("flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-[1100] transition-transform duration-300 text-[14px]", sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0")}>
       <div className="flex items-center gap-2.5 px-6 h-16 border-b border-gray-100 shrink-0">
         <img src={Logo} alt="DERMAI logo" className="h-8 w-auto object-contain" />
         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200 ml-0.5">
@@ -256,7 +256,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
     </aside>
 
     <main className="flex-1 lg:ml-65 min-h-screen">
-      <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
+      <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-[1000]">
         <div className="flex items-center gap-3">
           <button className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500" onClick={() => setSidebarOpen(true)}>
             <Menu className="w-5 h-5" />
@@ -269,7 +269,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
         </div>
         <div className="flex items-center gap-3">
 
-          <div ref={notifRef} className="relative">
+          <div ref={notifRef} className="relative z-[1050]">
             <button onClick={() => setNotifOpen((o) => !o)} className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors">
               <Bell className={cn("w-5 h-5", notifOpen ? "text-magenta-500" : "text-gray-500")} />
               {unreadCount > 0 && (<span className="absolute top-1 right-1 min-w-4 h-4 px-0.5 flex items-center justify-center bg-magenta-500 rounded-full text-white text-[10px] font-bold leading-none">
@@ -278,7 +278,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
             </button>
 
             {notifOpen && (
-              <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+              <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-[1050] overflow-hidden">
                 <ClinicNotifications isDropdown onClose={() => setNotifOpen(false)} />
               </div>
             )}

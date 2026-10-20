@@ -362,7 +362,7 @@ export default function DoctorScheduledAppointmentsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px">
+      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         <button
           type="button"
           onClick={() => setTab("upcoming")}

@@ -203,7 +203,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       {/* Mobile Overlay */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden"
+          className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[1090] lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -211,7 +211,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       {/* Sidebar — White */}
       <aside
         className={cn(
-          "flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-50 transition-transform duration-300",
+          "flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-[1100] transition-transform duration-300",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
@@ -296,7 +296,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       {/* Main Content */}
       <main className="flex-1 lg:ml-65 min-h-screen">
         {/* Top Bar */}
-        <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-40">
+        <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-[1000]">
           <div className="flex items-center gap-3">
             <button
               className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500"
@@ -311,7 +311,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <div className="relative" ref={bellRef}>
+            <div className="relative z-[1050]" ref={bellRef}>
               <button
                 onClick={() => setBellOpen((prev) => !prev)}
                 className="relative p-2.5 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer"
@@ -327,7 +327,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
               {/* Dropdown panel */}
               {bellOpen && (
-                <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden">
+                <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-gray-100 z-[1050] overflow-hidden">
                   <AdminNotifications isDropdown onClose={() => setBellOpen(false)} />
                 </div>
               )}

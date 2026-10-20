@@ -18,15 +18,18 @@ import {
 } from "@/lib/store";
 import { supabase } from "@/lib/supabaseClient";
 
-type FilterStatus = "all" | HelpdeskTicketStatus;
+type FilterStatus = "all" | "pending" | "open" | "in_progress" | "resolved";
 
 const statusConfig: Record<
-  HelpdeskTicketStatus,
+  string,
   { label: string; pill: string }
 > = {
-  open: { label: "Open", pill: "bg-magenta-50 border-magenta-200 text-black" },
-  "in-progress": { label: "In Progress", pill: "bg-white border-gray-300 text-black" },
-  resolved: { label: "Resolved", pill: "bg-gray-100 border-gray-200 text-black" },
+  pending: { label: "Pending", pill: "bg-amber-50 border-amber-200 text-amber-800" },
+  open: { label: "Open", pill: "bg-magenta-50 border-magenta-200 text-magenta-900" },
+  in_progress: { label: "In Progress", pill: "bg-blue-50 border-blue-200 text-blue-800" },
+  "in-progress": { label: "In Progress", pill: "bg-blue-50 border-blue-200 text-blue-800" },
+  resolved: { label: "Resolved", pill: "bg-emerald-50 border-emerald-200 text-emerald-800" },
+  closed: { label: "Resolved", pill: "bg-emerald-50 border-emerald-200 text-emerald-800" },
 };
 
 const priorityLabel: Record<string, { label: string; cls: string }> = {
@@ -47,8 +50,9 @@ const CATEGORIES = [
   "Technical Support",
 ];
 
-function StatusPill({ status }: { status: HelpdeskTicketStatus }) {
-  const cfg = statusConfig[status] || statusConfig.open;
+function StatusPill({ status }: { status?: string }) {
+  const normalized = (status || "pending").toLowerCase();
+  const cfg = statusConfig[normalized] || statusConfig.pending;
   return (
     <span
       className={cn(
@@ -104,6 +108,14 @@ function SenderAvatar({
   );
 }
 
+// Maps a stored status onto the value used by the modal's status controls.
+// Reflects exactly what the database holds (no defaulting pending -> open).
+function toModalStatus(status: HelpdeskTicketStatus): HelpdeskTicketStatus {
+  if (status === "in-progress") return "in_progress";
+  if (status === "closed") return "resolved";
+  return status;
+}
+
 export default function AdminHelpdeskPage() {
   const [tickets, setTickets] = useState<HelpdeskTicket[]>([]);
   const [loading, setLoading] = useState(true);
@@ -116,6 +128,7 @@ export default function AdminHelpdeskPage() {
 
   // Admin reply draft state for modal
   const [replyText, setReplyText] = useState("");
+  const [modalStatus, setModalStatus] = useState<HelpdeskTicketStatus>("open");
   const [replySubmitting, setReplySubmitting] = useState(false);
   const [replySuccess, setReplySuccess] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -173,13 +186,17 @@ export default function AdminHelpdeskPage() {
     [tickets, selectedTicketId]
   );
 
-  // Sync draft reply when selected ticket changes
+  // Sync draft reply and exact status when selected ticket changes
   useEffect(() => {
-    if (selectedTicket) {
-      setReplyText(selectedTicket.response || "");
-      setReplySuccess(false);
+    if (selectedTicketId) {
+      const current = tickets.find((t) => t.id === selectedTicketId);
+      if (current) {
+        setReplyText(current.response || "");
+        setReplySuccess(false);
+        setModalStatus(toModalStatus(current.status));
+      }
     }
-  }, [selectedTicket]);
+  }, [selectedTicketId]);
 
   // Derived category list
   const categories = useMemo(() => {
@@ -195,7 +212,7 @@ export default function AdminHelpdeskPage() {
   const filteredTickets = useMemo(() => {
     return tickets.filter((ticket) => {
       if (!ticket) return false;
-      const status = ticket.status || "open";
+      const status = ticket.status || "pending";
       const category = ticket.category || "General Support";
       const subject = ticket.subject || "";
       const message = ticket.message || "";
@@ -204,7 +221,9 @@ export default function AdminHelpdeskPage() {
       const id = ticket.id || "";
 
       const matchesStatus =
-        statusFilter === "all" || status === statusFilter;
+        statusFilter === "all" ||
+        status === statusFilter ||
+        (statusFilter === "in_progress" && status === "in-progress");
       const matchesCategory =
         categoryFilter === "all" ||
         category.toLowerCase() === categoryFilter.toLowerCase();
@@ -223,17 +242,62 @@ export default function AdminHelpdeskPage() {
 
   // Counts
   const totalCount = tickets.length;
+  const pendingCount = tickets.filter((t) => t.status === "pending").length;
   const openCount = tickets.filter((t) => t.status === "open").length;
-  const inProgressCount = tickets.filter((t) => t.status === "in-progress").length;
-  const resolvedCount = tickets.filter((t) => t.status === "resolved").length;
+  const inProgressCount = tickets.filter(
+    (t) => t.status === "in_progress" || (t.status as string) === "in-progress"
+  ).length;
+  const resolvedCount = tickets.filter(
+    (t) => t.status === "resolved" || (t.status as string) === "closed"
+  ).length;
+
+  // Handler when opening a ticket to view
+  const handleViewTicket = async (ticket: HelpdeskTicket) => {
+    setSelectedTicketId(ticket.id);
+    setActionError(null);
+    setReplySuccess(false);
+
+    setModalStatus(toModalStatus(ticket.status));
+
+    // A 'pending' ticket becomes 'open' only once an admin actually views it, and the
+    // modal switches to 'open' only after the database has confirmed the change.
+    if (ticket.status === "pending") {
+      try {
+        await updateHelpdeskTicketStatus(ticket.id, "open", undefined, {
+          ticketSubject: ticket.subject,
+          ticketUserId: ticket.userId,
+          previousStatus: ticket.status,
+        });
+        setModalStatus("open");
+        setTickets((prev) =>
+          prev.map((t) => (t.id === ticket.id ? { ...t, status: "open" } : t))
+        );
+      } catch (err) {
+        console.warn("Auto-transition pending to open warning:", err);
+      }
+    }
+  };
 
   // Actions
   const handleStatusChange = async (id: string, newStatus: HelpdeskTicketStatus) => {
     setActionError(null);
     setReplySuccess(false);
+    const persistedStatus = toModalStatus(
+      tickets.find((t) => t.id === id)?.status ?? modalStatus
+    );
+    setModalStatus(newStatus);
 
     try {
-      await updateHelpdeskTicketStatus(id, newStatus);
+      await updateHelpdeskTicketStatus(
+        id,
+        newStatus,
+        replyText.trim() || undefined,
+        {
+          ticketSubject: selectedTicket?.subject,
+          ticketUserId: selectedTicket?.userId,
+          previousStatus: selectedTicket?.status,
+        }
+      );
       setTickets((prev) =>
         prev.map((ticket) =>
           ticket.id === id ? { ...ticket, status: newStatus } : ticket
@@ -241,6 +305,8 @@ export default function AdminHelpdeskPage() {
       );
     } catch (err) {
       console.error("Failed to update ticket status:", err);
+      // The save failed, so show the status that is actually stored.
+      setModalStatus(persistedStatus);
       setActionError(
         err instanceof Error
           ? err.message
@@ -253,12 +319,17 @@ export default function AdminHelpdeskPage() {
     if (!selectedTicket) return;
     setActionError(null);
     setReplySubmitting(true);
-    const targetStatus = resolveTicket ? "resolved" : selectedTicket.status;
+    const targetStatus: HelpdeskTicketStatus = resolveTicket ? "resolved" : modalStatus;
     try {
       await updateHelpdeskTicketStatus(
         selectedTicket.id,
         targetStatus,
-        replyText.trim()
+        replyText.trim(),
+        {
+          ticketSubject: selectedTicket.subject,
+          ticketUserId: selectedTicket.userId,
+          previousStatus: selectedTicket.status,
+        }
       );
       setTickets((prev) =>
         prev.map((t) =>
@@ -267,6 +338,7 @@ export default function AdminHelpdeskPage() {
             : t
         )
       );
+      setModalStatus(targetStatus);
       setReplySuccess(true);
       setTimeout(() => setReplySuccess(false), 3000);
       if (resolveTicket) {
@@ -309,8 +381,9 @@ export default function AdminHelpdeskPage() {
 
   const statCards = [
     { id: "all", label: "Total tickets", count: totalCount, hint: "All received inquiries", Icon: MessageSquare },
-    { id: "open", label: "Open", count: openCount, hint: "Needs attention", Icon: AlertCircle },
-    { id: "in-progress", label: "In progress", count: inProgressCount, hint: "Being worked on", Icon: Clock },
+    { id: "pending", label: "Pending", count: pendingCount, hint: "Awaiting admin review", Icon: AlertCircle },
+    { id: "open", label: "Open", count: openCount, hint: "Actively viewed", Icon: Clock },
+    { id: "in_progress", label: "In progress", count: inProgressCount, hint: "Being worked on", Icon: Clock },
     { id: "resolved", label: "Resolved", count: resolvedCount, hint: "Closed inquiries", Icon: CheckCircle2 },
   ] as const;
 
@@ -334,7 +407,7 @@ export default function AdminHelpdeskPage() {
       </div>
 
       {/* Stat cards (click to filter) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         {statCards.map(({ id, label, count, hint, Icon }) => {
           const active = statusFilter === id;
           return (
@@ -460,7 +533,7 @@ export default function AdminHelpdeskPage() {
                     <tr
                       key={ticket.id}
                       className="hover:bg-gray-50 transition-colors cursor-pointer"
-                      onClick={() => setSelectedTicketId(ticket.id)}
+                      onClick={() => handleViewTicket(ticket)}
                     >
                       {/* Ticket ID */}
                       <td className="px-7 py-5 whitespace-nowrap">
@@ -524,7 +597,7 @@ export default function AdminHelpdeskPage() {
                       {/* Action */}
                       <td className="px-7 py-5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         <button
-                          onClick={() => setSelectedTicketId(ticket.id)}
+                          onClick={() => handleViewTicket(ticket)}
                           className="px-5 py-2 rounded-lg border border-magenta-300 text-magenta-700 text-sm font-semibold hover:bg-magenta-50 transition-colors cursor-pointer"
                         >
                           View
@@ -561,7 +634,7 @@ export default function AdminHelpdeskPage() {
                     <span className="px-2.5 py-1 rounded-md bg-gray-100 font-mono text-xs font-semibold text-black">
                       {selectedTicket.id}
                     </span>
-                    <StatusPill status={selectedTicket.status} />
+                    <StatusPill status={modalStatus} />
                     <span className="text-xs text-gray-600">
                       {new Date(selectedTicket.createdAt).toLocaleString("en-US", {
                         month: "short",
@@ -617,20 +690,34 @@ export default function AdminHelpdeskPage() {
                 <div>
                   <p className="text-sm font-semibold text-black mb-2">Status</p>
                   <div className="grid grid-cols-3 gap-3">
-                    {(["open", "in-progress", "resolved"] as const).map((statusKey) => {
-                      const active = selectedTicket.status === statusKey;
+                    {(["open", "in_progress", "resolved"] as const).map((statusKey) => {
+                      const active =
+                        modalStatus === statusKey ||
+                        (statusKey === "in_progress" && (modalStatus as string) === "in-progress");
+                      const label =
+                        statusKey === "in_progress"
+                          ? "In Progress"
+                          : statusKey === "resolved"
+                          ? "Resolved"
+                          : "Open";
+
                       return (
                         <button
                           key={statusKey}
+                          type="button"
                           onClick={() => handleStatusChange(selectedTicket.id, statusKey)}
                           className={cn(
-                            "py-3 rounded-lg text-sm font-semibold border text-black transition-colors cursor-pointer",
+                            "py-3 rounded-lg text-sm font-semibold border transition-colors cursor-pointer text-center",
                             active
-                              ? "border-magenta-500 bg-magenta-50"
-                              : "bg-white border-gray-300 hover:bg-gray-50"
+                              ? statusKey === "in_progress"
+                                ? "border-blue-500 bg-blue-50 text-blue-900 font-bold"
+                                : statusKey === "resolved"
+                                ? "border-emerald-500 bg-emerald-50 text-emerald-900 font-bold"
+                                : "border-magenta-500 bg-magenta-50 text-magenta-900 font-bold"
+                              : "bg-white border-gray-300 text-black hover:bg-gray-50"
                           )}
                         >
-                          {statusConfig[statusKey].label}
+                          {label}
                         </button>
                       );
                     })}
@@ -644,7 +731,7 @@ export default function AdminHelpdeskPage() {
                       Response to user
                     </label>
                     {actionError && (
-                      <p role="alert" className="text-xs text-black font-medium">
+                      <p role="alert" className="text-xs text-rose-600 font-medium">
                         {actionError}
                       </p>
                     )}

@@ -121,9 +121,6 @@ function renderReminderEmailHtml(opts: {
           <!-- Title -->
           <tr>
             <td align="center" style="padding:36px 32px 8px;">
-              <div style="display:inline-block;background:${pinkSoft};color:${pink};font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:6px 14px;border-radius:999px;border:1px solid ${pinkBorder};">
-                Subscription Reminder
-              </div>
               <h1 style="margin:18px 0 0;font-size:24px;line-height:1.3;color:${pinkDark};">
                 Your Pro subscription ends ${timePhrase}
               </h1>
@@ -140,7 +137,7 @@ function renderReminderEmailHtml(opts: {
               </p>
               <p style="margin:0 0 14px;">
                 Once it expires, your account will switch to the Free Plan unless you manually renew.
-                Because your plan does not renew automatically, you can renew ahead of time to keep your unlimited scans, priority clinic booking, and full condition tracking uninterrupted.
+                Because your plan does not renew automatically, you can renew ahead of time to keep your unlimited scans.
               </p>
             </td>
           </tr>

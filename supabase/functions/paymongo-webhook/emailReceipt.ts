@@ -4,12 +4,16 @@ export async function sendReceiptEmail({
   patientEmail,
   paymentMethod,
   amount,
+  baseAmount,
+  vatAmount,
   paymentDate,
   paymongoPaymentId,
 }: {
   patientEmail: string;
   paymentMethod: string;
   amount: number;
+  baseAmount?: number;
+  vatAmount?: number;
   paymentDate: string;
   paymongoPaymentId: string;
 }) {
@@ -38,10 +42,27 @@ export async function sendReceiptEmail({
     timeStyle: "short",
   });
 
-  const formattedAmount = new Intl.NumberFormat("en-PH", {
+  const resolvedBase = baseAmount != null && baseAmount > 0
+    ? baseAmount
+    : Math.round((amount / 1.12) * 100) / 100;
+  const resolvedVat = vatAmount != null && vatAmount > 0
+    ? vatAmount
+    : Math.round((amount - resolvedBase) * 100) / 100;
+
+  const formattedTotal = new Intl.NumberFormat("en-PH", {
     style: "currency",
     currency: "PHP",
   }).format(amount);
+
+  const formattedBase = new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+  }).format(resolvedBase);
+
+  const formattedVat = new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+  }).format(resolvedVat);
 
   await transporter.sendMail({
     from: `"DermAI" <${smtpUser}>`,
@@ -55,7 +76,9 @@ export async function sendReceiptEmail({
       `Payment Method: ${paymentMethod}`,
       `Date: ${formattedDate}`,
       `Transaction ID: ${paymongoPaymentId}`,
-      `Total Paid: ${formattedAmount}`,
+      `Amount (excl. VAT): ${formattedBase}`,
+      `VAT (12%): ${formattedVat}`,
+      `Total Paid: ${formattedTotal}`,
       "",
       "Thank you for using DermAI.",
     ].join("\n"),
@@ -77,9 +100,11 @@ export async function sendReceiptEmail({
               <p><strong>Payment Method:</strong> ${paymentMethod}</p>
               <p><strong>Date:</strong> ${formattedDate}</p>
               <p><strong>Transaction ID:</strong> ${paymongoPaymentId}</p>
-              <p>
+              <p><strong>Amount (excl. VAT):</strong> ${formattedBase}</p>
+              <p><strong>VAT (12%):</strong> ${formattedVat}</p>
+              <p style="margin-top:12px;font-size:16px;color:#A21D5C;">
                 <strong>Total Paid:</strong>
-                ${formattedAmount}
+                ${formattedTotal}
               </p>
             </div>
 

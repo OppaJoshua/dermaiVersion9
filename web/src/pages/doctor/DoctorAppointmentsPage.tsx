@@ -309,7 +309,7 @@ export default function DoctorAppointmentsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px">
+      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         {(["pending", "reviewed"] as const).map((t) => (
           <button
             key={t}
@@ -362,37 +362,37 @@ export default function DoctorAppointmentsPage() {
           </div>
 
           {/* Responsive Table */}
-          <div className="w-full overflow-x-auto">
-            <table className="w-full min-w-[900px] text-left text-sm">
+          <div className="w-full overflow-x-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            <table className="w-full min-w-[760px] xl:min-w-full text-left text-sm">
 
         {/* Table Header */}
         <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 tracking-wider">
           <tr>
-            <th className="py-3.5 px-5 font-semibold whitespace-nowrap">
+            <th className="py-3.5 px-4 sm:px-5 font-semibold whitespace-nowrap">
               PATIENT NAME
             </th>
 
-            <th className="py-3.5 px-4 font-semibold whitespace-nowrap">
+            <th className="py-3.5 px-3 sm:px-4 font-semibold whitespace-nowrap">
               AGE / GENDER
             </th>
 
-            <th className="py-3.5 px-4 font-semibold whitespace-nowrap">
+            <th className="py-3.5 px-3 sm:px-4 font-semibold whitespace-nowrap">
               REASON FOR VISIT
             </th>
 
-            <th className="py-3.5 px-4 font-semibold whitespace-nowrap">
+            <th className="py-3.5 px-3 sm:px-4 font-semibold whitespace-nowrap">
               PREFERRED SCHEDULE
             </th>
 
-            <th className="py-3.5 px-4 font-semibold whitespace-nowrap">
+            <th className="py-3.5 px-3 sm:px-4 font-semibold whitespace-nowrap">
               REQUESTED DATE
             </th>
 
-            <th className="py-3.5 px-4 font-semibold whitespace-nowrap">
+            <th className="py-3.5 px-3 sm:px-4 font-semibold whitespace-nowrap">
               STATUS
             </th>
 
-            <th className="py-3.5 px-5 font-semibold text-center whitespace-nowrap">
+            <th className="py-3.5 px-4 sm:px-5 font-semibold text-center whitespace-nowrap">
               ACTIONS
             </th>
           </tr>
@@ -443,8 +443,8 @@ export default function DoctorAppointmentsPage() {
                 >
 
                   {/* Patient Name */}
-                  <td className="py-4 px-5">
-                    <div className="flex items-center gap-3 min-w-[220px]">
+                  <td className="py-4 px-4 sm:px-5">
+                    <div className="flex items-center gap-3 min-w-[190px]">
 
                       <img
                         src={
@@ -471,8 +471,8 @@ export default function DoctorAppointmentsPage() {
                   </td>
 
                   {/* Age / Gender */}
-                  <td className="py-4 px-4">
-                    <div className="min-w-[110px]">
+                  <td className="py-4 px-3 sm:px-4">
+                    <div className="min-w-[95px]">
                       <p className="text-slate-800 font-medium">
                         {appt.patientAge
                           ? `${appt.patientAge} years old`
@@ -486,8 +486,8 @@ export default function DoctorAppointmentsPage() {
                   </td>
 
                   {/* Reason */}
-                  <td className="py-4 px-4">
-                    <p className="text-slate-700 max-w-[220px] line-clamp-2 leading-relaxed">
+                  <td className="py-4 px-3 sm:px-4">
+                    <p className="text-slate-700 max-w-[200px] line-clamp-2 leading-relaxed">
                       {appt.notes ||
                         appt.conditionName ||
                         appt.aiConditionName ||
@@ -496,7 +496,7 @@ export default function DoctorAppointmentsPage() {
                   </td>
 
                   {/* Preferred Schedule */}
-                  <td className="py-4 px-4">
+                  <td className="py-4 px-3 sm:px-4">
                     <div className="flex items-center gap-1.5 text-slate-700 font-medium whitespace-nowrap">
                       <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
 
@@ -510,14 +510,14 @@ export default function DoctorAppointmentsPage() {
                   </td>
 
                   {/* Requested Date */}
-                  <td className="py-4 px-4">
+                  <td className="py-4 px-3 sm:px-4">
                     <span className="text-slate-700 font-medium whitespace-nowrap">
                       {formatRequestedDate(appt.createdAt)}
                     </span>
                   </td>
 
                   {/* Status */}
-                  <td className="py-4 px-4">
+                  <td className="py-4 px-3 sm:px-4">
                     {isCompleted ? (
                       <span className="inline-flex px-3 py-1 rounded-full text-sm font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
                         Completed
@@ -538,7 +538,7 @@ export default function DoctorAppointmentsPage() {
                   </td>
 
                   {/* Actions */}
-                  <td className="py-4 px-5 text-center">
+                  <td className="py-4 px-4 sm:px-5 text-center">
                     {tab === "pending" &&
                     !isApproved &&
                     !isRejected &&

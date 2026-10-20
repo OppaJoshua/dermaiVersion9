@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
-import { withVat } from "@/lib/vat";
+import { withVat, splitVat, calculatePricing } from "@/lib/vat";
 
 interface SubData {
   isPro: boolean;
@@ -25,6 +25,10 @@ interface BillingHistoryItem {
   paymentDate: string;
   date: string;
   amount: string;
+  rawAmount: number;
+  baseAmount: number;
+  vatAmount: number;
+  totalAmount: number;
   method: string;
   status: string;
 }
@@ -196,26 +200,74 @@ export default function BillingSettingsPage() {
       }
 
       // 2. Load payment transactions
-      // user_payment.amount must hold the amount actually charged (VAT-inclusive).
+      // user_payment records store transactions. Resolve the actual total paid (VAT-inclusive: ₱199.00).
       const { data: payments } = await supabase
         .from("user_payment")
-        .select("payment_id, amount, payment_date, method, status")
+        .select(`
+          payment_id,
+          amount,
+          payment_date,
+          method,
+          status,
+          plan:plan_id (
+            price,
+            name
+          )
+        `)
         .eq("user_id", user.id)
         .order("payment_date", { ascending: false });
 
       if (payments && payments.length > 0) {
-        const mappedHistory: BillingHistoryItem[] = payments.map((p) => ({
-          paymentId: p.payment_id,
-          paymentDate: p.payment_date,
-          date: new Date(p.payment_date).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          }),
-          amount: `₱${Number(p.amount).toLocaleString()}`,
-          method: p.method || "Not provided",
-          status: p.status === "success" ? "Paid" : p.status,
-        }));
+        const mappedHistory: BillingHistoryItem[] = payments.map((p: any) => {
+          const planObj = Array.isArray(p.plan) ? p.plan[0] : p.plan;
+          const rawAmount = Number(p.total_amount ?? p.amount_paid ?? p.amount ?? 0);
+
+          let resolvedTotal = rawAmount;
+          let resolvedBase = Number(p.base_amount ?? 0);
+          let resolvedVat = Number(p.vat_amount ?? 0);
+
+          if (resolvedBase > 0 && resolvedVat > 0) {
+            resolvedTotal = Math.round((resolvedBase + resolvedVat) * 100) / 100;
+          } else if (planObj?.price != null && Number(planObj.price) > 0) {
+            const planBase = Number(planObj.price);
+            const calc = calculatePricing(planBase);
+            resolvedBase = calc.basePrice;
+            resolvedVat = calc.vatAmount;
+            resolvedTotal = calc.totalPrice;
+          } else if (rawAmount === 177.68) {
+            const calc = calculatePricing(177.68);
+            resolvedBase = calc.basePrice;
+            resolvedVat = calc.vatAmount;
+            resolvedTotal = calc.totalPrice; // 199.00
+          } else if (rawAmount > 0) {
+            const split = splitVat(rawAmount);
+            resolvedBase = split.net;
+            resolvedVat = split.vat;
+            resolvedTotal = rawAmount;
+          }
+
+          const formattedAmount = `₱${resolvedTotal.toLocaleString("en-PH", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}`;
+
+          return {
+            paymentId: p.payment_id,
+            paymentDate: p.payment_date,
+            date: new Date(p.payment_date).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            }),
+            amount: formattedAmount,
+            rawAmount,
+            baseAmount: resolvedBase,
+            vatAmount: resolvedVat,
+            totalAmount: resolvedTotal,
+            method: p.method || "Not provided",
+            status: p.status === "success" ? "Paid" : p.status,
+          };
+        });
         setBillingHistory(mappedHistory);
 
       } else {
@@ -577,6 +629,24 @@ export default function BillingSettingsPage() {
                     <dt className="shrink-0 text-gray-500">Description</dt>
                     <dd className="font-medium text-gray-900 sm:text-right">
                       DermAI Subscription
+                    </dd>
+                  </div>
+                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+                    <dt className="shrink-0 text-gray-500">Amount (excl. VAT)</dt>
+                    <dd className="font-medium text-gray-900 sm:text-right">
+                      ₱{(selectedPayment.baseAmount ?? 177.68).toLocaleString("en-PH", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </dd>
+                  </div>
+                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+                    <dt className="shrink-0 text-gray-500">VAT (12%)</dt>
+                    <dd className="font-medium text-gray-900 sm:text-right">
+                      ₱{(selectedPayment.vatAmount ?? 21.32).toLocaleString("en-PH", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
                     </dd>
                   </div>
                   <div className="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">

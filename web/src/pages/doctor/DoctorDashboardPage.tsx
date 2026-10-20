@@ -492,7 +492,7 @@ export default function DoctorDashboardPage() {
             </div>
           ) : (
             <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white">
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 <table className="w-full min-w-[480px] text-left text-sm">
                   <thead>
                     <tr className="bg-[#F8F9FB] border-b border-slate-200/80 text-[12px] font-semibold text-slate-500">

@@ -10,6 +10,8 @@ import {
   Sparkles,
   Loader2,
   AlertCircle,
+  AlertTriangle,
+  Megaphone,
   CheckCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -31,6 +33,16 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
 
   const filtered = useMemo(() => {
     if (activeTab === "all") return notifications;
+    if (activeTab === "broadcast") {
+      return notifications.filter(
+        (n) =>
+          n.category === "broadcast" ||
+          n.type === "broadcast" ||
+          n.metadata?.subtype === "admin_announcement" ||
+          n.metadata?.subtype === "maintenance_alert" ||
+          n.type === "maintenance_alert"
+      );
+    }
     return notifications.filter((n) => n.category === activeTab);
   }, [notifications, activeTab]);
 
@@ -47,12 +59,24 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
   };
 
   const getItemIcon = (n: NotificationItem) => {
+    const isMaintenance =
+      n.metadata?.subtype === "maintenance_alert" ||
+      n.type === "maintenance_alert" ||
+      n.metadata?.priority === "high";
+
+    if (isMaintenance) return <AlertTriangle className="w-5 h-5 text-amber-600" />;
     const cls = "w-5 h-5 text-magenta-600";
     if (n.type === "appointment-accepted") return <CheckCircle2 className={cls} />;
     if (n.type === "appointment-rejected") return <XCircle className={cls} />;
     if (n.type === "appointment-completed") return <Sparkles className={cls} />;
     if (n.category === "ticket") return <HelpCircle className={cls} />;
-    if (n.category === "broadcast") return <Bell className={cls} />;
+    if (
+      n.category === "broadcast" ||
+      n.type === "broadcast" ||
+      n.metadata?.subtype === "admin_announcement"
+    ) {
+      return <Megaphone className={cls} />;
+    }
     return <Calendar className={cls} />;
   };
 
@@ -103,7 +127,8 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
               key={tab.key}
               onClick={() => setActiveTab(tab.key as any)}
               className={cn(
-                "px-3 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer",
+                "border-b-2 transition-colors whitespace-nowrap cursor-pointer",
+                isDropdown ? "px-2.5 py-2 text-xs font-semibold" : "px-3 py-2.5 text-sm font-medium",
                 activeTab === tab.key
                   ? "border-magenta-600 text-magenta-700"
                   : "border-transparent text-gray-500 hover:text-gray-900"
@@ -137,6 +162,14 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
         ) : (
           filtered.map((item) => {
             const isRejected = item.type === "appointment-rejected";
+            const isMaintenance =
+              item.metadata?.subtype === "maintenance_alert" ||
+              item.type === "maintenance_alert" ||
+              item.metadata?.priority === "high";
+            const isBroadcast =
+              item.category === "broadcast" ||
+              item.type === "broadcast" ||
+              item.metadata?.subtype === "admin_announcement";
 
             return (
               <div
@@ -144,10 +177,21 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                 onClick={() => !item.isRead && markRead(item.id)}
                 className={cn(
                   "relative flex items-start gap-3 px-5 py-4 transition-colors cursor-pointer",
-                  !item.isRead ? "bg-magenta-50/40 hover:bg-magenta-50/70" : "hover:bg-gray-50"
+                  !item.isRead
+                    ? isMaintenance
+                      ? "bg-amber-50/50 hover:bg-amber-50/80"
+                      : "bg-magenta-50/40 hover:bg-magenta-50/70"
+                    : "hover:bg-gray-50"
                 )}
               >
-                {!item.isRead && <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-magenta-600" />}
+                {!item.isRead && (
+                  <span
+                    className={cn(
+                      "absolute left-0 top-0 bottom-0 w-0.5",
+                      isMaintenance ? "bg-amber-500" : "bg-magenta-600"
+                    )}
+                  />
+                )}
 
                 {/* Sender Avatar / Icon */}
                 <div className="shrink-0">
@@ -162,6 +206,14 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                     <div className="w-10 h-10 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center">
                       <Building2 className="w-5 h-5 text-magenta-600" />
                     </div>
+                  ) : isMaintenance ? (
+                    <div className="w-10 h-10 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center">
+                      <AlertTriangle className="w-5 h-5 text-amber-600" />
+                    </div>
+                  ) : isBroadcast ? (
+                    <div className="w-10 h-10 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center">
+                      <Megaphone className="w-5 h-5 text-magenta-600" />
+                    </div>
                   ) : (
                     <div className="w-10 h-10 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center">
                       {getItemIcon(item)}
@@ -172,12 +224,37 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                 {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-xs font-medium text-magenta-700 truncate">
-                      {item.senderName || "Clinic Update"}
-                    </span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={cn(
+                          "text-xs font-semibold truncate",
+                          isMaintenance ? "text-amber-800" : "text-magenta-700"
+                        )}
+                      >
+                        {item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : "Clinic Update")}
+                      </span>
+                      {isMaintenance && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+                          <AlertTriangle className="w-3 h-3 text-amber-600" />
+                          High Priority
+                        </span>
+                      )}
+                      {isBroadcast && !isMaintenance && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-magenta-100 text-magenta-800 border border-magenta-200 shrink-0">
+                          Announcement
+                        </span>
+                      )}
+                    </div>
                     <span className="flex items-center gap-2 shrink-0">
                       <span className="text-xs text-gray-500 whitespace-nowrap">{timeAgo(item.timestamp)}</span>
-                      {!item.isRead && <span className="w-2 h-2 rounded-full bg-magenta-600" />}
+                      {!item.isRead && (
+                        <span
+                          className={cn(
+                            "w-2 h-2 rounded-full",
+                            isMaintenance ? "bg-amber-500" : "bg-magenta-600"
+                          )}
+                        />
+                      )}
                     </span>
                   </div>
 

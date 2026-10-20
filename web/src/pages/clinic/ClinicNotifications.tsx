@@ -5,6 +5,8 @@ import {
   ArrowRight,
   CheckCheck,
   Loader2,
+  AlertTriangle,
+  Megaphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
@@ -33,7 +35,16 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
     if (activeTab === "requests") return notifications.filter((n) => n.type === "appointment-request" || n.type === "patient-reselection");
     if (activeTab === "doctor-action") return notifications.filter((n) => n.type.includes("doctor-") || n.type === "consultation-completed");
     if (activeTab === "ticket") return notifications.filter((n) => n.category === "ticket");
-    if (activeTab === "broadcast") return notifications.filter((n) => n.category === "broadcast");
+    if (activeTab === "broadcast") {
+      return notifications.filter(
+        (n) =>
+          n.category === "broadcast" ||
+          n.type === "broadcast" ||
+          n.metadata?.subtype === "admin_announcement" ||
+          n.metadata?.subtype === "maintenance_alert" ||
+          n.type === "maintenance_alert"
+      );
+    }
     return notifications;
   }, [notifications, activeTab]);
 
@@ -99,7 +110,8 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
               key={tab.key}
               onClick={() => setActiveTab(tab.key as any)}
               className={cn(
-                "px-3 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer",
+                "border-b-2 transition-colors whitespace-nowrap cursor-pointer",
+                isDropdown ? "px-2.5 py-2 text-xs font-semibold" : "px-3 py-2.5 text-sm font-medium",
                 activeTab === tab.key
                   ? "border-magenta-600 text-magenta-700"
                   : "border-transparent text-gray-500 hover:text-gray-900"
@@ -133,6 +145,14 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
         ) : (
           filtered.map((item) => {
             const isApproval = item.type === "application_approved" || item.type === "clinic_application";
+            const isMaintenance =
+              item.metadata?.subtype === "maintenance_alert" ||
+              item.type === "maintenance_alert" ||
+              item.metadata?.priority === "high";
+            const isBroadcast =
+              item.category === "broadcast" ||
+              item.type === "broadcast" ||
+              item.metadata?.subtype === "admin_announcement";
 
             return (
               <div
@@ -141,12 +161,25 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
                 className={cn(
                   "relative flex items-start gap-3 px-5 py-4 transition-colors cursor-pointer",
                   !item.isRead
-                    ? (isApproval ? "bg-emerald-50/50 hover:bg-emerald-50" : "bg-magenta-50/40 hover:bg-magenta-50/70")
+                    ? isMaintenance
+                      ? "bg-amber-50/50 hover:bg-amber-50/80"
+                      : isApproval
+                      ? "bg-emerald-50/50 hover:bg-emerald-50"
+                      : "bg-magenta-50/40 hover:bg-magenta-50/70"
                     : "hover:bg-gray-50"
                 )}
               >
                 {!item.isRead && (
-                  <span className={cn("absolute left-0 top-0 bottom-0 w-0.5", isApproval ? "bg-emerald-600" : "bg-magenta-600")} />
+                  <span
+                    className={cn(
+                      "absolute left-0 top-0 bottom-0 w-0.5",
+                      isMaintenance
+                        ? "bg-amber-500"
+                        : isApproval
+                        ? "bg-emerald-600"
+                        : "bg-magenta-600"
+                    )}
+                  />
                 )}
 
                 {/* Avatar with real profile picture & graceful fallback */}
@@ -167,31 +200,63 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
                   <div
                     className={cn(
                       "w-10 h-10 rounded-full items-center justify-center font-semibold text-xs border",
-                      isApproval
+                      isMaintenance
+                        ? "bg-amber-100 text-amber-800 border-amber-300"
+                        : isApproval
                         ? "bg-emerald-600 text-white border-emerald-600"
+                        : isBroadcast
+                        ? "bg-magenta-50 text-magenta-700 border-magenta-200"
                         : "bg-magenta-50 text-magenta-700 border-magenta-100"
                     )}
                     style={{ display: item.senderAvatar ? "none" : "flex" }}
                   >
-                    {(item.senderName || "AD").slice(0, 2).toUpperCase()}
+                    {isMaintenance ? (
+                      <AlertTriangle className="w-5 h-5 text-amber-600" />
+                    ) : isBroadcast ? (
+                      <Megaphone className="w-5 h-5 text-magenta-600" />
+                    ) : (
+                      (item.senderName || "AD").slice(0, 2).toUpperCase()
+                    )}
                   </div>
                 </div>
 
                 {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-3">
-                    <span
-                      className={cn(
-                        "text-xs font-medium truncate capitalize",
-                        isApproval ? "text-emerald-700" : "text-magenta-700"
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={cn(
+                          "text-xs font-semibold truncate",
+                          isMaintenance
+                            ? "text-amber-800"
+                            : isApproval
+                            ? "text-emerald-700"
+                            : "text-magenta-700"
+                        )}
+                      >
+                        {item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : item.category)}
+                      </span>
+                      {isMaintenance && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+                          <AlertTriangle className="w-3 h-3 text-amber-600" />
+                          High Priority
+                        </span>
                       )}
-                    >
-                      {item.senderName || item.category}
-                    </span>
+                      {isBroadcast && !isMaintenance && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-magenta-100 text-magenta-800 border border-magenta-200 shrink-0">
+                          Announcement
+                        </span>
+                      )}
+                    </div>
                     <span className="flex items-center gap-2 shrink-0">
                       <span className="text-xs text-gray-500 whitespace-nowrap">{timeAgo(item.timestamp)}</span>
                       {!item.isRead && (
-                        <span className={cn("w-2 h-2 rounded-full", isApproval ? "bg-emerald-600" : "bg-magenta-600")} />
+                        <span
+                          className={cn(
+                            "w-2 h-2 rounded-full",
+                            isMaintenance ? "bg-amber-500" : isApproval ? "bg-emerald-600" : "bg-magenta-600"
+                          )}
+                        />
                       )}
                     </span>
                   </div>

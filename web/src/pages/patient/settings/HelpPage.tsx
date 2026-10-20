@@ -1,21 +1,12 @@
 import {
-  MessageSquare,
-  BookOpen,
   ChevronRight,
-  Mail,
-  CheckCircle2,
-  Send,
   X,
   Scan,
   CalendarDays,
   CreditCard,
   ShieldCheck,
   Search,
-  Clock,
-  AlertCircle,
-  Tag,
   Loader2,
-  MessageCircle,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
@@ -102,10 +93,13 @@ const faqs = [
   },
 ];
 
-const statusBadge: Record<HelpdeskTicketStatus, { bg: string; text: string; icon: typeof CheckCircle2; label: string }> = {
-  open: { bg: "bg-rose-50 border-rose-200", text: "text-rose-600", icon: AlertCircle, label: "Open" },
-  "in-progress": { bg: "bg-amber-50 border-amber-200", text: "text-amber-600", icon: Clock, label: "In Progress" },
-  resolved: { bg: "bg-emerald-50 border-emerald-200", text: "text-emerald-600", icon: CheckCircle2, label: "Resolved" },
+const statusBadge: Record<HelpdeskTicketStatus, { pill: string; label: string }> = {
+  pending: { pill: "bg-amber-50 border-amber-200 text-amber-800", label: "Pending" },
+  open: { pill: "bg-magenta-50 border-magenta-200 text-magenta-900", label: "Open" },
+  "in-progress": { pill: "bg-blue-50 border-blue-200 text-blue-800", label: "In Progress" },
+  in_progress: { pill: "bg-blue-50 border-blue-200 text-blue-800", label: "In Progress" },
+  resolved: { pill: "bg-emerald-50 border-emerald-200 text-emerald-800", label: "Resolved" },
+  closed: { pill: "bg-emerald-50 border-emerald-200 text-emerald-800", label: "Resolved" },
 };
 
 const CATEGORIES = [
@@ -116,6 +110,10 @@ const CATEGORIES = [
   "Account Support",
   "Feedback / Suggestion",
 ];
+
+const fieldClass =
+  "w-full px-3.5 py-2.5 rounded-md border border-gray-300 text-sm text-black placeholder:text-gray-500 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/15 bg-white";
+const labelClass = "block text-sm font-medium text-black mb-1.5";
 
 export default function HelpPage() {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
@@ -219,93 +217,71 @@ export default function HelpPage() {
   return (
     <div className="max-w-3xl mx-auto py-10 px-4 sm:px-6 space-y-8">
       {/* Page Header */}
-      <div className="flex items-center gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Help &amp; Support</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Find quick answers, browse user guides, or submit a support ticket.
-          </p>
-        </div>
+      <div>
+        <h1 className="text-2xl font-display font-bold text-black">Help &amp; Support</h1>
+        <p className="text-sm text-gray-600 mt-1">
+          Find quick answers, browse user guides, or submit a support ticket.
+        </p>
       </div>
 
-      {/* Quick Action Cards */}
+      {/* Quick Actions */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <button
           onClick={() => setShowGuide(true)}
-          className="flex items-center gap-4 bg-white border border-gray-100 rounded-2xl p-4 shadow-xs hover:border-magenta-200 hover:bg-magenta-50/20 transition-all text-left group"
+          className="text-left bg-white border border-gray-200 rounded-lg p-6 hover:border-magenta-400 transition-colors cursor-pointer"
         >
-          <div className="text-magenta-600">
-            <BookOpen className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-gray-900">User Guide</p>
-            <p className="text-xs text-gray-500 mt-0.5">Step-by-step instructions on how to use DermAI</p>
-          </div>
-          <ChevronRight className="w-4 h-4 text-gray-300 ml-auto group-hover:text-magenta-500 transition-colors" />
+          <p className="text-base font-semibold text-black">User guide</p>
+          <p className="text-sm text-gray-600 mt-1">Step-by-step instructions on how to use DermAI.</p>
         </button>
 
         <button
           onClick={() => {
             setShowTicketForm(true);
             setSubmittedId(null);
-    setSubmitError(null);
+            setSubmitError(null);
           }}
-          className="flex items-center gap-4 bg-white border border-gray-100 rounded-2xl p-4 shadow-xs hover:border-magenta-200 hover:bg-magenta-50/20 transition-all text-left group"
+          className="text-left bg-white border border-gray-200 rounded-lg p-6 hover:border-magenta-400 transition-colors cursor-pointer"
         >
-          <div className="text-magenta-600">
-            <MessageSquare className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-gray-900">Contact Support</p>
-            <p className="text-xs text-gray-500 mt-0.5">Submit an inquiry or report an issue</p>
-          </div>
-          <ChevronRight className="w-4 h-4 text-gray-300 ml-auto group-hover:text-magenta-500 transition-colors" />
+          <p className="text-base font-semibold text-black">Contact support</p>
+          <p className="text-sm text-gray-600 mt-1">Submit an inquiry or report an issue.</p>
         </button>
       </div>
 
       {/* Ticket Submission Form */}
       {showTicketForm && (
-        <div className="bg-white rounded-3xl border border-magenta-100 shadow-sm p-6 sm:p-8 transition-all">
+        <div className="bg-white rounded-lg border border-gray-200 p-7">
           {submittedId ? (
-            <div className="flex flex-col items-center py-6 text-center space-y-3">
-              <div className="w-12 h-12 rounded-full bg-green-100 text-green-600 flex items-center justify-center">
-                <CheckCircle2 className="w-7 h-7" />
-              </div>
-              <h3 className="text-lg font-bold text-gray-900">Support Ticket Submitted!</h3>
-              <p className="text-sm text-gray-600 max-w-sm">
-                Your ticket <span className="font-mono font-bold text-magenta-600">{submittedId}</span> has been received. Our admin support team will review your inquiry shortly.
+            <div className="py-4 space-y-3">
+              <h3 className="text-lg font-semibold text-black">Support ticket submitted</h3>
+              <p className="text-sm text-gray-700 max-w-md leading-relaxed">
+                Your ticket <span className="font-mono font-semibold text-black">{submittedId}</span> has been received. Our admin support team will review your inquiry shortly.
               </p>
               <button
                 onClick={resetForm}
-                className="mt-4 px-6 py-2.5 rounded-full bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors shadow-md shadow-magenta-500/20"
+                className="mt-2 px-5 py-2.5 rounded-md bg-magenta-600 text-white text-sm font-medium hover:bg-magenta-700 transition-colors cursor-pointer"
               >
                 Done
               </button>
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4 text-magenta-600" />
-                  Submit a Support Ticket
-                </h2>
+            <div className="space-y-5">
+              <div className="flex items-center justify-between border-b border-gray-200 pb-4">
+                <h2 className="text-lg font-semibold text-black">Submit a support ticket</h2>
                 <button
                   onClick={resetForm}
-                  className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                  className="text-sm font-medium text-gray-700 hover:underline underline-offset-2 cursor-pointer"
                 >
                   Cancel
                 </button>
               </div>
 
-              <div className="space-y-3.5 text-xs">
+              <div className="space-y-5">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">
-                    Category
-                  </label>
+                  <label className={labelClass}>Category</label>
                   <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 font-medium cursor-pointer"
+                    className={cn(fieldClass, "cursor-pointer")}
                   >
                     {CATEGORIES.map((cat) => (
                       <option key={cat} value={cat}>
@@ -316,9 +292,7 @@ export default function HelpPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">
-                    Subject
-                  </label>
+                  <label className={labelClass}>Subject</label>
                   <input
                     type="text"
                     value={subject}
@@ -327,14 +301,12 @@ export default function HelpPage() {
                       setSubmitError(null);
                     }}
                     placeholder="e.g. Pro subscription not reflecting or scan issue"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 transition-all"
+                    className={fieldClass}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">
-                    Describe your concern
-                  </label>
+                  <label className={labelClass}>Describe your concern</label>
                   <textarea
                     rows={4}
                     value={message}
@@ -343,29 +315,28 @@ export default function HelpPage() {
                       setSubmitError(null);
                     }}
                     placeholder="Please provide details so we can assist you quickly..."
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 transition-all resize-none"
+                    className={cn(fieldClass, "resize-none")}
                   />
                 </div>
 
                 {submitError && (
-                  <p role="alert" className="text-xs text-red-600">
+                  <p role="alert" className="text-sm font-medium text-black border-l-2 border-magenta-600 pl-3">
                     {submitError}
                   </p>
                 )}
 
-                <div className="pt-2">
+                <div>
                   <button
                     onClick={handleSubmitTicket}
                     disabled={submitting || !subject.trim() || !message.trim()}
                     className={cn(
-                      "inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-semibold transition-all",
+                      "px-5 py-2.5 rounded-md text-sm font-medium transition-colors",
                       subject.trim() && message.trim() && !submitting
-                        ? "bg-magenta-600 text-white hover:bg-magenta-700 shadow-md shadow-magenta-500/20 cursor-pointer"
-                        : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                        ? "bg-magenta-600 text-white hover:bg-magenta-700 cursor-pointer"
+                        : "bg-gray-100 text-gray-500 cursor-not-allowed"
                     )}
                   >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>{submitting ? "Submitting..." : "Send Ticket"}</span>
+                    {submitting ? "Submitting..." : "Send ticket"}
                   </button>
                 </div>
               </div>
@@ -376,70 +347,61 @@ export default function HelpPage() {
 
       {/* My Submitted Tickets Section */}
       {myTickets.length > 0 && (
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-xs overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-gray-800 flex items-center gap-2">
-              <MessageCircle className="w-4 h-4 text-magenta-600" />
-              My Support Tickets ({myTickets.length})
+        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-base font-semibold text-black">
+              My support tickets <span className="font-normal text-gray-600">({myTickets.length})</span>
             </h2>
           </div>
 
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-gray-200">
             {loadingTickets ? (
-              <div className="p-6 text-center text-gray-400 text-xs">
-                <Loader2 className="w-5 h-5 animate-spin mx-auto text-magenta-500 mb-1" />
+              <div className="p-8 text-center text-gray-600 text-sm">
+                <Loader2 className="w-5 h-5 animate-spin mx-auto text-magenta-600 mb-2" />
                 Loading your tickets...
               </div>
             ) : (
               myTickets.map((t) => {
                 const status = statusBadge[t.status] || statusBadge.open;
-                const StatusIcon = status.icon;
                 return (
-                  <div key={t.id} className="p-5 space-y-2.5 hover:bg-gray-50/50 transition-colors">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">
+                  <div key={t.id} className="px-6 py-5 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 mb-1 text-xs text-gray-600">
+                          <span className="font-mono font-semibold text-black">
                             {t.id.length > 12 ? t.id.slice(0, 8).toUpperCase() : t.id}
                           </span>
-                          <span className="inline-flex items-center gap-1 text-[11px] text-gray-500 font-medium">
-                            <Tag className="w-3 h-3 text-gray-400" />
-                            {t.category}
-                          </span>
+                          <span>·</span>
+                          <span>{t.category}</span>
                         </div>
-                        <h3 className="text-sm font-bold text-gray-900">{t.subject}</h3>
+                        <h3 className="text-sm font-semibold text-black">{t.subject}</h3>
                       </div>
 
                       <span
                         className={cn(
-                          "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border shrink-0",
-                          status.bg,
-                          status.text
+                          "inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border shrink-0",
+                          status.pill
                         )}
                       >
-                        <StatusIcon className="w-3.5 h-3.5" />
                         {status.label}
                       </span>
                     </div>
 
-                    <p className="text-xs text-gray-600 leading-relaxed bg-gray-50/80 rounded-xl p-3 border border-gray-100">
+                    <p className="text-sm text-gray-700 leading-relaxed bg-gray-50 rounded-md p-3.5 border border-gray-200">
                       {t.message}
                     </p>
 
                     {/* Admin Response Note if available */}
                     {t.response && (
-                      <div className="mt-2 bg-emerald-50/80 rounded-xl p-3 border border-emerald-200/80 text-xs">
-                        <div className="flex items-center gap-1.5 text-emerald-800 font-bold mb-1">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Admin Support Response:</span>
-                        </div>
-                        <p className="text-emerald-900 leading-relaxed pl-5">
+                      <div className="border-l-[3px] border-l-magenta-600 bg-gray-50 px-4 py-3 text-sm">
+                        <p className="font-semibold text-black mb-1">Admin support response</p>
+                        <p className="text-gray-700 leading-relaxed">
                           {t.response}
                         </p>
                       </div>
                     )}
 
-                    <p className="text-[10px] text-gray-400">
+                    <p className="text-xs text-gray-600">
                       Submitted on {new Date(t.createdAt).toLocaleDateString("en-US", {
                         month: "short",
                         day: "numeric",
@@ -457,29 +419,29 @@ export default function HelpPage() {
       )}
 
       {/* Frequently Asked Questions */}
-      <div className="bg-white rounded-3xl border border-gray-100 shadow-xs overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
-            Frequently Asked Questions
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h2 className="text-base font-semibold text-black">
+            Frequently asked questions
           </h2>
         </div>
-        <div className="divide-y divide-gray-100 text-xs">
+        <div className="divide-y divide-gray-200">
           {faqs.map((faq, i) => (
             <div key={i}>
               <button
                 onClick={() => setOpenIdx(openIdx === i ? null : i)}
-                className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-gray-50 transition-colors"
+                className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-gray-50 transition-colors cursor-pointer"
               >
-                <span className="text-sm font-semibold text-gray-800 pr-4">{faq.q}</span>
+                <span className="text-sm font-medium text-black pr-4">{faq.q}</span>
                 <ChevronRight
                   className={cn(
-                    "w-4 h-4 text-gray-400 shrink-0 transition-transform",
-                    openIdx === i && "rotate-90 text-magenta-500"
+                    "w-4 h-4 text-magenta-600 shrink-0 transition-transform",
+                    openIdx === i && "rotate-90"
                   )}
                 />
               </button>
               {openIdx === i && (
-                <div className="px-6 pb-4 text-xs text-gray-600 leading-relaxed">
+                <div className="px-6 pb-5 text-sm text-gray-700 leading-relaxed">
                   {faq.a}
                 </div>
               )}
@@ -488,64 +450,50 @@ export default function HelpPage() {
         </div>
       </div>
 
-      {/* Contact Direct Card */}
-      <div className="bg-magenta-50/80 rounded-3xl border border-magenta-100 p-6 flex items-center gap-4">
-        <div className="p-3.5 bg-white rounded-2xl shadow-xs text-magenta-600 shrink-0">
-          <Mail className="w-5 h-5" />
-        </div>
-        <div>
-          <p className="text-sm font-bold text-magenta-950">Still need direct assistance?</p>
-          <p className="text-xs text-magenta-800 mt-0.5">
-            You can reach our official team directly at{" "}
-            <a href="mailto:dermaisupport@gmail.com" className="font-semibold underline">
-              dermaisupport@gmail.com
-            </a>
-          </p>
-        </div>
+      {/* Contact Direct */}
+      <div className="rounded-lg border border-gray-200 bg-white p-6">
+        <p className="text-base font-semibold text-black">Still need direct assistance?</p>
+        <p className="text-sm text-gray-700 mt-1">
+          You can reach our official team directly at{" "}
+          <a href="mailto:dermaisupport@gmail.com" className="font-medium text-magenta-700 underline underline-offset-2">
+            dermaisupport@gmail.com
+          </a>
+        </p>
       </div>
 
       {/* User Guide Modal */}
       {showGuide && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
             {/* Modal Header */}
-            <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-magenta-100 rounded-xl text-magenta-600">
-                  <BookOpen className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-base font-bold text-gray-900">User Guide</h2>
-                  <p className="text-xs text-gray-500">Getting started with DermAI features</p>
-                </div>
+            <div className="flex items-center justify-between px-7 py-5 border-b border-gray-200">
+              <div>
+                <h2 className="text-lg font-semibold text-black">User guide</h2>
+                <p className="text-sm text-gray-600">Getting started with DermAI features</p>
               </div>
               <button
                 onClick={() => setShowGuide(false)}
-                className="p-2 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                className="p-2 rounded-md hover:bg-gray-100 text-gray-500 hover:text-black transition-colors cursor-pointer"
+                aria-label="Close"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Guide Steps */}
-            <div className="overflow-y-auto px-6 py-5 space-y-6 text-xs">
+            <div className="overflow-y-auto px-7 py-6 space-y-7">
               {guideSteps.map((section, si) => (
-                <div key={si} className="space-y-2.5">
-                  <div className="flex items-center gap-2">
-                    <div className="p-1.5 bg-magenta-100 rounded-lg text-magenta-600">
-                      <section.icon className="w-4 h-4" />
-                    </div>
-                    <h3 className="text-xs font-bold text-gray-900">
-                      Step {si + 1}: {section.title}
-                    </h3>
-                  </div>
-                  <ol className="space-y-1.5 pl-2">
+                <div key={si} className="space-y-3">
+                  <h3 className="text-sm font-semibold text-black">
+                    Step {si + 1}: {section.title}
+                  </h3>
+                  <ol className="space-y-2">
                     {section.steps.map((step, i) => (
-                      <li key={i} className="flex items-start gap-2.5">
-                        <span className="shrink-0 mt-0.5 w-4 h-4 flex items-center justify-center rounded-full bg-magenta-600 text-white text-[10px] font-bold">
-                          {i + 1}
+                      <li key={i} className="flex items-start gap-3">
+                        <span className="shrink-0 w-5 text-sm font-semibold text-magenta-700 tabular-nums">
+                          {i + 1}.
                         </span>
-                        <p className="text-xs text-gray-600 leading-relaxed">{step}</p>
+                        <p className="text-sm text-gray-700 leading-relaxed">{step}</p>
                       </li>
                     ))}
                   </ol>
@@ -554,12 +502,12 @@ export default function HelpPage() {
             </div>
 
             {/* Guide Footer */}
-            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50">
+            <div className="px-7 py-4 border-t border-gray-200 bg-gray-50">
               <button
                 onClick={() => setShowGuide(false)}
-                className="w-full py-2.5 rounded-full bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors shadow-md shadow-magenta-500/20"
+                className="w-full py-2.5 rounded-md bg-magenta-600 text-white text-sm font-medium hover:bg-magenta-700 transition-colors cursor-pointer"
               >
-                Got it!
+                Got it
               </button>
             </div>
           </div>

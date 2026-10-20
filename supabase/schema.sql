@@ -34,23 +34,33 @@ alter table if exists user_notification add column if not exists created_at time
 alter table if exists user_support_ticket add column if not exists category text default 'General';
 alter table if exists user_support_ticket add column if not exists priority text default 'medium';
 alter table if exists user_support_ticket add column if not exists response text;
-alter table if exists user_support_ticket add column if not exists status varchar(20) not null default 'open';
+alter table if exists user_support_ticket add column if not exists status varchar(20) not null default 'pending';
+alter table if exists user_support_ticket add column if not exists resolved_at timestamptz;
 alter table if exists user_support_ticket add column if not exists created_at timestamptz not null default now();
 alter table if exists user_support_ticket add column if not exists updated_at timestamptz not null default now();
 
--- 4. user_plan_subscription table updates (PayMongo columns + period dates)
+-- 4. user_plan_subscription table updates (PayMongo columns + period dates + VAT pricing)
 alter table if exists user_plan_subscription add column if not exists current_period_start timestamptz;
 alter table if exists user_plan_subscription add column if not exists current_period_end timestamptz;
 alter table if exists user_plan_subscription add column if not exists paymongo_subscription_id text;
 alter table if exists user_plan_subscription add column if not exists paymongo_customer_id text;
 alter table if exists user_plan_subscription add column if not exists paymongo_plan_id text;
+alter table if exists user_plan_subscription add column if not exists base_amount decimal(10,2);
+alter table if exists user_plan_subscription add column if not exists vat_amount decimal(10,2);
+alter table if exists user_plan_subscription add column if not exists total_amount decimal(10,2);
+alter table if exists user_plan_subscription add column if not exists amount_paid decimal(10,2);
 alter table if exists user_plan_subscription add column if not exists updated_at timestamptz not null default now();
 
--- 5. user_payment table updates (PayMongo transaction columns)
+-- 5. user_payment table updates (PayMongo transaction columns + VAT pricing)
 alter table if exists user_payment add column if not exists billing_cycle varchar(20);
 alter table if exists user_payment add column if not exists reference_number text;
 alter table if exists user_payment add column if not exists paymongo_payment_id text;
 alter table if exists user_payment add column if not exists paymongo_payment_intent_id text;
+alter table if exists user_payment add column if not exists base_amount decimal(10,2);
+alter table if exists user_payment add column if not exists vat_amount decimal(10,2);
+alter table if exists user_payment add column if not exists total_amount decimal(10,2);
+alter table if exists user_payment add column if not exists amount_paid decimal(10,2);
+alter table if exists user_payment add column if not exists created_at timestamptz not null default now();
 alter table if exists user_payment add column if not exists plan_id uuid references plan(plan_id) on delete set null;
 alter table if exists user_payment add column if not exists appointment_id uuid references patient_appointment(appointment_id) on delete set null;
 alter table if exists user_payment add column if not exists clinic_id uuid references clinic(clinic_id) on delete set null;
@@ -239,15 +249,25 @@ create table if not exists user_support_ticket (
   ticket_id   uuid primary key default gen_random_uuid(),
   subject     varchar(200) not null,
   message     text not null,
-  status      varchar(20) not null default 'open'
-              check (status in ('open','pending','closed')),
+  status      varchar(20) not null default 'pending'
+              check (status in ('pending','open','in_progress','resolved','closed')),
   category    text default 'General',
   priority    text default 'medium',
   response    text,
+  resolved_at timestamptz,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now(),
   user_id     uuid not null references "user"(user_id) on delete cascade
 );
+
+-- Migration: databases created before the in_progress/resolved workflow still carry the
+-- old check (status in ('open','pending','closed')). `create table if not exists` never
+-- updates it, so replace the constraint to allow the full ticket lifecycle.
+update user_support_ticket set status = 'in_progress' where status = 'in-progress';
+alter table user_support_ticket drop constraint if exists user_support_ticket_status_check;
+alter table user_support_ticket add constraint user_support_ticket_status_check
+  check (status in ('pending','open','in_progress','resolved','closed'));
+
 
 -- ----------------------------------------------------------------------------
 -- 5. PLAN
@@ -287,6 +307,10 @@ create table if not exists user_plan_subscription (
   paymongo_subscription_id text,
   paymongo_customer_id     text,
   paymongo_plan_id         text,
+  base_amount              decimal(10,2),
+  vat_amount               decimal(10,2),
+  total_amount             decimal(10,2),
+  amount_paid              decimal(10,2),
   updated_at               timestamptz not null default now()
 );
 
@@ -296,6 +320,10 @@ create table if not exists user_plan_subscription (
 create table if not exists user_payment (
   payment_id                 uuid primary key default gen_random_uuid(),
   amount                     decimal(10,2) not null,
+  base_amount                decimal(10,2),
+  vat_amount                 decimal(10,2),
+  total_amount               decimal(10,2),
+  amount_paid                decimal(10,2),
   payment_date               timestamptz not null default now(),
   method                     varchar(50) not null,
   status                     varchar(20) not null check (status in ('success','failed','pending')),
@@ -666,7 +694,8 @@ alter table if exists user_notification add column if not exists created_at time
 alter table if exists user_support_ticket add column if not exists category text default 'General';
 alter table if exists user_support_ticket add column if not exists priority text default 'medium';
 alter table if exists user_support_ticket add column if not exists response text;
-alter table if exists user_support_ticket add column if not exists status varchar(20) not null default 'open';
+alter table if exists user_support_ticket add column if not exists status varchar(20) not null default 'pending';
+alter table if exists user_support_ticket add column if not exists resolved_at timestamptz;
 alter table if exists user_support_ticket add column if not exists created_at timestamptz not null default now();
 alter table if exists user_support_ticket add column if not exists updated_at timestamptz not null default now();
 

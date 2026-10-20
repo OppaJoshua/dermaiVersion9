@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import { getLocalHelpdeskTickets } from "./store";
+import { logAuditEvent } from "./auditLog";
 
 export type NotificationRole = "patient" | "doctor" | "clinic" | "admin";
 
@@ -94,28 +95,43 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     // 1. Direct user_notification records for this patient
     const { data: dbNotifs } = await supabase
       .from("user_notification")
-      .select("notif_id, type, subtype, title, body, is_read, created_at")
+      .select("notif_id, type, subtype, title, body, is_read, created_at, metadata")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
-      .limit(30);
+      .limit(40);
 
     if (dbNotifs) {
       dbNotifs.forEach((n) => {
+        const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
+        const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
+        const isTicket = n.type === "support_ticket" || n.type?.includes("ticket");
+        const isAdminSystem = isBroadcast || isMaintenance;
+
         items.push({
           id: n.notif_id,
           type: n.type || "system",
           category: n.type?.includes("appointment")
             ? "appointment"
-            : n.type?.includes("ticket")
+            : isTicket
             ? "ticket"
+            : isBroadcast
+            ? "broadcast"
             : "system",
           title: n.title,
           message: n.body || "",
-          senderType: (n.subtype as any) || "system",
+          senderName:
+            (n.metadata as any)?.sender_name ||
+            (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : (n.subtype as any) || "DERMAI Support"),
+          senderType: isTicket || isAdminSystem ? "admin" : (n.subtype as any) || "system",
+          link: isTicket ? "/dashboard/settings/help" : undefined,
           timestamp: n.created_at,
           isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
+          metadata: {
+            ...n.metadata,
+            subtype: n.subtype,
+          },
         });
-      }      );
+      });
     }
 
     // 2. Live Patient Appointments (with Clinic Name joined)
@@ -222,7 +238,16 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
 
     if (tickets) {
       tickets.forEach((ticket: any) => {
-        if (ticket.response || ticket.status !== "open") {
+        const alreadyNotified = items.some(
+          (i) => i.metadata?.ticket_id === ticket.ticket_id
+        );
+        if (
+          !alreadyNotified &&
+          (ticket.response ||
+            (ticket.status !== "open" &&
+              ticket.status !== "pending" &&
+              ticket.status !== "submitted"))
+        ) {
           const notifId = `ticket-update-${ticket.ticket_id}`;
           const replySummary = ticket.response ? ` Response: "${ticket.response}"` : "";
           items.push({
@@ -246,7 +271,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     const { data: broadcasts } = await supabase
       .from("admin_broadcast")
       .select("broadcast_id, title, message, audience, sent_at")
-      .in("audience", ["all", "patients"])
+      .in("audience", ["all", "patients", "patient"])
       .order("sent_at", { ascending: false })
       .limit(10);
 
@@ -259,10 +284,14 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           category: "broadcast",
           title: b.title,
           message: b.message,
-          senderName: "DERMAI Team",
+          senderName: "Platform Administrator",
           senderType: "admin",
           timestamp: b.sent_at,
           isRead: readSet.has(notifId),
+          metadata: {
+            broadcast_id: b.broadcast_id,
+            subtype: "admin_announcement",
+          },
         });
       });
     }
@@ -270,10 +299,16 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     console.warn("[notificationService] Error fetching patient notifications:", err);
   }
 
-  // De-duplicate by ID and sort newest first
+  // De-duplicate by ID and broadcast_id, and sort newest first
   const seen = new Set<string>();
+  const seenBroadcastIds = new Set<string>();
   const unique = items.filter((item) => {
     if (seen.has(item.id)) return false;
+    const bId = item.metadata?.broadcast_id;
+    if (bId) {
+      if (seenBroadcastIds.has(bId)) return false;
+      seenBroadcastIds.add(bId);
+    }
     seen.add(item.id);
     return true;
   });
@@ -475,7 +510,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
     const { data: broadcasts } = await supabase
       .from("admin_broadcast")
       .select("broadcast_id, title, message, audience, sent_at")
-      .in("audience", ["all", "doctors"])
+      .in("audience", ["all", "doctors", "doctor"])
       .order("sent_at", { ascending: false })
       .limit(10);
 
@@ -488,11 +523,15 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           category: "broadcast",
           title: b.title,
           message: b.message,
-          senderName: "DERMAI Admin",
+          senderName: "Platform Administrator",
           senderType: "admin",
           senderAvatar: adminAvatar || undefined,
           timestamp: b.sent_at,
           isRead: readSet.has(notifId),
+          metadata: {
+            broadcast_id: b.broadcast_id,
+            subtype: "admin_announcement",
+          },
         });
       });
     }
@@ -500,23 +539,34 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
     // 5. Direct User Notifications for Doctor
     const { data: directNotifs } = await supabase
       .from("user_notification")
-      .select("notif_id, type, subtype, title, body, is_read, created_at")
+      .select("notif_id, type, subtype, title, body, is_read, created_at, metadata")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
-      .limit(15);
+      .limit(25);
 
     if (directNotifs) {
       directNotifs.forEach((n) => {
+        const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
+        const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
+        const isAdminSystem = isBroadcast || isMaintenance;
+
         items.push({
           id: n.notif_id,
           type: n.type || "system",
-          category: "system",
+          category: isBroadcast ? "broadcast" : "system",
           title: n.title,
           message: n.body || "",
-          senderType: (n.subtype as any) || "system",
-          senderAvatar: (n as any).metadata?.avatar_url || (n.subtype === "admin" ? adminAvatar : undefined),
+          senderName:
+            (n.metadata as any)?.sender_name ||
+            (isAdminSystem ? "Platform Administrator" : "DERMAI Admin"),
+          senderType: isAdminSystem ? "admin" : (n.subtype as any) || "system",
+          senderAvatar: (n as any).metadata?.avatar_url || (isAdminSystem ? adminAvatar : undefined),
           timestamp: n.created_at,
           isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
+          metadata: {
+            ...n.metadata,
+            subtype: n.subtype,
+          },
         });
       });
     }
@@ -525,8 +575,14 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
   }
 
   const seen = new Set<string>();
+  const seenBroadcastIds = new Set<string>();
   const unique = items.filter((item) => {
     if (seen.has(item.id)) return false;
+    const bId = item.metadata?.broadcast_id;
+    if (bId) {
+      if (seenBroadcastIds.has(bId)) return false;
+      seenBroadcastIds.add(bId);
+    }
     seen.add(item.id);
     return true;
   });
@@ -779,14 +835,14 @@ export async function fetchClinicNotifications(
       }
     }
 
-    // 2. User Notifications for Clinic Owner (including Clinic Application Approval)
+    // 2. User Notifications for Clinic Owner (including Clinic Application Approval, broadcasts, maintenance)
     if (resolvedUserId) {
       const { data: userNotifs } = await supabase
         .from("user_notification")
-        .select("notif_id, type, subtype, title, body, is_read, created_at")
+        .select("notif_id, type, subtype, title, body, is_read, created_at, metadata")
         .eq("user_id", resolvedUserId)
         .order("created_at", { ascending: false })
-        .limit(20);
+        .limit(30);
 
       if (userNotifs) {
         userNotifs.forEach((n: any) => {
@@ -794,20 +850,29 @@ export async function fetchClinicNotifications(
             n.type === "clinic_application" ||
             n.subtype === "application_approved" ||
             n.subtype === "clinic_approval";
+          const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
+          const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
+          const isAdminSystem = isBroadcast || isMaintenance;
 
           items.push({
             id: n.notif_id,
             type: isApproval ? "application_approved" : n.subtype || n.type || "system",
-            category: isApproval ? "clinic" : "system",
+            category: isBroadcast ? "broadcast" : isApproval ? "clinic" : "system",
             title: n.title,
             message: n.body || "",
-            senderName: isApproval ? "Platform Admin" : "DERMAI Admin",
+            senderName:
+              (n.metadata as any)?.sender_name ||
+              (isAdminSystem ? "Platform Administrator" : isApproval ? "Platform Admin" : "DERMAI Admin"),
             senderType: "admin",
             senderAvatar: adminAvatar || undefined,
             link: isApproval ? "/clinic" : undefined,
             timestamp: n.created_at,
             isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
-            metadata: n.metadata || (isApproval ? { clinic_id: resolvedClinicId, status: "approved" } : undefined),
+            metadata: {
+              ...n.metadata,
+              subtype: n.subtype,
+              ...(isApproval ? { clinic_id: resolvedClinicId, status: "approved" } : {}),
+            },
           });
         });
       }
@@ -878,7 +943,7 @@ export async function fetchClinicNotifications(
     const { data: broadcasts } = await supabase
       .from("admin_broadcast")
       .select("broadcast_id, title, message, audience, sent_at")
-      .in("audience", ["all", "clinics"])
+      .in("audience", ["all", "clinics", "clinic"])
       .order("sent_at", { ascending: false })
       .limit(10);
 
@@ -891,11 +956,15 @@ export async function fetchClinicNotifications(
           category: "broadcast",
           title: b.title,
           message: b.message,
-          senderName: "DERMAI Admin",
+          senderName: "Platform Administrator",
           senderType: "admin",
           senderAvatar: adminAvatar || undefined,
           timestamp: b.sent_at,
           isRead: readSet.has(notifId),
+          metadata: {
+            broadcast_id: b.broadcast_id,
+            subtype: "admin_announcement",
+          },
         });
       });
     }
@@ -904,8 +973,14 @@ export async function fetchClinicNotifications(
   }
 
   const seen = new Set<string>();
+  const seenBroadcastIds = new Set<string>();
   const unique = items.filter((item) => {
     if (seen.has(item.id)) return false;
+    const bId = item.metadata?.broadcast_id;
+    if (bId) {
+      if (seenBroadcastIds.has(bId)) return false;
+      seenBroadcastIds.add(bId);
+    }
     seen.add(item.id);
     return true;
   });
@@ -1057,7 +1132,7 @@ export async function fetchAdminNotifications(): Promise<NotificationItem[]> {
         user_id,
         user:user_id (user_id, full_name, email, role, avatar_url)
       `)
-      .eq("status", "open")
+      .in("status", ["pending", "open"])
       .order("created_at", { ascending: false })
       .limit(15);
 
@@ -1661,4 +1736,288 @@ export async function runNotificationHealthCheck() {
 
 if (typeof window !== "undefined") {
   (window as any).__dermai_notification_check = runNotificationHealthCheck;
+}
+
+/**
+ * ----------------------------------------------------------------------------
+ * ADMIN BROADCAST & MAINTENANCE DISPATCH SYSTEM
+ * ----------------------------------------------------------------------------
+ */
+
+/**
+ * Resolves active recipient user IDs dynamically based on live accounts in:
+ * - public.user (role = 'patient', 'clinic', 'doctor', account_status != 'suspended' / 'inactive')
+ * - public.clinic (owner_user_id)
+ * - public.clinic_doctor (user_id where status is active)
+ */
+export async function resolveActiveAudienceUserIds(
+  audience: "all" | "patient" | "patients" | "clinic" | "clinics" | "doctor" | "doctors" | string
+): Promise<string[]> {
+  const norm = (audience || "all").toLowerCase().trim();
+  const recipientIds = new Set<string>();
+
+  const isAll = norm === "all" || norm === "all users";
+  const wantPatients = isAll || norm === "patient" || norm === "patients";
+  const wantClinics = isAll || norm === "clinic" || norm === "clinics";
+  const wantDoctors = isAll || norm === "doctor" || norm === "doctors";
+
+  try {
+    // 1. Resolve Patients
+    if (wantPatients) {
+      const { data: patients, error: pErr } = await supabase
+        .from("user")
+        .select("user_id, account_status")
+        .eq("role", "patient")
+        .neq("account_status", "suspended")
+        .neq("account_status", "inactive");
+      if (pErr) console.warn("[resolveActiveAudienceUserIds] Error querying patients:", pErr);
+      (patients || []).forEach((p) => p.user_id && recipientIds.add(p.user_id));
+    }
+
+    // 2. Resolve Clinics
+    if (wantClinics) {
+      // A. Users with role 'clinic'
+      const { data: clinicUsers, error: cuErr } = await supabase
+        .from("user")
+        .select("user_id, account_status")
+        .eq("role", "clinic")
+        .neq("account_status", "suspended")
+        .neq("account_status", "inactive");
+      if (cuErr) console.warn("[resolveActiveAudienceUserIds] Error querying clinic users:", cuErr);
+      (clinicUsers || []).forEach((c) => c.user_id && recipientIds.add(c.user_id));
+
+      // B. Owners in clinic table
+      const { data: clinicOwners, error: coErr } = await supabase
+        .from("clinic")
+        .select("owner_user_id, status")
+        .not("owner_user_id", "is", null)
+        .neq("status", "rejected");
+      if (coErr) console.warn("[resolveActiveAudienceUserIds] Error querying clinic owners:", coErr);
+      (clinicOwners || []).forEach((c) => c.owner_user_id && recipientIds.add(c.owner_user_id));
+    }
+
+    // 3. Resolve Doctors
+    if (wantDoctors) {
+      // A. Users with role 'doctor'
+      const { data: doctorUsers, error: duErr } = await supabase
+        .from("user")
+        .select("user_id, account_status")
+        .eq("role", "doctor")
+        .neq("account_status", "suspended")
+        .neq("account_status", "inactive");
+      if (duErr) console.warn("[resolveActiveAudienceUserIds] Error querying doctor users:", duErr);
+      (doctorUsers || []).forEach((d) => d.user_id && recipientIds.add(d.user_id));
+
+      // B. Active Doctors in clinic_doctor table
+      const { data: docRecords, error: cdErr } = await supabase
+        .from("clinic_doctor")
+        .select("user_id, status")
+        .not("user_id", "is", null);
+      if (cdErr) console.warn("[resolveActiveAudienceUserIds] Error querying clinic_doctor:", cdErr);
+      (docRecords || []).forEach((d) => {
+        const s = (d.status || "").toLowerCase();
+        if (d.user_id && s !== "inactive" && s !== "suspended" && s !== "archived") {
+          recipientIds.add(d.user_id);
+        }
+      });
+    }
+  } catch (err) {
+    console.error("[resolveActiveAudienceUserIds] Failed to dynamically resolve recipients:", err);
+  }
+
+  return Array.from(recipientIds);
+}
+
+/**
+ * Publishes an Admin Broadcast Announcement into public.admin_broadcast,
+ * generates matching individual records in public.user_notification for active users,
+ * and records an entry in the system audit log.
+ */
+export async function dispatchAdminBroadcastNotification(params: {
+  title: string;
+  message: string;
+  audience: "all" | "patients" | "clinics" | "doctors" | string;
+}): Promise<{ broadcastId: string; recipientCount: number }> {
+  const normAudience = (params.audience || "all").toLowerCase().trim();
+  const dbAudience =
+    normAudience === "patient" ? "patients"
+    : normAudience === "clinic" ? "clinics"
+    : normAudience === "doctor" ? "doctors"
+    : (["all", "patients", "clinics", "doctors"].includes(normAudience) ? normAudience : "all");
+
+  // 1. Insert into public.admin_broadcast
+  const { data: bcastRow, error: bcastError } = await supabase
+    .from("admin_broadcast")
+    .insert({
+      title: params.title.trim(),
+      message: params.message.trim(),
+      audience: dbAudience,
+      sent_at: new Date().toISOString(),
+    })
+    .select("broadcast_id")
+    .single();
+
+  if (bcastError) {
+    console.error("[dispatchAdminBroadcastNotification] Failed to insert admin_broadcast:", bcastError);
+    throw bcastError;
+  }
+
+  const broadcastId = bcastRow.broadcast_id;
+
+  // 2. Dynamically resolve recipient user IDs
+  const recipientIds = await resolveActiveAudienceUserIds(dbAudience);
+
+  // 3. Batch insert into public.user_notification
+  if (recipientIds.length > 0) {
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < recipientIds.length; i += BATCH_SIZE) {
+      const chunk = recipientIds.slice(i, i + BATCH_SIZE);
+      const rows = chunk.map((uid) => ({
+        user_id: uid,
+        type: "broadcast",
+        subtype: "admin_announcement",
+        title: params.title.trim(),
+        body: params.message.trim(),
+        is_read: false,
+        metadata: {
+          broadcast_id: broadcastId,
+          sender_name: "Platform Administrator",
+          audience: dbAudience,
+          priority: "normal",
+        },
+      }));
+      const { error: insErr } = await supabase.from("user_notification").insert(rows);
+      if (insErr) {
+        console.warn("[dispatchAdminBroadcastNotification] Batch insert error:", insErr);
+      }
+    }
+  }
+
+  // 4. Central Audit Logging
+  try {
+    await logAuditEvent({
+      role: "admin",
+      category: "System",
+      action: "Broadcast Announcement Created",
+      target: `Audience: ${dbAudience}`,
+      details: `Admin published broadcast announcement "${params.title.trim()}" to ${dbAudience} (${recipientIds.length} active users notified).`,
+      metadata: {
+        broadcast_id: broadcastId,
+        title: params.title.trim(),
+        audience: dbAudience,
+        recipient_count: recipientIds.length,
+      },
+    });
+  } catch (auditErr) {
+    console.warn("[dispatchAdminBroadcastNotification] Audit logging failed:", auditErr);
+  }
+
+  // 5. Emit Realtime Events locally
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+    window.dispatchEvent(new Event("storage"));
+  }
+
+  return { broadcastId, recipientCount: recipientIds.length };
+}
+
+/**
+ * Dispatches a high-priority System Maintenance notification to all active user roles (Patient, Clinic, Doctor)
+ * and records the event in public.system_audit_log.
+ */
+export async function dispatchSystemMaintenanceAlert(params: {
+  scheduledWindow: string;
+  estimatedDowntime: string;
+  instructions?: string;
+  enabled: boolean;
+}): Promise<{ recipientCount: number }> {
+  if (!params.enabled) {
+    // Maintenance Mode Deactivated / Disabled
+    try {
+      await logAuditEvent({
+        role: "admin",
+        category: "System",
+        action: "Maintenance Mode Disabled",
+        target: "Platform Maintenance",
+        details: "Platform maintenance mode was deactivated by the administrator. Normal access restored.",
+      });
+    } catch (auditErr) {
+      console.warn("[dispatchSystemMaintenanceAlert] Audit log error:", auditErr);
+    }
+    return { recipientCount: 0 };
+  }
+
+  // Maintenance Mode Enabled
+  const instructions =
+    params.instructions?.trim() ||
+    "Some features such as booking and online consultations may be temporarily unavailable. Please complete any active sessions.";
+  const dynamicBody = `The system will undergo scheduled maintenance on ${params.scheduledWindow}. Estimated downtime: ${params.estimatedDowntime}. ${instructions}`;
+
+  // 1. Record in admin_broadcast for permanent record
+  try {
+    await supabase.from("admin_broadcast").insert({
+      title: "System Maintenance Notice",
+      message: dynamicBody,
+      audience: "all",
+      sent_at: new Date().toISOString(),
+    });
+  } catch (bcastErr) {
+    console.warn("[dispatchSystemMaintenanceAlert] Broadcast record insert warning:", bcastErr);
+  }
+
+  // 2. Dynamically resolve all active users (Patients, Clinics, Doctors)
+  const recipientIds = await resolveActiveAudienceUserIds("all");
+
+  // 3. Batch insert high-priority user_notification records
+  if (recipientIds.length > 0) {
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < recipientIds.length; i += BATCH_SIZE) {
+      const chunk = recipientIds.slice(i, i + BATCH_SIZE);
+      const rows = chunk.map((uid) => ({
+        user_id: uid,
+        type: "system",
+        subtype: "maintenance_alert",
+        title: "System Maintenance Notice",
+        body: dynamicBody,
+        is_read: false,
+        metadata: {
+          priority: "high",
+          level: "warning",
+          sender_name: "Platform Administrator",
+          scheduled_window: params.scheduledWindow,
+          estimated_downtime: params.estimatedDowntime,
+        },
+      }));
+      const { error: insErr } = await supabase.from("user_notification").insert(rows);
+      if (insErr) {
+        console.warn("[dispatchSystemMaintenanceAlert] Batch insert error:", insErr);
+      }
+    }
+  }
+
+  // 4. Central Audit Logging
+  try {
+    await logAuditEvent({
+      role: "admin",
+      category: "System",
+      action: "Maintenance Mode Enabled",
+      target: "Platform Maintenance",
+      details: `System maintenance mode enabled. Scheduled window: ${params.scheduledWindow}. Estimated downtime: ${params.estimatedDowntime}. High-priority alert sent to ${recipientIds.length} active users.`,
+      metadata: {
+        scheduled_window: params.scheduledWindow,
+        estimated_downtime: params.estimatedDowntime,
+        recipient_count: recipientIds.length,
+      },
+    });
+  } catch (auditErr) {
+    console.warn("[dispatchSystemMaintenanceAlert] Audit log error:", auditErr);
+  }
+
+  // 5. Emit Realtime Events
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+    window.dispatchEvent(new Event("storage"));
+  }
+
+  return { recipientCount: recipientIds.length };
 }

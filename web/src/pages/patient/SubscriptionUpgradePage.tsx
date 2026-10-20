@@ -6,7 +6,7 @@ import { Calendar, CalendarDays, AlertCircle } from "lucide-react";
 import { getSubscriptionPlansAsync, type SubscriptionPlan } from "@/lib/store";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
-import { withVat } from "@/lib/vat";
+import { withVat, calculatePricing } from "@/lib/vat";
 import gcashLogo from "@/assets/gcash.png";
 import mayaLogo from "@/assets/maya.png";
 import SubscriptionAgreementModal from "../../components/common/SubscriptionAgreementModal";
@@ -142,10 +142,15 @@ const selectedPlan =
   availablePlans.find((p) => p.id === selectedPlanId) ??
   availablePlans[0];
 
-// plan.price is the NET price set by the admin. The patient sees and pays
-// the VAT-inclusive price (net x 1.12). The same formula runs in the
-// paymongo-payment edge function, which sets the real charged amount.
-const total = withVat(selectedPlan?.price ?? 0);
+// Pricing Formula:
+// vat_amount = round(base_price * 0.12, 2)
+// total_price = round(base_price + vat_amount, 2)
+// For base_price = 177.68, vat_amount = 21.32 and total_price = 199.00.
+const basePrice = Number(selectedPlan?.price ?? 0);
+const pricing = calculatePricing(basePrice);
+const total = pricing.totalPrice;
+const vatAmount = pricing.vatAmount;
+const amountInCentavos = pricing.amountInCentavos;
 const billingLabel = billingCycle === "monthly" ? "Monthly" : "Yearly";
 const currentPlanId = selectedPlan?.id;
 
@@ -154,7 +159,7 @@ const togglePrice = (type: "monthly" | "yearly") => {
   const p = plans.find(
     (x) => x.billingType === type && x.status === "active" && x.price > 0
   );
-  return p ? withVat(p.price).toLocaleString() : "—";
+  return p ? withVat(p.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
 };
 
 
@@ -350,44 +355,54 @@ const togglePrice = (type: "monthly" | "yearly") => {
       );
     }
 
+    // Save calculation and billing cycle so we can restore it after a 3DS redirect and in receipt
+    sessionStorage.setItem("dermai_pending_billing_cycle", billingCycle);
+    sessionStorage.setItem("dermai_pending_plan_base_price", String(basePrice));
+    sessionStorage.setItem("dermai_pending_plan_vat_amount", String(vatAmount));
+    sessionStorage.setItem("dermai_pending_plan_total_price", String(total));
+
     // 1. Create Payment Intent through the Supabase Edge Function
-const { data: intentJson, error: intentError } =
-  await supabase.functions.invoke("paymongo-payment", {
-    body: {
-      paymentMethod: paymentMethod,
-      userId: user.id,
-      planId: currentPlanId,
-      billingCycle: billingCycle,
-      fullName,
-      email,
-      address,
-      mobileNumber,
-    },
-  });
+    // Passes gross total_price (e.g. 199.00 / 19900 centavos) and breakdown
+    const { data: intentJson, error: intentError } =
+      await supabase.functions.invoke("paymongo-payment", {
+        body: {
+          paymentMethod: paymentMethod,
+          userId: user.id,
+          planId: currentPlanId,
+          billingCycle: billingCycle,
+          fullName,
+          email,
+          address,
+          mobileNumber,
+          basePrice,
+          vatAmount,
+          totalPrice: total,
+          amountInCentavos,
+          amount: amountInCentavos,
+        },
+      });
 
-if (intentError) {
-  console.error("[upgrade] PayMongo Edge Function error:", intentError);
-  throw new Error(
-    intentError.message || "Failed to create payment intent"
-  );
-}
+    if (intentError) {
+      console.error("[upgrade] PayMongo Edge Function error:", intentError);
+      throw new Error(
+        intentError.message || "Failed to create payment intent"
+      );
+    }
 
-if (!intentJson?.paymentIntentId || !intentJson?.clientKey) {
-  console.error("[upgrade] Invalid payment intent response:", intentJson);
-  throw new Error("PayMongo did not return a valid payment intent");
-}
+    if (!intentJson?.paymentIntentId || !intentJson?.clientKey) {
+      console.error("[upgrade] Invalid payment intent response:", intentJson);
+      throw new Error("PayMongo did not return a valid payment intent");
+    }
 
-const { paymentIntentId, clientKey } = intentJson;
+    const { paymentIntentId, clientKey } = intentJson;
 
-      // Save billing cycle so we can restore it after a 3DS redirect
-      sessionStorage.setItem("dermai_pending_billing_cycle", billingCycle);
-      sessionStorage.setItem("dermai_pending_payment_intent_client_key", clientKey);
+    sessionStorage.setItem("dermai_pending_payment_intent_client_key", clientKey);
 
-      // 2. Create Payment Method directly with PayMongo (uses public key)
-      const pmRes = await fetch("https://api.paymongo.com/v1/payment_methods", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+    // 2. Create Payment Method directly with PayMongo (uses public key)
+    const pmRes = await fetch("https://api.paymongo.com/v1/payment_methods", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
           Authorization: "Basic " + btoa(PAYMONGO_PUBLIC_KEY + ":"),
         },
         body: JSON.stringify({
@@ -533,13 +548,19 @@ const { paymentIntentId, clientKey } = intentJson;
                   <span className="font-semibold text-gray-900">{billingLabel}</span>
                 </div>
                 <div className="flex justify-between items-center text-gray-600">
-                  <span>Subtotal</span>
+                  <span>Amount (excl. VAT)</span>
                   <span className="font-semibold text-gray-900">
-                    ₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ₱{basePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-gray-600">
+                  <span>VAT (12%)</span>
+                  <span className="font-semibold text-gray-900">
+                    ₱{vatAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
                 <div className="pt-3 border-t border-gray-100 flex justify-between items-baseline">
-                  <span className="text-sm font-bold text-gray-900"> Due today</span>
+                  <span className="text-sm font-bold text-gray-900">Total Due Today</span>
                   <span className="text-xl font-bold text-magenta-600">
                      ₱{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>

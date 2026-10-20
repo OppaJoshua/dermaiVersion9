@@ -258,7 +258,7 @@ export default function DoctorPatientHistoryPage() {
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px">
+      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         {[
           { key: "all", label: "All History", count: history.length },
           { key: "completed", label: "Completed Visits", count: completedList.length },
@@ -300,7 +300,7 @@ export default function DoctorPatientHistoryPage() {
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden shadow-xs min-w-0">
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             <table className="w-full min-w-[760px] text-left text-sm">
               <thead className="bg-[#F8F9FA] border-b border-slate-200/80 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
                 <tr>

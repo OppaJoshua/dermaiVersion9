@@ -517,22 +517,60 @@ if (existingPaymentError) {
   );
 }
 
+// Dynamically read base_price from the plan record to compute VAT and total amounts
+const { data: planRecord } = await supabase
+  .from("plan")
+  .select("plan_id, name, price")
+  .eq("plan_id", metadata.plan_id)
+  .maybeSingle();
+
+const basePrice = planRecord?.price != null
+  ? Number(planRecord.price)
+  : Number(metadata.base_amount ?? metadata.base_price ?? metadata.net_amount ?? (amount / 1.12));
+const vatAmount = Math.round(basePrice * 0.12 * 100) / 100;
+const totalPrice = Math.round((basePrice + vatAmount) * 100) / 100;
+const finalAmountPaid = amount > 0 ? (amount >= totalPrice ? amount : totalPrice) : totalPrice;
+const baseAmount = basePrice;
+
 if (!existingPayment) {
-  const { error: paymentInsertError } =
-    await supabase
-      .from("user_payment")
-      .insert({
-        amount,
-        payment_date: new Date().toISOString(),
-        method: paymentMethodType,
-        status: "success",
-        user_id: metadata.user_id,
-        plan_id: metadata.plan_id,
-        billing_cycle: metadata.billing_cycle,
-        reference_number: paymongoPaymentId,
-        paymongo_payment_id: paymongoPaymentId,
-        paymongo_payment_intent_id: paymentIntentId,
-      });
+  const paymentRecord: Record<string, unknown> = {
+    amount: finalAmountPaid,
+    base_amount: baseAmount,
+    vat_amount: vatAmount,
+    total_amount: finalAmountPaid,
+    amount_paid: finalAmountPaid,
+    payment_date: new Date().toISOString(),
+    method: paymentMethodType,
+    status: "success",
+    user_id: metadata.user_id,
+    plan_id: metadata.plan_id,
+    billing_cycle: metadata.billing_cycle,
+    reference_number: paymongoPaymentId,
+    paymongo_payment_id: paymongoPaymentId,
+    paymongo_payment_intent_id: paymentIntentId,
+  };
+
+  let { error: paymentInsertError } = await supabase
+    .from("user_payment")
+    .insert(paymentRecord);
+
+  // Fallback if newly added columns are not yet migrated in Supabase Cloud
+  if (paymentInsertError && paymentInsertError.message?.includes("does not exist")) {
+    const fallbackRecord = {
+      amount: finalAmountPaid,
+      payment_date: new Date().toISOString(),
+      method: paymentMethodType,
+      status: "success",
+      user_id: metadata.user_id,
+      plan_id: metadata.plan_id,
+      billing_cycle: metadata.billing_cycle,
+      reference_number: paymongoPaymentId,
+      paymongo_payment_id: paymongoPaymentId,
+      paymongo_payment_intent_id: paymentIntentId,
+    };
+    const res = await supabase.from("user_payment").insert(fallbackRecord);
+    paymentInsertError = res.error;
+  }
 
   if (paymentInsertError) {
     console.error(
@@ -578,32 +616,52 @@ console.log(
   }
 );
 
-const { error: subscriptionUpsertError } =
-  await supabase
-    .from("user_plan_subscription")
-    .upsert(
-      {
-        user_id: metadata.user_id,
-        plan_id: metadata.plan_id,
-        status: "active",
-        billing_cycle: metadata.billing_cycle,
-        started_at: periodStart.toISOString(),
-        renews_at: periodEnd.toISOString(),
-        current_period_start:
-          periodStart.toISOString(),
-        current_period_end:
-          periodEnd.toISOString(),
-        payment_method: metadata.payment_method,
-        payment_full_name: metadata.payment_full_name,
-        payment_email: metadata.payment_email,
-        billing_address: metadata.billing_address,
-        payment_mobile_number: metadata.payment_mobile_number,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: "user_id",
-      }
-    );
+const subscriptionRecord: Record<string, unknown> = {
+  user_id: metadata.user_id,
+  plan_id: metadata.plan_id,
+  status: "active",
+  billing_cycle: metadata.billing_cycle,
+  started_at: periodStart.toISOString(),
+  renews_at: periodEnd.toISOString(),
+  current_period_start: periodStart.toISOString(),
+  current_period_end: periodEnd.toISOString(),
+  base_amount: baseAmount,
+  vat_amount: vatAmount,
+  total_amount: finalAmountPaid,
+  amount_paid: finalAmountPaid,
+  payment_method: metadata.payment_method,
+  payment_full_name: metadata.payment_full_name,
+  payment_email: metadata.payment_email,
+  billing_address: metadata.billing_address,
+  payment_mobile_number: metadata.payment_mobile_number,
+  updated_at: new Date().toISOString(),
+};
+
+let { error: subscriptionUpsertError } = await supabase
+  .from("user_plan_subscription")
+  .upsert(subscriptionRecord, { onConflict: "user_id" });
+
+// Fallback if newly added columns are not yet migrated in Supabase Cloud
+if (subscriptionUpsertError && subscriptionUpsertError.message?.includes("does not exist")) {
+  const fallbackSub = {
+    user_id: metadata.user_id,
+    plan_id: metadata.plan_id,
+    status: "active",
+    billing_cycle: metadata.billing_cycle,
+    started_at: periodStart.toISOString(),
+    renews_at: periodEnd.toISOString(),
+    current_period_start: periodStart.toISOString(),
+    current_period_end: periodEnd.toISOString(),
+    payment_method: metadata.payment_method,
+    payment_full_name: metadata.payment_full_name,
+    payment_email: metadata.payment_email,
+    billing_address: metadata.billing_address,
+    payment_mobile_number: metadata.payment_mobile_number,
+    updated_at: new Date().toISOString(),
+  };
+  const res = await supabase.from("user_plan_subscription").upsert(fallbackSub, { onConflict: "user_id" });
+  subscriptionUpsertError = res.error;
+}
 
 if (subscriptionUpsertError) {
   console.error(
@@ -658,7 +716,9 @@ try {
   await sendReceiptEmail({
     patientEmail,
     paymentMethod: paymentMethodLabel,
-    amount,
+    amount: finalAmountPaid,
+    baseAmount,
+    vatAmount,
     paymentDate: new Date().toISOString(),
     paymongoPaymentId,
   });

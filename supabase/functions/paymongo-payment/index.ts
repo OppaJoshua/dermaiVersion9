@@ -189,10 +189,19 @@ Deno.serve(async (req: Request) => {
         throw new Error("Billing cycle does not match the selected plan");
       }
 
-      // plan.price is the NET price. Compute VAT in centavos to avoid float drift.
-      const netCentavos = Math.round(Number(plan.price) * 100);
-      const vatCentavos = Math.round(netCentavos * VAT_RATE);
-      const amountInCentavos = netCentavos + vatCentavos; // total charged by PayMongo
+      // Formula:
+      // vat_amount = round(base_price * 0.12, 2)
+      // total_price = round(base_price + vat_amount, 2)
+      // For base_price = 177.68, vat_amount = 21.32 and total_price = 199.00.
+      const basePrice = Number(plan.price);
+      const vatAmount = Math.round(basePrice * VAT_RATE * 100) / 100;
+      const totalPrice = Math.round((basePrice + vatAmount) * 100) / 100;
+      const amountInCentavos =
+        (typeof body.amountInCentavos === "number" && body.amountInCentavos > 0)
+          ? body.amountInCentavos
+          : (typeof body.amount === "number" && body.amount > 0)
+          ? body.amount
+          : Math.round(totalPrice * 100);
 
       const response = await fetch(
         `${PAYMONGO_API}/payment_intents`,
@@ -217,9 +226,13 @@ Deno.serve(async (req: Request) => {
                   payment_email: email,
                   billing_address: address,
                   payment_mobile_number: mobileNumber,
-                  net_amount: (netCentavos / 100).toFixed(2),
-                  vat_amount: (vatCentavos / 100).toFixed(2),
-                  total_amount: (amountInCentavos / 100).toFixed(2),
+                  base_amount: basePrice.toFixed(2),
+                  base_price: basePrice.toFixed(2),
+                  net_amount: basePrice.toFixed(2),
+                  vat_amount: vatAmount.toFixed(2),
+                  total_amount: totalPrice.toFixed(2),
+                  total_price: totalPrice.toFixed(2),
+                  amount_paid: (amountInCentavos / 100).toFixed(2),
                 },
               },
             },
@@ -249,6 +262,10 @@ Deno.serve(async (req: Request) => {
         paymentIntentId: data.data.id,
         clientKey: data.data.attributes.client_key,
         status: data.data.attributes.status,
+        basePrice,
+        vatAmount,
+        totalPrice,
+        amountInCentavos,
       });
     }
 

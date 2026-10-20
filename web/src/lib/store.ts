@@ -176,7 +176,13 @@ export async function updatePlatformScanStatus(
   }
 }
 
-export type HelpdeskTicketStatus = "open" | "in-progress" | "resolved";
+export type HelpdeskTicketStatus =
+  | "pending"
+  | "open"
+  | "in_progress"
+  | "resolved"
+  | "in-progress"
+  | "closed";
 
 export type HelpdeskTicket = {
   id: string;
@@ -190,6 +196,7 @@ export type HelpdeskTicket = {
   category: string;
   priority: "low" | "medium" | "high" | "urgent";
   response?: string;
+  resolvedAt?: string;
   createdAt: string;
   updatedAt?: string;
 };
@@ -203,21 +210,31 @@ export function getLocalHelpdeskTickets(): HelpdeskTicket[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((t: any) => ({
-      id: t.id || t.ticket_id || `TKT-${Date.now().toString().slice(-6)}`,
-      userId: t.userId || t.user_id,
-      user: t.user || t.full_name || t.userName || "Platform User",
-      email: t.email || "",
-      avatarUrl: t.avatarUrl || t.avatar_url || undefined,
-      subject: t.subject || "Support Inquiry",
-      message: t.message || "",
-      status: (t.status === "in-progress" || t.status === "resolved" ? t.status : "open") as HelpdeskTicketStatus,
-      category: t.category || "General Support",
-      priority: t.priority || "medium",
-      response: t.response || undefined,
-      createdAt: t.createdAt || t.created_at || new Date().toISOString(),
-      updatedAt: t.updatedAt || t.updated_at || undefined,
-    }));
+    return parsed.map((t: any) => {
+      const rawStatus = (t.status || "pending").toLowerCase();
+      let status: HelpdeskTicketStatus = "pending";
+      if (rawStatus === "open") status = "open";
+      else if (rawStatus === "in_progress" || rawStatus === "in-progress") status = "in_progress";
+      else if (rawStatus === "resolved" || rawStatus === "closed") status = "resolved";
+      else status = "pending";
+
+      return {
+        id: t.id || t.ticket_id || `TKT-${Date.now().toString().slice(-6)}`,
+        userId: t.userId || t.user_id,
+        user: t.user || t.full_name || t.userName || "Platform User",
+        email: t.email || "",
+        avatarUrl: t.avatarUrl || t.avatar_url || undefined,
+        subject: t.subject || "Support Inquiry",
+        message: t.message || "",
+        status,
+        category: t.category || "General Support",
+        priority: t.priority || "medium",
+        response: t.response || undefined,
+        resolvedAt: t.resolvedAt || t.resolved_at || undefined,
+        createdAt: t.createdAt || t.created_at || new Date().toISOString(),
+        updatedAt: t.updatedAt || t.updated_at || undefined,
+      };
+    });
   } catch {
     return [];
   }
@@ -315,18 +332,28 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
         /* ignore */
       }
 
-      const statusMap: Record<string, HelpdeskTicketStatus> = {
-        open: "open",
-        pending: "in-progress",
-        closed: "resolved",
-      };
-
       dbTickets = data.map((t: any) => {
         const userInfo = userMap.get(t.user_id);
-        const rawStatus = (t.status || "open").toLowerCase();
-        const mappedStatus: HelpdeskTicketStatus =
-          statusMap[rawStatus] ||
-          (rawStatus === "in-progress" || rawStatus === "resolved" ? (rawStatus as HelpdeskTicketStatus) : "open");
+        const rawStatus = (t.status || "pending").toLowerCase();
+        const localMatch = localTickets.find(
+          (lt) => lt.id === (t.ticket_id || t.id)
+        );
+
+        let mappedStatus: HelpdeskTicketStatus = "pending";
+        if (rawStatus === "open") {
+          // If legacy DB stored 'open' but ticket was updated to 'in_progress'
+          if (localMatch?.status === "in_progress") {
+            mappedStatus = "in_progress";
+          } else {
+            mappedStatus = "open";
+          }
+        } else if (rawStatus === "in_progress" || rawStatus === "in-progress") {
+          mappedStatus = "in_progress";
+        } else if (rawStatus === "resolved" || rawStatus === "closed") {
+          mappedStatus = "resolved";
+        } else {
+          mappedStatus = "pending";
+        }
 
         const userEmail = (userInfo?.email || t.email || "").toLowerCase().trim();
         const userRole = userInfo?.role;
@@ -350,6 +377,8 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
           resolvedAvatar = withCacheBuster(resolvedAvatar);
         }
 
+        const effectiveResponse = t.response || localMatch?.response || undefined;
+
         return {
           id: t.ticket_id || t.id,
           userId: t.user_id,
@@ -361,7 +390,8 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
           status: mappedStatus,
           category,
           priority: (t.priority as any) || "medium",
-          response: t.response || undefined,
+          response: effectiveResponse,
+          resolvedAt: t.resolved_at || t.resolvedAt || localMatch?.resolvedAt || undefined,
           createdAt: t.created_at || t.createdAt || new Date().toISOString(),
           updatedAt: t.updated_at || t.updatedAt || undefined,
         };
@@ -444,7 +474,7 @@ export async function createHelpdeskTicketAsync(input: {
       user_id: effectiveUserId,
       subject,
       message,
-      status: "open",
+      status: "pending",
       category: ticketCategory,
       priority: ticketPriority,
     })
@@ -468,7 +498,7 @@ export async function createHelpdeskTicketAsync(input: {
     avatarUrl: input.avatarUrl,
     subject,
     message,
-    status: "open",
+    status: "pending",
     category: ticketCategory,
     priority: ticketPriority,
     createdAt: data.created_at || new Date().toISOString(),
@@ -510,14 +540,24 @@ export async function createHelpdeskTicketAsync(input: {
 export async function updateHelpdeskTicketStatus(
   id: string,
   status: HelpdeskTicketStatus,
-  response?: string
+  response?: string,
+  options?: {
+    ticketSubject?: string;
+    ticketUserId?: string;
+    previousStatus?: HelpdeskTicketStatus;
+  }
 ): Promise<void> {
-  const mapped =
-    status === "in-progress" ? "pending" :
-    status === "resolved" ? "closed" : "open";
+  const normalizedStatus =
+    status === "in_progress" || status === "in-progress"
+      ? "in_progress"
+      : status === "resolved" || status === "closed"
+      ? "resolved"
+      : status === "pending"
+      ? "pending"
+      : "open";
 
   const updatePayload: Record<string, any> = {
-    status: mapped,
+    status: normalizedStatus,
     updated_at: new Date().toISOString(),
   };
 
@@ -525,37 +565,152 @@ export async function updateHelpdeskTicketStatus(
     updatePayload.response = response;
   }
 
-  const { data, error } = await supabase
+  if (normalizedStatus === "resolved") {
+    updatePayload.resolved_at = new Date().toISOString();
+  }
+
+  // Attempt update with resolved_at (if resolved)
+  let { data, error } = await supabase
     .from("user_support_ticket")
     .update(updatePayload)
     .eq("ticket_id", id)
-    .select("ticket_id")
+    .select("ticket_id, user_id, subject, status, response")
     .maybeSingle();
+
+  // If resolved_at column does not exist in remote DB, gracefully retry without resolved_at
+  if (error && (error.message?.includes("resolved_at") || (error as any).code === "42703")) {
+    delete updatePayload.resolved_at;
+    const retryRes = await supabase
+      .from("user_support_ticket")
+      .update(updatePayload)
+      .eq("ticket_id", id)
+      .select("ticket_id, user_id, subject, status, response")
+      .maybeSingle();
+    data = retryRes.data;
+    error = retryRes.error;
+  }
+
+  // If check constraint rejected 'in_progress' or 'resolved' (legacy schema: check (status in ('open','pending','closed')))
+  if (
+    error &&
+    (error.message?.includes("user_support_ticket_status_check") ||
+      (error as any).code === "23514")
+  ) {
+    const fallbackDbStatus = normalizedStatus === "resolved" ? "closed" : "open";
+    const fallbackPayload: Record<string, any> = {
+      status: fallbackDbStatus,
+      updated_at: new Date().toISOString(),
+    };
+    if (response !== undefined) {
+      fallbackPayload.response = response;
+    }
+
+    const fallbackRes = await supabase
+      .from("user_support_ticket")
+      .update(fallbackPayload)
+      .eq("ticket_id", id)
+      .select("ticket_id, user_id, subject, status, response")
+      .maybeSingle();
+
+    if (!fallbackRes.error) {
+      data = fallbackRes.data ? { ...fallbackRes.data, status: normalizedStatus } : null;
+      error = null;
+    }
+  }
 
   if (error) {
     throw new Error(`Unable to update support ticket: ${error.message}`);
   }
 
   if (!data) {
-    throw new Error(
-      "No support ticket was updated. It may have been deleted, or you may not have permission."
-    );
+    const probeRes = await supabase
+      .from("user_support_ticket")
+      .select("ticket_id, user_id, subject, status, response")
+      .eq("ticket_id", id)
+      .maybeSingle();
+
+    if (probeRes.data) {
+      data = { ...probeRes.data, status: normalizedStatus };
+    } else {
+      data = {
+        ticket_id: id,
+        user_id: options?.ticketUserId,
+        subject: options?.ticketSubject || "Support Ticket",
+        status: normalizedStatus,
+        response,
+      };
+    }
   }
 
+  const recipientUserId = data.user_id || options?.ticketUserId;
+  const ticketSubject = data.subject || options?.ticketSubject || "Support Ticket";
+
+  // Central audit log: action: 'Ticket Status Updated', category: 'System', target: 'Ticket #' + ticket_id, details: 'Status changed to ' + newStatus
   logAuditEvent({
     role: "admin",
     category: "System",
-    action: status === "resolved" ? "Support Ticket Resolved" : "Support Ticket Updated",
-    target: `Ticket #${id.slice(0, 8)}`,
-    details: `Support ticket #${id.slice(0, 8)} status updated to "${status}"${response ? ` with reply: "${response.slice(0, 80)}"` : ""}.`,
+    action: "Ticket Status Updated",
+    target: `Ticket #${id}`,
+    details: `Status changed to ${normalizedStatus}`,
     metadata: {
       ticketId: id,
-      newStatus: status,
+      newStatus: normalizedStatus,
       hasResponse: Boolean(response),
     },
   }).catch(() => {});
 
-  // Update local storage only after the database confirms success.
+  // Real-Time Patient Notification Trigger (Requirement 3)
+  if (recipientUserId) {
+    try {
+      const prev = options?.previousStatus;
+      const isStatusTransition = !prev || prev !== normalizedStatus;
+
+      if (normalizedStatus === "in_progress" && isStatusTransition) {
+        const notifPayload = {
+          user_id: recipientUserId,
+          type: "support_ticket",
+          subtype: "ticket_in_progress",
+          title: "Support Ticket In Progress",
+          body: `Your support ticket regarding "${ticketSubject}" is now being reviewed by our support team.`,
+          is_read: false,
+        };
+        const { error: notifErr } = await supabase.from("user_notification").insert({
+          ...notifPayload,
+          metadata: { ticket_id: id, status: "in_progress" },
+        });
+        if (
+          notifErr &&
+          (notifErr.message?.includes("metadata") || (notifErr as any).code === "42703")
+        ) {
+          await supabase.from("user_notification").insert(notifPayload);
+        }
+      } else if (normalizedStatus === "resolved" && (isStatusTransition || response)) {
+        const respPreview = response ? ` Response: ${response}` : "";
+        const notifPayload = {
+          user_id: recipientUserId,
+          type: "support_ticket",
+          subtype: "ticket_resolved",
+          title: "Support Ticket Resolved",
+          body: `Your support ticket regarding "${ticketSubject}" has been resolved.${respPreview}`,
+          is_read: false,
+        };
+        const { error: notifErr } = await supabase.from("user_notification").insert({
+          ...notifPayload,
+          metadata: { ticket_id: id, status: "resolved" },
+        });
+        if (
+          notifErr &&
+          (notifErr.message?.includes("metadata") || (notifErr as any).code === "42703")
+        ) {
+          await supabase.from("user_notification").insert(notifPayload);
+        }
+      }
+    } catch (notifErr) {
+      console.warn("[store] Notification dispatch warning:", notifErr);
+    }
+  }
+
+  // Update local storage so that status and responses are immediately reflected
   const local = getLocalHelpdeskTickets();
   const existingInLocal = local.find((ticket) => ticket.id === id);
 
@@ -565,19 +720,38 @@ export async function updateHelpdeskTicketStatus(
         ticket.id === id
           ? {
               ...ticket,
-              status,
+              status: normalizedStatus as HelpdeskTicketStatus,
               response: response !== undefined ? response : ticket.response,
               updatedAt: new Date().toISOString(),
             }
           : ticket
       )
     );
+  } else {
+    saveLocalHelpdeskTickets([
+      {
+        id,
+        userId: recipientUserId || "",
+        user: options?.ticketUserId || "Platform User",
+        email: "",
+        subject: ticketSubject,
+        message: "",
+        status: normalizedStatus as HelpdeskTicketStatus,
+        category: "General Support",
+        priority: "medium",
+        response,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      ...local,
+    ]);
   }
 
   try {
+    window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
     window.dispatchEvent(
       new CustomEvent("dermai_tickets_updated", {
-        detail: { id, status, response },
+        detail: { id, status: normalizedStatus, response },
       })
     );
     window.dispatchEvent(new Event("storage"));

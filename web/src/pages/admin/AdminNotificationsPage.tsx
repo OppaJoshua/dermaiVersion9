@@ -14,7 +14,11 @@ import {
 import { cn } from "@/lib/utils";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { supabase } from "@/lib/supabaseClient";
-import { useRoleNotifications, type NotificationItem } from "@/lib/notificationService";
+import {
+  useRoleNotifications,
+  dispatchAdminBroadcastNotification,
+  type NotificationItem,
+} from "@/lib/notificationService";
 
 function AdminNotifAvatar({ item }: { item: NotificationItem }) {
   const [imgError, setImgError] = useState(false);
@@ -131,7 +135,8 @@ export function AdminNotifications({ onClose, isDropdown = false }: AdminNotific
               key={tab.key}
               onClick={() => setActiveTab(tab.key as any)}
               className={cn(
-                "px-3 py-1.5 text-sm rounded-lg transition-colors whitespace-nowrap cursor-pointer",
+                "rounded-lg transition-colors whitespace-nowrap cursor-pointer",
+                isDropdown ? "px-2.5 py-1 text-xs" : "px-3 py-1.5 text-sm",
                 activeTab === tab.key
                   ? "bg-magenta-50 text-magenta-700 font-semibold"
                   : "text-gray-500 hover:text-gray-900 hover:bg-gray-50 font-medium"
@@ -226,7 +231,7 @@ type Broadcast = {
   id: string;
   title: string;
   message: string;
-  audience: "All Users" | "Premium Only" | "Free Only";
+  audience: "all" | "patients" | "clinics" | "doctors" | string;
   sentAt: string;
 };
 
@@ -234,56 +239,65 @@ const seedAlerts: Array<{ id: string; title: string; text: string; level: string
 
 export default function AdminNotificationsPage() {
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
-  const [, setSending] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
-  const [audience, setAudience] = useState<"All Users" | "Premium Only" | "Free Only">("All Users");
+  const [audience, setAudience] = useState<"all" | "patients" | "clinics" | "doctors">("all");
+
+  const loadBroadcasts = async () => {
+    try {
+      const { data } = await supabase
+        .from("admin_broadcast")
+        .select("broadcast_id, title, message, audience, sent_at")
+        .order("sent_at", { ascending: false })
+        .limit(20);
+      if (data) {
+        setBroadcasts(
+          data.map((b: any) => ({
+            id: b.broadcast_id,
+            title: b.title,
+            message: b.message,
+            audience: b.audience,
+            sentAt: b.sent_at,
+          }))
+        );
+      }
+    } catch (err) {
+      console.warn("Could not load broadcasts:", err);
+    }
+  };
+
+  useEffect(() => {
+    loadBroadcasts();
+  }, []);
 
   const sendBroadcast = async () => {
-    if (!title.trim() || !message.trim()) return;
+    if (!title.trim() || !message.trim() || sending) return;
     setSending(true);
+    setSuccessMsg(null);
     try {
-      const { data: users } = await supabase.from("user").select("user_id").limit(100);
-      if (users && users.length > 0) {
-        const notifRows = users.map((u) => ({
-          user_id: u.user_id,
-          type: "broadcast",
-          title: title.trim(),
-          body: message.trim(),
-        }));
-        await supabase.from("user_notification").insert(notifRows);
-      }
-
-      const newBroadcast: Broadcast = {
-        id: `bcast-${Date.now()}`,
+      const { recipientCount } = await dispatchAdminBroadcastNotification({
         title: title.trim(),
         message: message.trim(),
         audience,
-        sentAt: new Date().toISOString(),
-      };
-      setBroadcasts((prev) => [newBroadcast, ...prev]);
-      logAuditEvent({
-        role: "admin",
-        category: "System",
-        action: "Broadcast Announcement",
-        target: `Audience: ${audience}`,
-        details: `Admin broadcast announcement "${title.trim()}" to ${audience}.`,
-        metadata: {
-          title: title.trim(),
-          audience,
-        },
-      }).catch(() => {});
+      });
+
+      setSuccessMsg(`Broadcast sent to ${recipientCount} active ${audience === "all" ? "users" : audience}!`);
+      setTimeout(() => setSuccessMsg(null), 5000);
+
       setTitle("");
       setMessage("");
-      setAudience("All Users");
-    } catch {
-      /* ignore */
+      setAudience("all");
+      await loadBroadcasts();
+    } catch (err) {
+      console.error("Failed to publish broadcast:", err);
     } finally {
       setSending(false);
     }
   };
 
-  const canSend = Boolean(title.trim() && message.trim());
+  const canSend = Boolean(title.trim() && message.trim() && !sending);
 
   return (
     <div className="space-y-6">
@@ -323,9 +337,10 @@ export default function AdminNotificationsPage() {
                   onChange={(e) => setAudience(e.target.value as typeof audience)}
                   className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm text-gray-900 outline-none focus:border-magenta-500 bg-white"
                 >
-                  <option>All Users</option>
-                  <option>Premium Only</option>
-                  <option>Free Only</option>
+                  <option value="all">All Roles (Patients, Clinics, Doctors)</option>
+                  <option value="patients">Patients Only</option>
+                  <option value="clinics">Clinics Only</option>
+                  <option value="doctors">Doctors Only</option>
                 </select>
               </div>
               <div>
@@ -333,22 +348,30 @@ export default function AdminNotificationsPage() {
                 <textarea
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
-                  placeholder="Write your announcement"
+                  placeholder="Write your announcement message..."
                   rows={4}
                   className="w-full px-3.5 py-2 rounded-md border border-gray-300 text-sm text-gray-900 placeholder:text-gray-400 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 resize-none"
                 />
               </div>
+
+              {successMsg && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-md text-xs font-medium text-emerald-800">
+                  {successMsg}
+                </div>
+              )}
+
               <button
                 onClick={sendBroadcast}
                 disabled={!canSend}
                 className={cn(
-                  "w-full px-4 py-2.5 rounded-md text-sm font-medium transition-colors",
+                  "w-full px-4 py-2.5 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2",
                   canSend
                     ? "bg-magenta-600 text-white hover:bg-magenta-700 cursor-pointer"
                     : "bg-gray-100 text-gray-400 cursor-not-allowed"
                 )}
               >
-                Send broadcast
+                {sending && <Loader2 className="w-4 h-4 animate-spin" />}
+                <span>{sending ? "Delivering announcement..." : "Send broadcast"}</span>
               </button>
             </div>
           </div>
@@ -356,13 +379,15 @@ export default function AdminNotificationsPage() {
           {/* Sent broadcasts */}
           {broadcasts.length > 0 && (
             <div className="bg-white rounded-lg border border-gray-200">
-              <h2 className="px-5 py-3.5 text-sm font-semibold text-gray-900 border-b border-gray-200">Sent this session</h2>
-              <ul className="divide-y divide-gray-100">
+              <h2 className="px-5 py-3.5 text-sm font-semibold text-gray-900 border-b border-gray-200">Broadcast history</h2>
+              <ul className="divide-y divide-gray-100 max-h-80 overflow-y-auto">
                 {broadcasts.map((b) => (
                   <li key={b.id} className="px-5 py-3.5">
                     <div className="flex items-baseline justify-between gap-3">
                       <p className="text-sm font-medium text-gray-900">{b.title}</p>
-                      <span className="text-xs text-gray-500 shrink-0">{b.audience}</span>
+                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 uppercase tracking-wider shrink-0">
+                        {b.audience}
+                      </span>
                     </div>
                     <p className="mt-0.5 text-sm text-gray-600 leading-relaxed">{b.message}</p>
                     <p className="mt-1 text-xs text-gray-400">{new Date(b.sentAt).toLocaleString()}</p>

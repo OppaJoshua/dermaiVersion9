@@ -5,6 +5,8 @@ import {
   ArrowRight,
   CheckCheck,
   Loader2,
+  AlertTriangle,
+  Megaphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
@@ -26,6 +28,16 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
 
   const filtered = useMemo(() => {
     if (activeTab === "all") return notifications;
+    if (activeTab === "broadcast") {
+      return notifications.filter(
+        (n) =>
+          n.category === "broadcast" ||
+          n.type === "broadcast" ||
+          n.metadata?.subtype === "admin_announcement" ||
+          n.metadata?.subtype === "maintenance_alert" ||
+          n.type === "maintenance_alert"
+      );
+    }
     return notifications.filter((n) => n.category === activeTab);
   }, [notifications, activeTab]);
 
@@ -83,15 +95,16 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
             { key: "all", label: "All" },
             { key: "appointment", label: "Patient Bookings" },
             { key: "ticket", label: "Support Tickets" },
-            { key: "broadcast", label: "Announcements" },
+            { key: "broadcast", label: "Announcements & Maintenance" },
           ].map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key as any)}
               className={cn(
-                "px-3 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer",
+                "border-b-2 transition-colors whitespace-nowrap cursor-pointer",
+                isDropdown ? "px-2.5 py-2 text-xs font-semibold" : "px-3 py-2.5 text-sm font-medium",
                 activeTab === tab.key
-                  ? "border-magenta-600 text-magenta-700"
+                  ? "border-blue-600 text-blue-700"
                   : "border-transparent text-gray-500 hover:text-gray-900"
               )}
             >
@@ -116,73 +129,139 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
             <p className="text-sm font-semibold text-gray-900">No new notifications</p>
             <p className="text-sm text-gray-500 mt-1">
               {activeTab === "all"
-                ? "New patient requests and clinic assignments will appear here."
+                ? "New patient requests, clinic assignments, and announcements will appear here."
                 : `No notifications under ${activeTab}.`}
             </p>
           </div>
         ) : (
-          filtered.map((item) => (
-            <div
-              key={item.id}
-              onClick={() => !item.isRead && markRead(item.id)}
-              className={cn(
-                "relative flex items-start gap-3 px-5 py-4 transition-colors cursor-pointer",
-                !item.isRead ? "bg-magenta-50/40 hover:bg-magenta-50/70" : "hover:bg-gray-50"
-              )}
-            >
-              {!item.isRead && <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-magenta-600" />}
+          filtered.map((item) => {
+            const isMaintenance =
+              item.metadata?.subtype === "maintenance_alert" ||
+              item.type === "maintenance_alert" ||
+              item.metadata?.priority === "high";
+            const isBroadcast =
+              item.category === "broadcast" ||
+              item.type === "broadcast" ||
+              item.metadata?.subtype === "admin_announcement";
 
-              {/* Avatar with real profile picture & fallback initials */}
-              <div className="relative shrink-0 w-10 h-10">
-                {item.senderAvatar ? (
-                  <img
-                    src={item.senderAvatar}
-                    alt={item.senderName || "Sender"}
-                    referrerPolicy="no-referrer"
-                    className="w-10 h-10 rounded-full object-cover border border-gray-200 bg-white"
-                    onError={(e) => {
-                      (e.currentTarget as HTMLElement).style.display = "none";
-                      const fallback = e.currentTarget.nextElementSibling as HTMLElement;
-                      if (fallback) fallback.style.display = "flex";
-                    }}
-                  />
-                ) : null}
-                <div
-                  className="w-10 h-10 rounded-full items-center justify-center font-semibold text-xs border border-magenta-100 bg-magenta-50 text-magenta-700"
-                  style={{ display: item.senderAvatar ? "none" : "flex" }}
-                >
-                  {(item.senderName || "PT").slice(0, 2).toUpperCase()}
-                </div>
-              </div>
-
-              {/* Content */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium text-magenta-700 truncate capitalize">
-                    {item.senderName || item.category}
-                  </span>
-                  <span className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs text-gray-500 whitespace-nowrap">{timeAgo(item.timestamp)}</span>
-                    {!item.isRead && <span className="w-2 h-2 rounded-full bg-magenta-600" />}
-                  </span>
-                </div>
-
-                <p className="text-sm font-semibold text-gray-900 mt-0.5">{item.title}</p>
-                <p className="text-sm text-gray-600 leading-relaxed mt-0.5 break-words">{item.message}</p>
-
-                {item.link && (
-                  <Link
-                    to={item.link}
-                    onClick={onClose}
-                    className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-magenta-700 hover:text-magenta-800 transition-colors"
-                  >
-                    <span>{item.type.includes("delegated") ? "Review Booking Table" : "View Consultation"}</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
+            return (
+              <div
+                key={item.id}
+                onClick={() => !item.isRead && markRead(item.id)}
+                className={cn(
+                  "relative flex items-start gap-3 px-5 py-4 transition-colors cursor-pointer",
+                  !item.isRead
+                    ? isMaintenance
+                      ? "bg-amber-50/50 hover:bg-amber-50/80"
+                      : "bg-magenta-50/40 hover:bg-magenta-50/70"
+                    : "hover:bg-gray-50"
                 )}
+              >
+                {!item.isRead && (
+                  <span
+                    className={cn(
+                      "absolute left-0 top-0 bottom-0 w-0.5",
+                      isMaintenance ? "bg-amber-500" : "bg-magenta-600"
+                    )}
+                  />
+                )}
+
+                {/* Avatar with real profile picture & fallback initials */}
+                <div className="relative shrink-0 w-10 h-10">
+                  {item.senderAvatar ? (
+                    <img
+                      src={item.senderAvatar}
+                      alt={item.senderName || "Sender"}
+                      referrerPolicy="no-referrer"
+                      className="w-10 h-10 rounded-full object-cover border border-gray-200 bg-white"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = "none";
+                        const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                        if (fallback) fallback.style.display = "flex";
+                      }}
+                    />
+                  ) : null}
+                  <div
+                    className={cn(
+                      "w-10 h-10 rounded-full items-center justify-center font-semibold text-xs border",
+                      isMaintenance
+                        ? "bg-amber-100 text-amber-800 border-amber-300"
+                        : isBroadcast
+                        ? "bg-magenta-50 text-magenta-700 border-magenta-200"
+                        : "bg-magenta-50 text-magenta-700 border-magenta-100"
+                    )}
+                    style={{ display: item.senderAvatar ? "none" : "flex" }}
+                  >
+                    {isMaintenance ? (
+                      <AlertTriangle className="w-5 h-5 text-amber-600" />
+                    ) : isBroadcast ? (
+                      <Megaphone className="w-5 h-5 text-magenta-600" />
+                    ) : (
+                      (item.senderName || "PT").slice(0, 2).toUpperCase()
+                    )}
+                  </div>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={cn(
+                          "text-xs font-semibold truncate",
+                          isMaintenance ? "text-amber-800" : "text-magenta-700"
+                        )}
+                      >
+                        {item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : item.category)}
+                      </span>
+                      {isMaintenance && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+                          <AlertTriangle className="w-3 h-3 text-amber-600" />
+                          High Priority
+                        </span>
+                      )}
+                    </div>
+                    <span className="flex items-center gap-2 shrink-0">
+                      <span className="text-xs text-gray-500 whitespace-nowrap">{timeAgo(item.timestamp)}</span>
+                      {!item.isRead && (
+                        <span
+                          className={cn(
+                            "w-2 h-2 rounded-full",
+                            isMaintenance ? "bg-amber-500" : "bg-magenta-600"
+                          )}
+                        />
+                      )}
+                    </span>
+                  </div>
+
+                  <p className="text-sm font-semibold text-gray-900 mt-0.5">{item.title}</p>
+                  <p className="text-sm text-gray-600 leading-relaxed mt-0.5 break-words">{item.message}</p>
+
+                  {item.link && (
+                    <Link
+                      to={item.link}
+                      onClick={onClose}
+                      className={cn(
+                        "mt-2 inline-flex items-center gap-1 text-sm font-medium transition-colors",
+                        isMaintenance
+                          ? "text-amber-800 hover:text-amber-900"
+                          : "text-magenta-700 hover:text-magenta-800"
+                      )}
+                    >
+                      <span>
+                        {isMaintenance
+                          ? "View System Status"
+                          : item.type.includes("delegated")
+                          ? "Review Booking Table"
+                          : "View Consultation"}
+                      </span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </Link>
+                  )}
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 

@@ -4,7 +4,7 @@ import { CreditCard, CalendarDays, AlertCircle, CheckCircle2 } from "lucide-reac
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { useAuth } from "@/context/AuthContext";
-import { splitVat } from "@/lib/vat";
+import { splitVat, calculatePricing } from "@/lib/vat";
 
 export default function PaymentSuccessPage() {
   const navigate = useNavigate();
@@ -75,21 +75,49 @@ export default function PaymentSuccessPage() {
           null;
 
         if (typeof amountInCentavos === "number") {
-          const total = amountInCentavos / 100;
-          setAmount(total);
+          const totalCharged = amountInCentavos / 100;
 
-          // VAT breakdown for the receipt. Prefer the exact values the edge
-          // function saved in the payment intent metadata; for older payments
-          // without metadata, work them out from the total that was charged.
+          // VAT breakdown for the receipt.
+          // 1. Check metadata from edge function / payment intent
           const metadata = attributes?.metadata ?? {};
-          const metaNet = Number(metadata.net_amount);
-          const metaVat = Number(metadata.net_amount != null ? metadata.vat_amount : NaN);
+          const metaBase = Number(metadata.base_amount ?? metadata.base_price ?? metadata.net_amount);
+          const metaVat = Number(metadata.vat_amount);
+          const metaTotal = Number(metadata.total_amount ?? metadata.total_price ?? metadata.amount_paid);
 
-          if (Number.isFinite(metaNet) && Number.isFinite(metaVat)) {
-            setNetAmount(metaNet);
-            setVatAmount(metaVat);
+          // 2. Check pending calculations stored in sessionStorage during checkout
+          const sessBase = Number(sessionStorage.getItem("dermai_pending_plan_base_price"));
+          const sessVat = Number(sessionStorage.getItem("dermai_pending_plan_vat_amount"));
+          const sessTotal = Number(sessionStorage.getItem("dermai_pending_plan_total_price"));
+
+          // 3. Fallback to plan lookup dynamically if plan_id is available
+          let resolvedBase = Number.isFinite(metaBase) && metaBase > 0 ? metaBase : (Number.isFinite(sessBase) && sessBase > 0 ? sessBase : NaN);
+          let resolvedVat = Number.isFinite(metaVat) && metaVat > 0 ? metaVat : (Number.isFinite(sessVat) && sessVat > 0 ? sessVat : NaN);
+          let resolvedTotal = Number.isFinite(metaTotal) && metaTotal > 0 ? metaTotal : (Number.isFinite(sessTotal) && sessTotal > 0 ? sessTotal : totalCharged);
+
+          if (!Number.isFinite(resolvedBase) || isNaN(resolvedBase)) {
+            const planId = metadata.plan_id;
+            if (planId) {
+              const { data: planRow } = await supabase
+                .from("plan")
+                .select("price")
+                .eq("plan_id", planId)
+                .maybeSingle();
+              if (planRow?.price != null) {
+                const calc = calculatePricing(Number(planRow.price));
+                resolvedBase = calc.basePrice;
+                resolvedVat = calc.vatAmount;
+                resolvedTotal = calc.totalPrice;
+              }
+            }
+          }
+
+          if (Number.isFinite(resolvedBase) && Number.isFinite(resolvedVat)) {
+            setAmount(resolvedTotal);
+            setNetAmount(resolvedBase);
+            setVatAmount(resolvedVat);
           } else {
-            const { net, vat } = splitVat(total);
+            const { net, vat } = splitVat(resolvedTotal);
+            setAmount(resolvedTotal);
             setNetAmount(net);
             setVatAmount(vat);
           }
@@ -105,7 +133,7 @@ export default function PaymentSuccessPage() {
           throw new Error("PayMongo payment ID was not found.");
         }
 
-setPaymentId(paymongoPaymentId);
+        setPaymentId(paymongoPaymentId);
 
         const methodType =
           payment?.attributes?.source?.type ||
@@ -122,13 +150,11 @@ setPaymentId(paymongoPaymentId);
 
         setPaymentDate(new Date().toISOString());
 
-        sessionStorage.removeItem(
-          "dermai_pending_billing_cycle"
-        );
-
-        sessionStorage.removeItem(
-          "dermai_pending_payment_intent_client_key"
-        );
+        sessionStorage.removeItem("dermai_pending_billing_cycle");
+        sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+        sessionStorage.removeItem("dermai_pending_plan_base_price");
+        sessionStorage.removeItem("dermai_pending_plan_vat_amount");
+        sessionStorage.removeItem("dermai_pending_plan_total_price");
 
         logAuditEvent({
           userId: user?.id,
