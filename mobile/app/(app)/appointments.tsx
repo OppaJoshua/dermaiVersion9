@@ -42,8 +42,8 @@ function formatDateDisplay(dStr?: string): string {
       const d = new Date(year, month, day);
       if (!isNaN(d.getTime())) {
         return d.toLocaleDateString('en-US', {
-          weekday: 'long',
-          month: 'long',
+          weekday: 'short',
+          month: 'short',
           day: 'numeric',
           year: 'numeric',
         });
@@ -52,8 +52,8 @@ function formatDateDisplay(dStr?: string): string {
     const d = new Date(dStr);
     if (!isNaN(d.getTime())) {
       return d.toLocaleDateString('en-US', {
-        weekday: 'long',
-        month: 'long',
+        weekday: 'short',
+        month: 'short',
         day: 'numeric',
         year: 'numeric',
       });
@@ -76,6 +76,7 @@ export default function AppointmentsScreen() {
   const params = useLocalSearchParams<{ openBooking?: string; clinicId?: string }>();
   const [tab, setTab] = useState<Tab>('upcoming');
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [clinics, setClinics] = useState<ClinicRecord[]>([]);
   const [user, setUser] = useState<PatientAccount | null>(null);
   const [showBooking, setShowBooking] = useState(false);
   const [selectedApptForSummary, setSelectedApptForSummary] = useState<Appointment | null>(null);
@@ -96,8 +97,12 @@ export default function AppointmentsScreen() {
   async function loadData() {
     setLoading(true);
     try {
-      const u = await getCurrentUser();
+      const [u, loadedClinics] = await Promise.all([
+        getCurrentUser(),
+        getClinics(),
+      ]);
       setUser(u);
+      setClinics(loadedClinics);
       if (!u) return;
       const appts = await getAppointments(u.id);
       setAppointments(appts);
@@ -141,29 +146,44 @@ export default function AppointmentsScreen() {
     <SafeAreaView style={styles.safe}>
       {/* ── Header ── */}
       <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerWelcome}>Your Schedule</Text>
+        <View style={styles.headerAvatarCircle}>
+          <Ionicons name="calendar" size={20} color={COLORS.primary} />
+        </View>
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={styles.headerWelcome}>Your Consultations</Text>
           <Text style={styles.headerName}>Appointments</Text>
         </View>
         <TouchableOpacity style={styles.addBtn} onPress={() => setShowBooking(true)}>
-          <Ionicons name="add" size={16} color="#fff" />
-          <Text style={styles.addBtnTxt}>Book</Text>
+          <Ionicons name="add" size={17} color="#fff" />
+          <Text style={styles.addBtnTxt}>Book New</Text>
         </TouchableOpacity>
       </View>
 
       {/* ── Tabs ── */}
-      <View style={styles.tabRow}>
-        {(['upcoming', 'past'] as Tab[]).map((t) => (
-          <TouchableOpacity
-            key={t}
-            style={[styles.tabBtn, tab === t && styles.tabBtnActive]}
-            onPress={() => setTab(t)}
-          >
-            <Text style={[styles.tabTxt, tab === t && styles.tabTxtActive]}>
-              {t === 'upcoming' ? `Upcoming (${upcomingAppts.length})` : `Past (${pastAppts.length})`}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      <View style={styles.tabContainer}>
+        <View style={styles.tabRow}>
+          {(['upcoming', 'past'] as Tab[]).map((t) => {
+            const count = t === 'upcoming' ? upcomingAppts.length : pastAppts.length;
+            const active = tab === t;
+            return (
+              <TouchableOpacity
+                key={t}
+                style={[styles.tabBtn, active && styles.tabBtnActive]}
+                onPress={() => setTab(t)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.tabTxt, active && styles.tabTxtActive]}>
+                  {t === 'upcoming' ? 'Upcoming' : 'Past & Completed'}
+                </Text>
+                <View style={[styles.tabCountBadge, active && styles.tabCountBadgeActive]}>
+                  <Text style={[styles.tabCountTxt, active && styles.tabCountTxtActive]}>
+                    {count}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
       <ScrollView
@@ -180,16 +200,17 @@ export default function AppointmentsScreen() {
                 <Ionicons name="calendar-outline" size={32} color={COLORS.primary} />
               </View>
               <Text style={styles.emptyTitle}>
-                {tab === 'upcoming' ? 'No Upcoming Appointments' : 'No Past Appointments'}
+                {tab === 'upcoming' ? 'No Upcoming Consultations' : 'No Past Consultations'}
               </Text>
               <Text style={styles.emptySub}>
                 {tab === 'upcoming'
-                  ? 'Book a consultation with a dermatologist to get started.'
-                  : 'Your completed and cancelled appointments will show up here.'}
+                  ? 'Book a consultation with a licensed dermatologist to get personalized medical care.'
+                  : 'Your completed and cancelled appointments will be recorded here.'}
               </Text>
               {tab === 'upcoming' && (
                 <TouchableOpacity style={styles.bookBtn} onPress={() => setShowBooking(true)}>
-                  <Text style={styles.bookBtnTxt}>Book Appointment</Text>
+                  <Ionicons name="add-circle-outline" size={18} color="#fff" />
+                  <Text style={styles.bookBtnTxt}>Book an Appointment</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -198,6 +219,7 @@ export default function AppointmentsScreen() {
               <AppointmentCard
                 key={appt.id}
                 appt={appt}
+                clinics={clinics}
                 onViewSummary={() => setSelectedApptForSummary(appt)}
                 onCancel={() => handleCancel(appt.id)}
               />
@@ -210,6 +232,7 @@ export default function AppointmentsScreen() {
       <BookingModal
         visible={showBooking}
         user={user}
+        clinics={clinics}
         initialClinicId={params.clinicId}
         onClose={() => setShowBooking(false)}
         onSaved={() => {
@@ -221,6 +244,7 @@ export default function AppointmentsScreen() {
       <AppointmentSummaryModal
         visible={!!selectedApptForSummary}
         appt={selectedApptForSummary}
+        clinics={clinics}
         onClose={() => setSelectedApptForSummary(null)}
         onCancel={() => {
           if (selectedApptForSummary) {
@@ -236,14 +260,19 @@ export default function AppointmentsScreen() {
 
 function AppointmentCard({
   appt,
+  clinics,
   onCancel,
   onViewSummary,
 }: {
   appt: Appointment;
+  clinics: ClinicRecord[];
   onCancel: () => void;
   onViewSummary: () => void;
 }) {
   const sc = STATUS_COLORS[appt.status] ?? STATUS_COLORS.pending;
+  const matchedClinic = clinics.find(
+    (c) => String(c.id) === String(appt.clinicId) || c.name === appt.clinicName
+  );
 
   const STEPS = ['Request Sent', 'Clinic Review', 'Scheduled', 'Completed'] as const;
   const getStepIndex = (status: string) => {
@@ -257,49 +286,69 @@ function AppointmentCard({
 
   return (
     <TouchableOpacity activeOpacity={0.92} onPress={onViewSummary} style={styles.card}>
+      {/* Top Clinic & Status Header */}
       <View style={styles.cardTopRow}>
-        <View style={[styles.listIconWrap, { backgroundColor: '#be185d15' }]}>
-          <Ionicons name="medkit-outline" size={20} color={COLORS.primary} />
-        </View>
+        {matchedClinic?.logoUrl ? (
+          <Image source={{ uri: matchedClinic.logoUrl }} style={styles.cardClinicLogo} />
+        ) : (
+          <View style={styles.cardClinicLogoFallback}>
+            <Text style={styles.cardClinicLogoTxt}>
+              {appt.clinicName.charAt(0) || 'C'}
+            </Text>
+          </View>
+        )}
         <View style={{ flex: 1, marginLeft: 12 }}>
           <View style={styles.cardHeader}>
-            <Text style={styles.clinicName}>{appt.clinicName}</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <Text style={styles.clinicName} numberOfLines={1}>
+                {appt.clinicName}
+              </Text>
+              {matchedClinic?.verified && (
+                <View style={styles.verifiedTag}>
+                  <Ionicons name="checkmark-circle" size={11} color="#059669" />
+                  <Text style={styles.verifiedTagTxt}>Verified</Text>
+                </View>
+              )}
+            </View>
             <View style={[styles.statusBadge, { backgroundColor: sc.bg }]}>
               <Text style={[styles.statusTxt, { color: sc.text }]}>{sc.label}</Text>
             </View>
           </View>
-          {appt.doctorName ? <Text style={styles.doctorName}>{appt.doctorName}</Text> : null}
-          {appt.specialty ? <Text style={styles.specialty}>{appt.specialty}</Text> : null}
+
+          {/* Doctor Info */}
+          <View style={styles.doctorRow}>
+            <Ionicons name="medkit-outline" size={13} color={COLORS.primary} />
+            <Text style={styles.doctorName} numberOfLines={1}>
+              {appt.doctorName ? (appt.doctorName.startsWith('Dr') ? appt.doctorName : `Dr. ${appt.doctorName}`) : 'Attending Dermatologist'}
+            </Text>
+            {appt.specialty ? (
+              <Text style={styles.specialtyTag}>• {appt.specialty}</Text>
+            ) : null}
+          </View>
         </View>
       </View>
 
+      {/* Meta Pills (No Queue Number!) */}
       <View style={styles.apptMeta}>
         {appt.date ? (
           <View style={styles.apptMetaItem}>
-            <Ionicons name="calendar-outline" size={11} color={COLORS.textSecondary} />
-            <Text style={styles.apptMetaText}>{appt.date}</Text>
+            <Ionicons name="calendar-outline" size={12} color={COLORS.primary} />
+            <Text style={styles.apptMetaText}>{formatDateDisplay(appt.date)}</Text>
           </View>
         ) : null}
         {appt.batchTime || appt.time ? (
           <View style={styles.apptMetaItem}>
-            <Ionicons name="time-outline" size={11} color={COLORS.textSecondary} />
+            <Ionicons name="time-outline" size={12} color={COLORS.primary} />
             <Text style={styles.apptMetaText}>{appt.batchTime || appt.time}</Text>
           </View>
         ) : null}
-        {appt.queueNumber ? (
-          <View style={styles.apptMetaItem}>
-            <Ionicons name="people-outline" size={11} color={COLORS.primary} />
-            <Text style={[styles.apptMetaText, { color: COLORS.primary, fontWeight: '700' }]}>
-              Queue #{appt.queueNumber}
-            </Text>
-          </View>
-        ) : null}
         <View style={styles.apptMetaItem}>
-          <Ionicons name="location-outline" size={11} color={COLORS.textSecondary} />
-          <Text style={styles.apptMetaText}>In-Person</Text>
+          <Ionicons name="location-outline" size={12} color="#64748b" />
+          <Text style={styles.apptMetaText}>In-Person Consultation</Text>
         </View>
       </View>
 
+      {/* 4-Step Progress Tracker */}
       {currentStep >= 0 && (
         <View style={styles.stepTracker}>
           {STEPS.map((step, idx) => (
@@ -316,7 +365,7 @@ function AppointmentCard({
                   <View style={[styles.stepLine, idx < currentStep ? styles.stepLineActive : styles.stepLineInactive]} />
                 )}
               </View>
-              <Text style={[styles.stepLabel, idx <= currentStep && { color: COLORS.primary, fontWeight: '600' }]}>
+              <Text style={[styles.stepLabel, idx <= currentStep && { color: COLORS.primary, fontWeight: '700' }]}>
                 {step}
               </Text>
             </View>
@@ -324,19 +373,34 @@ function AppointmentCard({
         </View>
       )}
 
+      {/* Optional AI Condition Banner */}
+      {appt.conditionName ? (
+        <View style={styles.cardConditionRow}>
+          <Ionicons name="scan-outline" size={12} color={COLORS.primary} />
+          <Text style={styles.cardConditionLabel}>AI Finding: </Text>
+          <Text style={styles.cardConditionVal}>{appt.conditionName}</Text>
+        </View>
+      ) : null}
+
+      {/* Symptoms / Notes Preview */}
       {appt.notes ? (
         <Text style={styles.reason} numberOfLines={2}>
-          Symptoms/Notes: {appt.notes}
+          Symptoms: {appt.notes}
         </Text>
       ) : null}
+
+      {/* Clinic Note from staff */}
       {appt.clinicNote ? (
         <View style={styles.referralTag}>
-          <Text style={styles.referralTagTxt}>Clinic Note: {appt.clinicNote}</Text>
+          <Ionicons name="chatbubble-ellipses-outline" size={13} color="#c2410c" />
+          <Text style={styles.referralTagTxt} numberOfLines={2}>
+            Clinic Note: {appt.clinicNote}
+          </Text>
         </View>
       ) : null}
 
       {/* Summary button & Cancellation controls */}
-      <View style={{ marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+      <View style={styles.cardFooterRow}>
         <TouchableOpacity onPress={onViewSummary} style={styles.viewSummaryBtn}>
           <Ionicons name="document-text-outline" size={13} color={COLORS.primary} />
           <Text style={styles.viewSummaryTxt}>Consultation Summary</Text>
@@ -346,12 +410,12 @@ function AppointmentCard({
         {appt.status === 'pending' ? (
           <TouchableOpacity onPress={onCancel} style={styles.cancelActionBtn}>
             <Ionicons name="close-circle-outline" size={14} color="#dc2626" />
-            <Text style={styles.cancelActionTxt}>Cancel</Text>
+            <Text style={styles.cancelActionTxt}>Cancel Request</Text>
           </TouchableOpacity>
         ) : isFinalized ? (
           <View style={styles.lockedBadge}>
             <Ionicons name="lock-closed-outline" size={12} color="#64748b" />
-            <Text style={styles.lockedBadgeTxt}>Finalized</Text>
+            <Text style={styles.lockedBadgeTxt}>Confirmed</Text>
           </View>
         ) : null}
       </View>
@@ -362,17 +426,18 @@ function AppointmentCard({
 function BookingModal({
   visible,
   user,
+  clinics,
   initialClinicId,
   onClose,
   onSaved,
 }: {
   visible: boolean;
   user: PatientAccount | null;
+  clinics: ClinicRecord[];
   initialClinicId?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [clinics, setClinics] = useState<ClinicRecord[]>([]);
   const [selectedClinic, setSelectedClinic] = useState<ClinicRecord | null>(null);
   const [selectedDoctor, setSelectedDoctor] = useState<ClinicDoctor | null>(null);
   const [selectedBatch, setSelectedBatch] = useState(BATCH_SLOTS[0]);
@@ -389,6 +454,7 @@ function BookingModal({
   const [saving, setSaving] = useState(false);
   const [aiConditionName, setAiConditionName] = useState('');
   const [skinPhotoUri, setSkinPhotoUri] = useState<string | null>(null);
+  const [cameraModalVisible, setCameraModalVisible] = useState(false);
 
   const quickDates = useMemo(() => {
     const list: Array<{ label: string; dateStr: string; sub: string }> = [];
@@ -409,27 +475,23 @@ function BookingModal({
     return list;
   }, []);
 
-  // Load clinics from live Supabase
   useEffect(() => {
-    if (visible) {
-      getClinics().then((loaded) => {
-        setClinics(loaded);
-        if (loaded.length > 0) {
-          const match = initialClinicId ? loaded.find((c) => String(c.id) === String(initialClinicId)) : loaded[0];
-          const activeClinic = match || loaded[0];
-          setSelectedClinic(activeClinic);
-          setSelectedDoctor(activeClinic.doctors?.[0] || null);
-        }
-      });
-
-      if (user) {
-        setPatientName(user.fullName || '');
-        setPatientEmail(user.email || '');
-        setPatientAddress(user.address || '');
-        setPatientContact(user.phone || '');
-      }
+    if (visible && clinics.length > 0) {
+      const match = initialClinicId
+        ? clinics.find((c) => String(c.id) === String(initialClinicId))
+        : clinics[0];
+      const activeClinic = match || clinics[0];
+      setSelectedClinic(activeClinic);
+      setSelectedDoctor(activeClinic.doctors?.[0] || null);
     }
-  }, [visible, initialClinicId, user]);
+
+    if (visible && user) {
+      setPatientName(user.fullName || '');
+      setPatientEmail(user.email || '');
+      setPatientAddress(user.address || '');
+      setPatientContact(user.phone || '');
+    }
+  }, [visible, initialClinicId, user, clinics]);
 
   async function handlePickImage(useCamera: boolean) {
     if (useCamera) {
@@ -464,8 +526,8 @@ function BookingModal({
   }
 
   function showPhotoOptions() {
-    Alert.alert('Add Skin Photo', 'Choose an option', [
-      { text: 'Take Photo with Camera', onPress: () => handlePickImage(true) },
+    Alert.alert('Add Skin Photo', 'Attach a photo of your skin lesion for the dermatologist', [
+      { text: 'Take Photo with Camera', onPress: () => setCameraModalVisible(true) },
       { text: 'Choose from Gallery', onPress: () => handlePickImage(false) },
       { text: 'Cancel', style: 'cancel' },
     ]);
@@ -482,7 +544,7 @@ function BookingModal({
       return;
     }
     if (!dateStr.trim()) {
-      Alert.alert('Date Required', 'Please enter a valid consultation date.');
+      Alert.alert('Date Required', 'Please select a valid consultation date.');
       return;
     }
 
@@ -493,6 +555,7 @@ function BookingModal({
         clinicId: selectedClinic.id,
         clinicName: selectedClinic.name,
         clinicAddress: selectedClinic.address,
+        clinicPhone: selectedClinic.phone,
         assignedDoctorId: selectedDoctor?.id,
         doctorName: selectedDoctor?.name,
         specialty: selectedDoctor?.specialization,
@@ -504,7 +567,6 @@ function BookingModal({
         date: dateStr.trim(),
         time: selectedBatch.batchTime,
         batchTime: selectedBatch.label,
-        queueNumber: 1,
         checkInStatus: 'scheduled',
         status: 'pending',
         notes: notes.trim() || undefined,
@@ -519,7 +581,7 @@ function BookingModal({
         userId: user.id,
       });
 
-      Alert.alert('Appointment Submitted!', 'Your booking is pending clinic review. You can track its live status here.');
+      Alert.alert('Appointment Submitted!', 'Your consultation request is pending clinic review. You can track its live status here.');
       onSaved();
     } catch (err: any) {
       Alert.alert('Booking Error', err?.message ?? 'Failed to submit appointment.');
@@ -532,102 +594,119 @@ function BookingModal({
     return null;
   }
 
+  const dynamicFee = selectedClinic.consultationFee
+    ? `₱${Number(selectedClinic.consultationFee).toLocaleString()}`
+    : '₱500';
+
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <SafeAreaView style={styles.modalSafe}>
-          <View style={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 12, backgroundColor: '#fff' }}>
+          <View style={styles.modalHeader}>
             <TouchableOpacity onPress={onClose} style={styles.backBtn}>
               <Ionicons name="chevron-back" size={18} color={COLORS.text} />
-              <Text style={styles.backBtnTxt}>Back</Text>
+              <Text style={styles.backBtnTxt}>Cancel</Text>
             </TouchableOpacity>
 
-            <Text style={styles.modalHeading}>Book Appointment</Text>
-            <Text style={styles.modalSub}>Select clinic, doctor, and arrival window</Text>
-
-            {/* Clinic chips */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 14, marginBottom: 8 }}>
-              {clinics.map((c) => (
-                <TouchableOpacity
-                  key={c.id}
-                  style={[styles.clinicChip, selectedClinic.id === c.id && styles.clinicChipActive]}
-                  onPress={() => {
-                    setSelectedClinic(c);
-                    setSelectedDoctor(c.doctors?.[0] || null);
-                  }}
-                >
-                  <Text style={[styles.clinicChipTxt, selectedClinic.id === c.id && styles.clinicChipTxtActive]}>
-                    {c.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-
-            <View style={styles.clinicInfoCard}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.clinicInfoLabel}>Selected Clinic</Text>
-                <Text style={styles.clinicInfoName} numberOfLines={1}>{selectedClinic.name}</Text>
-                <Text style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 2 }}>{selectedClinic.address}</Text>
-              </View>
-              <View style={{ alignItems: 'flex-end', marginLeft: 12 }}>
-                <Text style={styles.clinicInfoLabel}>Mode</Text>
-                <View style={styles.modePill}>
-                  <Text style={styles.modePillTxt}>In-Person</Text>
-                </View>
-              </View>
-            </View>
+            <Text style={styles.modalHeading}>Book Consultation</Text>
+            <Text style={styles.modalSub}>Select clinic, doctor, and consultation window</Text>
           </View>
 
-          <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-            {/* Doctor Selection */}
-            {selectedClinic.doctors && selectedClinic.doctors.length > 0 && (
-              <View>
-                <Text style={styles.modalLabel}>Preferred Dermatologist</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 6 }}>
-                  {selectedClinic.doctors.map((doc, idx) => (
+          <ScrollView contentContainerStyle={styles.modalContent} showsVerticalScrollIndicator={false}>
+            {/* 1. Clinic Selection */}
+            <Text style={styles.modalLabel}>1. Select Dermatology Clinic</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                {clinics.map((c) => {
+                  const isSelected = selectedClinic.id === c.id;
+                  return (
                     <TouchableOpacity
-                      key={doc.id || idx}
-                      style={[
-                        styles.doctorChip,
-                        selectedDoctor?.id === doc.id && styles.doctorChipActive,
-                      ]}
-                      onPress={() => setSelectedDoctor(doc)}
+                      key={c.id}
+                      style={[styles.clinicChip, isSelected && styles.clinicChipSelected]}
+                      onPress={() => {
+                        setSelectedClinic(c);
+                        setSelectedDoctor(c.doctors?.[0] || null);
+                      }}
+                      activeOpacity={0.8}
                     >
-                      <Ionicons
-                        name="person-circle-outline"
-                        size={16}
-                        color={selectedDoctor?.id === doc.id ? '#fff' : COLORS.primary}
-                      />
-                      <Text
-                        style={[
-                          styles.doctorChipTxt,
-                          selectedDoctor?.id === doc.id && styles.doctorChipTxtActive,
-                        ]}
-                      >
-                        {doc.name}
-                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        {c.logoUrl ? (
+                          <Image source={{ uri: c.logoUrl }} style={styles.chipLogo} />
+                        ) : (
+                          <View style={styles.chipLogoFallback}>
+                            <Text style={styles.chipLogoTxt}>{c.name.charAt(0) || 'C'}</Text>
+                          </View>
+                        )}
+                        <View style={{ maxWidth: 170 }}>
+                          <Text style={[styles.clinicChipTitle, isSelected && styles.clinicChipTitleSelected]} numberOfLines={1}>
+                            {c.name}
+                          </Text>
+                          <Text style={styles.clinicChipSub} numberOfLines={1}>
+                            {c.district || c.city || 'Cebu'} • ₱{Number(c.consultationFee || 500).toLocaleString()}
+                          </Text>
+                        </View>
+                      </View>
                     </TouchableOpacity>
-                  ))}
-                </ScrollView>
+                  );
+                })}
               </View>
-            )}
+            </ScrollView>
 
-            {/* Date Selection */}
-            <Text style={styles.modalLabel}>Consultation Date (YYYY-MM-DD) *</Text>
+            {/* 2. Doctor Selection */}
+            <Text style={styles.modalLabel}>2. Select Attending Dermatologist</Text>
+            <View style={styles.doctorChipGrid}>
+              {(selectedClinic.doctors || []).length > 0 ? (
+                selectedClinic.doctors.map((d) => {
+                  const isSelected = selectedDoctor?.name === d.name;
+                  return (
+                    <TouchableOpacity
+                      key={d.name}
+                      style={[styles.doctorChip, isSelected && styles.doctorChipSelected]}
+                      onPress={() => setSelectedDoctor(d)}
+                      activeOpacity={0.8}
+                    >
+                      <View style={styles.docAvatar}>
+                        <Ionicons
+                          name="person"
+                          size={14}
+                          color={isSelected ? '#fff' : COLORS.primary}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.doctorChipName, isSelected && styles.doctorChipNameSelected]} numberOfLines={1}>
+                          {d.name.startsWith('Dr') ? d.name : `Dr. ${d.name}`}
+                        </Text>
+                        <Text style={[styles.doctorChipSpec, isSelected && styles.doctorChipSpecSelected]} numberOfLines={1}>
+                          {d.specialization || 'Dermatology'}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              ) : (
+                <View style={styles.noDoctorsNotice}>
+                  <Text style={styles.noDoctorsNoticeTxt}>Duty Dermatologist on Schedule</Text>
+                </View>
+              )}
+            </View>
+
+            {/* 3. Date Selection */}
+            <Text style={styles.modalLabel}>3. Consultation Date</Text>
             <View style={styles.quickDateRow}>
-              {quickDates.map((q) => {
-                const isActive = dateStr === q.dateStr;
+              {quickDates.map((item) => {
+                const isActive = dateStr === item.dateStr;
                 return (
                   <TouchableOpacity
-                    key={q.dateStr}
+                    key={item.label}
                     style={[styles.quickDateChip, isActive && styles.quickDateChipActive]}
-                    onPress={() => setDateStr(q.dateStr)}
+                    onPress={() => setDateStr(item.dateStr)}
+                    activeOpacity={0.8}
                   >
                     <Text style={[styles.quickDateLabel, isActive && styles.quickDateLabelActive]}>
-                      {q.label}
+                      {item.label}
                     </Text>
                     <Text style={[styles.quickDateSub, isActive && styles.quickDateSubActive]}>
-                      {q.sub}
+                      {item.sub}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -635,24 +714,30 @@ function BookingModal({
             </View>
             <TextInput
               style={styles.modalInput}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={COLORS.textLight}
               value={dateStr}
               onChangeText={setDateStr}
-              placeholder="e.g. 2026-10-15"
-              placeholderTextColor={COLORS.textLight}
             />
 
-            {/* Hourly Batch Window Selection */}
-            <Text style={styles.modalLabel}>Arrival Time Window *</Text>
+            {/* 4. Consultation Arrival Window */}
+            <Text style={styles.modalLabel}>4. Arrival Window / Time Slot</Text>
             <View style={styles.batchGrid}>
               {BATCH_SLOTS.map((b) => {
                 const isSelected = selectedBatch.batchTime === b.batchTime;
                 return (
                   <TouchableOpacity
                     key={b.batchTime}
-                    style={[styles.batchCard, isSelected && styles.batchCardActive]}
+                    style={[styles.batchSlot, isSelected && styles.batchSlotSelected]}
                     onPress={() => setSelectedBatch(b)}
+                    activeOpacity={0.8}
                   >
-                    <Text style={[styles.batchCardTxt, isSelected && styles.batchCardTxtActive]}>
+                    <Ionicons
+                      name="time-outline"
+                      size={13}
+                      color={isSelected ? COLORS.primary : COLORS.textSecondary}
+                    />
+                    <Text style={[styles.batchSlotTxt, isSelected && styles.batchSlotTxtSelected]}>
                       {b.label}
                     </Text>
                   </TouchableOpacity>
@@ -660,32 +745,16 @@ function BookingModal({
               })}
             </View>
 
-            {/* Patient Information Fields */}
-            <Text style={styles.modalLabel}>Patient Details</Text>
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <View style={{ flex: 1 }}>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Full Name *"
-                  placeholderTextColor={COLORS.textLight}
-                  value={patientName}
-                  onChangeText={setPatientName}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Email"
-                  placeholderTextColor={COLORS.textLight}
-                  value={patientEmail}
-                  onChangeText={setPatientEmail}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
-              </View>
-            </View>
-
-            <View style={{ flexDirection: 'row', gap: 12, marginTop: 10 }}>
+            {/* 5. Patient Information */}
+            <Text style={styles.modalLabel}>5. Patient Contact Information</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Full Name *"
+              placeholderTextColor={COLORS.textLight}
+              value={patientName}
+              onChangeText={setPatientName}
+            />
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
               <View style={{ flex: 1 }}>
                 <TextInput
                   style={styles.modalInput}
@@ -699,53 +768,56 @@ function BookingModal({
               <View style={{ flex: 1 }}>
                 <TextInput
                   style={styles.modalInput}
-                  placeholder="Address"
+                  placeholder="Email Address"
                   placeholderTextColor={COLORS.textLight}
-                  value={patientAddress}
-                  onChangeText={setPatientAddress}
+                  value={patientEmail}
+                  onChangeText={setPatientEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
                 />
               </View>
             </View>
+            <TextInput
+              style={[styles.modalInput, { marginTop: 10 }]}
+              placeholder="Home Address"
+              placeholderTextColor={COLORS.textLight}
+              value={patientAddress}
+              onChangeText={setPatientAddress}
+            />
 
-            {/* Skin Photo Attachment */}
+            {/* 6. Skin Photo Attachment */}
             <Text style={styles.modalLabel}>
-              Skin Photo Attachment <Text style={{ color: '#ef4444' }}>*</Text>
+              6. Skin Photo Attachment <Text style={{ color: '#ef4444' }}>*</Text>
             </Text>
             {skinPhotoUri ? (
               <View style={styles.photoPreviewBox}>
                 <Image source={{ uri: skinPhotoUri }} style={styles.photoPreview} resizeMode="cover" />
                 <TouchableOpacity style={styles.photoRemoveBtn} onPress={() => setSkinPhotoUri(null)}>
-                  <Ionicons name="close-circle" size={24} color="#ef4444" />
+                  <Ionicons name="close-circle" size={26} color="#ef4444" />
                 </TouchableOpacity>
               </View>
             ) : (
               <TouchableOpacity style={styles.photoUploadBox} onPress={showPhotoOptions} activeOpacity={0.8}>
-                <Ionicons name="camera-outline" size={28} color={COLORS.primary} />
-                <Text style={styles.photoUploadTxt}>Tap to attach photo</Text>
-                <Text style={styles.photoUploadSub}>Camera or Photo Library</Text>
+                <View style={styles.photoUploadIconCircle}>
+                  <Ionicons name="camera-outline" size={26} color={COLORS.primary} />
+                </View>
+                <Text style={styles.photoUploadTxt}>Tap to attach photo of affected skin</Text>
+                <Text style={styles.photoUploadSub}>Camera photo or gallery image</Text>
               </TouchableOpacity>
             )}
 
-            {/* AI Diagnosis Result Note */}
-            <View style={styles.aiBox}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <Ionicons name="scan-outline" size={18} color={COLORS.primary} />
-                <Text style={styles.aiBoxTitle}>AI Skin Condition (Optional)</Text>
-              </View>
-              <TextInput
-                style={[styles.modalInput, { marginTop: 6, backgroundColor: '#fff' }]}
-                placeholder="Condition name from DermAI Scan (optional)"
-                placeholderTextColor={COLORS.textLight}
-                value={aiConditionName}
-                onChangeText={setAiConditionName}
-              />
-            </View>
-
-            {/* Symptoms & Notes */}
-            <Text style={styles.modalLabel}>Consultation Notes / Symptoms</Text>
+            {/* 7. AI Condition & Notes */}
+            <Text style={styles.modalLabel}>7. AI Finding & Symptoms</Text>
             <TextInput
-              style={[styles.modalInput, styles.textArea]}
-              placeholder="Describe your symptoms, how long you've had the condition, and any current treatments..."
+              style={styles.modalInput}
+              placeholder="Condition name from DermAI scan (optional)"
+              placeholderTextColor={COLORS.textLight}
+              value={aiConditionName}
+              onChangeText={setAiConditionName}
+            />
+            <TextInput
+              style={[styles.modalInput, styles.textArea, { marginTop: 10 }]}
+              placeholder="Describe your symptoms, how long you've had it, and any current treatments..."
               placeholderTextColor={COLORS.textLight}
               value={notes}
               onChangeText={setNotes}
@@ -753,7 +825,7 @@ function BookingModal({
               numberOfLines={4}
             />
 
-            {/* ════════ Consultation Summary Card (matching Web) ════════ */}
+            {/* 8. Live Consultation Summary Card */}
             <View style={styles.summaryCard}>
               <View style={styles.summaryHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -767,14 +839,9 @@ function BookingModal({
                 </View>
               </View>
 
-              {/* Prominent Slot Consultation Details */}
+              {/* Slot Details */}
               <View style={styles.summarySlotBox}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Text style={styles.summarySlotLabel}>Selected Consultation Slot</Text>
-                  <View style={styles.summaryDurationBadge}>
-                    <Text style={styles.summaryDurationTxt}>30 mins</Text>
-                  </View>
-                </View>
+                <Text style={styles.summarySlotLabel}>Selected Consultation Window</Text>
                 <Text style={styles.summaryDoctorName} numberOfLines={1}>
                   {selectedDoctor?.name ? (selectedDoctor.name.startsWith('Dr') ? selectedDoctor.name : `Dr. ${selectedDoctor.name}`) : 'Attending Dermatologist'}
                 </Text>
@@ -784,15 +851,18 @@ function BookingModal({
                 <View style={styles.summarySlotRow}>
                   <Ionicons name="time-outline" size={13} color={COLORS.primary} />
                   <Text style={styles.summarySlotTime}>
-                    Time Slot: <Text style={{ fontWeight: '700', color: COLORS.primary }}>{selectedBatch.label}</Text>
+                    Arrival Window: <Text style={{ fontWeight: '700', color: COLORS.primary }}>{selectedBatch.label}</Text>
                   </Text>
                 </View>
-                <Text style={styles.summarySlotFootnote}>
-                  Individual in-person patient consultation
-                </Text>
+                <View style={styles.summarySlotRow}>
+                  <Ionicons name="calendar-outline" size={13} color={COLORS.primary} />
+                  <Text style={styles.summarySlotTime}>
+                    Date: <Text style={{ fontWeight: '700', color: COLORS.text }}>{formatDateDisplay(dateStr)}</Text>
+                  </Text>
+                </View>
               </View>
 
-              {/* Clean Minimal Schedule Details */}
+              {/* Clinic Details */}
               <View style={styles.summaryClinicBox}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                   {selectedClinic.logoUrl ? (
@@ -815,23 +885,20 @@ function BookingModal({
                 <View style={styles.summaryDivider} />
 
                 <View style={{ gap: 2 }}>
-                  <Text style={styles.summaryDateText}>{formatDateDisplay(dateStr)}</Text>
-                  <Text style={styles.summaryHoursText}>{selectedClinic.hours || 'Mon–Sat: 9:00 AM – 5:00 PM'}</Text>
-                  <Text style={styles.summaryAppointmentOnly}>(By Appointment Only)</Text>
+                  <Text style={styles.summaryHoursText}>Clinic Hours: {selectedClinic.hours || 'Mon–Sat: 9:00 AM – 5:00 PM'}</Text>
+                  <Text style={styles.summaryAppointmentOnly}>Face-to-face consultation by appointment</Text>
                 </View>
 
                 <View style={styles.summaryDivider} />
 
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <View>
-                    <Text style={styles.summaryFeeLabel}>Fee</Text>
-                    <Text style={styles.summaryFeeAmount}>
-                      ₱{Number(selectedClinic.consultationFee || 500).toLocaleString()}
-                    </Text>
+                    <Text style={styles.summaryFeeLabel}>Consultation Fee</Text>
+                    <Text style={styles.summaryFeeAmount}>{dynamicFee}</Text>
                   </View>
                   <View style={styles.summaryPayableBadge}>
                     <Ionicons name="checkmark-circle-outline" size={13} color={COLORS.textSecondary} />
-                    <Text style={styles.summaryPayableText}>Payable at clinic</Text>
+                    <Text style={styles.summaryPayableText}>Payable at clinic counter</Text>
                   </View>
                 </View>
               </View>
@@ -845,17 +912,18 @@ function BookingModal({
               {saving ? (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <ActivityIndicator color="#fff" size="small" />
-                  <Text style={styles.sendBtnTxt}>Submitting Appointment...</Text>
+                  <Text style={styles.sendBtnTxt}>Submitting Request...</Text>
                 </View>
               ) : (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Text style={styles.sendBtnTxt}>Book Here</Text>
+                  <Text style={styles.sendBtnTxt}>Confirm &amp; Book Appointment</Text>
                   <Ionicons name="checkmark" size={18} color="#fff" />
                 </View>
               )}
             </TouchableOpacity>
+
             <Text style={styles.sendNote}>
-              Your appointment will be sent directly to {selectedClinic.name}&apos;s live schedule.
+              Your request will be sent directly to {selectedClinic.name}&apos;s live schedule.
             </Text>
           </ScrollView>
         </SafeAreaView>
@@ -867,16 +935,25 @@ function BookingModal({
 function AppointmentSummaryModal({
   visible,
   appt,
+  clinics,
   onClose,
   onCancel,
 }: {
   visible: boolean;
   appt: Appointment | null;
+  clinics: ClinicRecord[];
   onClose: () => void;
   onCancel: () => void;
 }) {
   if (!appt) return null;
   const sc = STATUS_COLORS[appt.status] ?? STATUS_COLORS.pending;
+  const matchedClinic = clinics.find(
+    (c) => String(c.id) === String(appt.clinicId) || c.name === appt.clinicName
+  );
+  const dynamicFee = matchedClinic?.consultationFee
+    ? `₱${Number(matchedClinic.consultationFee).toLocaleString()}`
+    : '₱500';
+
   const STEPS = ['Request Sent', 'Clinic Review', 'Scheduled', 'Completed'] as const;
   const getStepIndex = (status: string) => {
     if (status === 'completed') return 3;
@@ -895,10 +972,10 @@ function AppointmentSummaryModal({
             <Ionicons name="chevron-back" size={18} color={COLORS.text} />
             <Text style={styles.backBtnTxt}>Close</Text>
           </TouchableOpacity>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
             <View style={{ flex: 1, marginRight: 8 }}>
               <Text style={styles.summaryModalHeading}>Consultation Summary</Text>
-              <Text style={styles.summaryModalSub}>Details of your dermatologist appointment</Text>
+              <Text style={styles.summaryModalSub}>Details of your dermatologist consultation</Text>
             </View>
             <View style={[styles.statusBadge, { backgroundColor: sc.bg }]}>
               <Text style={[styles.statusTxt, { color: sc.text }]}>{sc.label}</Text>
@@ -939,16 +1016,10 @@ function AppointmentSummaryModal({
           <View style={styles.summaryCard}>
             <View style={styles.summarySlotBox}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={styles.summarySlotLabel}>Consultation Slot</Text>
-                {appt.queueNumber ? (
-                  <View style={styles.summaryDurationBadge}>
-                    <Text style={styles.summaryDurationTxt}>Queue #{appt.queueNumber}</Text>
-                  </View>
-                ) : (
-                  <View style={styles.summaryDurationBadge}>
-                    <Text style={styles.summaryDurationTxt}>In-Person</Text>
-                  </View>
-                )}
+                <Text style={styles.summarySlotLabel}>Consultation Details</Text>
+                <View style={styles.summaryDurationBadge}>
+                  <Text style={styles.summaryDurationTxt}>In-Person</Text>
+                </View>
               </View>
               <Text style={styles.summaryDoctorName}>
                 {appt.doctorName ? (appt.doctorName.startsWith('Dr') ? appt.doctorName : `Dr. ${appt.doctorName}`) : 'Attending Dermatologist'}
@@ -971,12 +1042,16 @@ function AppointmentSummaryModal({
             {/* Clinic Details */}
             <View style={styles.summaryClinicBox}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <View style={styles.summaryClinicLogoFallback}>
-                  <Text style={styles.summaryClinicLogoTxt}>{appt.clinicName.charAt(0) || 'C'}</Text>
-                </View>
+                {matchedClinic?.logoUrl ? (
+                  <Image source={{ uri: matchedClinic.logoUrl }} style={styles.summaryClinicLogo} />
+                ) : (
+                  <View style={styles.summaryClinicLogoFallback}>
+                    <Text style={styles.summaryClinicLogoTxt}>{appt.clinicName.charAt(0) || 'C'}</Text>
+                  </View>
+                )}
                 <View style={{ flex: 1 }}>
                   <Text style={styles.summaryClinicName}>{appt.clinicName}</Text>
-                  <Text style={styles.summaryClinicAddr}>{appt.clinicAddress || 'Dermatology Clinic'}</Text>
+                  <Text style={styles.summaryClinicAddr}>{appt.clinicAddress || matchedClinic?.address || 'Dermatology Clinic'}</Text>
                 </View>
               </View>
 
@@ -984,8 +1059,8 @@ function AppointmentSummaryModal({
 
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <View>
-                  <Text style={styles.summaryFeeLabel}>Fee</Text>
-                  <Text style={styles.summaryFeeAmount}>₱500</Text>
+                  <Text style={styles.summaryFeeLabel}>Consultation Fee</Text>
+                  <Text style={styles.summaryFeeAmount}>{dynamicFee}</Text>
                 </View>
                 <View style={styles.summaryPayableBadge}>
                   <Ionicons name="checkmark-circle-outline" size={13} color={COLORS.textSecondary} />
@@ -1014,10 +1089,16 @@ function AppointmentSummaryModal({
                 <Text style={styles.summaryInfoVal}>{appt.patientEmail}</Text>
               </View>
             ) : null}
+            {appt.patientAddress ? (
+              <View style={styles.summaryInfoRow}>
+                <Text style={styles.summaryInfoKey}>Address</Text>
+                <Text style={styles.summaryInfoVal}>{appt.patientAddress}</Text>
+              </View>
+            ) : null}
 
             {appt.conditionName ? (
               <View style={[styles.summaryInfoRow, { marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#f1f5f9' }]}>
-                <Text style={styles.summaryInfoKey}>AI Skin Condition</Text>
+                <Text style={styles.summaryInfoKey}>AI Detected Condition</Text>
                 <View style={styles.conditionTag}>
                   <Text style={styles.conditionTagTxt}>{appt.conditionName}</Text>
                 </View>
@@ -1032,7 +1113,7 @@ function AppointmentSummaryModal({
             ) : null}
 
             {appt.clinicNote ? (
-              <View style={{ marginTop: 8, backgroundColor: '#fff7ed', borderRadius: 10, padding: 10 }}>
+              <View style={{ marginTop: 8, backgroundColor: '#fff7ed', borderRadius: 10, padding: 10, borderWidth: 1, borderColor: '#ffedd5' }}>
                 <Text style={{ fontSize: 11, fontWeight: '700', color: '#c2410c' }}>Clinic Note</Text>
                 <Text style={{ fontSize: 12, color: '#9a3412', marginTop: 2 }}>{appt.clinicNote}</Text>
               </View>
@@ -1064,18 +1145,27 @@ function AppointmentSummaryModal({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F7F8FA' },
+  safe: { flex: 1, backgroundColor: '#F8FAFC' },
+
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
+    paddingTop: 14,
+    paddingBottom: 10,
     backgroundColor: '#fff',
   },
-  headerWelcome: { fontSize: 12, color: COLORS.textSecondary, fontWeight: '500' },
-  headerName: { fontSize: 20, fontWeight: '800', color: COLORS.text },
+  headerAvatarCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#fce7f3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerWelcome: { fontSize: 11, color: COLORS.textSecondary, letterSpacing: 0.2 },
+  headerName: { fontSize: 19, fontWeight: '800', color: COLORS.text },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1084,39 +1174,74 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 8,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
   },
   addBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 13 },
 
-  tabRow: {
-    flexDirection: 'row',
+  // Tabs
+  tabContainer: {
     backgroundColor: '#fff',
     paddingHorizontal: 20,
     paddingBottom: 12,
-    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  tabRow: {
+    flexDirection: 'row',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 14,
+    padding: 3,
+    gap: 4,
   },
   tabBtn: {
     flex: 1,
-    paddingVertical: 9,
-    borderRadius: 12,
+    flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 12,
+    gap: 6,
   },
-  tabBtnActive: { backgroundColor: COLORS.primary },
+  tabBtnActive: {
+    backgroundColor: COLORS.primary,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 2,
+  },
   tabTxt: { fontSize: 13, fontWeight: '600', color: COLORS.textSecondary },
   tabTxtActive: { color: '#fff', fontWeight: '700' },
+  tabCountBadge: {
+    backgroundColor: '#e2e8f0',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  tabCountBadgeActive: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
+  tabCountTxt: { fontSize: 11, fontWeight: '700', color: COLORS.textSecondary },
+  tabCountTxtActive: { color: '#fff' },
 
   container: { flex: 1 },
-  list: { paddingHorizontal: 20, paddingTop: 16, gap: 14 },
+  list: { paddingHorizontal: 16, paddingTop: 14, gap: 12 },
 
   empty: {
     backgroundColor: '#fff',
-    borderRadius: 18,
+    borderRadius: 20,
     padding: 32,
     alignItems: 'center',
     marginTop: 20,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
     shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
     elevation: 1,
   },
@@ -1124,176 +1249,204 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: COLORS.primaryLight ?? '#e6f4ea',
+    backgroundColor: '#fce7f3',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10,
+    marginBottom: 12,
   },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
-  emptySub: { fontSize: 12, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 18, marginTop: 2 },
-  bookBtn: { backgroundColor: COLORS.primary, borderRadius: 14, paddingHorizontal: 24, paddingVertical: 12, marginTop: 14 },
+  emptySub: { fontSize: 13, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 19, marginTop: 4, maxWidth: 280 },
+  bookBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: COLORS.primary,
+    borderRadius: 14,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginTop: 18,
+    shadowColor: COLORS.primary,
+    shadowOpacity: 0.22,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
   bookBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
 
   // Card
   card: {
     backgroundColor: '#fff',
-    borderRadius: 18,
+    borderRadius: 20,
     padding: 16,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
     shadowColor: '#000',
     shadowOpacity: 0.04,
-    shadowRadius: 6,
+    shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
+    elevation: 2,
   },
-  cardTopRow: { flexDirection: 'row', alignItems: 'flex-start' },
-  listIconWrap: { width: 46, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  clinicName: { fontSize: 14, fontWeight: '700', color: COLORS.text, flex: 1, marginRight: 8 },
-  statusBadge: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },
-  statusTxt: { fontSize: 10, fontWeight: '700' },
-  doctorName: { fontSize: 12, color: COLORS.text, fontWeight: '600', marginTop: 3 },
-  specialty: { fontSize: 11, color: COLORS.primary, marginTop: 1 },
-
-  apptMeta: { flexDirection: 'row', gap: 12, marginTop: 12, flexWrap: 'wrap' },
-  apptMetaItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  apptMetaText: { fontSize: 11, color: COLORS.textSecondary },
-
-  reason: { fontSize: 12, color: COLORS.textSecondary, marginTop: 10 },
-  referralTag: {
-    marginTop: 8,
-    backgroundColor: '#fff7ed',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    alignSelf: 'flex-start',
+  cardTopRow: { flexDirection: 'row', alignItems: 'center' },
+  cardClinicLogo: { width: 44, height: 44, borderRadius: 14, backgroundColor: '#f1f5f9' },
+  cardClinicLogoFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#fce7f3',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  referralTagTxt: { fontSize: 11, color: '#c2410c' },
-
-  cancelActionBtn: {
+  cardClinicLogoTxt: { color: COLORS.primary, fontWeight: '800', fontSize: 17 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  clinicName: { fontSize: 15, fontWeight: '800', color: COLORS.text },
+  verifiedTag: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    backgroundColor: '#fef2f2',
-  },
-  cancelActionTxt: { fontSize: 12, fontWeight: '700', color: '#dc2626' },
-  lockedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 3,
-    paddingHorizontal: 8,
+    gap: 2,
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
     borderRadius: 6,
-    backgroundColor: '#f1f5f9',
   },
-  lockedBadgeTxt: { fontSize: 11, color: '#64748b', fontWeight: '500' },
+  verifiedTagTxt: { fontSize: 9, fontWeight: '700', color: '#059669' },
+  statusBadge: {
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  statusTxt: { fontSize: 11, fontWeight: '700' },
+  doctorRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  doctorName: { fontSize: 13, fontWeight: '600', color: COLORS.text },
+  specialtyTag: { fontSize: 11, color: COLORS.textSecondary },
 
-  // Step tracker
+  // Appt Meta Row
+  apptMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 12,
+  },
+  apptMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  apptMetaText: { fontSize: 11, fontWeight: '600', color: '#334155' },
+
+  // Stepper
   stepTracker: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 14,
-    marginBottom: 2,
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F1F5',
+    marginBottom: 6,
+    paddingHorizontal: 4,
   },
-  stepItem: { alignItems: 'center', flex: 1 },
+  stepItem: { flex: 1, alignItems: 'center' },
   stepRow: { flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'center' },
-  stepCircle: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  stepCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   stepCircleActive: { backgroundColor: COLORS.primary },
-  stepCircleInactive: { backgroundColor: '#EDEEF2' },
-  stepCheck: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  stepNum: { color: COLORS.textLight, fontSize: 11, fontWeight: '600' },
-  stepLine: { flex: 1, height: 2, marginHorizontal: 2 },
+  stepCircleInactive: { backgroundColor: '#e2e8f0' },
+  stepCheck: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  stepNum: { color: '#94a3b8', fontSize: 10, fontWeight: '700' },
+  stepLine: { flex: 1, height: 2 },
   stepLineActive: { backgroundColor: COLORS.primary },
-  stepLineInactive: { backgroundColor: '#EDEEF2' },
+  stepLineInactive: { backgroundColor: '#e2e8f0' },
   stepLabel: { fontSize: 9, color: COLORS.textSecondary, marginTop: 4, textAlign: 'center' },
 
-  // Modal
-  modalSafe: { flex: 1, backgroundColor: '#F7F8FA' },
-  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, alignSelf: 'flex-start', paddingVertical: 4, marginBottom: 8 },
-  backBtnTxt: { color: COLORS.text, fontWeight: '600', fontSize: 15 },
-  modalHeading: { fontSize: 20, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
-  modalSub: { color: COLORS.primary, fontWeight: '600', fontSize: 13 },
-
-  clinicChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    backgroundColor: '#fff',
-    borderRadius: 999,
-    marginRight: 8,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
+  cardConditionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#fdf2f8',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginTop: 8,
   },
-  clinicChipActive: { backgroundColor: COLORS.primary },
-  clinicChipTxt: { fontSize: 13, color: COLORS.text },
-  clinicChipTxtActive: { color: '#fff', fontWeight: '600' },
-
-  doctorChip: {
+  cardConditionLabel: { fontSize: 11, fontWeight: '600', color: COLORS.primary },
+  cardConditionVal: { fontSize: 11, fontWeight: '700', color: '#831843' },
+  reason: { fontSize: 12, color: COLORS.textSecondary, marginTop: 8, lineHeight: 17 },
+  referralTag: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    marginRight: 8,
+    backgroundColor: '#fff7ed',
+    padding: 8,
+    borderRadius: 8,
+    marginTop: 8,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#fed7aa',
   },
-  doctorChipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
-  doctorChipTxt: { fontSize: 12, color: COLORS.text, fontWeight: '600' },
-  doctorChipTxtActive: { color: '#fff' },
+  referralTagTxt: { fontSize: 11, color: '#9a3412', fontWeight: '500', flex: 1 },
 
-  batchGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  batchCard: {
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 10,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+  cardFooterRow: {
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  batchCardActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
-  batchCardTxt: { fontSize: 12, color: COLORS.text, fontWeight: '600' },
-  batchCardTxtActive: { color: '#fff' },
-
-  clinicInfoCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+  viewSummaryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#fdf2f8',
   },
-  clinicInfoLabel: {
-    color: COLORS.primary,
-    fontWeight: '700',
-    fontSize: 10,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    marginBottom: 4,
+  viewSummaryTxt: { fontSize: 12, fontWeight: '700', color: COLORS.primary },
+  cancelActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
   },
-  clinicInfoName: { fontWeight: '800', fontSize: 14, color: COLORS.text },
-  modePill: { backgroundColor: COLORS.primary, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
-  modePillTxt: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  cancelActionTxt: { fontSize: 12, fontWeight: '600', color: '#dc2626' },
+  lockedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#f1f5f9',
+  },
+  lockedBadgeTxt: { fontSize: 11, color: '#64748b', fontWeight: '600' },
 
-  modalContent: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 40 },
-  modalLabel: { fontSize: 13, fontWeight: '600', color: COLORS.text, marginBottom: 8, marginTop: 14 },
-  modalInput: {
+  // Modal Common
+  modalSafe: { flex: 1, backgroundColor: '#fff' },
+  modalHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 12,
     backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  backBtn: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginBottom: 6 },
+  backBtnTxt: { fontSize: 13, color: COLORS.textSecondary, fontWeight: '600' },
+  modalHeading: { fontSize: 18, fontWeight: '800', color: COLORS.text },
+  modalSub: { fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
+  modalContent: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 40 },
+  modalLabel: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 8, marginTop: 14 },
+  modalInput: {
+    backgroundColor: '#F8FAFC',
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -1302,49 +1455,78 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  textArea: { height: 90, textAlignVertical: 'top', paddingTop: 12 },
-  sendBtn: { backgroundColor: COLORS.primary, borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 20 },
-  sendBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  sendNote: { fontSize: 12, color: COLORS.textSecondary, textAlign: 'center', marginTop: 10 },
+  textArea: { height: 85, textAlignVertical: 'top', paddingTop: 12 },
 
-  photoUploadBox: {
-    borderWidth: 2,
-    borderStyle: 'dashed',
-    borderColor: COLORS.primary,
-    borderRadius: 16,
-    paddingVertical: 20,
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: COLORS.primaryLight ?? '#e6f4ea',
+  // Clinic chips in booking modal
+  clinicChip: {
+    padding: 10,
+    borderRadius: 14,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
   },
-  photoUploadTxt: { fontSize: 14, fontWeight: '700', color: COLORS.primary },
-  photoUploadSub: { fontSize: 12, color: COLORS.textSecondary },
-  photoPreviewBox: { borderRadius: 16, overflow: 'hidden', position: 'relative' },
-  photoPreview: { width: '100%', height: 180, borderRadius: 16 },
-  photoRemoveBtn: { position: 'absolute', top: 8, right: 8, backgroundColor: '#fff', borderRadius: 12 },
-
-  aiBox: { backgroundColor: '#fff0fa', borderRadius: 16, padding: 14, marginTop: 14 },
-  aiBoxTitle: { fontSize: 14, fontWeight: '700', color: COLORS.text },
-
-  // Consultation Summary & Quick Dates styles
-  viewSummaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    borderRadius: 8,
+  clinicChipSelected: {
+    borderColor: COLORS.primary,
     backgroundColor: '#fdf2f8',
   },
-  viewSummaryTxt: { fontSize: 12, fontWeight: '700', color: COLORS.primary },
+  chipLogo: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#f1f5f9' },
+  chipLogoFallback: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: '#fce7f3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipLogoTxt: { color: COLORS.primary, fontWeight: '800', fontSize: 14 },
+  clinicChipTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text },
+  clinicChipTitleSelected: { color: '#831843' },
+  clinicChipSub: { fontSize: 11, color: COLORS.textSecondary, marginTop: 1 },
 
+  // Doctor selection chips
+  doctorChipGrid: { gap: 8 },
+  doctorChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 10,
+    borderRadius: 14,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+  },
+  doctorChipSelected: {
+    borderColor: COLORS.primary,
+    backgroundColor: '#fdf2f8',
+  },
+  docAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#fce7f3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  doctorChipName: { fontSize: 13, fontWeight: '700', color: COLORS.text },
+  doctorChipNameSelected: { color: '#831843' },
+  doctorChipSpec: { fontSize: 11, color: COLORS.textSecondary },
+  doctorChipSpecSelected: { color: COLORS.primary },
+  noDoctorsNotice: {
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+  },
+  noDoctorsNoticeTxt: { fontSize: 12, color: COLORS.textSecondary, fontStyle: 'italic' },
+
+  // Quick dates
   quickDateRow: { flexDirection: 'row', gap: 6, marginBottom: 8 },
   quickDateChip: {
     flex: 1,
     paddingVertical: 8,
     paddingHorizontal: 4,
-    borderRadius: 10,
-    backgroundColor: '#fff',
+    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
     borderColor: '#e2e8f0',
     alignItems: 'center',
@@ -1352,12 +1534,59 @@ const styles = StyleSheet.create({
   quickDateChipActive: { backgroundColor: '#fdf2f8', borderColor: COLORS.primary },
   quickDateLabel: { fontSize: 11, fontWeight: '700', color: COLORS.text },
   quickDateLabelActive: { color: COLORS.primary },
-  quickDateSub: { fontSize: 9, color: COLORS.textLight, marginTop: 2 },
+  quickDateSub: { fontSize: 9, color: COLORS.textSecondary, marginTop: 2 },
   quickDateSubActive: { color: COLORS.primary, fontWeight: '600' },
 
+  // Arrival window / Time slots
+  batchGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  batchSlot: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  batchSlotSelected: {
+    borderColor: COLORS.primary,
+    backgroundColor: '#fdf2f8',
+  },
+  batchSlotTxt: { fontSize: 12, fontWeight: '600', color: '#334155' },
+  batchSlotTxtSelected: { color: COLORS.primary, fontWeight: '700' },
+
+  // Photo Upload
+  photoUploadBox: {
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: COLORS.primary,
+    borderRadius: 16,
+    paddingVertical: 22,
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#fdf2f8',
+  },
+  photoUploadIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#fce7f3',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  photoUploadTxt: { fontSize: 13, fontWeight: '700', color: COLORS.primary },
+  photoUploadSub: { fontSize: 11, color: COLORS.textSecondary },
+  photoPreviewBox: { borderRadius: 16, overflow: 'hidden', position: 'relative' },
+  photoPreview: { width: '100%', height: 180, borderRadius: 16 },
+  photoRemoveBtn: { position: 'absolute', top: 8, right: 8, backgroundColor: '#fff', borderRadius: 13 },
+
+  // Summary Card
   summaryCard: {
     backgroundColor: '#fff',
-    borderRadius: 20,
+    borderRadius: 18,
     padding: 16,
     marginTop: 18,
     marginBottom: 6,
@@ -1382,7 +1611,7 @@ const styles = StyleSheet.create({
     width: 26,
     height: 26,
     borderRadius: 8,
-    backgroundColor: COLORS.primaryLight ?? '#fce7f3',
+    backgroundColor: '#fce7f3',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1402,7 +1631,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: '#fce7f3',
     marginBottom: 12,
   },
   summarySlotLabel: {
@@ -1419,11 +1648,10 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   summaryDurationTxt: { color: '#fff', fontSize: 10, fontWeight: '700' },
-  summaryDoctorName: { fontSize: 13, fontWeight: '800', color: COLORS.text, marginTop: 4 },
+  summaryDoctorName: { fontSize: 14, fontWeight: '800', color: COLORS.text, marginTop: 4 },
   summaryDoctorSpec: { fontSize: 11, color: COLORS.primary, fontWeight: '600', marginTop: 1 },
   summarySlotRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 },
   summarySlotTime: { fontSize: 12, color: COLORS.text },
-  summarySlotFootnote: { fontSize: 10, color: COLORS.textSecondary, fontStyle: 'italic', marginTop: 4 },
 
   summaryClinicBox: {
     backgroundColor: '#f8fafc',
@@ -1445,24 +1673,38 @@ const styles = StyleSheet.create({
   summaryClinicName: { fontSize: 13, fontWeight: '700', color: COLORS.text },
   summaryClinicAddr: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
   summaryDivider: { height: 1, backgroundColor: '#e2e8f0', marginVertical: 10 },
-  summaryDateText: { fontSize: 12, fontWeight: '700', color: COLORS.text },
-  summaryHoursText: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
-  summaryAppointmentOnly: { fontSize: 10, color: COLORS.textLight, fontStyle: 'italic', marginTop: 2 },
-  summaryFeeLabel: { fontSize: 10, fontWeight: '700', color: COLORS.textLight, textTransform: 'uppercase', letterSpacing: 0.5 },
+  summaryHoursText: { fontSize: 11, color: COLORS.textSecondary },
+  summaryAppointmentOnly: { fontSize: 10, color: COLORS.textSecondary, fontStyle: 'italic', marginTop: 2 },
+  summaryFeeLabel: { fontSize: 10, fontWeight: '700', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
   summaryFeeAmount: { fontSize: 16, fontWeight: '800', color: COLORS.text, marginTop: 1 },
   summaryPayableBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   summaryPayableText: { fontSize: 11, color: COLORS.textSecondary },
 
-  // Summary Modal styles
+  sendBtn: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 20,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  sendBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  sendNote: { fontSize: 11, color: COLORS.textSecondary, textAlign: 'center', marginTop: 10 },
+
+  // Summary Modal specific
   summaryModalHeader: {
     paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 12,
+    paddingTop: 12,
+    paddingBottom: 14,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
-  summaryModalHeading: { fontSize: 18, fontWeight: '800', color: COLORS.text, marginTop: 2 },
+  summaryModalHeading: { fontSize: 18, fontWeight: '800', color: COLORS.text },
   summaryModalSub: { fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
   summaryModalContent: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 40 },
   summaryProgressCard: {
@@ -1474,7 +1716,7 @@ const styles = StyleSheet.create({
     borderColor: '#f1f5f9',
   },
   summarySectionTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 10 },
-  summaryInfoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
+  summaryInfoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 5 },
   summaryInfoKey: { fontSize: 12, color: COLORS.textSecondary },
   summaryInfoVal: { fontSize: 12, fontWeight: '700', color: COLORS.text },
   conditionTag: {
@@ -1483,10 +1725,10 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: '#fce7f3',
   },
   conditionTagTxt: { fontSize: 11, fontWeight: '700', color: COLORS.primary },
-  summaryNotesTxt: { fontSize: 12, color: COLORS.text, lineHeight: 17, marginTop: 4 },
+  summaryNotesTxt: { fontSize: 12, color: COLORS.text, lineHeight: 18, marginTop: 4 },
   summaryPhoto: { width: '100%', height: 160, borderRadius: 14, marginTop: 4 },
   summaryCancelBtn: {
     flexDirection: 'row',
@@ -1502,6 +1744,6 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   summaryCancelBtnTxt: { fontSize: 13, fontWeight: '700', color: '#dc2626' },
-  summaryCloseBtn: { paddingVertical: 14, borderRadius: 14, backgroundColor: '#f3f4f6', alignItems: 'center', marginTop: 4 },
+  summaryCloseBtn: { paddingVertical: 14, borderRadius: 14, backgroundColor: '#f1f5f9', alignItems: 'center', marginTop: 4 },
   summaryCloseBtnTxt: { fontSize: 14, fontWeight: '700', color: COLORS.text },
 });

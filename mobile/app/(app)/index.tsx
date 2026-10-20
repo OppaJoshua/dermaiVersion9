@@ -7,11 +7,13 @@ import {
   StyleSheet,
   RefreshControl,
   Image,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { COLORS } from '@/lib/constants';
+import { Ionicons, Feather } from '@expo/vector-icons';
+import Svg, { Circle, Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
+import { COLORS, FONTS } from '@/lib/constants';
 import {
   getCurrentUser,
   getSkinHistory,
@@ -24,51 +26,64 @@ import {
 } from '@/lib/store';
 import type { PatientAccount, Appointment, ScanResult } from '@/lib/store';
 
-interface QuickAction {
-  icon: React.ComponentProps<typeof Ionicons>['name'];
-  label: string;
-  description: string;
-  route: string;
-  color: string;
+function RadialProgressBar({
+  progress,
+  size = 56,
+  strokeWidth = 5,
+  color = COLORS.primary,
+  bgColor = COLORS.primaryLight,
+}: {
+  progress: number;
+  size?: number;
+  strokeWidth?: number;
+  color?: string;
+  bgColor?: string;
+}) {
+  const safeProgress = Math.min(Math.max(isNaN(progress) ? 0 : progress, 0), 100);
+  const strokeColor = color || COLORS.primary;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (circumference * safeProgress) / 100;
+
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke={bgColor}
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke={strokeColor}
+          strokeWidth={strokeWidth}
+          strokeDasharray={`${circumference} ${circumference}`}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+          fill="none"
+        />
+      </Svg>
+      <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+        <Text
+          style={{
+            fontSize: size * 0.24,
+            fontWeight: '800',
+            color: COLORS.primary,
+            fontFamily: FONTS.bold,
+          }}
+        >
+          {Math.round(safeProgress)}%
+        </Text>
+      </View>
+    </View>
+  );
 }
 
-const QUICK_ACTIONS: QuickAction[] = [
-  {
-    icon: 'camera-outline',
-    label: 'Start Skin Scan',
-    description: 'AI-powered analysis',
-    route: '/(app)/scan',
-    color: COLORS.primary,
-  },
-  {
-    icon: 'clipboard-outline',
-    label: 'Scan History',
-    description: 'View past results',
-    route: '/(app)/history',
-    color: '#7c3aed',
-  },
-  {
-    icon: 'calendar-outline',
-    label: 'Appointments',
-    description: 'Book & manage',
-    route: '/(app)/appointments',
-    color: '#2563eb',
-  },
-  {
-    icon: 'medkit-outline',
-    label: 'Find Clinics',
-    description: 'Nearby dermatologists',
-    route: '/(app)/clinics',
-    color: '#16a34a',
-  },
-  {
-    icon: 'star-outline',
-    label: 'Upgrade Plan',
-    description: 'Unlock premium features',
-    route: '/(app)/subscription',
-    color: COLORS.warning,
-  },
-];
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -107,10 +122,15 @@ export default function HomeScreen() {
     const appts = await getAppointments(u.id);
     await syncAppointmentNotifications(u.id, appts);
 
-    const upcoming = appts.find(
-      (a) => (a.status === 'pending' || a.status === 'scheduled' || a.status === 'confirmed')
+    const activeAppts = appts.filter(
+      (a) => a.status === 'pending' || a.status === 'scheduled' || a.status === 'confirmed'
     );
-    setNextAppt(upcoming ?? null);
+    activeAppts.sort((a, b) => {
+      const aTime = a.date ? new Date(a.date).getTime() : Infinity;
+      const bTime = b.date ? new Date(b.date).getTime() : Infinity;
+      return aTime - bTime;
+    });
+    setNextAppt(activeAppts[0] ?? null);
 
     const notifs = await getAppNotifications(u.id);
     setUnreadCount(notifs.filter((n) => !n.read).length);
@@ -159,11 +179,8 @@ export default function HomeScreen() {
             <Text style={styles.headerWelcome}>Welcome Back</Text>
             <Text style={styles.headerName}>{firstName}</Text>
           </View>
-          <TouchableOpacity style={styles.iconBtn} onPress={() => router.push('/(app)/clinics')}>
-            <Ionicons name="search-outline" size={20} color={COLORS.text} />
-          </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.iconBtn, { marginLeft: 8 }]}
+            style={styles.iconBtn}
             onPress={() => router.push('/(app)/notifications')}
           >
             <Ionicons name="notifications-outline" size={20} color={COLORS.text} />
@@ -172,6 +189,12 @@ export default function HomeScreen() {
                 <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : String(unreadCount)}</Text>
               </View>
             )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.iconBtn, { marginLeft: 8 }]}
+            onPress={() => router.push('/(app)/settings')}
+          >
+            <Ionicons name="settings-outline" size={20} color={COLORS.text} />
           </TouchableOpacity>
         </View>
 
@@ -196,163 +219,276 @@ export default function HomeScreen() {
           </View>
         </TouchableOpacity>
 
-        {/* ── Your Overview (2×2 grid with big stat cards) ── */}
+        {/* ── 1. Your Overview (Smaller Compact 2×2 Colorful Cards) ── */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Your Overview</Text>
         </View>
 
         <View style={styles.overviewGrid}>
           {/* Card 1 — Total Scans */}
-          <View style={[styles.overviewCard, { backgroundColor: COLORS.primary }]}>
-            <View style={styles.overviewIconWrap}>
-              <Ionicons name="scan-outline" size={20} color={COLORS.primary} />
+          <View style={styles.overviewCard}>
+            <View pointerEvents="none" style={styles.overviewDecorCircle} />
+            <View style={styles.overviewTopRow}>
+              <Text style={styles.overviewLabel} numberOfLines={1}>
+                Total Scans
+              </Text>
+              <View style={styles.overviewArrowBtn}>
+                <Feather name="arrow-up-right" size={13} color="#fff" />
+              </View>
             </View>
             <Text style={styles.overviewValue}>{scanCount}</Text>
-            <Text style={styles.overviewLabel}>Total Scans</Text>
-            <View style={styles.overviewDecorDot} />
           </View>
 
           {/* Card 2 — Conditions Found */}
-          <View style={[styles.overviewCard, { backgroundColor: '#7c3aed' }]}>
-            <View style={[styles.overviewIconWrap, { backgroundColor: 'rgba(255,255,255,0.25)' }]}>
-              <Ionicons name="alert-circle-outline" size={20} color="#fff" />
+          <View style={styles.overviewCard}>
+            <View pointerEvents="none" style={styles.overviewDecorCircle} />
+            <View style={styles.overviewTopRow}>
+              <Text style={styles.overviewLabel} numberOfLines={1}>
+                Conditions Found
+              </Text>
+              <View style={styles.overviewArrowBtn}>
+                <Feather name="arrow-up-right" size={13} color="#fff" />
+              </View>
             </View>
             <Text style={styles.overviewValue}>{conditionsFound}</Text>
-            <Text style={styles.overviewLabel}>Conditions Found</Text>
-            <View style={[styles.overviewDecorDot, { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
           </View>
 
           {/* Card 3 — Clinics Saved */}
-          <View style={[styles.overviewCard, { backgroundColor: '#0ea5e9' }]}>
-            <View style={[styles.overviewIconWrap, { backgroundColor: 'rgba(255,255,255,0.25)' }]}>
-              <Ionicons name="bookmark-outline" size={20} color="#fff" />
+          <View style={styles.overviewCard}>
+            <View pointerEvents="none" style={styles.overviewDecorCircle} />
+            <View style={styles.overviewTopRow}>
+              <Text style={styles.overviewLabel} numberOfLines={1}>
+                Clinics Saved
+              </Text>
+              <View style={styles.overviewArrowBtn}>
+                <Feather name="arrow-up-right" size={13} color="#fff" />
+              </View>
             </View>
             <Text style={styles.overviewValue}>{clinicsSavedCount}</Text>
-            <Text style={styles.overviewLabel}>Clinics Saved</Text>
-            <View style={[styles.overviewDecorDot, { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
           </View>
 
           {/* Card 4 — Last Scan */}
-          <View style={[styles.overviewCard, { backgroundColor: '#16a34a' }]}>
-            <View style={[styles.overviewIconWrap, { backgroundColor: 'rgba(255,255,255,0.25)' }]}>
-              <Ionicons name="time-outline" size={20} color="#fff" />
+          <View style={styles.overviewCard}>
+            <View pointerEvents="none" style={styles.overviewDecorCircle} />
+            <View style={styles.overviewTopRow}>
+              <Text style={styles.overviewLabel} numberOfLines={1}>
+                Last Scan
+              </Text>
+              <View style={styles.overviewArrowBtn}>
+                <Feather name="arrow-up-right" size={13} color="#fff" />
+              </View>
             </View>
-            <Text style={[styles.overviewValue, { fontSize: lastScanLabel.length > 5 ? 18 : 26 }]}>{lastScanLabel}</Text>
-            <Text style={styles.overviewLabel}>Last Scan</Text>
-            <View style={[styles.overviewDecorDot, { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
+            <Text
+              style={[
+                styles.overviewValue,
+                { fontSize: lastScanLabel.length > 5 ? 16 : 22 },
+              ]}
+            >
+              {lastScanLabel}
+            </Text>
           </View>
         </View>
 
-        {/* ── Quick Actions ── */}
+        {/* ── 2. Recent Analyses (Placed directly after Overview with Radial Progress Bar, NO moderate/severe) ── */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
-          <TouchableOpacity>
-            <Text style={styles.seeAll}>See All &rsaquo;</Text>
+          <Text style={styles.sectionTitle}>Recent Analyses</Text>
+          <TouchableOpacity onPress={() => router.push('/(app)/history')}>
+            <Text style={styles.seeAll}>View All &rsaquo;</Text>
           </TouchableOpacity>
         </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.actionsScroll}
-        >
-          {QUICK_ACTIONS.map((action) => (
-            <TouchableOpacity
-              key={action.label}
-              style={styles.actionCard}
-              onPress={() => {
-                if (action.label === 'Appointments') {
-                  router.push({ pathname: '/(app)/appointments', params: { openBooking: '1' } } as any);
-                } else {
-                  router.push(action.route as any);
-                }
-              }}
-            >
-              <View style={[styles.actionIconWrap, { backgroundColor: action.color + '18' }]}>
-                <Ionicons name={action.icon} size={24} color={action.color} />
-              </View>
-              <Text style={styles.actionLabel}>{action.label}</Text>
-              <Text style={styles.actionDesc}>{action.description}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
 
-        {recentScans.length > 0 && (
-          <>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Recent Analyses</Text>
-              <TouchableOpacity onPress={() => router.push('/(app)/history')}>
-                <Text style={styles.seeAll}>See All &rsaquo;</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.listContainer}>
-              {recentScans.map((scan) => (
-                <TouchableOpacity
-                  key={scan.id}
-                  style={styles.listCard}
-                  onPress={() => router.push('/(app)/history')}
-                >
-                  <View style={[styles.listIconWrap, { backgroundColor: COLORS.primary + '15' }]}>
-                    <Ionicons name="flask-outline" size={20} color={COLORS.primary} />
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={styles.listCardTitle}>{scan.condition}</Text>
-                    <Text style={styles.listCardSub}>
-                      {new Date(scan.date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
-                    </Text>
-                  </View>
-                  <View style={styles.confidencePill}>
-                    <Text style={styles.confidenceText}>{scan.confidence}%</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </>
-        )}
-
-        {/* ── Upcoming Appointment ── */}
-        {nextAppt && (
-          <>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Upcoming Appointment</Text>
-              <TouchableOpacity onPress={() => router.push('/(app)/appointments')}>
-                <Text style={styles.seeAll}>See All &rsaquo;</Text>
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity
-              style={styles.apptCard}
-              onPress={() => router.push('/(app)/appointments')}
-            >
-              <View style={[styles.listIconWrap, { backgroundColor: '#2563eb15' }]}>
-                <Ionicons name="calendar" size={22} color="#2563eb" />
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.listCardTitle}>{nextAppt.clinicName}</Text>
-                {nextAppt.doctorName && (
-                  <Text style={styles.listCardSub}>{nextAppt.doctorName}</Text>
-                )}
-                <View style={styles.apptMeta}>
-                  <View style={styles.apptMetaItem}>
-                    <Ionicons name="calendar-outline" size={11} color={COLORS.textSecondary} />
-                    <Text style={styles.apptMetaText}>{nextAppt.date}</Text>
-                  </View>
-                  <View style={styles.apptMetaItem}>
-                    <Ionicons name="time-outline" size={11} color={COLORS.textSecondary} />
-                    <Text style={styles.apptMetaText}>{nextAppt.time}</Text>
-                  </View>
-                  <View style={styles.apptMetaItem}>
-                    <Ionicons name="location-outline" size={11} color={COLORS.textSecondary} />
-                    <Text style={styles.apptMetaText}>In-Person</Text>
+        {recentScans.length > 0 ? (
+          <View style={styles.listContainer}>
+            {recentScans.map((scan) => (
+              <TouchableOpacity
+                key={scan.id}
+                style={styles.recentAnalysisCard}
+                activeOpacity={0.82}
+                onPress={() => router.push('/(app)/history')}
+              >
+                <RadialProgressBar
+                  progress={scan.confidence}
+                  size={56}
+                  strokeWidth={5}
+                  color={COLORS.primary}
+                  bgColor={COLORS.primaryLight}
+                />
+                <View style={styles.analysisBody}>
+                  <Text style={styles.analysisTitle} numberOfLines={1}>
+                    {scan.condition}
+                  </Text>
+                  <View style={styles.analysisMetaRow}>
+                    <View style={styles.metaBadge}>
+                      <Ionicons name="calendar-outline" size={11} color={COLORS.textSecondary} />
+                      <Text style={styles.metaBadgeText}>
+                        {new Date(scan.date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </Text>
+                    </View>
+                    <View style={styles.metaBadge}>
+                      <Ionicons name="sparkles" size={11} color={COLORS.primary} />
+                      <Text style={[styles.metaBadgeText, { color: COLORS.primary, fontWeight: '600' }]}>
+                        AI Analysis
+                      </Text>
+                    </View>
                   </View>
                 </View>
-              </View>
-              <TouchableOpacity
-                style={styles.bookBtn}
-                onPress={() => router.push('/(app)/appointments')}
-              >
-                <Text style={styles.bookBtnText}>View</Text>
+                <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
               </TouchableOpacity>
+            ))}
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.emptyAnalysisCard}
+            activeOpacity={0.85}
+            onPress={() => router.push('/(app)/scan')}
+          >
+            <RadialProgressBar
+              progress={0}
+              size={52}
+              strokeWidth={4.5}
+              color={COLORS.primary}
+              bgColor={COLORS.primaryLight}
+            />
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.emptyAnalysisTitle}>No Skin Analysis Yet</Text>
+              <Text style={styles.emptyAnalysisSub}>Take an AI skin scan in seconds</Text>
+            </View>
+            <View style={styles.startScanBtn}>
+              <Text style={styles.startScanBtnText}>Start</Text>
+              <Ionicons name="arrow-forward" size={12} color="#fff" />
+            </View>
+          </TouchableOpacity>
+        )}
+
+
+        {/* ── 3. Upcoming Appointment (Redesigned) ── */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Upcoming Appointment</Text>
+          {nextAppt && (
+            <TouchableOpacity onPress={() => router.push('/(app)/appointments')}>
+              <Text style={styles.seeAll}>Manage &rsaquo;</Text>
             </TouchableOpacity>
-          </>
+          )}
+        </View>
+
+        {nextAppt ? (
+          <TouchableOpacity
+            style={styles.redesignedApptCard}
+            activeOpacity={0.88}
+            onPress={() => router.push('/(app)/appointments')}
+          >
+            {/* Top Doctor Profile Row */}
+            <View style={styles.apptDoctorRow}>
+              {/* Doctor Avatar with synced Supabase photo */}
+              <View style={styles.apptDoctorAvatarWrap}>
+                {nextAppt.doctorPhotoUrl ? (
+                  <Image
+                    source={{ uri: nextAppt.doctorPhotoUrl }}
+                    style={styles.apptDoctorAvatar}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={styles.apptDoctorAvatarFallback}>
+                    <Ionicons name="medical" size={22} color={COLORS.primary} />
+                  </View>
+                )}
+                {/* Active indicator dot */}
+                <View style={styles.apptDoctorOnlineDot} />
+              </View>
+
+              {/* Doctor Info & Status */}
+              <View style={styles.apptDoctorInfo}>
+                <View style={styles.apptDoctorHeaderRow}>
+                  <Text style={styles.apptDoctorName} numberOfLines={1}>
+                    {nextAppt.doctorName
+                      ? (nextAppt.doctorName.toLowerCase().startsWith('dr')
+                          ? nextAppt.doctorName
+                          : `Dr. ${nextAppt.doctorName}`)
+                      : 'Assigned Specialist'}
+                  </Text>
+                  <View
+                    style={[
+                      styles.apptStatusBadge,
+                      {
+                        backgroundColor:
+                          nextAppt.status === 'confirmed' || nextAppt.status === 'scheduled'
+                            ? '#dcfce7'
+                            : nextAppt.status === 'completed'
+                            ? '#dbeafe'
+                            : '#fef3c7',
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.apptStatusText,
+                        {
+                          color:
+                            nextAppt.status === 'confirmed' || nextAppt.status === 'scheduled'
+                              ? '#15803d'
+                              : nextAppt.status === 'completed'
+                              ? '#1d4ed8'
+                              : '#b45309',
+                        },
+                      ]}
+                    >
+                      {nextAppt.status === 'confirmed' || nextAppt.status === 'scheduled'
+                        ? 'Confirmed'
+                        : nextAppt.status === 'completed'
+                        ? 'Completed'
+                        : 'Pending'}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Clinic Name */}
+                <Text style={styles.apptClinicSubtitle} numberOfLines={1}>
+                  {nextAppt.clinicName}
+                </Text>
+              </View>
+            </View>
+
+            {/* Clean Schedule Row */}
+            <View style={styles.apptScheduleBox}>
+              <View style={styles.apptScheduleItem}>
+                <Ionicons name="calendar-outline" size={13} color={COLORS.primary} />
+                <Text style={styles.apptScheduleText}>
+                  {nextAppt.date
+                    ? new Date(nextAppt.date).toLocaleDateString('en-US', {
+                        weekday: 'short',
+                        month: 'short',
+                        day: 'numeric',
+                      })
+                    : 'Schedule pending'}
+                </Text>
+              </View>
+              <View style={styles.apptScheduleItem}>
+                <Ionicons name="time-outline" size={13} color={COLORS.primary} />
+                <Text style={styles.apptScheduleText}>
+                  {nextAppt.batchTime || nextAppt.time || 'Time pending'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
+            </View>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={styles.emptyApptCard}
+            activeOpacity={0.85}
+            onPress={() => router.push('/(app)/clinics')}
+          >
+            <View style={styles.emptyApptIconWrap}>
+              <Ionicons name="calendar-outline" size={22} color="#2563eb" />
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.emptyApptTitle}>No Upcoming Consultations</Text>
+              <Text style={styles.emptyApptSub}>Find a clinic and book your dermatologist visit</Text>
+            </View>
+            <View style={styles.bookConsultBtn}>
+              <Text style={styles.bookConsultBtnText}>Book</Text>
+              <Ionicons name="arrow-forward" size={12} color="#fff" />
+            </View>
+          </TouchableOpacity>
         )}
 
         {/* ── Skin Tips ── */}
@@ -505,7 +641,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   sectionTitle: {
     fontSize: 16,
@@ -514,91 +650,315 @@ const styles = StyleSheet.create({
   },
   seeAll: { fontSize: 13, color: COLORS.primary, fontWeight: '600' },
 
-  // ── Your Overview (2×2 colourful grid) ──
+  // ── 1. Your Overview (Berry Cards) ──
   overviewGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     paddingHorizontal: 20,
-    gap: 12,
+    justifyContent: 'space-between',
+    rowGap: 10,
     marginBottom: 20,
   },
   overviewCard: {
-    width: '47%',
-    borderRadius: 20,
-    padding: 12,
+    width: '48.5%',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 13,
     overflow: 'hidden',
     position: 'relative',
-    minHeight: 110,
-    justifyContent: 'flex-end',
+    minHeight: 82,
+    justifyContent: 'space-between',
+    backgroundColor: '#be185d',
+    ...(Platform.OS === 'web'
+      ? ({
+          backgroundImage: 'linear-gradient(135deg, #c21a62 0%, #be185d 40%, #9d174d 100%)',
+          cursor: 'default', userSelect: 'none',
+        } as any)
+      : {}),
+    shadowColor: '#be185d',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  overviewIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.25)',
+  overviewDecorCircle: {
+    position: 'absolute',
+    right: -24,
+    bottom: -32,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    pointerEvents: 'none',
+  },
+  overviewTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+    pointerEvents: 'none',
+  },
+  overviewArrowBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10,
+  },
+  overviewLabel: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 11.5,
+    fontWeight: '600',
+    flex: 1,
+    marginRight: 6,
   },
   overviewValue: {
     color: '#fff',
-    fontSize: 26,
+    fontSize: 22,
     fontWeight: '800',
-    lineHeight: 30,
+    lineHeight: 26,
+    pointerEvents: 'none',
   },
-  overviewLabel: {
-    color: 'rgba(255,255,255,0.82)',
-    fontSize: 11,
+  // ── 2. Recent Analysis (Radial Progress & Clean Metadata) ──
+  recentAnalysisCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  analysisBody: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  analysisTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 4,
+  },
+  analysisMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  metaBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+  },
+  metaBadgeText: {
+    fontSize: 10.5,
+    color: COLORS.textSecondary,
     fontWeight: '500',
-    marginTop: 2,
   },
-  overviewDecorDot: {
-    position: 'absolute',
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    top: -20,
-    right: -20,
-  },
-
-  // ── Quick Actions ──
-  actionsScroll: {
-    paddingHorizontal: 20,
-    gap: 12,
-    paddingBottom: 4,
+  emptyAnalysisCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    marginHorizontal: 20,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderStyle: 'dashed',
     marginBottom: 20,
   },
-  actionCard: {
-    width: 100,
+  emptyAnalysisTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  emptyAnalysisSub: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  startScanBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+  },
+  startScanBtnText: {
+    color: '#fff',
+    fontSize: 11.5,
+    fontWeight: '700',
+  },
+
+
+  // ── 3. Upcoming Appointment (Redesigned with Synced Doctor Profile) ──
+  redesignedApptCard: {
     backgroundColor: '#fff',
+    marginHorizontal: 20,
     borderRadius: 18,
     padding: 14,
-    alignItems: 'center',
     shadowColor: '#000',
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.04,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
     elevation: 2,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+    marginBottom: 20,
   },
-  actionIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
+  apptDoctorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  apptDoctorAvatarWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    position: 'relative',
+    marginRight: 12,
+  },
+  apptDoctorAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+  },
+  apptDoctorAvatarFallback: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#fce7f3',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10,
+    borderWidth: 1.5,
+    borderColor: '#fbcfe8',
   },
-  actionLabel: {
-    fontSize: 11,
+  apptDoctorOnlineDot: {
+    position: 'absolute',
+    bottom: -1,
+    right: -1,
+    width: 13,
+    height: 13,
+    borderRadius: 6.5,
+    backgroundColor: '#10b981',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  apptDoctorInfo: {
+    flex: 1,
+  },
+  apptDoctorHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  apptDoctorName: {
+    fontSize: 14.5,
     fontWeight: '700',
     color: COLORS.text,
-    textAlign: 'center',
-    marginBottom: 2,
+    flex: 1,
   },
-  actionDesc: { fontSize: 9, color: COLORS.textSecondary, textAlign: 'center' },
+  apptClinicSubtitle: {
+    fontSize: 11.5,
+    color: COLORS.textSecondary,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  apptStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+  },
+  apptStatusText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  apptScheduleBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#edf2f7',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  apptScheduleItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  apptScheduleText: {
+    fontSize: 12,
+    color: COLORS.text,
+    fontWeight: '600',
+  },
+  emptyApptCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    marginHorizontal: 20,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderStyle: 'dashed',
+    marginBottom: 20,
+  },
+  emptyApptIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#eff6ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyApptTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  emptyApptSub: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  bookConsultBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+  },
+  bookConsultBtnText: {
+    color: '#fff',
+    fontSize: 11.5,
+    fontWeight: '700',
+  },
 
-  // ── List cards ──
+  // ── List cards / Skin Tips ──
   listContainer: {
     paddingHorizontal: 20,
     gap: 10,
@@ -608,7 +968,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
-    borderRadius: 18,
+    borderRadius: 16,
     padding: 14,
     shadowColor: '#000',
     shadowOpacity: 0.04,
@@ -617,56 +977,20 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   listIconWrap: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   listCardTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 3 },
   listCardSub: { fontSize: 11, color: COLORS.textSecondary, lineHeight: 16 },
 
-  // ── Confidence pill ──
-  confidencePill: {
-    backgroundColor: COLORS.primary + '15',
-    borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  confidenceText: { fontSize: 13, fontWeight: '800', color: COLORS.primary },
-
-  // ── Appointment ──
-  apptCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    marginHorizontal: 20,
-    borderRadius: 18,
-    padding: 14,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
-    marginBottom: 20,
-  },
-  apptMeta: { flexDirection: 'row', gap: 8, marginTop: 6, flexWrap: 'wrap' },
-  apptMetaItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  apptMetaText: { fontSize: 10, color: COLORS.textSecondary },
-  bookBtn: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    marginLeft: 8,
-  },
-  bookBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-
   // ── Info card ──
   infoCard: {
     backgroundColor: COLORS.primaryLight ?? '#e6f4ea',
     marginHorizontal: 20,
-    borderRadius: 18,
+    borderRadius: 16,
     padding: 16,
     borderWidth: 1,
     borderColor: COLORS.primary + '25',

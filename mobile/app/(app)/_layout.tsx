@@ -1,49 +1,71 @@
 import { Tabs } from 'expo-router';
-import { View } from 'react-native';
+import { View, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS } from '@/lib/constants';
+import { COLORS, FONTS } from '@/lib/constants';
 
 function ScanIcon({ focused }: { focused: boolean }) {
   return (
     <View
       style={{
-        width: 56,
-        height: 56,
-        borderRadius: 28,
+        width: 54,
+        height: 54,
+        borderRadius: 27,
         backgroundColor: COLORS.primary,
         alignItems: 'center',
         justifyContent: 'center',
-        marginBottom: 28,
+        top: Platform.OS === 'web' ? -12 : -14,
         shadowColor: COLORS.primary,
         shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.4,
+        shadowOpacity: 0.35,
         shadowRadius: 8,
         elevation: 6,
+        borderWidth: 3,
+        borderColor: '#ffffff',
       }}
     >
-      <Ionicons name="camera-outline" size={26} color="#ffffff" />
+      <Ionicons name="camera" size={24} color="#ffffff" />
     </View>
   );
 }
 
 export default function AppLayout() {
+  const insets = useSafeAreaInsets();
+  const isWeb = Platform.OS === 'web';
+  const isIOS = Platform.OS === 'ios';
+
+  const bottomPadding = isWeb ? 8 : (isIOS ? Math.max(insets.bottom, 20) : Math.max(insets.bottom, 8));
+  const tabHeight = isWeb ? 62 : 56 + bottomPadding;
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: COLORS.primary,
-        tabBarInactiveTintColor: COLORS.textSecondary,
+        tabBarInactiveTintColor: '#64748b',
         tabBarStyle: {
-          backgroundColor: COLORS.surface,
-          borderTopColor: COLORS.border,
+          backgroundColor: '#ffffff',
+          borderTopColor: '#f1f5f9',
           borderTopWidth: 1,
-          height: 100,
-          paddingBottom: 40,
-          paddingTop: 12,
+          height: tabHeight,
+          paddingBottom: bottomPadding,
+          paddingTop: 8,
+          overflow: 'visible',
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: -2 },
+          shadowOpacity: 0.04,
+          shadowRadius: 8,
+          elevation: 4,
+        },
+        tabBarItemStyle: {
+          paddingVertical: 2,
         },
         tabBarLabelStyle: {
-          fontSize: 11,
+          fontSize: 10.5,
           fontWeight: '600',
+          fontFamily: FONTS.semiBold,
+          letterSpacing: -0.15,
+          marginTop: 2,
         },
       }}
     >
@@ -76,7 +98,7 @@ export default function AppLayout() {
       <Tabs.Screen
         name="appointments"
         options={{
-          title: 'Appoint...',
+          title: 'Appointments',
           tabBarIcon: ({ focused, color }) => (
             <Ionicons name={focused ? 'calendar' : 'calendar-outline'} size={22} color={color} />
           ),

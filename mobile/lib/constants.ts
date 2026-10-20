@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 export const COLORS = {
   primary: '#be185d',
   primaryDark: '#9d174d',
@@ -21,6 +23,15 @@ export const COLORS = {
   infoLight: '#dbeafe',
   shadow: 'rgba(190, 24, 93, 0.15)',
   overlay: 'rgba(0, 0, 0, 0.5)',
+};
+
+export const FONTS = {
+  regular: Platform.OS === 'web' ? '"Plus Jakarta Sans", "Poppins", sans-serif' : 'PlusJakartaSans_400Regular',
+  medium: Platform.OS === 'web' ? '"Plus Jakarta Sans", "Poppins", sans-serif' : 'PlusJakartaSans_500Medium',
+  semiBold: Platform.OS === 'web' ? '"Plus Jakarta Sans", "Poppins", sans-serif' : 'PlusJakartaSans_600SemiBold',
+  bold: Platform.OS === 'web' ? '"Plus Jakarta Sans", "Poppins", sans-serif' : 'PlusJakartaSans_700Bold',
+  extraBold: Platform.OS === 'web' ? '"Plus Jakarta Sans", "Poppins", sans-serif' : 'PlusJakartaSans_800ExtraBold',
+  display: Platform.OS === 'web' ? '"Poppins", "Plus Jakarta Sans", sans-serif' : 'Poppins_600SemiBold',
 };
 
 export const APP_NAME = 'DermAI';

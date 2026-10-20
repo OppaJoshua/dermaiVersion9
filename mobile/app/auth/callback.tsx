@@ -1,3 +1,4 @@
+import DashboardSkeleton from '@/components/DashboardSkeleton';
 import { useEffect } from 'react';
 import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -151,12 +152,7 @@ export default function AuthCallback() {
     };
   }, []);
 
-  return (
-    <View style={styles.container}>
-      <ActivityIndicator size="large" color={COLORS.primary} />
-      <Text style={styles.text}>Signing you in...</Text>
-    </View>
-  );
+  return <DashboardSkeleton statusMessage="Signing you in..." />;
 }
 
 const styles = StyleSheet.create({

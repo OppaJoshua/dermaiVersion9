@@ -1,4 +1,4 @@
-import { useState, useCallback, ComponentProps } from 'react';
+import { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,22 +13,25 @@ import {
   KeyboardAvoidingView,
   Platform,
   Switch,
+  Image,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS } from '@/lib/constants';
+import { COLORS, APP_NAME, APP_VERSION } from '@/lib/constants';
 import {
   getCurrentUser,
   clearCurrentUser,
   addHelpdeskTicket,
   getNotifPrefs,
   saveNotifPrefs,
+  getUserSubscription,
 } from '@/lib/store';
-import type { PatientAccount, NotifPrefs } from '@/lib/store';
+import type { PatientAccount, NotifPrefs, SubscriptionRecord } from '@/lib/store';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const [user, setUser] = useState<PatientAccount | null>(null);
+  const [sub, setSub] = useState<SubscriptionRecord | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [notifPrefs, setNotifPrefs] = useState<NotifPrefs>({
     appointmentReminders: true,
@@ -39,7 +42,10 @@ export default function SettingsScreen() {
     useCallback(() => {
       getCurrentUser().then((u) => {
         setUser(u);
-        if (u) getNotifPrefs(u.id).then(setNotifPrefs);
+        if (u) {
+          getNotifPrefs(u.id).then(setNotifPrefs);
+          getUserSubscription(u.id).then(setSub);
+        }
       });
     }, [])
   );
@@ -49,31 +55,6 @@ export default function SettingsScreen() {
     const updated = { ...notifPrefs, [key]: value };
     setNotifPrefs(updated);
     await saveNotifPrefs(user.id, updated);
-  }
-
-  async function handleDeleteAccount() {
-    Alert.alert(
-      'Delete Account',
-      'This will permanently delete your account and all associated data. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            if (!user) return;
-            const { getPatientAccounts, KEYS } = await import('@/lib/store');
-            const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-            const accounts = await getPatientAccounts();
-            const updated = accounts.filter((a) => a.email !== user.email);
-            await AsyncStorage.setItem(KEYS.PATIENT_ACCOUNTS, JSON.stringify(updated));
-            await clearCurrentUser();
-            Alert.alert('Account Deleted', 'Your account has been removed.');
-            router.replace('/(auth)/login');
-          },
-        },
-      ]
-    );
   }
 
   async function handleLogout() {
@@ -90,143 +71,179 @@ export default function SettingsScreen() {
     ]);
   }
 
+  const isPremium = sub?.plan === 'premium';
+
   return (
     <SafeAreaView style={styles.safe}>
       {/* Header with back */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={22} color={COLORS.text} />
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
+          <Ionicons name="arrow-back" size={20} color={COLORS.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Settings</Text>
-        <View style={{ width: 40 }} />
+        <View style={{ flex: 1, marginLeft: 8 }}>
+          <Text style={styles.headerTitle}>Settings</Text>
+          <Text style={styles.headerSub}>Preferences &amp; System Controls</Text>
+        </View>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Account */}
-        <SectionHeader title="Account" />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 60 }}>
+
+        {/* User Mini Card */}
+        {user && (
+          <View style={styles.userCard}>
+            <View style={styles.userAvatar}>
+              {user.profileImage ? (
+                <Image source={{ uri: user.profileImage }} style={styles.userAvatarImg} />
+              ) : (
+                <Text style={styles.userAvatarTxt}>
+                  {user.fullName
+                    .split(' ')
+                    .slice(0, 2)
+                    .map((n) => n[0])
+                    .join('')
+                    .toUpperCase()}
+                </Text>
+              )}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.userName} numberOfLines={1}>{user.fullName}</Text>
+              <Text style={styles.userEmail} numberOfLines={1}>{user.email}</Text>
+            </View>
+            <View style={[styles.planTag, isPremium ? styles.planTagPremium : styles.planTagFree]}>
+              <Text style={[styles.planTagTxt, isPremium ? styles.planTagTxtPremium : styles.planTagTxtFree]}>
+                {isPremium ? 'Premium' : 'Free'}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Section 1: Subscription & Plan */}
+        <SectionHeader title="Subscription &amp; Plans" />
         <View style={styles.group}>
           <SettingsRow
             icon="star-outline"
-            iconColor={COLORS.warning}
             label="Manage Subscription"
-            onPress={() => router.push('/(app)/subscription')}
+            value={isPremium ? 'Premium Active' : 'Free Plan'}
+            onPress={() => router.push({ pathname: '/(app)/subscription', params: { from: 'settings' } })}
           />
           <SettingsRow
             icon="receipt-outline"
-            iconColor={COLORS.primary}
-            label="Billing"
-            onPress={() => router.push('/(app)/billing')}
+            label="Billing &amp; Allowance"
+            onPress={() => router.push({ pathname: '/(app)/subscription', params: { from: 'settings' } })}
             last
           />
         </View>
 
-        {/* Notifications */}
-        <SectionHeader title="Notifications" />
+        {/* Section 2: Notifications */}
+        <SectionHeader title="Notifications &amp; Alerts" />
         <View style={styles.group}>
-          <View style={[styles.row]}>
-            <View style={[styles.iconCircle, { backgroundColor: '#2563eb18' }]}>
-              <Ionicons name="calendar-outline" size={18} color="#2563eb" />
+          <View style={styles.row}>
+            <View style={styles.iconCircle}>
+              <Ionicons name="calendar-outline" size={18} color={COLORS.primary} />
             </View>
-            <Text style={styles.rowLabel}>Appointment Reminders</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowLabel}>Appointment Reminders</Text>
+              <Text style={styles.rowSubLabel}>Get notified before scheduled clinic consultations</Text>
+            </View>
             <Switch
               value={notifPrefs.appointmentReminders}
               onValueChange={(v) => toggleNotif('appointmentReminders', v)}
-              trackColor={{ false: COLORS.border, true: COLORS.primary + '80' }}
-              thumbColor={notifPrefs.appointmentReminders ? COLORS.primary : '#f4f4f5'}
+              trackColor={{ false: '#e2e8f0', true: COLORS.primary + '80' }}
+              thumbColor={notifPrefs.appointmentReminders ? COLORS.primary : '#f8fafc'}
             />
           </View>
+
           <View style={[styles.row, { borderBottomWidth: 0 }]}>
-            <View style={[styles.iconCircle, { backgroundColor: COLORS.success + '18' }]}>
-              <Ionicons name="scan-outline" size={18} color={COLORS.success} />
+            <View style={styles.iconCircle}>
+              <Ionicons name="scan-outline" size={18} color={COLORS.primary} />
             </View>
-            <Text style={styles.rowLabel}>Scan Result Alerts</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowLabel}>Scan Result Alerts</Text>
+              <Text style={styles.rowSubLabel}>Real-time updates when AI finishes skin analysis</Text>
+            </View>
             <Switch
               value={notifPrefs.scanResultAlerts}
               onValueChange={(v) => toggleNotif('scanResultAlerts', v)}
-              trackColor={{ false: COLORS.border, true: COLORS.primary + '80' }}
-              thumbColor={notifPrefs.scanResultAlerts ? COLORS.primary : '#f4f4f5'}
+              trackColor={{ false: '#e2e8f0', true: COLORS.primary + '80' }}
+              thumbColor={notifPrefs.scanResultAlerts ? COLORS.primary : '#f8fafc'}
             />
           </View>
         </View>
 
-        {/* Privacy */}
-        <SectionHeader title="Privacy" />
+        {/* Section 3: Privacy & Compliance */}
+        <SectionHeader title="Privacy &amp; Medical Compliance" />
         <View style={styles.group}>
           <SettingsRow
             icon="shield-checkmark-outline"
-            iconColor={COLORS.success}
-            label="Privacy Policy"
+            label="Clinical Data Privacy"
             onPress={() =>
               Alert.alert(
-                'Privacy Policy',
-                'DermAI collects and processes your skin scan data solely to provide diagnostic assistance. Your data is stored locally on your device and is never shared without your consent. For full details, visit our website.'
+                'Clinical Data Privacy',
+                'DermAI processes skin assessment photos and questionnaire data strictly for clinical screening and licensed dermatologist consultation. Your medical records are encrypted and never disclosed to third parties without authorization.'
               )
             }
           />
           <SettingsRow
             icon="document-text-outline"
-            iconColor={COLORS.info}
-            label="Terms of Service"
+            label="Terms of Medical Service"
             onPress={() =>
               Alert.alert(
-                'Terms of Service',
-                'DermAI is an AI-assisted diagnostic tool intended for informational purposes only. It does not replace professional medical advice. By using DermAI, you acknowledge that results are preliminary and should be confirmed by a licensed dermatologist.'
+                'Terms of Medical Service',
+                'DermAI is an AI-assisted clinical pre-screening tool intended for preliminary assessment and dermatologist referral. It is NOT a definitive diagnosis. Always consult a licensed physician or board-certified dermatologist for clinical confirmation and prescription treatments.'
               )
             }
             last
           />
         </View>
 
-        {/* Support */}
-        <SectionHeader title="Support" />
+        {/* Section 4: Support */}
+        <SectionHeader title="Help &amp; Support" />
         <View style={styles.group}>
           <SettingsRow
-            icon="chatbubble-outline"
-            iconColor="#7c3aed"
-            label="Contact Support"
+            icon="chatbubble-ellipses-outline"
+            label="Contact Helpdesk Support"
             onPress={() => setShowHelp(true)}
           />
           <SettingsRow
             icon="help-circle-outline"
-            iconColor={COLORS.textSecondary}
-            label="FAQ"
+            label="Frequently Asked Questions (FAQ)"
             onPress={() =>
               Alert.alert(
-                'Frequently Asked Questions',
-                '• How accurate is the AI? — DermAI achieves 75-85% preliminary accuracy.\n\n• Is it a replacement for a doctor? — No, always consult a dermatologist.\n\n• How do I upgrade? — Go to Profile → Subscription.\n\n• Can I delete my data? — Yes, via Settings → Delete Account.'
+                'DermAI FAQs',
+                '• How does the 15-question pre-screening work?\nIt evaluates clinical symptoms (itching, location, onset) based on AAD and DermNet guidelines.\n\n• Is my data confidential?\nYes, all photo submissions and scan records are encrypted and protected.\n\n• How do I book an appointment?\nGo to Appointments → Book New, select your clinic, attending dermatologist, and arrival window.'
               )
             }
             last
           />
         </View>
 
-        {/* About */}
-        <SectionHeader title="About" />
+        {/* Section 5: App Information */}
+        <SectionHeader title="System &amp; Engine" />
         <View style={styles.group}>
-          <SettingsRow icon="phone-portrait-outline" iconColor={COLORS.textSecondary} label="App Version" value="1.0.0" />
-          <SettingsRow icon="people-outline" iconColor={COLORS.primary} label="Development Team" value="Capstone Group" last />
+          <SettingsRow
+            icon="phone-portrait-outline"
+            label="Application Version"
+            value={`${APP_NAME} v${APP_VERSION}`}
+          />
+          <SettingsRow
+            icon="hardware-chip-outline"
+            label="AI Diagnostic Engine"
+            value="ResNet-50 + Rule Mapping"
+            last
+          />
         </View>
 
-        {/* Danger zone */}
-        <SectionHeader title="Danger Zone" />
+        {/* Section 6: Danger Zone */}
+        <SectionHeader title="Account Actions" />
         <View style={styles.group}>
-          <TouchableOpacity style={styles.dangerRow} onPress={handleLogout}>
-            <View style={[styles.iconCircle, { backgroundColor: COLORS.danger + '18' }]}>
-              <Ionicons name="log-out-outline" size={18} color={COLORS.danger} />
+          <TouchableOpacity style={[styles.dangerRow, { borderBottomWidth: 0 }]} onPress={handleLogout} activeOpacity={0.7}>
+            <View style={[styles.iconCircle, { backgroundColor: '#fee2e2' }]}>
+              <Ionicons name="log-out-outline" size={18} color="#dc2626" />
             </View>
-            <Text style={[styles.rowLabel, { color: COLORS.danger }]}>Sign Out</Text>
-            <Ionicons name="chevron-forward" size={16} color={COLORS.textLight} />
+            <Text style={[styles.rowLabel, { color: '#dc2626' }]}>Sign Out</Text>
+            <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.dangerRow, { borderBottomWidth: 0 }]}
-            onPress={handleDeleteAccount}
-          >
-            <View style={[styles.iconCircle, { backgroundColor: COLORS.danger + '18' }]}>
-              <Ionicons name="trash-outline" size={18} color={COLORS.danger} />
-            </View>
-            <Text style={[styles.rowLabel, { color: COLORS.danger }]}>Delete Account</Text>
-            <Ionicons name="chevron-forward" size={16} color={COLORS.textLight} />
-          </TouchableOpacity>
+          
         </View>
 
         <View style={{ height: 40 }} />
@@ -247,14 +264,12 @@ function SectionHeader({ title }: { title: string }) {
 
 function SettingsRow({
   icon,
-  iconColor,
   label,
   value,
   onPress,
   last,
 }: {
-  icon: ComponentProps<typeof Ionicons>['name'];
-  iconColor?: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
   label: string;
   value?: string;
   onPress?: () => void;
@@ -265,15 +280,15 @@ function SettingsRow({
       style={[styles.row, last && { borderBottomWidth: 0 }]}
       onPress={onPress}
       disabled={!onPress}
-      activeOpacity={onPress ? 0.7 : 1}
+      activeOpacity={0.7}
     >
-      <View style={[styles.iconCircle, { backgroundColor: (iconColor ?? COLORS.primary) + '18' }]}>
-        <Ionicons name={icon} size={18} color={iconColor ?? COLORS.primary} />
+      <View style={styles.iconCircle}>
+        <Ionicons name={icon} size={18} color={COLORS.primary} />
       </View>
       <Text style={styles.rowLabel}>{label}</Text>
       <View style={styles.rowRight}>
         {value && <Text style={styles.rowValue}>{value}</Text>}
-        {onPress && <Ionicons name="chevron-forward" size={16} color={COLORS.textLight} />}
+        <Ionicons name="chevron-forward" size={16} color="#94a3b8" />
       </View>
     </TouchableOpacity>
   );
@@ -295,11 +310,11 @@ function HelpModal({
 
   async function handleSubmit() {
     if (!subject.trim() || !message.trim()) {
-      Alert.alert('Missing Fields', 'Please fill in both subject and message.');
+      Alert.alert('Missing Information', 'Please provide both a subject and a message.');
       return;
     }
     if (!user) {
-      Alert.alert('Not Logged In', 'Please log in to submit a support ticket.');
+      Alert.alert('Not Signed In', 'Please sign in to submit a support inquiry.');
       return;
     }
     setSubmitting(true);
@@ -312,6 +327,8 @@ function HelpModal({
         message: message.trim(),
       });
       setSubmitted(ticket.id);
+    } catch (err: any) {
+      Alert.alert('Submission Error', err?.message ?? 'Failed to submit ticket.');
     } finally {
       setSubmitting(false);
     }
@@ -332,22 +349,25 @@ function HelpModal({
       >
         <SafeAreaView style={styles.modalSafe}>
           <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={handleClose}>
-              <Text style={styles.modalClose}>Close</Text>
+            <TouchableOpacity onPress={handleClose} style={styles.modalBackBtn}>
+              <Ionicons name="chevron-back" size={18} color={COLORS.text} />
+              <Text style={styles.modalClose}>Cancel</Text>
             </TouchableOpacity>
             <Text style={styles.modalTitle}>Contact Support</Text>
-            <View style={{ width: 50 }} />
+            <View style={{ width: 60 }} />
           </View>
 
           {submitted ? (
             <View style={styles.successBox}>
               <View style={styles.successIconCircle}>
-                <Ionicons name="checkmark-circle" size={52} color={COLORS.success} />
+                <Ionicons name="checkmark-circle" size={54} color={COLORS.primary} />
               </View>
               <Text style={styles.successTitle}>Ticket Submitted!</Text>
-              <Text style={styles.successId}>Ticket ID: {submitted}</Text>
+              <View style={styles.ticketIdBadge}>
+                <Text style={styles.successId}>Ticket #{submitted}</Text>
+              </View>
               <Text style={styles.successMsg}>
-                Our support team will respond within 24 hours. You may also follow up via email.
+                Our technical and clinical support team has received your ticket and will respond to {user?.email || 'your email'} within 24 hours.
               </Text>
               <TouchableOpacity style={styles.doneBtn} onPress={handleClose}>
                 <Text style={styles.doneBtnTxt}>Done</Text>
@@ -356,13 +376,13 @@ function HelpModal({
           ) : (
             <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
               <Text style={styles.helpIntro}>
-                Describe your issue below and our team will get back to you within 24 hours.
+                Have a question about your scan or need technical assistance? Fill out the form below.
               </Text>
               <View style={styles.formGroup}>
                 <Text style={styles.formLabel}>Subject</Text>
                 <TextInput
                   style={styles.formInput}
-                  placeholder="e.g. Can't upload photo"
+                  placeholder="e.g. Issue uploading skin photos"
                   placeholderTextColor={COLORS.textLight}
                   value={subject}
                   onChangeText={setSubject}
@@ -372,7 +392,7 @@ function HelpModal({
                 <Text style={styles.formLabel}>Message</Text>
                 <TextInput
                   style={[styles.formInput, styles.textArea]}
-                  placeholder="Describe your issue in detail..."
+                  placeholder="Describe your issue or inquiry in detail..."
                   placeholderTextColor={COLORS.textLight}
                   value={message}
                   onChangeText={setMessage}
@@ -386,9 +406,9 @@ function HelpModal({
                 disabled={submitting}
               >
                 {submitting ? (
-                  <ActivityIndicator color="#fff" />
+                  <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={styles.submitBtnTxt}>Submit Ticket</Text>
+                  <Text style={styles.submitBtnTxt}>Submit Support Ticket</Text>
                 )}
               </TouchableOpacity>
             </ScrollView>
@@ -400,48 +420,103 @@ function HelpModal({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.background },
+  safe: { flex: 1, backgroundColor: '#F8FAFC' },
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingHorizontal: 20,
+    paddingTop: 14,
     paddingBottom: 10,
-    backgroundColor: COLORS.surface,
+    backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: '#f1f5f9',
   },
   backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: COLORS.background,
-    alignItems: 'center', justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text },
+  headerTitle: { fontSize: 18, fontWeight: '800', color: COLORS.text },
+  headerSub: { fontSize: 11, color: COLORS.textSecondary, marginTop: 1 },
+
+  // User Card Preview
+  userCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    marginHorizontal: 16,
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+    gap: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  userAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  userAvatarImg: { width: '100%', height: '100%' },
+  userAvatarTxt: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  userName: { fontSize: 15, fontWeight: '800', color: COLORS.text },
+  userEmail: { fontSize: 12, color: COLORS.textSecondary, marginTop: 1 },
+  planTag: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  planTagPremium: { backgroundColor: '#fdf2f8', borderColor: '#fbcfe8' },
+  planTagFree: { backgroundColor: '#f8fafc', borderColor: '#e2e8f0' },
+  planTagTxt: { fontSize: 11, fontWeight: '700' },
+  planTagTxtPremium: { color: COLORS.primary },
+  planTagTxtFree: { color: '#64748b' },
+
   sectionHeader: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.textSecondary,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    paddingHorizontal: 20,
-    paddingTop: 22,
+    letterSpacing: 0.7,
+    paddingHorizontal: 22,
+    paddingTop: 20,
     paddingBottom: 8,
   },
   group: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 16,
+    backgroundColor: '#fff',
+    borderRadius: 20,
     marginHorizontal: 16,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#f1f5f9',
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 13,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: '#f1f5f9',
     gap: 12,
   },
   dangerRow: {
@@ -449,73 +524,97 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 13,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: '#f1f5f9',
     gap: 12,
-    paddingHorizontal: 0,
   },
   iconCircle: {
-    width: 36, height: 36, borderRadius: 18,
-    alignItems: 'center', justifyContent: 'center',
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: '#fdf2f8',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  rowLabel: { flex: 1, fontSize: 14, color: COLORS.text, fontWeight: '500' },
-  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  rowValue: { fontSize: 13, color: COLORS.textSecondary },
-  // Modal
-  modalSafe: { flex: 1, backgroundColor: COLORS.background },
+  rowLabel: { flex: 1, fontSize: 14, color: '#1e293b', fontWeight: '600' },
+  rowSubLabel: { fontSize: 11, color: '#94a3b8', marginTop: 1 },
+  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rowValue: { fontSize: 12, color: '#64748b', fontWeight: '600' },
+
+  // Help Modal
+  modalSafe: { flex: 1, backgroundColor: '#fff' },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    backgroundColor: COLORS.surface,
+    borderBottomColor: '#f1f5f9',
   },
-  modalClose: { color: COLORS.textSecondary, fontSize: 15 },
-  modalTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
-  modalSave: { color: COLORS.primary, fontWeight: '700', fontSize: 15 },
-  modalContent: { padding: 20, gap: 4 },
-  helpIntro: { fontSize: 14, color: COLORS.textSecondary, lineHeight: 21, marginBottom: 16 },
-  formGroup: { marginBottom: 14 },
-  formLabel: { fontSize: 13, fontWeight: '600', color: COLORS.text, marginBottom: 6 },
+  modalBackBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  modalClose: { color: COLORS.textSecondary, fontSize: 14, fontWeight: '600' },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text },
+  modalContent: { padding: 20 },
+  helpIntro: { fontSize: 13, color: '#64748b', lineHeight: 20, marginBottom: 18 },
+  formGroup: { marginBottom: 16 },
+  formLabel: { fontSize: 12, fontWeight: '700', color: '#334155', marginBottom: 6 },
   formInput: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#e2e8f0',
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontSize: 15,
-    color: COLORS.text,
+    fontSize: 14,
+    color: '#0f172a',
   },
-  textArea: { height: 120, textAlignVertical: 'top', paddingTop: 12 },
+  textArea: { height: 110, textAlignVertical: 'top', paddingTop: 12 },
   submitBtn: {
     backgroundColor: COLORS.primary,
-    borderRadius: 12,
-    paddingVertical: 14,
+    borderRadius: 14,
+    paddingVertical: 15,
     alignItems: 'center',
     marginTop: 8,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.22,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  submitBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  submitBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
+
   successBox: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
-    gap: 8,
   },
-  successIconCircle: { marginBottom: 8 },
-  successTitle: { fontSize: 22, fontWeight: '700', color: COLORS.text },
-  successId: { fontSize: 14, color: COLORS.primary, fontWeight: '600' },
-  successMsg: { fontSize: 14, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 21, marginTop: 4 },
+  successIconCircle: { marginBottom: 14 },
+  successTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text },
+  ticketIdBadge: {
+    backgroundColor: '#fdf2f8',
+    borderColor: '#fbcfe8',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  successId: { fontSize: 13, color: COLORS.primary, fontWeight: '700' },
+  successMsg: { fontSize: 13, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 20, marginTop: 4 },
   doneBtn: {
     backgroundColor: COLORS.primary,
-    borderRadius: 12,
-    paddingHorizontal: 32,
+    borderRadius: 14,
+    paddingHorizontal: 36,
     paddingVertical: 13,
-    marginTop: 16,
+    marginTop: 24,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  doneBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 15 },
-  textLight: { color: COLORS.textLight },
+  doneBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });

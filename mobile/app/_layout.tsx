@@ -1,8 +1,22 @@
+import DashboardSkeleton from '@/components/DashboardSkeleton';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
 import { Platform, StatusBar as RNStatusBar, View, ActivityIndicator } from 'react-native';
+import {
+  useFonts,
+  PlusJakartaSans_400Regular,
+  PlusJakartaSans_500Medium,
+  PlusJakartaSans_600SemiBold,
+  PlusJakartaSans_700Bold,
+  PlusJakartaSans_800ExtraBold,
+} from '@expo-google-fonts/plus-jakarta-sans';
+import {
+  Poppins_400Regular,
+  Poppins_600SemiBold,
+  Poppins_700Bold,
+} from '@expo-google-fonts/poppins';
 import { supabase } from '@/lib/supabase';
 import { savePatientAccount } from '@/lib/store';
 
@@ -11,6 +25,45 @@ export default function RootLayout() {
   const segments = useSegments();
   const segmentsRef = useRef(segments);
   const [ready, setReady] = useState(false);
+
+  const [fontsLoaded] = useFonts({
+    PlusJakartaSans_400Regular,
+    PlusJakartaSans_500Medium,
+    PlusJakartaSans_600SemiBold,
+    PlusJakartaSans_700Bold,
+    PlusJakartaSans_800ExtraBold,
+    Poppins_400Regular,
+    Poppins_600SemiBold,
+    Poppins_700Bold,
+  });
+
+  // Inject web Google Fonts link & style so web view matches web app typography exactly
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const styleId = 'dermai-brand-fonts';
+      if (!document.getElementById(styleId)) {
+        const link = document.createElement('link');
+        link.id = styleId;
+        link.rel = 'stylesheet';
+        link.href = 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Poppins:wght@400;600;700;800&display=swap';
+        document.head.appendChild(link);
+
+        const customStyle = document.createElement('style');
+        customStyle.id = 'dermai-typography-global';
+        customStyle.textContent = `
+          body, html, #root, input, button, select, textarea {
+            font-family: "Plus Jakarta Sans", "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+          }
+          [dir="auto"], div, span, p {
+            font-family: "Plus Jakarta Sans", "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          }
+        `;
+        document.head.appendChild(customStyle);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     segmentsRef.current = segments;
@@ -105,12 +158,8 @@ export default function RootLayout() {
     }
   }
 
-  if (!ready) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fdf2f8' }}>
-        <ActivityIndicator size="large" color="#be185d" />
-      </View>
-    );
+  if (!ready || (!fontsLoaded && Platform.OS !== 'web')) {
+    return <DashboardSkeleton statusMessage="Signing you in..." />;
   }
 
   return (

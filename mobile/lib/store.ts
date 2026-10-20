@@ -31,7 +31,7 @@ export interface ScanResult {
   date: string;
   imageUri?: string;
   imageUris?: [string, string];
-  answers: Record<string, string>;
+  answers: Record<string, any>;
   condition: string;
   confidence: number;
   severity: 'mild' | 'moderate' | 'severe';
@@ -57,6 +57,8 @@ export interface Appointment {
   clinicPhone?: string;
   assignedDoctorId?: string;
   doctorName?: string;
+  doctorPhotoUrl?: string;
+  doctorPrcLicense?: string;
   specialty?: string;
   consultationType: 'face-to-face';
   conditionId?: string;
@@ -635,7 +637,7 @@ export async function getAppointments(userId: string): Promise<Appointment[]> {
         ai_confidence,
         created_at,
         clinic:clinic_id (name, address, phone),
-        doctor:assigned_doctor_id (doctor_name)
+        doctor:assigned_doctor_id (doctor_name, photo_url, prc_license)
       `)
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
@@ -651,6 +653,8 @@ export async function getAppointments(userId: string): Promise<Appointment[]> {
       clinicPhone: a.clinic?.phone || '',
       assignedDoctorId: a.assigned_doctor_id,
       doctorName: a.doctor?.doctor_name || undefined,
+      doctorPhotoUrl: a.doctor?.photo_url || undefined,
+      doctorPrcLicense: a.doctor?.prc_license || undefined,
       consultationType: 'face-to-face',
       conditionName: a.ai_condition_name || undefined,
       notes: a.notes || undefined,
