@@ -1,3 +1,7 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { evaluateDiseaseMapping, normalizeAnswers } from '@/lib/diseaseMappingService';
+import { getConditionGuide } from '@/lib/conditionGuides';
+import { CONDITION_UUIDS, getConditionUUID } from '@/lib/aiApi';
 import { supabase } from '@/lib/supabase';
 import { SAMPLE_CLINICS } from '@/lib/constants';
 
@@ -42,10 +46,16 @@ export interface ScanResult {
   referralSuggested: boolean;
   referralReason?: string;
   localName?: string;
-  status: 'pending' | 'validated' | 'flagged';
+  status: 'pending' | 'validated' | 'flagged' | 'completed';
   secondaryCondition?: string;
   secondaryConfidence?: number;
   isGovernmentReportable?: boolean;
+  isCombined?: boolean;
+  combinedEvidenceScore?: number;
+  patientReportedImpact?: string;
+  agreementStatus?: 'aligned' | 'differing' | 'inconclusive' | 'contextual';
+  agreementSummary?: string;
+  supportingFindings?: string[];
 }
 
 export interface Appointment {
@@ -71,6 +81,15 @@ export interface Appointment {
   patientContact?: string;
   patientGender?: string;
   patientBirthdate?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  emergencyContactRelationship?: string;
+  primaryScanId?: string;
+  paymentStatus?: 'paid' | 'unpaid' | 'refunded';
+  paymentReference?: string;
+  paymentAmount?: number;
+  paidAt?: string;
+  paymentMethod?: 'gcash' | 'maya' | string;
   date?: string;
   time?: string;
   batchTime?: string;
@@ -154,16 +173,31 @@ export interface HelpdeskTicket {
   createdAt: string;
 }
 
+export type NotificationCategory =
+  | 'appointment'
+  | 'broadcast'
+  | 'ticket'
+  | 'scan'
+  | 'subscription'
+  | 'system'
+  | 'general';
+
 export interface AppNotification {
   id: string;
   userId: string;
-  type: 'appointment' | 'scan' | 'subscription' | 'general';
-  subtype?: 'appointment-scheduled' | 'appointment-rejected';
+  type: string;
+  subtype?: string;
+  category?: NotificationCategory;
   title: string;
   message: string;
+  senderName?: string;
+  senderType?: 'clinic' | 'admin' | 'doctor' | 'system' | 'patient';
+  senderAvatar?: string | null;
+  link?: string;
   timestamp: string;
   read: boolean;
   relatedId?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface NotifPrefs {
@@ -448,8 +482,10 @@ export async function getSkinHistory(userId: string): Promise<ScanResult[]> {
         user_id,
         scanned_at,
         photo_url,
+        photo_url_wide,
         confidence_score,
         body_part,
+        condition_id,
         status,
         referral_suggested,
         questionnaire_answers,
@@ -471,6 +507,8 @@ export async function getSkinHistory(userId: string): Promise<ScanResult[]> {
       data.map(async (s: any) => {
         const condObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
         let imageUrl = s.photo_url || undefined;
+        let wideImageUrl = s.photo_url_wide || undefined;
+
         if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('file:') && !imageUrl.startsWith('data:')) {
           try {
             const { data: signed } = await supabase.storage
@@ -480,26 +518,69 @@ export async function getSkinHistory(userId: string): Promise<ScanResult[]> {
           } catch {}
         }
 
+        if (wideImageUrl && !wideImageUrl.startsWith('http') && !wideImageUrl.startsWith('file:') && !wideImageUrl.startsWith('data:')) {
+          try {
+            const { data: signedWide } = await supabase.storage
+              .from('scan-uploads')
+              .createSignedUrl(wideImageUrl, 3600);
+            if (signedWide?.signedUrl) wideImageUrl = signedWide.signedUrl;
+          } catch {}
+        }
+
         const careTipsList: string[] = (condObj?.skin_condition_care_tip || [])
           .map((t: any) => t.tip_text)
           .filter(Boolean);
+
+        // Resolve condition name if condObj.name was not linked in database
+        let conditionName = condObj?.name;
+        if (!conditionName && s.condition_id) {
+          const UUID_TO_NAME: Record<string, string> = {
+            '00000000-0000-0000-0000-000000000012': 'Acne Vulgaris',
+            '00000000-0000-0000-0000-000000000013': 'Atopic Dermatitis',
+            '00000000-0000-0000-0000-000000000014': 'Contact Dermatitis',
+            '00000000-0000-0000-0000-000000000015': 'Melasma',
+            '00000000-0000-0000-0000-000000000011': 'Vitiligo',
+          };
+          conditionName = UUID_TO_NAME[s.condition_id];
+        }
+        if (!conditionName && s.questionnaire_answers && Object.keys(s.questionnaire_answers).length > 0) {
+          try {
+            const mapped = evaluateDiseaseMapping(normalizeAnswers(s.questionnaire_answers));
+            if (mapped.primarySupportedCondition) {
+              conditionName = mapped.primarySupportedCondition;
+            }
+          } catch {}
+        }
+        if (!conditionName) {
+          if (typeof s.body_part === 'string' && s.body_part.length > 0 && s.body_part !== 'Skin Assessment') {
+            conditionName = s.body_part;
+          } else {
+            conditionName = 'Acne Vulgaris';
+          }
+        }
+
+        const guide = getConditionGuide(conditionName);
+        const resolvedLocalName = condObj?.local_name || guide?.filipinoName || 'Taghiyawat';
+        const resolvedDescription = condObj?.description || guide?.definition || '';
+        const resolvedCareTips = careTipsList.length > 0 ? careTipsList : (guide?.basicCareTips || []);
 
         return {
           id: s.analysis_id,
           userId: s.user_id,
           date: s.scanned_at,
           imageUri: imageUrl,
+          imageUris: imageUrl && wideImageUrl ? [imageUrl, wideImageUrl] : undefined,
           answers: s.questionnaire_answers || (s.body_part ? { bodyLocation: s.body_part } : {}),
-          condition: condObj?.name || 'Skin Analysis Result',
+          condition: conditionName,
           confidence: Number(s.confidence_score) || 0,
           severity: (Number(s.confidence_score) >= 75 ? 'severe' : Number(s.confidence_score) >= 50 ? 'moderate' : 'mild') as any,
-          category: 'Dermatology',
-          description: condObj?.description || '',
-          symptoms: [],
-          careTips: careTipsList,
+          category: guide?.category || 'Dermatology',
+          description: resolvedDescription,
+          symptoms: guide?.commonSymptoms || [],
+          careTips: resolvedCareTips,
           referralSuggested: s.referral_suggested || false,
-          localName: condObj?.local_name || undefined,
-          status: s.status || 'pending',
+          localName: resolvedLocalName,
+          status: (s.status || 'completed') as any,
         };
       })
     );
@@ -510,24 +591,132 @@ export async function getSkinHistory(userId: string): Promise<ScanResult[]> {
   }
 }
 
+
+/**
+ * Upload an image from local mobile URI to Supabase Storage 'scan-uploads' bucket
+ */
+export async function uploadScanImageToStorage(
+  userId: string,
+  uri: string,
+  slotPrefix: 'close_up' | 'wide' = 'close_up'
+): Promise<string | null> {
+  if (!uri || uri.startsWith('http://') || uri.startsWith('https://')) {
+    return uri || null;
+  }
+  try {
+    const ts = Date.now();
+    const cleanUri = uri.split('?')[0];
+    const rawExt = cleanUri.split('.').pop()?.toLowerCase();
+    const ext = rawExt === 'png' ? 'png' : 'jpg';
+    const filePath = `${userId}/${ts}_${slotPrefix}.${ext}`;
+
+    // Direct Blob upload for compatibility across modern Expo on Web and Android/iOS
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    const { data, error } = await supabase.storage
+      .from('scan-uploads')
+      .upload(filePath, blob, {
+        contentType: ext === 'png' ? 'image/png' : 'image/jpeg',
+        upsert: true,
+      });
+
+    if (!error && data?.path) {
+      return data.path;
+    }
+
+    if (error) {
+      console.warn('[Store] Supabase storage upload error:', error.message);
+    }
+    return null;
+  } catch (err) {
+    console.warn('[Store] Supabase storage upload exception:', err);
+    return null;
+  }
+}
+
+
 export async function saveScanResult(userId: string, result: ScanResult): Promise<void> {
   try {
-    const { error } = await supabase.from('ai_scan_result').insert({
-      user_id: userId,
-      confidence_score: result.confidence,
-      status: result.confidence < 60 ? 'flagged' : 'pending',
-      scanned_at: result.date || new Date().toISOString(),
-      referral_suggested: result.referralSuggested,
-      photo_url: result.imageUri || null,
-      questionnaire_answers: result.answers || {},
-    });
+    let condId = getConditionUUID(result.condition);
+    if (!condId) {
+      try {
+        const { data: dbConds } = await supabase.from('skin_condition').select('condition_id, name');
+        const match = dbConds?.find((c: any) =>
+          c.name.toLowerCase().includes(result.condition.toLowerCase()) ||
+          result.condition.toLowerCase().includes(c.name.toLowerCase())
+        );
+        if (match) condId = match.condition_id;
+      } catch {}
+    }
+
+    // Upload images to Supabase Storage bucket ('scan-uploads') so Web and Mobile can both access them
+    let closeUpPath: string | null = null;
+    let widePath: string | null = null;
+
+    if (result.imageUri) {
+      if (!result.imageUri.startsWith('http') && !result.imageUri.startsWith('data:')) {
+        closeUpPath = await uploadScanImageToStorage(userId, result.imageUri, 'close_up');
+      } else {
+        closeUpPath = result.imageUri;
+      }
+    }
+
+    const wideUri = result.imageUris?.[1];
+    if (wideUri) {
+      if (!wideUri.startsWith('http') && !wideUri.startsWith('data:')) {
+        widePath = await uploadScanImageToStorage(userId, wideUri, 'wide');
+      } else {
+        widePath = wideUri;
+      }
+    }
+
+    const bodyLocation = result.answers?.bodyLocation || 'Skin Assessment';
+
+    const { data: scanData, error } = await supabase
+      .from('ai_scan_result')
+      .insert({
+        user_id: userId,
+        confidence_score: result.confidence,
+        condition_id: condId,
+        status: 'completed',
+        scanned_at: result.date || new Date().toISOString(),
+        referral_suggested: result.referralSuggested,
+        photo_url: closeUpPath || result.imageUri || null,
+        photo_url_wide: widePath || null,
+        body_part: bodyLocation,
+        questionnaire_answers: result.answers || {},
+      })
+      .select('analysis_id')
+      .maybeSingle();
 
     if (error) console.warn('[Store] saveScanResult insert error:', error.message);
 
-    // Increment free_scans_used for user
-    const { data: u } = await supabase.from('user').select('free_scans_used').eq('user_id', userId).maybeSingle();
-    if (u) {
-      await supabase.from('user').update({ free_scans_used: (u.free_scans_used || 0) + 1 }).eq('user_id', userId);
+    // Sync individual questionnaire answers into ai_skin_answer table
+    if (scanData?.analysis_id && (result.answers as any)?.questionnaireData) {
+      try {
+        const qItems = JSON.parse((result.answers as any).questionnaireData);
+        if (Array.isArray(qItems)) {
+          const skinAnswerRows = qItems.map((item: any, idx: number) => ({
+            analysis_id: scanData.analysis_id,
+            question_key: item.id || `q${idx + 1}`,
+            answer_value: item.answer || '',
+            sort_order: idx + 1,
+          }));
+          await supabase.from('ai_skin_answer').insert(skinAnswerRows);
+        }
+      } catch (secErr) {
+        console.warn('[Store] ai_skin_answer insert skipped:', secErr);
+      }
+    }
+
+    // Increment free_scans_used for free tier users only
+    const sub = await getUserSubscription(userId);
+    const isPaid = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
+    if (!isPaid) {
+      const { data: u } = await supabase.from('user').select('free_scans_used').eq('user_id', userId).maybeSingle();
+      if (u) {
+        await supabase.from('user').update({ free_scans_used: (u.free_scans_used || 0) + 1 }).eq('user_id', userId);
+      }
     }
   } catch (err) {
     console.warn('[Store] saveScanResult exception:', err);
@@ -545,13 +734,28 @@ export async function deleteScanResult(_userId: string, scanId: string): Promise
 // ─── Subscriptions ────────────────────────────────────────────────────────────
 export async function getUserSubscription(userId: string): Promise<SubscriptionRecord | null> {
   try {
-    const { data, error } = await supabase
+    // 1. Query active subscription first (prioritize status = 'active')
+    let { data, error } = await supabase
       .from('user_plan_subscription')
-      .select('*, plan(*)')
+      .select('*, plan:plan_id(*)')
       .eq('user_id', userId)
+      .eq('status', 'active')
       .order('started_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+
+    // 2. If no active row found, fetch latest subscription row
+    if (!data) {
+      const fallback = await supabase
+        .from('user_plan_subscription')
+        .select('*, plan:plan_id(*)')
+        .eq('user_id', userId)
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      data = fallback.data;
+      error = fallback.error;
+    }
 
     const { data: u } = await supabase.from('user').select('email, free_scans_used').eq('user_id', userId).maybeSingle();
 
@@ -567,19 +771,56 @@ export async function getUserSubscription(userId: string): Promise<SubscriptionR
       };
     }
 
-    const pName = data.plan?.name?.toLowerCase() || '';
-    const planType = pName.includes('pro') ? 'pro' : pName.includes('basic') ? 'basic' : 'free';
+    let planObj: any = Array.isArray(data.plan) ? data.plan[0] : data.plan;
+
+    // Fallback: If join didn't populate planObj, query plan table by plan_id
+    if (!planObj && data.plan_id) {
+      try {
+        const { data: p } = await supabase.from('plan').select('*').eq('plan_id', data.plan_id).maybeSingle();
+        if (p) planObj = p;
+      } catch {}
+    }
+
+    const pName = (planObj?.name || '').toLowerCase();
+    const status = String(data.status || '').toLowerCase();
+    const periodEndRaw = data.current_period_end || data.renews_at;
+    const periodEndMs = periodEndRaw ? new Date(periodEndRaw).getTime() : null;
+    const isLapsed = periodEndMs !== null ? periodEndMs <= Date.now() : false;
+    const isActive = (status === 'active' || status === 'cancelling' || status === 'pending_downgrade') && !isLapsed;
+
+    // Purely dynamic determination from live Supabase plan attributes
+    const isProOrPremium =
+      isActive &&
+      (planObj?.scan_limit === -1 ||
+        Number(planObj?.price ?? 0) > 0 ||
+        pName.includes('pro') ||
+        pName.includes('premium') ||
+        pName.includes('annual'));
+
+    const isBasic = isActive && pName.includes('basic') && planObj?.scan_limit !== -1;
+
+    const planType: 'free' | 'basic' | 'pro' | 'premium' = isProOrPremium
+      ? 'premium'
+      : isBasic
+      ? 'basic'
+      : 'free';
+
+    const isYearly =
+      data.billing_cycle === 'yearly' ||
+      planObj?.billing_type === 'yearly' ||
+      pName.includes('annual') ||
+      pName.includes('yearly');
 
     return {
       userId,
       email: u?.email || '',
       plan: planType,
-      billingCycle: data.billing_cycle || 'monthly',
+      billingCycle: isYearly ? 'yearly' : 'monthly',
       startDate: data.started_at,
-      endDate: data.renews_at,
+      endDate: periodEndRaw || data.renews_at,
       status: data.status,
       scansUsed: u?.free_scans_used ?? 0,
-      scanLimit: data.plan?.scan_limit ?? 3,
+      scanLimit: isProOrPremium ? -1 : (planObj?.scan_limit ?? 3),
     };
   } catch (err) {
     console.warn('[Store] getUserSubscription error:', err);
@@ -589,18 +830,80 @@ export async function getUserSubscription(userId: string): Promise<SubscriptionR
 
 export async function setUserSubscription(userId: string, record: SubscriptionRecord): Promise<void> {
   try {
-    // Find matching plan from live table
+    if (record.plan === 'free') {
+      // Cancel active subscription in user_plan_subscription
+      await supabase
+        .from('user_plan_subscription')
+        .update({
+          status: 'cancelled',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId)
+        .eq('status', 'active');
+
+      if (record.scansUsed !== undefined) {
+        await supabase
+          .from('user')
+          .update({ free_scans_used: record.scansUsed })
+          .eq('user_id', userId);
+      }
+      return;
+    }
+
     const { data: plans } = await supabase.from('plan').select('*');
-    const targetPlan = plans?.find((p: any) => p.name.toLowerCase().includes(record.plan)) || plans?.[0];
+    let targetPlan: any = null;
+    if (record.plan === 'premium' || record.plan === 'pro') {
+      if (record.billingCycle === 'yearly') {
+        targetPlan =
+          plans?.find((p: any) => p.name.toLowerCase().includes('annual')) ||
+          plans?.find((p: any) => p.plan_id === '00000000-0000-0000-0000-000000000004');
+      } else {
+        targetPlan =
+          plans?.find((p: any) => p.name.toLowerCase() === 'pro') ||
+          plans?.find((p: any) => p.plan_id === '00000000-0000-0000-0000-000000000003');
+      }
+    } else {
+      targetPlan = plans?.find((p: any) => p.name.toLowerCase().includes(record.plan));
+    }
+
+    if (!targetPlan) {
+      targetPlan = plans?.find((p: any) => p.name.toLowerCase() === 'pro') || plans?.[0];
+    }
+
+    const now = new Date();
+    const periodEnd = new Date(now);
+    if (record.billingCycle === 'yearly') {
+      periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+    } else {
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
+    }
 
     if (targetPlan) {
-      await supabase.from('user_plan_subscription').insert({
+      const subRow = {
         user_id: userId,
         plan_id: targetPlan.plan_id,
-        billing_cycle: record.billingCycle || 'monthly',
         status: 'active',
-        started_at: new Date().toISOString(),
-      });
+        billing_cycle: record.billingCycle || 'monthly',
+        started_at: now.toISOString(),
+        current_period_start: now.toISOString(),
+        current_period_end: periodEnd.toISOString(),
+        renews_at: periodEnd.toISOString(),
+        payment_method: 'Credit / Debit Card',
+        updated_at: now.toISOString(),
+      };
+
+      const { error: upsertErr } = await supabase
+        .from('user_plan_subscription')
+        .upsert(subRow, { onConflict: 'user_id' });
+
+      if (upsertErr) {
+        await supabase.from('user_plan_subscription').insert(subRow);
+      }
+
+      await supabase
+        .from('user')
+        .update({ updated_at: now.toISOString() })
+        .eq('user_id', userId);
     }
   } catch (err: any) {
     console.error('[Store] Failed to save subscription for user:', userId, err?.message ?? err);
@@ -608,7 +911,6 @@ export async function setUserSubscription(userId: string, record: SubscriptionRe
   }
 }
 
-// ─── Appointments ─────────────────────────────────────────────────────────────
 export async function getAppointments(userId: string): Promise<Appointment[]> {
   try {
     const { data, error } = await supabase
@@ -671,6 +973,10 @@ export async function getAppointments(userId: string): Promise<Appointment[]> {
       doctorStatus: a.doctor_status || undefined,
       status: a.status || 'pending',
       skinPhotoUri: a.skin_photo_url || undefined,
+      paymentStatus: (a.payment_status || (a.clinic_note && a.clinic_note.includes('Paid online') ? 'paid' : undefined)) as any,
+      paymentReference: a.payment_reference || (a.clinic_note ? (a.clinic_note.match(/Ref:\s*([^,\s)]+)/)?.[1] || undefined) : undefined),
+      paymentAmount: a.payment_amount != null ? Number(a.payment_amount) : (a.clinic_note ? (a.clinic_note.match(/Amount:\s*[₱P]?([0-9.]+)/)?.[1] ? Number(a.clinic_note.match(/Amount:\s*[₱P]?([0-9.]+)/)[1]) : undefined) : undefined),
+      paidAt: a.paid_at || undefined,
       createdAt: a.created_at,
     }));
   } catch (err) {
@@ -679,28 +985,50 @@ export async function getAppointments(userId: string): Promise<Appointment[]> {
   }
 }
 
-export async function saveAppointment(appt: Partial<Appointment> & { userId: string }): Promise<string> {
+export async function saveAppointment(appt: Partial<Appointment> & { userId: string; [key: string]: any }): Promise<string> {
   try {
+    const rawTime = appt.batchTime || appt.time || '09:00';
+    const timeFormatted = rawTime.includes(':') ? (rawTime.split(':').length === 2 ? `${rawTime}:00` : rawTime) : '09:00:00';
+    const rawDate = appt.date || new Date().toISOString().split('T')[0];
+    const dateFormatted = rawDate.includes('T') ? rawDate : `${rawDate}T${timeFormatted.slice(0, 5)}:00+08:00`;
+
     const payload: any = {
       user_id: appt.userId,
       clinic_id: appt.clinicId || null,
       assigned_doctor_id: appt.assignedDoctorId || null,
-      date: appt.date || null,
-      time: appt.time || null,
-      batch_time: appt.batchTime || appt.time || null,
+      date: dateFormatted,
+      time: timeFormatted,
+      batch_time: rawTime.slice(0, 5),
       queue_number: appt.queueNumber || 1,
       check_in_status: appt.checkInStatus || 'scheduled',
       status: appt.status || 'pending',
+      doctor_status: 'pending-review',
+      schedule_sent_to_doctor: true,
       patient_name: appt.patientName || null,
       patient_email: appt.patientEmail || null,
       patient_contact: appt.patientContact || null,
       patient_address: appt.patientAddress || null,
+      patient_gender: appt.patientGender || null,
+      patient_birthdate: appt.patientBirthdate || null,
+      emergency_contact_name: (appt as any).emergencyContactName || null,
+      emergency_contact_phone: (appt as any).emergencyContactPhone || null,
+      emergency_contact_relationship: (appt as any).emergencyContactRelationship || null,
+      primary_scan_id: (appt as any).primaryScanId || null,
+      condition_id: appt.conditionId || (appt as any).condition_id || null,
+      ai_condition_name: appt.conditionName || (appt as any).ai_condition_name || null,
+      ai_confidence: (appt as any).confidence != null ? Number((appt as any).confidence) : ((appt as any).ai_confidence != null ? Number((appt as any).ai_confidence) : null),
+      questionnaire_answers: (appt as any).questionnaireAnswers || (appt as any).questionnaire_answers || null,
       notes: appt.notes || null,
-      clinic_note: appt.clinicNote || null,
+      clinic_note: appt.clinicNote || (appt.doctorName ? `Assigned to ${appt.doctorName} for pre-consultation review.` : null),
       skin_photo_url: appt.skinPhotoUri || null,
-      ai_condition_name: appt.conditionName || null,
-      ai_confidence: appt.conditionId && !isNaN(Number(appt.conditionId)) ? Number(appt.conditionId) : null,
     };
+
+    if ((appt as any).paymentStatus || (appt as any).payment_status) {
+      payload.payment_status = (appt as any).paymentStatus || (appt as any).payment_status;
+      payload.payment_reference = (appt as any).paymentReference || (appt as any).payment_reference || null;
+      payload.payment_amount = (appt as any).paymentAmount != null ? Number((appt as any).paymentAmount) : null;
+      payload.paid_at = (appt as any).paidAt || (appt as any).paid_at || new Date().toISOString();
+    }
 
     if (appt.id && !appt.id.startsWith('appt_') && appt.id.includes('-')) {
       payload.appointment_id = appt.id;
@@ -712,13 +1040,57 @@ export async function saveAppointment(appt: Partial<Appointment> & { userId: str
       if (error) throw error;
       return data.appointment_id;
     } else {
-      const { data, error } = await supabase
-        .from('patient_appointment')
-        .insert(payload)
-        .select('appointment_id')
-        .single();
-      if (error) throw error;
-      return data.appointment_id;
+      let insertPayload = { ...payload };
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { data, error } = await supabase
+          .from('patient_appointment')
+          .insert(insertPayload)
+          .select('appointment_id')
+          .maybeSingle();
+
+        if (!error && data?.appointment_id) {
+          return data.appointment_id;
+        }
+
+        if (error) {
+          const missingColMatch =
+            error.message.match(/Could not find the '([^']+)' column/i) ||
+            error.message.match(/column patient_appointment\.([^ ]+) does not exist/i) ||
+            error.message.match(/column \"([^\"]+)\" of relation \"patient_appointment\" does not exist/i);
+          if (missingColMatch && missingColMatch[1]) {
+            delete insertPayload[missingColMatch[1]];
+            continue;
+          }
+          const candidateCols = [
+            'paid_at',
+            'payment_amount',
+            'payment_reference',
+            'payment_status',
+            'payment_hold_expires_at',
+            'primary_scan_id',
+            'check_in_status',
+            'batch_time',
+            'emergency_contact_name',
+            'emergency_contact_phone',
+            'emergency_contact_relationship',
+            'patient_gender',
+            'patient_birthdate',
+          ];
+          let strippedCandidate = false;
+          for (const col of candidateCols) {
+            if (error.message.includes(col) && insertPayload[col] !== undefined) {
+              delete insertPayload[col];
+              strippedCandidate = true;
+            }
+          }
+          if (strippedCandidate) {
+            continue;
+          }
+          throw error;
+        }
+        break;
+      }
+      return 'appt_' + Date.now();
     }
   } catch (err: any) {
     console.error('[Store] saveAppointment error:', err?.message ?? err);
@@ -802,30 +1174,256 @@ export async function addHelpdeskTicket(
   return { id };
 }
 
-// ─── App Notifications ────────────────────────────────────────────────────────
-export async function getAppNotifications(userId: string): Promise<AppNotification[]> {
-  try {
-    const { data, error } = await supabase
-      .from('user_notification')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
+// ─── App Notifications (Supabase + Realtime Synced) ───────────────────────────
+const READ_NOTIFS_KEY_PREFIX = 'dermai_patient_read_ids_';
 
-    if (error || !data) return [];
-    return data.map((n: any) => ({
-      id: n.notif_id,
-      userId: n.user_id,
-      type: n.type || 'general',
-      subtype: n.subtype || undefined,
-      title: n.title,
-      message: n.body || '',
-      timestamp: n.created_at,
-      read: n.is_read ?? false,
-    }));
+export async function getLocalReadIds(userId: string): Promise<Set<string>> {
+  try {
+    const raw = await AsyncStorage.getItem(`${READ_NOTIFS_KEY_PREFIX}${userId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return new Set(parsed);
+    }
+  } catch {}
+  return new Set();
+}
+
+export async function saveLocalReadId(userId: string, id: string): Promise<void> {
+  try {
+    const set = await getLocalReadIds(userId);
+    set.add(id);
+    await AsyncStorage.setItem(`${READ_NOTIFS_KEY_PREFIX}${userId}`, JSON.stringify([...set]));
+  } catch {}
+}
+
+export async function saveAllLocalReadIds(userId: string, ids: string[]): Promise<void> {
+  try {
+    const set = await getLocalReadIds(userId);
+    ids.forEach((id) => set.add(id));
+    await AsyncStorage.setItem(`${READ_NOTIFS_KEY_PREFIX}${userId}`, JSON.stringify([...set]));
+  } catch {}
+}
+
+export async function getAppNotifications(userId: string): Promise<AppNotification[]> {
+  if (!userId) return [];
+  const readSet = await getLocalReadIds(userId);
+  const items: AppNotification[] = [];
+
+  try {
+    // 1. Direct user_notification records for this patient
+    const { data: dbNotifs } = await supabase
+      .from('user_notification')
+      .select('notif_id, type, subtype, title, body, is_read, created_at, metadata')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(40);
+
+    if (dbNotifs) {
+      dbNotifs.forEach((n: any) => {
+        const isBroadcast = n.type === 'broadcast' || n.subtype === 'admin_announcement';
+        const isMaintenance = n.subtype === 'maintenance_alert' || n.type === 'maintenance_alert';
+        const isTicket = n.type === 'support_ticket' || n.type?.includes('ticket');
+        const isAppt = n.type?.includes('appointment');
+        const isScan = n.type === 'scan';
+        const isSub = n.type === 'subscription';
+
+        items.push({
+          id: n.notif_id,
+          userId,
+          type: n.type || 'general',
+          subtype: n.subtype || undefined,
+          category: isAppt
+            ? 'appointment'
+            : isScan
+            ? 'scan'
+            : isTicket
+            ? 'ticket'
+            : isBroadcast || isMaintenance
+            ? 'broadcast'
+            : isSub
+            ? 'subscription'
+            : 'general',
+          title: n.title || 'Notification',
+          message: n.body || '',
+          senderName:
+            (n.metadata as any)?.sender_name ||
+            (isTicket ? 'DERMAI Support' : isBroadcast || isMaintenance ? 'Platform Administrator' : undefined),
+          senderType: isTicket || isBroadcast ? 'admin' : undefined,
+          timestamp: n.created_at || new Date().toISOString(),
+          read: Boolean(n.is_read || readSet.has(n.notif_id)),
+          metadata: n.metadata,
+        });
+      });
+    }
+
+    // 2. Broadcast announcements sent by administrator
+    const { data: broadcasts } = await supabase
+      .from('admin_broadcast')
+      .select('broadcast_id, title, message, audience, sent_at')
+      .in('audience', ['all', 'patients', 'patient'])
+      .order('sent_at', { ascending: false })
+      .limit(10);
+
+    if (broadcasts) {
+      broadcasts.forEach((b: any) => {
+        const notifId = `broadcast-${b.broadcast_id}`;
+        items.push({
+          id: notifId,
+          userId,
+          type: 'broadcast',
+          subtype: 'admin_announcement',
+          category: 'broadcast',
+          title: b.title,
+          message: b.message,
+          senderName: 'Platform Administrator',
+          senderType: 'admin',
+          timestamp: b.sent_at || new Date().toISOString(),
+          read: readSet.has(notifId),
+          metadata: { broadcast_id: b.broadcast_id },
+        });
+      });
+    }
+
+    // 3. Live patient appointments from patient_appointment
+    const { data: appointments } = await supabase
+      .from('patient_appointment')
+      .select(`
+        appointment_id,
+        date,
+        time,
+        status,
+        doctor_status,
+        doctor_note,
+        clinic_note,
+        created_at,
+        clinic:clinic_id (name, logo_url)
+      `)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    if (appointments) {
+      appointments.forEach((appt: any) => {
+        const clinicObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
+        const clinicName = clinicObj?.name || 'Clinic';
+        const clinicLogo = clinicObj?.logo_url || null;
+        const dateStr = appt.date
+          ? new Date(appt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+          : 'scheduled date';
+        const timeStr = appt.time ? ` at ${appt.time}` : '';
+
+        // Confirmed / Accepted Appointment
+        if (appt.status === 'confirmed' || appt.doctor_status === 'approved') {
+          const notifId = `appt-accepted-${appt.appointment_id}`;
+          items.push({
+            id: notifId,
+            userId,
+            type: 'appointment',
+            subtype: 'appointment-scheduled',
+            category: 'appointment',
+            title: `Appointment Confirmed`,
+            message: `Your appointment at ${clinicName} on ${dateStr}${timeStr} has been confirmed.`,
+            senderName: clinicName,
+            senderType: 'clinic',
+            senderAvatar: clinicLogo,
+            timestamp: appt.created_at || new Date().toISOString(),
+            read: readSet.has(notifId),
+            metadata: { appointment_id: appt.appointment_id },
+          });
+        }
+
+        // Cancelled / Rejected Appointment
+        if (appt.status === 'cancelled' || appt.doctor_status === 'rejected') {
+          const notifId = `appt-rejected-${appt.appointment_id}`;
+          const noteText = appt.doctor_note ? ` Note: "${appt.doctor_note}".` : '';
+          items.push({
+            id: notifId,
+            userId,
+            type: 'appointment',
+            subtype: 'appointment-rejected',
+            category: 'appointment',
+            title: `Appointment Declined`,
+            message: `Your appointment request at ${clinicName} on ${dateStr} was declined.${noteText} You can select another available doctor or schedule.`,
+            senderName: clinicName,
+            senderType: 'clinic',
+            senderAvatar: clinicLogo,
+            timestamp: appt.created_at || new Date().toISOString(),
+            read: readSet.has(notifId),
+            metadata: { appointment_id: appt.appointment_id },
+          });
+        }
+
+        // Completed Consultation
+        if (appt.status === 'completed') {
+          const notifId = `appt-completed-${appt.appointment_id}`;
+          items.push({
+            id: notifId,
+            userId,
+            type: 'appointment',
+            subtype: 'appointment-completed',
+            category: 'appointment',
+            title: `Consultation Completed`,
+            message: `Your consultation at ${clinicName} has concluded. Your doctor notes and assessment are ready for review.`,
+            senderName: clinicName,
+            senderType: 'clinic',
+            senderAvatar: clinicLogo,
+            timestamp: appt.created_at || new Date().toISOString(),
+            read: readSet.has(notifId),
+            metadata: { appointment_id: appt.appointment_id },
+          });
+        }
+      });
+    }
+
+    // 4. Support Ticket updates
+    const { data: tickets } = await supabase
+      .from('user_support_ticket')
+      .select('ticket_id, subject, response, status, updated_at, created_at')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+      .limit(10);
+
+    if (tickets) {
+      tickets.forEach((ticket: any) => {
+        if (ticket.response || (ticket.status !== 'open' && ticket.status !== 'pending' && ticket.status !== 'submitted')) {
+          const notifId = `ticket-update-${ticket.ticket_id}`;
+          const replySummary = ticket.response ? ` Response: "${ticket.response}"` : '';
+          items.push({
+            id: notifId,
+            userId,
+            type: 'ticket',
+            subtype: 'ticket-update',
+            category: 'ticket',
+            title: `Support Ticket Updated`,
+            message: `Your ticket "${ticket.subject}" is now ${ticket.status}.${replySummary}`,
+            senderName: 'DERMAI Support',
+            senderType: 'admin',
+            timestamp: ticket.updated_at || ticket.created_at || new Date().toISOString(),
+            read: readSet.has(notifId),
+            metadata: { ticket_id: ticket.ticket_id },
+          });
+        }
+      });
+    }
   } catch (err) {
     console.warn('[Store] getAppNotifications error:', err);
-    return [];
   }
+
+  // De-duplicate by ID and broadcast_id, sorting newest first
+  const seen = new Set<string>();
+  const seenBroadcastIds = new Set<string>();
+  const unique = items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    const bId = item.metadata?.broadcast_id;
+    if (bId) {
+      if (seenBroadcastIds.has(bId)) return false;
+      seenBroadcastIds.add(bId);
+    }
+    seen.add(item.id);
+    return true;
+  });
+
+  return unique.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 }
 
 export async function addAppNotification(
@@ -846,38 +1444,50 @@ export async function addAppNotification(
   }
 }
 
-export async function markAppNotificationRead(_userId: string, id: string): Promise<void> {
+export async function markAppNotificationRead(userId: string, id: string): Promise<void> {
   try {
-    await supabase.from('user_notification').update({ is_read: true }).eq('notif_id', id);
+    await saveLocalReadId(userId, id);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    if (isUuid) {
+      await supabase.from('user_notification').update({ is_read: true }).eq('notif_id', id);
+    }
   } catch (err) {
     console.warn('[Store] markAppNotificationRead error:', err);
   }
 }
 
-export async function syncAppointmentNotifications(
-  userId: string,
-  appointments: Appointment[],
-): Promise<boolean> {
-  const existing = await getAppNotifications(userId);
-  let created = false;
-  for (const appt of appointments) {
-    if (appt.status === 'scheduled' || appt.status === 'confirmed') {
-      const already = existing.some(
-        (n) => n.title.includes(appt.clinicName) && n.subtype === 'appointment-scheduled',
-      );
-      if (!already) {
-        await addAppNotification(userId, {
-          userId,
-          type: 'appointment',
-          subtype: 'appointment-scheduled',
-          title: `Appointment Confirmed with ${appt.clinicName}! ✅`,
-          message: `Your appointment at ${appt.clinicName}${appt.date ? ` on ${appt.date}` : ''}${appt.time ? ` at ${appt.time}` : ''} has been scheduled.`,
-        });
-        created = true;
-      }
+export async function markAllAppNotificationsRead(userId: string, ids: string[]): Promise<void> {
+  try {
+    await saveAllLocalReadIds(userId, ids);
+    const uuidIds = ids.filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+    if (uuidIds.length > 0) {
+      await supabase.from('user_notification').update({ is_read: true }).in('notif_id', uuidIds);
     }
+  } catch (err) {
+    console.warn('[Store] markAllAppNotificationsRead error:', err);
   }
-  return created;
+}
+
+export function subscribeToAppNotifications(userId: string, onUpdate: () => void) {
+  if (!userId) return () => {};
+  const channel = supabase
+    .channel(`mobile_notifs_${userId}_${Date.now()}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'user_notification', filter: `user_id=eq.${userId}` }, () => onUpdate())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'admin_broadcast' }, () => onUpdate())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'patient_appointment', filter: `user_id=eq.${userId}` }, () => onUpdate())
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
+export async function syncAppointmentNotifications(
+  _userId: string,
+  _appointments: Appointment[],
+): Promise<boolean> {
+  // Live appointment statuses are now directly fetched from Supabase.
+  return false;
 }
 
 export async function uploadProfileImage(_userId: string, imageUri: string): Promise<string> {
@@ -1070,5 +1680,39 @@ export async function getUserPayments(userId: string): Promise<PlatformTransacti
   } catch (err) {
     console.warn('[Store] getUserPayments error:', err);
     return [];
+  }
+}
+
+export function generatePaymentReference(): string {
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const randomHex = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `TXN-${dateStr}-${randomHex}`;
+}
+
+export async function recordUserPayment(params: {
+  userId: string;
+  amount: number;
+  method: 'gcash' | 'maya' | string;
+  referenceNumber: string;
+  clinicName?: string;
+}): Promise<boolean> {
+  try {
+    const { error } = await supabase.from('user_payment').insert({
+      user_id: params.userId,
+      amount: params.amount,
+      method: params.method.toLowerCase() === 'maya' ? 'Maya' : 'GCash',
+      status: 'success',
+      reference_number: params.referenceNumber,
+      paymongo_payment_id: params.referenceNumber,
+      payment_date: new Date().toISOString(),
+    });
+    if (error) {
+      console.warn('[Store] recordUserPayment error:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('[Store] recordUserPayment exception:', err);
+    return false;
   }
 }

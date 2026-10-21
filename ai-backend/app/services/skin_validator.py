@@ -39,7 +39,7 @@ class SkinValidator:
     def load(self):
         """Load the model if not already loaded"""
         if self._model is None:
-            print(f"📂 Loading skin validator from: {SKIN_VALIDATOR_PATH}")
+            print(f" Loading skin validator from: {SKIN_VALIDATOR_PATH}")
 
             if not SKIN_VALIDATOR_PATH.exists():
                 raise FileNotFoundError(
@@ -54,7 +54,7 @@ class SkinValidator:
             dummy = np.zeros((1, 224, 224, 3), dtype=np.float32)
             _ = self._model.predict(dummy, verbose=0)
 
-            print("✅ Skin validator loaded and warmed up")
+            print(" Skin validator loaded and warmed up")
 
         return self._model
 

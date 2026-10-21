@@ -27,19 +27,19 @@ class ModelLoader:
     def load(self):
         """Load the model if not already loaded"""
         if self._model is None:
-            print(f"📂 Loading model from: {MODEL_PATH}")
+            print(f" Loading model from: {MODEL_PATH}")
             
             if not MODEL_PATH.exists():
                 raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
             
             self._model = tf.keras.models.load_model(str(MODEL_PATH))
-            print("✅ Model loaded successfully!")
+            print(" Model loaded successfully!")
             
             # Warm-up: Run a dummy prediction to initialize TF graph
             import numpy as np
             dummy = np.zeros((1, 224, 224, 3), dtype=np.float32)
             _ = self._model.predict(dummy, verbose=0)
-            print("✅ Model warm-up complete!")
+            print(" Model warm-up complete!")
         
         return self._model
     

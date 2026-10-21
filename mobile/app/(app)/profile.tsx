@@ -173,7 +173,7 @@ export default function ProfileScreen() {
     ]);
   }
 
-  const isPremium = sub?.plan === 'premium';
+  const isPremium = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
 
   if (loadingData) {
     return (

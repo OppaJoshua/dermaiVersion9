@@ -63,10 +63,22 @@ export default function SubscriptionScreen() {
     }
   }
 
-  const isPremium = sub?.plan === 'premium';
+  const isPremium = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
   const price = billingCycle === 'monthly' ? 199 : 1999;
   const priceLabel = billingCycle === 'monthly' ? '₱199/month' : '₱1,999/year';
   const scansUsed = sub?.scansUsed ?? 0;
+
+  const formattedRenewalDate = (() => {
+    if (!sub?.endDate) return null;
+    try {
+      const d = new Date(sub.endDate);
+      return isNaN(d.getTime())
+        ? null
+        : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    } catch {
+      return null;
+    }
+  })();
 
   async function handleUpgrade() {
     if (!user) {
@@ -192,7 +204,6 @@ export default function SubscriptionScreen() {
         {/* ── Active Status Banner ── */}
         {isPremium ? (
           <View style={styles.activePremiumCard}>
-            <View style={styles.cardCornerCircle} />
             <View style={styles.activePremiumTop}>
               <View style={styles.trophyWrap}>
                 <Ionicons name="star" size={22} color="#fff" />
@@ -215,12 +226,10 @@ export default function SubscriptionScreen() {
                   {sub?.billingCycle === 'yearly' ? '₱1,999 / Year' : '₱199 / Month'}
                 </Text>
               </View>
-              {sub?.endDate ? (
+              {formattedRenewalDate ? (
                 <View style={{ alignItems: 'flex-end' }}>
                   <Text style={styles.activeMetaLabel}>Renewal Date</Text>
-                  <Text style={styles.activeMetaVal}>
-                    {new Date(sub.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                  </Text>
+                  <Text style={styles.activeMetaVal}>{formattedRenewalDate}</Text>
                 </View>
               ) : null}
             </View>
@@ -238,6 +247,7 @@ export default function SubscriptionScreen() {
               style={styles.cancelPlanBtn}
               onPress={handleCancelSubscription}
               disabled={loading}
+              activeOpacity={0.8}
             >
               <Ionicons name="close-circle-outline" size={15} color="#fff" />
               <Text style={styles.cancelPlanBtnTxt}>Cancel Subscription</Text>
@@ -657,25 +667,9 @@ const styles = StyleSheet.create({
   // Active Premium Banner
   activePremiumCard: {
     backgroundColor: '#be185d',
-    borderRadius: 22,
+    borderRadius: 20,
     padding: 20,
-    position: 'relative',
-    overflow: 'hidden',
     marginBottom: 16,
-    shadowColor: '#be185d',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 4,
-  },
-  cardCornerCircle: {
-    position: 'absolute',
-    top: -20,
-    right: -20,
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
   },
   activePremiumTop: { flexDirection: 'row', alignItems: 'center' },
   trophyWrap: {

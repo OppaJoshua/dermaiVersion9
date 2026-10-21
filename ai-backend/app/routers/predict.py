@@ -3,10 +3,10 @@ DERMAI - Prediction Router
 POST /predict endpoint.
 
 Full pipeline (matches Manuscript Section 5.4):
-    1. Image quality check  — blur, dark, contrast, resolution
-    2. Skin validation      — human-skin detection
-    3. Classification       — ResNet50 skin condition classifier
-    4. Confidence fallback  — reject ambiguous predictions
+    1. Image quality check   blur, dark, contrast, resolution
+    2. Skin validation       human-skin detection
+    3. Classification        ResNet50 skin condition classifier
+    4. Confidence fallback   reject ambiguous predictions
 """
 
 from typing import Optional
@@ -58,7 +58,7 @@ async def predict_skin_condition(
     try:
         quality = check_image_quality(img)
     except Exception as e:
-        print(f"⚠️  Quality check error: {e} — skipping")
+        print(f"  Quality check error: {e}  skipping")
         quality = {"passed": True, "issues": []}
 
     if not quality["passed"]:
@@ -81,7 +81,7 @@ async def predict_skin_condition(
     try:
         is_skin, skin_score = skin_validator.is_human_skin(img)
     except Exception as e:
-        print(f"⚠️  Skin validator error: {e} — skipping")
+        print(f"  Skin validator error: {e}  skipping")
         is_skin, skin_score = True, 1.0
 
     if not is_skin:
@@ -99,7 +99,7 @@ async def predict_skin_condition(
         )
 
     # ==========================================================
-    # STEP 4: Classification — Primary close-up image (ResNet50)
+    # STEP 4: Classification  Primary close-up image (ResNet50)
     # ==========================================================
     try:
         primary_result = predictor.predict(img)
@@ -147,7 +147,7 @@ async def predict_skin_condition(
             try:
                 wide_quality = check_image_quality(img_wide)
             except Exception as e:
-                print(f"⚠️ Wide-view quality check error: {e} — skipping check")
+                print(f" Wide-view quality check error: {e}  skipping check")
                 wide_quality = {"passed": True, "issues": []}
 
             if not wide_quality["passed"]:
@@ -161,7 +161,7 @@ async def predict_skin_condition(
                 try:
                     is_skin_wide, wide_skin_score = skin_validator.is_human_skin(img_wide)
                 except Exception as e:
-                    print(f"⚠️ Wide-view skin validator error: {e} — skipping")
+                    print(f" Wide-view skin validator error: {e}  skipping")
                     is_skin_wide, wide_skin_score = True, 1.0
 
                 if not is_skin_wide:
@@ -177,7 +177,7 @@ async def predict_skin_condition(
                         "status": "valid",
                     }
         except Exception as e:
-            print(f"⚠️ Wide-view processing skipped due to error: {e}")
+            print(f" Wide-view processing skipped due to error: {e}")
             supporting_result = {
                 "status": "invalid",
                 "error": f"Processing error: {str(e)}",

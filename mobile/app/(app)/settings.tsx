@@ -71,7 +71,7 @@ export default function SettingsScreen() {
     ]);
   }
 
-  const isPremium = sub?.plan === 'premium';
+  const isPremium = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
 
   return (
     <SafeAreaView style={styles.safe}>

@@ -101,6 +101,12 @@ export default function LoginScreen() {
     console.log('[Google Auth] Processing auth URL:', url);
     const params = parseAuthUrlParams(url);
 
+    if (params.error || params.error_description) {
+      console.error('[Google Auth] Error in auth URL:', params.error, params.error_description);
+      Alert.alert('Google Sign-In Error', decodeURIComponent(params.error_description || params.error || 'Authentication failed.'));
+      return;
+    }
+
     if (params.code) {
       console.log('[Google Auth] Exchanging PKCE code for session...');
       const { data: exchangeData, error: exchangeError } = await supabase.auth.exchangeCodeForSession(params.code);

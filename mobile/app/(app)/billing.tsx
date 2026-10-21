@@ -56,7 +56,7 @@ export default function BillingScreen() {
           label: p.plan,
         }))
       );
-    } else if (s?.plan === 'premium' && s.startDate) {
+    } else if ((s?.plan === 'premium' || s?.plan === 'pro' || s?.scanLimit === -1) && s.startDate) {
       const start = new Date(s.startDate);
       const monthStep = isYearly ? 12 : 1;
       const entries = [];

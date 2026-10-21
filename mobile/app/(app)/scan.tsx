@@ -1,4 +1,7 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { predictSkinCondition, AIPredictionError } from '@/lib/aiApi';
+import type { PredictionResult } from '@/lib/aiApi';
+import { getConditionGuide } from '@/lib/conditionGuides';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,6 +10,9 @@ import {
   StyleSheet,
   Alert,
   Image,
+  Platform,
+  Animated,
+  Easing,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -24,6 +30,7 @@ import type {
 import {
   evaluateDiseaseMapping,
   evaluateSafetyWarnings,
+  compareAIAndQuestionnaire,
   normalizeAnswers,
 } from '@/lib/diseaseMappingService';
 import type { SafetyAlert } from '@/lib/diseaseMappingService';
@@ -100,6 +107,7 @@ export default function ScanScreen() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [scansUsed, setScansUsed] = useState(0);
   const [isPremium, setIsPremium] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -117,7 +125,7 @@ export default function ScanScreen() {
       return;
     }
     const sub = await getUserSubscription(user.id);
-    setIsPremium(sub?.plan === 'premium');
+    setIsPremium(sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1);
     setScansUsed(sub?.scansUsed ?? 0);
   }
 
@@ -127,7 +135,7 @@ export default function ScanScreen() {
     const isDemoAccount = user.email.toLowerCase().endsWith('@dermai.ph');
     if (isDemoAccount) return true;
     const sub = await getUserSubscription(user.id);
-    if (sub?.plan === 'premium') return true;
+    if (sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1) return true;
     return (sub?.scansUsed ?? 0) < MAX_FREE_SCANS;
   }
 
@@ -242,14 +250,14 @@ export default function ScanScreen() {
     }
 
     if (!referenceImageUri) {
-      Alert.alert('Second Photo Required', 'Please upload a second photo for comparison.');
+      Alert.alert('Second Photo Required', 'Please upload a second photo for anatomical context comparison.');
       return;
     }
 
     setStep('analyzing');
     const user = await getCurrentUser();
 
-    // Build standardized questionnaire payload matching web
+    // 1. Build standardized questionnaire payload
     const questionnaireData = QUESTIONNAIRE_QUESTIONS.map((q) => {
       const chosenIds = answers[q.id] || [];
       const chosenOptions = q.options.filter((o) => chosenIds.includes(o.id));
@@ -266,64 +274,66 @@ export default function ScanScreen() {
       };
     });
 
+    // 2. Evaluate Clinical Questionnaire Mapping independently
     const mappingResult = evaluateDiseaseMapping(answers);
 
-    const prediction = await analyzeUploadedImages([imageUri, referenceImageUri], mappingResult).catch((error) => {
-      console.warn('[Scan] Dataset prediction unavailable, falling back to questionnaire:', error?.message ?? error);
-      return null;
-    });
-
-    if (prediction && prediction.blurScore !== undefined && prediction.blurScore < 0.00005) {
-      Alert.alert(
-        'Photo too blurry',
-        'Please retake the photo in better light and closer focus. Clearer images improve the result.'
-      );
+    // 3. Real ResNet50 Inference via FastAPI Backend
+    let aiResult: PredictionResult;
+    try {
+      setAnalysisError(null);
+      const minAnimDelay = new Promise((resolve) => setTimeout(resolve, 3600));
+      const [prediction] = await Promise.all([
+        predictSkinCondition(imageUri, referenceImageUri),
+        minAnimDelay,
+      ]);
+      aiResult = prediction;
+    } catch (err: any) {
+      const userMessage = err instanceof AIPredictionError
+        ? err.message
+        : (err?.message || "We couldn't connect to the AI skin analysis service. Please check your network and try again.");
+      setAnalysisError(userMessage);
       setStep('upload');
+      if (Platform.OS === 'web') {
+        try { (window as any)?.alert?.(userMessage); } catch {}
+      } else {
+        Alert.alert('Analysis Notice', userMessage);
+      }
       return;
     }
 
-    // Determine primary condition
-    let condition = prediction ? getDatasetCondition(prediction.predictionKey) : null;
-    if (!condition) {
-      const conditionMapName = mappingResult.primarySupportedCondition || 'Acne Vulgaris';
-      const keyMap: Record<string, string> = {
-        'Acne Vulgaris': 'acne_vulgaris',
-        'Atopic Dermatitis': 'atopic_dermatitis',
-        'Contact Dermatitis': 'contact_dermatitis',
-        'Melasma': 'melasma',
-        'Vitiligo': 'melasma',
-      };
-      condition = getDatasetCondition(keyMap[conditionMapName] || 'atopic_dermatitis') || DATASET_CONDITIONS.acne_vulgaris;
+    // 4. Derive Primary AI Prediction & Confidence
+    const conditionName = aiResult.display_name;
+    const conditionGuide = getConditionGuide(conditionName);
+    const isCombined = Boolean(aiResult.is_combined && aiResult.combined_evidence_score != null);
+    const displayConfidence = isCombined
+      ? Math.round(aiResult.combined_evidence_score!)
+      : Math.round(aiResult.confidence);
+
+    // 5. Compare AI Prediction and Questionnaire Support independently
+    const comparison = compareAIAndQuestionnaire(conditionName, displayConfidence, mappingResult);
+
+    // 6. Extract patient-reported daily life impact from Q15
+    const q15Choice = answers.q15?.[0];
+    let patientReportedImpact: 'Mild' | 'Moderate' | 'Severe' = 'Mild';
+    if (q15Choice === 'q15_opt3' || q15Choice === 'q15_opt4') {
+      patientReportedImpact = 'Severe';
+    } else if (q15Choice === 'q15_opt2') {
+      patientReportedImpact = 'Moderate';
     }
 
-    const confidence = prediction ? prediction.confidence : 85;
-    const shouldShowMultiple =
-      !!prediction && (
-        confidence < 40 ||
-        (prediction.topPredictions[0] && prediction.topPredictions[1] && prediction.topPredictions[0].confidence - prediction.topPredictions[1].confidence <= 15)
-      );
-
-    const secondaryResult = prediction?.topPredictions?.[1]
-      ? {
-          conditionKey: prediction.topPredictions[1].predictionKey,
-          condition: getDatasetCondition(prediction.topPredictions[1].predictionKey) ?? condition,
-          confidence: prediction.topPredictions[1].confidence,
-        }
-      : undefined;
-
-    const referralSuggested =
-      condition.severity === 'severe' ||
-      confidence < condition.referralThreshold ||
-      shouldShowMultiple ||
-      !!secondaryResult ||
-      activeSafetyAlert.level !== 'none';
-
-    // Extract body location label from Q7
+    // 7. Extract body location label from Q7
     const q7Opts = QUESTIONNAIRE_QUESTIONS.find((q) => q.id === 'q7')?.options || [];
     const bodyLocationLabel = (answers.q7 || [])
       .map((id) => q7Opts.find((o) => o.id === id)?.labelEn)
       .filter(Boolean)
       .join(', ') || 'Skin Assessment';
+
+    const condEval = (mappingResult.conditions as any)[conditionName] ||
+      Object.values(mappingResult.conditions).find((c: any) =>
+        conditionName.toLowerCase().includes(c.condition.toLowerCase())
+      );
+    const supportingFindings = condEval?.supportingFindings || [];
+    const referralSuggested = activeSafetyAlert.level !== 'none';
 
     const scanResult: ScanResult = {
       id: `scan_${Date.now()}`,
@@ -336,88 +346,55 @@ export default function ScanScreen() {
         bodyLocation: bodyLocationLabel,
         questionnaireData: JSON.stringify(questionnaireData),
       } as any,
-      condition: condition.name,
-      confidence,
-      severity: condition.severity,
-      category: condition.category,
-      description: condition.description,
-      symptoms: condition.symptoms,
-      careTips: condition.careTips,
+      condition: conditionName,
+      localName: conditionGuide?.filipinoName || 'Taghiyawat',
+      confidence: displayConfidence,
+      severity: patientReportedImpact === 'Severe' ? 'severe' : patientReportedImpact === 'Moderate' ? 'moderate' : 'mild',
+      category: conditionGuide?.category || 'Dermatology',
+      description: conditionGuide?.definition || 'A common dermatological condition.',
+      symptoms: conditionGuide?.commonSymptoms || [],
+      careTips: conditionGuide?.basicCareTips || [],
       referralSuggested,
-      referralReason: referralSuggested
-        ? activeSafetyAlert.level === 'emergency'
-          ? 'Emergency warning signs detected in questionnaire — please seek immediate medical evaluation.'
-          : activeSafetyAlert.level === 'urgent'
-          ? 'Urgent symptoms detected in questionnaire — consult a dermatologist promptly.'
-          : condition.severity === 'severe'
-          ? 'This condition requires professional medical evaluation.'
-          : shouldShowMultiple || secondaryResult
-          ? 'Multiple possible skin conditions detected — a specialist can provide a definitive diagnosis.'
-          : 'Low diagnostic confidence — a specialist can provide a definitive diagnosis.'
-        : undefined,
-      isGovernmentReportable: condition.isGovernmentReportable ?? false,
-      secondaryCondition: shouldShowMultiple || secondaryResult ? (secondaryResult?.condition?.name ?? prediction?.topPredictions?.[1]?.predictionKey ?? undefined) : undefined,
-      secondaryConfidence: shouldShowMultiple || secondaryResult ? secondaryResult?.confidence : undefined,
-      status: confidence < 30 ? 'flagged' : 'pending',
+      referralReason: referralSuggested ? activeSafetyAlert.message : undefined,
+      isGovernmentReportable: false,
+      isCombined,
+      combinedEvidenceScore: isCombined ? aiResult.combined_evidence_score! : undefined,
+      patientReportedImpact,
+      agreementStatus: comparison.agreementStatus,
+      agreementSummary: comparison.summary,
+      supportingFindings,
+      status: 'completed',
     };
 
-    if (user) {
-      await saveScanResult(user.id, scanResult);
-      const isDemoAccount = user.email.toLowerCase().endsWith('@dermai.ph');
-      const sub = await getUserSubscription(user.id);
-      if (!isDemoAccount && sub?.plan !== 'premium') {
-        await setUserSubscription(user.id, {
-          ...(sub ?? { userId: user.id, email: user.email, plan: 'free' as const }),
-          scansUsed: (sub?.scansUsed ?? 0) + 1,
-        });
-      }
-      await addAppNotification(user.id, {
-        type: 'scan',
-        title: 'Scan Complete',
-        message: `Your scan result is ready: ${condition.name} (${confidence}% confidence).`,
-        userId: user.id,
-      });
-    }
-
+    // Transition to result immediately for responsive UI
     setResult(scanResult);
     setStep('result');
-  }
 
-  async function analyzeUploadedImages(
-    _uris: [string, string],
-    mappingResult: ReturnType<typeof evaluateDiseaseMapping>
-  ): Promise<{
-    predictionKey: string;
-    confidence: number;
-    topPredictions: Array<{ predictionKey: string; confidence: number }>;
-    blurScore?: number;
-  }> {
-    // Simulated ResNet model inference delay (1.5 seconds)
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    // Determine condition using clinical disease mapping support
-    const conditionMapName = mappingResult.primarySupportedCondition || 'Acne Vulgaris';
-    const keyMap: Record<string, string> = {
-      'Acne Vulgaris': 'acne_vulgaris',
-      'Atopic Dermatitis': 'atopic_dermatitis',
-      'Contact Dermatitis': 'contact_dermatitis',
-      'Melasma': 'melasma',
-      'Vitiligo': 'melasma',
-    };
-
-    const predKey = keyMap[conditionMapName] || 'atopic_dermatitis';
-    const conf = 89;
-    const altKey = predKey === 'acne_vulgaris' ? 'contact_dermatitis' : 'acne_vulgaris';
-
-    return {
-      predictionKey: predKey,
-      confidence: conf,
-      topPredictions: [
-        { predictionKey: predKey, confidence: conf },
-        { predictionKey: altKey, confidence: Math.max(12, 100 - conf) },
-      ],
-      blurScore: 1.0,
-    };
+    // Asynchronously sync to Supabase in the background
+    if (user) {
+      (async () => {
+        try {
+          await saveScanResult(user.id, scanResult);
+          const isDemoAccount = user.email.toLowerCase().endsWith('@dermai.ph');
+          const sub = await getUserSubscription(user.id);
+          const isPaid = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
+          if (!isDemoAccount && !isPaid) {
+            await setUserSubscription(user.id, {
+              ...(sub ?? { userId: user.id, email: user.email, plan: 'free' as const }),
+              scansUsed: (sub?.scansUsed ?? 0) + 1,
+            });
+          }
+          await addAppNotification(user.id, {
+            type: 'scan',
+            title: 'Scan Complete',
+            message: `Your scan result is ready: ${conditionName} (${displayConfidence}% confidence).`,
+            userId: user.id,
+          });
+        } catch (syncErr) {
+          console.warn('[Scan] Background sync warning:', syncErr);
+        }
+      })();
+    }
   }
 
   // --- Welcome ---------------------------------------------------------------
@@ -867,6 +844,19 @@ export default function ScanScreen() {
                 Please provide both a close-up and a wide-view photo for accurate AI skin comparison.
               </Text>
 
+              {analysisError ? (
+                <View style={styles.analysisErrorBanner}>
+                  <Ionicons name="alert-circle" size={20} color="#dc2626" />
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={styles.analysisErrorTitle}>Photo Analysis Notice</Text>
+                    <Text style={styles.analysisErrorText}>{analysisError}</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setAnalysisError(null)} style={{ padding: 4 }}>
+                    <Ionicons name="close" size={18} color="#dc2626" />
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
               {/* Photo 1: Close-up */}
               <View style={styles.uploadSlotContainer}>
                 <View style={styles.slotHeaderRow}>
@@ -1060,18 +1050,7 @@ export default function ScanScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.container}>
           <StepIndicator currentStep={2} />
-          <View style={styles.analyzingContainer}>
-            <View style={styles.card}>
-              <View style={styles.analyzingIconCircle}>
-                <Ionicons name="sparkles" size={30} color={COLORS.primary} />
-              </View>
-              <Text style={styles.analyzingTitle}>Analyzing your skin...</Text>
-              <Text style={styles.analyzingSub}>Cross-referencing photos with clinical questionnaire evidence</Text>
-              <View style={styles.analyzeBarBg}>
-                <View style={styles.analyzeBarFill} />
-              </View>
-            </View>
-          </View>
+          <AIScanningAnimationView imageUri={imageUri} referenceImageUri={referenceImageUri} />
         </View>
       </SafeAreaView>
     );
@@ -1096,13 +1075,7 @@ function ResultScreen({
   onReset: () => void;
   onFindClinic: () => void;
 }) {
-  const condKey = Object.keys(CONDITION_MAP).find(
-    (k) => CONDITION_MAP[k].name === result.condition
-  ) ?? '';
-  const conditionData = CONDITION_MAP[condKey];
-  const isGovReportable = result.isGovernmentReportable ?? false;
-  const isLowConfidence = result.confidence < 40;
-  const showMultiplePossibilities = isLowConfidence || !!result.secondaryCondition;
+  const guide = getConditionGuide(result.condition);
   const [realClinics, setRealClinics] = useState<ClinicRecord[]>([]);
 
   useEffect(() => {
@@ -1113,171 +1086,228 @@ function ResultScreen({
     .filter((c) => c.verified)
     .slice(0, 2);
 
+  const isAligned = result.agreementStatus === 'aligned';
+  const isCombined = result.isCombined;
+
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
         <StepIndicator currentStep={3} />
         <ScrollView contentContainerStyle={styles.pageContainer} showsVerticalScrollIndicator={false}>
 
-          <View style={styles.card}>
-
-            {result.imageUris?.length === 2 ? (
-              <View style={styles.comparisonStrip}>
-                <View style={styles.comparisonPhotoWrap}>
-                  <Image source={{ uri: result.imageUris[0] }} style={styles.comparisonPhoto} resizeMode="cover" />
-                  <Text style={styles.comparisonPhotoLabel}>Close-up View</Text>
+          <View style={styles.webResultCard}>
+            {/* Header Badges: AI-generated result & Daily-life impact */}
+            <View style={styles.webHeaderBadgesRow}>
+              <View style={styles.webAiPill}>
+                <Ionicons name="sparkles" size={13} color={COLORS.primary} />
+                <Text style={styles.webAiPillTxt}>AI-generated preliminary result</Text>
+              </View>
+              {result.patientReportedImpact ? (
+                <View style={styles.webImpactPill}>
+                  <Text style={styles.webImpactPillTxt}>
+                    Reported Daily-Life Impact: <Text style={{ fontWeight: '700' }}>{result.patientReportedImpact}</Text>
+                  </Text>
                 </View>
-                <View style={styles.comparisonPhotoWrap}>
-                  <Image source={{ uri: result.imageUris[1] }} style={styles.comparisonPhoto} resizeMode="cover" />
-                  <Text style={styles.comparisonPhotoLabel}>Wide View</Text>
+              ) : null}
+            </View>
+
+            {/* Condition Title & Tagalog Subtitle */}
+            <Text style={styles.webConditionTitle}>Possible Condition: {result.condition}</Text>
+            {result.localName ? (
+              <Text style={styles.webConditionSubtitle}>Lokal na tawag: {result.localName}</Text>
+            ) : null}
+
+            {/* Confidence Score Bar */}
+            <View style={styles.webConfidenceSection}>
+              <View style={styles.webConfHeaderRow}>
+                <Text style={styles.webConfTitle}>
+                  {isCombined
+                    ? 'Combined Image Evidence (70% Close-Up + 30% Wide-View)'
+                    : 'Image Model Confidence (ResNet50)'}
+                </Text>
+                <Text style={styles.webConfValue}>{result.confidence}%</Text>
+              </View>
+              <Text style={styles.webConfSub}>
+                {isCombined
+                  ? 'Derived from multi-view fusion: 70% primary lesion morphology + 30% anatomical distribution.'
+                  : 'Solely based on image inference; not altered by questionnaire answers.'}
+              </Text>
+              <View style={styles.webConfBarTrack}>
+                <View style={[styles.webConfBarFill, { width: `${Math.min(100, Math.max(5, result.confidence))}%` }]} />
+              </View>
+            </View>
+
+            {/* Supportive Alignment Card */}
+            <View style={[styles.webAlignCard, isAligned ? styles.webAlignCardGreen : styles.webAlignCardAmber]}>
+              <View style={styles.webAlignHeaderRow}>
+                <Ionicons
+                  name={isAligned ? 'checkmark-circle' : 'information-circle'}
+                  size={18}
+                  color={isAligned ? '#059669' : '#d97706'}
+                />
+                <Text style={[styles.webAlignTitle, { color: isAligned ? '#065f46' : '#92400e' }]}>
+                  {isAligned
+                    ? 'Supportive Alignment Between Photo & Questionnaire'
+                    : 'Contextual Variation Between Photo & Questionnaire'}
+                </Text>
+              </View>
+              <Text style={[styles.webAlignBody, { color: isAligned ? '#047857' : '#b45309' }]}>
+                {result.agreementSummary ||
+                  'Clinical presentation and patient-reported symptoms were evaluated independently to inform care guidance.'}
+              </Text>
+            </View>
+
+            {/* Questionnaire Evidence Support Card */}
+            <View style={styles.webEvidenceCard}>
+              <View style={styles.webEvidenceHeaderRow}>
+                <Text style={styles.webEvidenceTitle}>Questionnaire Evidence Support</Text>
+                <View style={[styles.webSupportPill, !isAligned && styles.webSupportPillAmber]}>
+                  <Text style={[styles.webSupportPillTxt, !isAligned && styles.webSupportPillTxtAmber]}>
+                    {isAligned ? 'Strong support' : 'Limited support'}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.webEvidenceSubtitle}>
+                Rule-based screening grounded in clinical practice guidelines:
+              </Text>
+
+              <View style={styles.webFindingsBox}>
+                <Text style={styles.webFindingsHeader}>
+                  {isAligned ? 'Key Supporting Questionnaire Findings' : 'Reported Symptoms Assessment'}
+                </Text>
+                {result.supportingFindings && result.supportingFindings.length > 0 ? (
+                  result.supportingFindings.map((finding, idx) => (
+                    <View key={idx} style={styles.webFindingRow}>
+                      <Ionicons name="checkmark-circle" size={14} color="#059669" style={{ marginTop: 2, marginRight: 6 }} />
+                      <Text style={styles.webFindingTxt}>{finding}</Text>
+                    </View>
+                  ))
+                ) : (
+                  <View style={styles.webFindingRow}>
+                    <Ionicons name="information-circle" size={14} color="#d97706" style={{ marginTop: 2, marginRight: 6 }} />
+                    <Text style={[styles.webFindingTxt, { color: '#92400e' }]}>
+                      Patient-reported questionnaire symptoms provide limited specific overlap with {result.condition}. In-person clinical dermatological evaluation recommended.
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+
+            {/* Uploaded Photos Strip */}
+            {result.imageUris && result.imageUris.length > 0 ? (
+              <View style={styles.webPhotosSection}>
+                <Text style={styles.webPhotosSectionTitle}>Uploaded Photos & AI Evidence</Text>
+                <View style={styles.webPhotosRow}>
+                  {result.imageUris[0] ? (
+                    <View style={styles.webPhotoCol}>
+                      <Image source={{ uri: result.imageUris[0] }} style={styles.webPhotoImg} resizeMode="cover" />
+                      <Text style={styles.webPhotoLabel}>CLOSE-UP (PRIMARY)</Text>
+                      <View style={styles.photoStatusBadgePrimary}>
+                        <Ionicons name="scan-circle" size={11} color="#059669" />
+                        <Text style={styles.photoStatusTextPrimary}>Primary Lesion Analyzed</Text>
+                      </View>
+                    </View>
+                  ) : null}
+                  {result.imageUris[1] ? (
+                    <View style={styles.webPhotoCol}>
+                      <Image source={{ uri: result.imageUris[1] }} style={styles.webPhotoImg} resizeMode="cover" />
+                      <Text style={styles.webPhotoLabel}>WIDE-VIEW (CONTEXT)</Text>
+                      {result.isCombined ? (
+                        <View style={styles.photoStatusBadgeCombined}>
+                          <Ionicons name="checkmark-circle" size={11} color="#2563eb" />
+                          <Text style={styles.photoStatusTextCombined}>Context Verified (30%)</Text>
+                        </View>
+                      ) : (
+                        <View style={styles.photoStatusBadgeExcluded}>
+                          <Ionicons name="alert-circle" size={11} color="#b45309" />
+                          <Text style={styles.photoStatusTextExcluded}>Excluded: Inconclusive Context</Text>
+                        </View>
+                      )}
+                    </View>
+                  ) : null}
                 </View>
               </View>
             ) : null}
 
-            {/* Condition header */}
-            <View style={[styles.categoryBadge, { backgroundColor: isGovReportable ? COLORS.dangerLight : COLORS.primaryLight }]}>
-              <Text style={[styles.categoryBadgeTxt, isGovReportable && { color: COLORS.danger }]}>
-                {isGovReportable ? 'Urgent: Government-Reportable Condition' : result.category}
-              </Text>
-            </View>
+            {/* Clinical Condition Guide Sections */}
+            {guide ? (
+              <View style={styles.webGuideSection}>
+                {/* What is it? */}
+                <Text style={styles.webSectionHeading}>What is it? / Ano ito?</Text>
+                <Text style={styles.webSectionBody}>{guide.definition}</Text>
 
-            {/* Leprosy: hide name, show DOH referral */}
-            {isGovReportable ? (
-              <>
-                <Text style={styles.resultConditionName}>Skin Concern Requires Immediate Attention</Text>
-                <View style={[styles.disclaimerResultBox, { backgroundColor: COLORS.dangerLight, borderColor: COLORS.danger + '44', marginTop: 12 }]}>
-                  <View style={styles.rowCenter}>
-                    <Ionicons name="medical-outline" size={16} color={COLORS.danger} />
-                    <Text style={[styles.disclaimerResultTitle, { color: COLORS.danger }]}> Confidential DOH Referral</Text>
+                {/* Common Symptoms */}
+                <Text style={styles.webSectionHeading}>Common Symptoms / Karaniwang Sintomas</Text>
+                {guide.commonSymptoms.map((sym, i) => (
+                  <View key={i} style={styles.webBulletRow}>
+                    <View style={styles.webBulletDot} />
+                    <Text style={styles.webBulletTxt}>{sym}</Text>
                   </View>
-                  <Text style={[styles.disclaimerResultTxt, { color: '#7f1d1d' }]}>
-                    Signs detected may be consistent with a government-reportable condition. The specific condition name is not shown to protect your privacy.{'\n\n'}
-                    Please contact the Department of Health (DOH) immediately:{'\n'}
-                    {'  '}• <Text style={{ fontWeight: '700' }}>DOH Hotline: 1555</Text> (free call){'\n'}
-                    {'  '}• Visit your nearest City Health Office (CHO){'\n\n'}
-                    <Text style={{ fontWeight: '700' }}>Free treatment is available</Text> under the National Leprosy Control Program (NLCP).
+                ))}
+
+                {/* Who does it affect? */}
+                <View style={styles.webCalloutBox}>
+                  <View style={styles.webCalloutHeaderRow}>
+                    <Ionicons name="people-outline" size={16} color={COLORS.primary} />
+                    <Text style={styles.webCalloutTitle}>Who does it affect? / Sino ang naaapektuhan?</Text>
+                  </View>
+                  <Text style={styles.webCalloutBody}>{guide.whoIsAffected}</Text>
+                </View>
+
+                {/* Evidence-Based Basic Care Tips */}
+                <Text style={styles.webSectionHeading}>Evidence-Based Basic Care Tips</Text>
+                {guide.basicCareTips.map((tip, i) => (
+                  <View key={i} style={styles.webCareTipRow}>
+                    <Ionicons name="checkmark-circle-outline" size={16} color="#059669" style={{ marginTop: 2, marginRight: 8 }} />
+                    <Text style={styles.webCareTipTxt}>{tip}</Text>
+                  </View>
+                ))}
+
+                {/* When to See a Doctor */}
+                <View style={styles.webDocBox}>
+                  <View style={styles.webDocHeaderRow}>
+                    <Ionicons name="medkit-outline" size={16} color="#b45309" />
+                    <Text style={styles.webDocTitle}>When to See a Doctor / Kailan Dapat Magpatingin sa Doktor</Text>
+                  </View>
+                  <Text style={styles.webDocBody}>{guide.whenToSeeDoctor}</Text>
+                </View>
+
+                {/* Verified Medical Sources */}
+                <View style={styles.webCitationsBox}>
+                  <Text style={styles.webCitationsTitle}>VERIFIED MEDICAL SOURCES & CLINICAL CITATIONS:</Text>
+                  <View style={styles.webCitationsGrid}>
+                    <View style={styles.webCitationItem}>
+                      <Text style={styles.webCitationTxt}>American Academy of Dermatology (AAD)</Text>
+                    </View>
+                    <View style={styles.webCitationItem}>
+                      <Text style={styles.webCitationTxt}>Cleveland Clinic Dermatology</Text>
+                    </View>
+                    <View style={styles.webCitationItem}>
+                      <Text style={styles.webCitationTxt}>DermNet NZ (Dermatological Society)</Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Medical Disclaimer */}
+                <View style={styles.webDisclaimerBox}>
+                  <View style={styles.webDisclaimerHeaderRow}>
+                    <Ionicons name="warning-outline" size={16} color="#e11d48" />
+                    <Text style={styles.webDisclaimerTitle}>Medical Disclaimer</Text>
+                  </View>
+                  <Text style={styles.webDisclaimerBody}>
+                    This AI assessment and rule-based questionnaire mapping are intended for educational and pre-screening purposes only. It is NOT a clinical diagnosis and cannot replace an in-person examination by a licensed medical dermatologist.
                   </Text>
                 </View>
-              </>
-            ) : (
-              <>
-                <Text style={styles.resultConditionName}>Possible {result.condition}</Text>
-                {conditionData?.localName && (
-                  <Text style={styles.resultLocalName}>{conditionData.localName} (Filipino name)</Text>
-                )}
-              </>
-            )}
-
-            {/* Secondary possibility / low-confidence multiple conditions */}
-            {showMultiplePossibilities && (
-              <View style={[styles.disclaimerResultBox, { backgroundColor: '#fef3c7', borderColor: '#d97706' + '44', marginTop: 12 }]}>
-                <View style={styles.rowCenter}>
-                  <Ionicons name="alert-circle-outline" size={15} color={COLORS.warning} />
-                  <Text style={[styles.disclaimerResultTitle, { color: COLORS.warning }]}> Multiple Possible Skin Conditions</Text>
-                </View>
-                <Text style={[styles.disclaimerResultTxt, { color: '#78350f' }]}>
-                  {result.secondaryCondition ? (
-                    <>
-                      <Text style={{ fontWeight: '700' }}>Could also be: {result.secondaryCondition}</Text>
-                      {result.secondaryConfidence ? ` (${result.secondaryConfidence}% confidence)` : ''}{'\n'}
-                    </>
-                  ) : null}
-                  {isLowConfidence
-                    ? 'The image result is not clear enough for a single diagnosis. Please retake the photo or consult a licensed dermatologist for a definitive diagnosis.'
-                    : 'Two conditions scored close to each other, so a licensed dermatologist can provide a definitive diagnosis.'}
-                </Text>
               </View>
-            )}
+            ) : null}
 
-            <Text style={styles.resultSectionTitle}>AI Confidence Score</Text>
-            <View style={styles.confRow}>
-              <View style={styles.confBarBg}>
-                <View style={[styles.confBarFill, { width: `${result.confidence}%` as any, backgroundColor: COLORS.primary }]} />
-              </View>
-              <Text style={[styles.confPct, { color: COLORS.primary }]}>{result.confidence}%</Text>
-            </View>
-
-            <View style={styles.metaRow}>
-              <Text style={styles.metaTxt}>Analysis Date</Text>
-              <Text style={[styles.metaTxt, { fontWeight: '600', color: COLORS.text }]}>
-                {new Date(result.date).toLocaleDateString()}
-              </Text>
-            </View>
-            <View style={[styles.metaRow, { marginTop: 6 }]}>
-              <Text style={styles.metaTxt}>Pre-screening Assessment</Text>
-              <Text style={[styles.metaTxt, { fontWeight: '600', color: COLORS.text }]}>
-                15 Clinical Questions Answered
-              </Text>
-            </View>
-
-            {/* Description */}
-            <View style={styles.sectionDivider} />
-            <Text style={styles.resultSectionTitle}>About This Condition</Text>
-            <Text style={styles.resultBodyText}>{result.description}</Text>
-
-            {/* Symptoms */}
-            <View style={styles.sectionDivider} />
-            <Text style={styles.resultSectionTitle}>Common Symptoms</Text>
-            {result.symptoms.map((s) => (
-              <View key={s} style={styles.bulletRow}>
-                <View style={styles.bulletDot} />
-                <Text style={styles.bulletTxt}>{s}</Text>
-              </View>
-            ))}
-
-            {/* Care tips */}
-            <View style={styles.sectionDivider} />
-            <Text style={styles.resultSectionTitle}>Recommended Care Tips</Text>
-            {result.careTips.map((tip) => (
-              <View key={tip} style={styles.careRow}>
-                <Ionicons name="checkmark-circle" size={16} color={COLORS.success} style={{ marginTop: 2, marginRight: 8 }} />
-                <Text style={styles.careTxt}>{tip}</Text>
-              </View>
-            ))}
-
-            {/* Referral Banner */}
-            {result.referralSuggested && (
-              <View style={[styles.referralCard, { marginTop: 20 }]}>
-                <View style={styles.referralCardHeader}>
-                  <View style={styles.referralCardIconCircle}>
-                    <Ionicons name="medkit" size={22} color="#fff" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.referralCardTitle}>Professional Referral Recommended</Text>
-                    <Text style={styles.referralCardSub}>Expert clinical examination advised</Text>
-                  </View>
-                </View>
-                {result.referralReason ? (
-                  <Text style={styles.referralCardReason}>{result.referralReason}</Text>
-                ) : null}
-                <TouchableOpacity
-                  style={styles.referralCardBtn}
-                  onPress={onFindClinic}
-                >
-                  <Ionicons name="calendar-outline" size={17} color="#fff" />
-                  <Text style={styles.referralCardBtnTxt}>Find a Dermatologist Near You</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* Disclaimer */}
-            <View style={[styles.disclaimerResultBox, { marginTop: 18 }]}>
-              <View style={styles.rowCenter}>
-                <Ionicons name="information-circle-outline" size={16} color={COLORS.danger} />
-                <Text style={styles.disclaimerResultTitle}> Medical Disclaimer</Text>
-              </View>
-              <Text style={styles.disclaimerResultTxt}>
-                This AI-generated preliminary assessment does not replace professional medical diagnosis. Please consult a board-certified dermatologist for clinical evaluation and prescription treatments.
-              </Text>
-            </View>
-
-            {/* Action buttons */}
-            <View style={styles.resultBtnRow}>
-              <TouchableOpacity style={styles.resultBtnOutline} onPress={onReset}>
-                <Text style={styles.resultBtnOutlineTxt}>New Scan</Text>
+            {/* Action Buttons */}
+            <View style={styles.webActionButtonsRow}>
+              <TouchableOpacity style={styles.webBtnOutline} onPress={onReset}>
+                <Text style={styles.webBtnOutlineTxt}>Scan Again</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.resultBtnFilled} onPress={onFindClinic}>
-                <Text style={styles.resultBtnFilledTxt}>Find Clinic</Text>
+              <TouchableOpacity style={styles.webBtnFilled} onPress={onFindClinic}>
+                <Text style={styles.webBtnFilledTxt}>Find a Clinic</Text>
               </TouchableOpacity>
             </View>
 
@@ -1370,7 +1400,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
     borderWidth: 1, borderColor: '#f1f5f9',
   },
-  pageContainer: { paddingBottom: 32 },
+  pageContainer: { paddingBottom: 120 },
   pageTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, marginBottom: 4 },
   backRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
   backTxt: { fontSize: 13, color: COLORS.textSecondary, fontWeight: '600' },
@@ -2001,6 +2031,28 @@ const styles = StyleSheet.create({
   analyzingTitle: { fontSize: 19, fontWeight: '700', color: COLORS.text, textAlign: 'center', marginBottom: 8 },
   analyzingSub: { fontSize: 13, color: COLORS.primary, textAlign: 'center', marginBottom: 20 },
   analyzeBarBg: { height: 6, backgroundColor: '#fce7f3', borderRadius: 3, overflow: 'hidden' },
+  analysisErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  analysisErrorTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#991b1b',
+    marginBottom: 2,
+  },
+  analysisErrorText: {
+    fontSize: 12,
+    color: '#b91c1c',
+    lineHeight: 17,
+  },
   analyzeBarFill: { height: 6, width: '60%', backgroundColor: COLORS.primary, borderRadius: 3 },
 
   // ── Results Screen ──
@@ -2106,4 +2158,977 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
   resultBtnFilledTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
+
+  // ─── Web-Matching Result Styles ──────────────────────────────────────────
+  webResultCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    shadowColor: '#64748b',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+    marginBottom: 24,
+  },
+  webHeaderBadgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginBottom: 14,
+  },
+  webAiPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#fdf2f8',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#fbcfe8',
+  },
+  webAiPillTxt: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+  webImpactPill: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  webImpactPillTxt: {
+    fontSize: 11.5,
+    color: '#475569',
+  },
+  webConditionTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: -0.3,
+    marginBottom: 4,
+  },
+  webConditionSubtitle: {
+    fontSize: 13,
+    fontStyle: 'italic',
+    color: COLORS.textSecondary,
+    marginBottom: 16,
+  },
+  webConfidenceSection: {
+    backgroundColor: '#FAFAFA',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    marginBottom: 16,
+  },
+  webConfHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  webConfTitle: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: '#1E293B',
+    flex: 1,
+    marginRight: 8,
+  },
+  webConfValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.primary,
+  },
+  webConfSub: {
+    fontSize: 11.5,
+    color: '#64748B',
+    lineHeight: 16,
+    marginBottom: 10,
+  },
+  webConfBarTrack: {
+    height: 8,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  webConfBarFill: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: COLORS.primary,
+  },
+  webAlignCard: {
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  webAlignCardGreen: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+  },
+  webAlignCardAmber: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  webAlignHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginBottom: 6,
+  },
+  webAlignTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    flex: 1,
+  },
+  webAlignBody: {
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  webEvidenceCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 18,
+  },
+  webEvidenceHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  webEvidenceTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  webSupportPill: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  webSupportPillTxt: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#15803D',
+  },
+  webEvidenceSubtitle: {
+    fontSize: 11.5,
+    color: '#64748B',
+    marginBottom: 12,
+  },
+  webFindingsBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#EDF2F7',
+  },
+  webFindingsHeader: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 8,
+  },
+  webFindingRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 6,
+  },
+  webFindingTxt: {
+    fontSize: 12,
+    color: '#475569',
+    flex: 1,
+    lineHeight: 17,
+  },
+  webPhotosSection: {
+    marginBottom: 20,
+  },
+  webPhotosSectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginBottom: 10,
+  },
+  webPhotosRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  webPhotoCol: {
+    flex: 1,
+  },
+  webPhotoImg: {
+    width: '100%',
+    height: 120,
+    borderRadius: 12,
+    backgroundColor: '#E2E8F0',
+  },
+    webSupportPillAmber: {
+    backgroundColor: '#fef3c7',
+  },
+  webSupportPillTxtAmber: {
+    color: '#b45309',
+  },
+  photoStatusBadgePrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    backgroundColor: '#ecfdf5',
+    paddingVertical: 3,
+    paddingHorizontal: 6,
+    borderRadius: 6,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  photoStatusTextPrimary: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#065f46',
+  },
+  photoStatusBadgeCombined: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    backgroundColor: '#eff6ff',
+    paddingVertical: 3,
+    paddingHorizontal: 6,
+    borderRadius: 6,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  photoStatusTextCombined: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#1e40af',
+  },
+  photoStatusBadgeExcluded: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    backgroundColor: '#fef3c7',
+    paddingVertical: 3,
+    paddingHorizontal: 6,
+    borderRadius: 6,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+  },
+  photoStatusTextExcluded: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#92400e',
+  },
+  webPhotoLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  webGuideSection: {
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    paddingTop: 16,
+  },
+  webSectionHeading: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  webSectionBody: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 20,
+    marginBottom: 10,
+  },
+  webBulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 6,
+  },
+  webBulletDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: COLORS.primary,
+    marginTop: 7,
+    marginRight: 8,
+  },
+  webBulletTxt: {
+    fontSize: 13,
+    color: '#334155',
+    flex: 1,
+    lineHeight: 19,
+  },
+  webCalloutBox: {
+    backgroundColor: '#FDF2F8',
+    borderRadius: 14,
+    padding: 14,
+    marginVertical: 12,
+    borderWidth: 1,
+    borderColor: '#FCE7F3',
+  },
+  webCalloutHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  webCalloutTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+  webCalloutBody: {
+    fontSize: 12.5,
+    color: '#831843',
+    lineHeight: 18,
+  },
+  webCareTipRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  webCareTipTxt: {
+    fontSize: 13,
+    color: '#334155',
+    flex: 1,
+    lineHeight: 19,
+  },
+  webDocBox: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 14,
+    padding: 14,
+    marginVertical: 12,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  webDocHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  webDocTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#92400E',
+  },
+  webDocBody: {
+    fontSize: 12.5,
+    color: '#78350F',
+    lineHeight: 18,
+  },
+  webCitationsBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 14,
+    marginVertical: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  webCitationsTitle: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  webCitationsGrid: {
+    gap: 6,
+  },
+  webCitationItem: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  webCitationTxt: {
+    fontSize: 11.5,
+    color: '#334155',
+    fontWeight: '500',
+  },
+  webDisclaimerBox: {
+    backgroundColor: '#FFF1F2',
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#FECDD3',
+  },
+  webDisclaimerHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  webDisclaimerTitle: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#BE123C',
+  },
+  webDisclaimerBody: {
+    fontSize: 11.5,
+    color: '#9F1239',
+    lineHeight: 17,
+  },
+  webActionButtonsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  webBtnOutline: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: COLORS.primary,
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  webBtnOutlineTxt: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+  webBtnFilled: {
+    flex: 1,
+    backgroundColor: COLORS.primary,
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: COLORS.primary,
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  webBtnFilledTxt: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+
+});
+
+
+// ─────────────────────────────────────────────────────────────
+// Dynamic AI Scanning & Dual-Photo Merge Animation Component
+// ─────────────────────────────────────────────────────────────
+function AIScanningAnimationView({
+  imageUri,
+  referenceImageUri,
+}: {
+  imageUri: string | null;
+  referenceImageUri: string | null;
+}) {
+  const [phaseIndex, setPhaseIndex] = useState(0);
+
+  // Animated values
+  const photo1Opacity = useRef(new Animated.Value(0)).current;
+  const photo1Scale = useRef(new Animated.Value(0.75)).current;
+  const photo1TranslateX = useRef(new Animated.Value(0)).current;
+
+  const photo2Opacity = useRef(new Animated.Value(0)).current;
+  const photo2Scale = useRef(new Animated.Value(0.75)).current;
+  const photo2TranslateX = useRef(new Animated.Value(0)).current;
+
+  const laserY = useRef(new Animated.Value(-65)).current;
+  const pulseScale = useRef(new Animated.Value(1)).current;
+  const auraOpacity = useRef(new Animated.Value(0.3)).current;
+  const progressBar = useRef(new Animated.Value(0.05)).current;
+  const mergeFlash = useRef(new Animated.Value(0)).current;
+
+  const PHASES = [
+    { title: 'Detecting Close-Up Lesion...', sub: 'Extracting dermatological macro texture & lesion borders' },
+    { title: 'Calibrating Wide-View Context...', sub: 'Evaluating anatomical skin region & surrounding tissue' },
+    { title: 'Neural Feature Extraction...', sub: 'ResNet50 cross-referencing multi-layer skin patterns' },
+    { title: 'Synthesizing Dual-View Evidence...', sub: 'Merging 70/30 visual weights with questionnaire answers' },
+  ];
+
+  useEffect(() => {
+    // 1. Photo 1 appears immediately (0 - 700ms)
+    Animated.parallel([
+      Animated.timing(photo1Opacity, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.spring(photo1Scale, {
+        toValue: 1,
+        friction: 6,
+        tension: 40,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    // 2. Photo 2 appears at 800ms
+    const timerPhoto2 = setTimeout(() => {
+      setPhaseIndex(1);
+      Animated.parallel([
+        Animated.timing(photo2Opacity, {
+          toValue: 1,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.spring(photo2Scale, {
+          toValue: 1,
+          friction: 6,
+          tension: 40,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }, 800);
+
+    // 3. Laser scan & pulsing starts at 1600ms
+    const timerScan = setTimeout(() => {
+      setPhaseIndex(2);
+
+      // Looping laser scan
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(laserY, {
+            toValue: 65,
+            duration: 1000,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(laserY, {
+            toValue: -65,
+            duration: 1000,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+
+      // Looping pulse
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseScale, {
+            toValue: 1.05,
+            duration: 700,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseScale, {
+            toValue: 1,
+            duration: 700,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+
+      // Looping aura
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(auraOpacity, {
+            toValue: 0.8,
+            duration: 600,
+            useNativeDriver: true,
+          }),
+          Animated.timing(auraOpacity, {
+            toValue: 0.3,
+            duration: 600,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+    }, 1600);
+
+    // 4. Merge animation at 2600ms (photos slide toward each other and merge)
+    const timerMerge = setTimeout(() => {
+      setPhaseIndex(3);
+      Animated.parallel([
+        Animated.timing(photo1TranslateX, {
+          toValue: 32,
+          duration: 700,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(photo2TranslateX, {
+          toValue: -32,
+          duration: 700,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.sequence([
+          Animated.timing(mergeFlash, {
+            toValue: 0.85,
+            duration: 350,
+            useNativeDriver: true,
+          }),
+          Animated.timing(mergeFlash, {
+            toValue: 0,
+            duration: 350,
+            useNativeDriver: true,
+          }),
+        ]),
+      ]).start();
+    }, 2600);
+
+    // 5. Progress bar animation smoothly moving 0 -> 100% over 3400ms
+    Animated.timing(progressBar, {
+      toValue: 1,
+      duration: 3400,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false,
+    }).start();
+
+    return () => {
+      clearTimeout(timerPhoto2);
+      clearTimeout(timerScan);
+      clearTimeout(timerMerge);
+    };
+  }, []);
+
+  const progressInterpolate = progressBar.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['5%', '100%'],
+  });
+
+  const currentPhase = PHASES[phaseIndex] || PHASES[0];
+
+  return (
+    <View style={animStyles.container}>
+      {/* Background Pulse Glow */}
+      <Animated.View style={[animStyles.auraGlow, { opacity: auraOpacity }]} />
+
+      {/* Header Pill */}
+      <View style={animStyles.aiBadge}>
+        <Ionicons name="sparkles" size={13} color={COLORS.primary} />
+        <Text style={animStyles.aiBadgeText}>DERMAI NEURAL ENGINE</Text>
+      </View>
+
+      <Text style={animStyles.title}>{currentPhase.title}</Text>
+      <Text style={animStyles.subtitle}>{currentPhase.sub}</Text>
+
+      {/* Dual Photo Stage Container */}
+      <View style={animStyles.stage}>
+        {/* Photo 1: Close-up */}
+        <Animated.View
+          style={[
+            animStyles.photoCard,
+            {
+              opacity: photo1Opacity,
+              transform: [
+                { scale: Animated.multiply(photo1Scale, pulseScale) },
+                { translateX: photo1TranslateX },
+              ],
+            },
+          ]}
+        >
+          {imageUri ? (
+            <Image source={{ uri: imageUri }} style={animStyles.photoImage} resizeMode="cover" />
+          ) : (
+            <View style={animStyles.placeholderPhoto}>
+              <Ionicons name="image" size={32} color={COLORS.primary} />
+            </View>
+          )}
+          <View style={animStyles.photoLabelPill}>
+            <Text style={animStyles.photoLabelText}>1. Close-Up</Text>
+          </View>
+          {/* HUD Corner Brackets */}
+          <View style={[animStyles.bracket, animStyles.bracketTL]} />
+          <View style={[animStyles.bracket, animStyles.bracketTR]} />
+          <View style={[animStyles.bracket, animStyles.bracketBL]} />
+          <View style={[animStyles.bracket, animStyles.bracketBR]} />
+        </Animated.View>
+
+        {/* Center Connection Bridge / Icon */}
+        <View style={animStyles.bridgeContainer}>
+          <View style={animStyles.bridgeLine} />
+          <Animated.View style={[animStyles.bridgeIconWrap, { transform: [{ scale: pulseScale }] }]}>
+            <Ionicons name="git-merge" size={16} color={COLORS.primary} />
+          </Animated.View>
+          <View style={animStyles.bridgeLine} />
+        </View>
+
+        {/* Photo 2: Wide-view */}
+        <Animated.View
+          style={[
+            animStyles.photoCard,
+            {
+              opacity: photo2Opacity,
+              transform: [
+                { scale: Animated.multiply(photo2Scale, pulseScale) },
+                { translateX: photo2TranslateX },
+              ],
+            },
+          ]}
+        >
+          {referenceImageUri ? (
+            <Image source={{ uri: referenceImageUri }} style={animStyles.photoImage} resizeMode="cover" />
+          ) : (
+            <View style={animStyles.placeholderPhoto}>
+              <Ionicons name="body" size={32} color={COLORS.primary} />
+            </View>
+          )}
+          <View style={animStyles.photoLabelPill}>
+            <Text style={animStyles.photoLabelText}>2. Wide-View</Text>
+          </View>
+          {/* HUD Corner Brackets */}
+          <View style={[animStyles.bracket, animStyles.bracketTL]} />
+          <View style={[animStyles.bracket, animStyles.bracketTR]} />
+          <View style={[animStyles.bracket, animStyles.bracketBL]} />
+          <View style={[animStyles.bracket, animStyles.bracketBR]} />
+        </Animated.View>
+
+        {/* Laser Scanning Beam Sweeping Vertically */}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            animStyles.laserBeam,
+            { transform: [{ translateY: laserY }] },
+          ]}
+        >
+          <View style={animStyles.laserGlow} />
+        </Animated.View>
+
+        {/* Flash Overlay when Merging */}
+        <Animated.View
+          pointerEvents="none"
+          style={[animStyles.mergeFlashOverlay, { opacity: mergeFlash }]}
+        />
+      </View>
+
+      {/* Progress Bar & Status */}
+      <View style={animStyles.progressSection}>
+        <View style={animStyles.progressTrack}>
+          <Animated.View style={[animStyles.progressFill, { width: progressInterpolate }]} />
+        </View>
+        <View style={animStyles.progressFooter}>
+          <Text style={animStyles.progressStatusText}>Deep neural scan running...</Text>
+          <Text style={animStyles.progressWeightText}>70/30 Dual-View</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const animStyles = StyleSheet.create({
+  container: {
+    marginHorizontal: 20,
+    marginTop: 20,
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  auraGlow: {
+    position: 'absolute',
+    top: -50,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: '#fce7f3',
+  },
+  aiBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fdf2f8',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#fbcfe8',
+    marginBottom: 12,
+  },
+  aiBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.primary,
+    letterSpacing: 0.6,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.text,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginBottom: 20,
+    paddingHorizontal: 10,
+    lineHeight: 17,
+  },
+  stage: {
+    width: '100%',
+    height: 180,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 10,
+    position: 'relative',
+  },
+  photoCard: {
+    width: 125,
+    height: 155,
+    borderRadius: 16,
+    backgroundColor: '#f8fafc',
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
+    position: 'relative',
+  },
+  photoImage: {
+    width: '100%',
+    height: '100%',
+  },
+  placeholderPhoto: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fdf2f8',
+  },
+  photoLabelPill: {
+    position: 'absolute',
+    bottom: 6,
+    left: 6,
+    right: 6,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    borderRadius: 8,
+    paddingVertical: 3,
+    alignItems: 'center',
+  },
+  photoLabelText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  bridgeContainer: {
+    width: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
+  bridgeLine: {
+    width: 2,
+    height: 24,
+    backgroundColor: '#fbcfe8',
+  },
+  bridgeIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#fdf2f8',
+    borderWidth: 1,
+    borderColor: '#fbcfe8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 4,
+  },
+  bracket: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    borderColor: '#ffffff',
+  },
+  bracketTL: { top: 6, left: 6, borderTopWidth: 2, borderLeftWidth: 2 },
+  bracketTR: { top: 6, right: 6, borderTopWidth: 2, borderRightWidth: 2 },
+  bracketBL: { bottom: 24, left: 6, borderBottomWidth: 2, borderLeftWidth: 2 },
+  bracketBR: { bottom: 24, right: 6, borderBottomWidth: 2, borderRightWidth: 2 },
+  laserBeam: {
+    position: 'absolute',
+    left: 10,
+    right: 10,
+    height: 3,
+    backgroundColor: COLORS.primary,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 10,
+  },
+  laserGlow: {
+    position: 'absolute',
+    top: -4,
+    left: 0,
+    right: 0,
+    height: 11,
+    backgroundColor: 'rgba(190, 24, 93, 0.25)',
+    borderRadius: 6,
+  },
+  mergeFlashOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    zIndex: 20,
+  },
+  progressSection: {
+    width: '100%',
+    marginTop: 18,
+  },
+  progressTrack: {
+    height: 7,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: COLORS.primary,
+    borderRadius: 4,
+  },
+  progressFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  progressStatusText: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    fontWeight: '500',
+  },
+  progressWeightText: {
+    fontSize: 11,
+    color: COLORS.primary,
+    fontWeight: '700',
+  },
 });
