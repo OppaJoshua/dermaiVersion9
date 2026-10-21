@@ -14,6 +14,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
+import { formatConfidencePercent } from "@/lib/utils";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -828,7 +829,7 @@ export default function DoctorAppointmentsPage() {
                                         />
                                       </div>
                                       <span className="text-xs font-bold text-slate-800">
-                                        {reviewModal.appointment.aiConfidence}%
+                                        {formatConfidencePercent(reviewModal.appointment.aiConfidence)}
                                       </span>
                                     </div>
                                   ) : (

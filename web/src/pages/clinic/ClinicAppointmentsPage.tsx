@@ -17,7 +17,7 @@ import {
   Send,
   History,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatConfidencePercent } from "@/lib/utils";
 import { Link, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
@@ -2995,7 +2995,7 @@ export default function ClinicAppointmentsPage() {
                   {viewingPatient.aiConfidence !== undefined && (
                     <div className="flex items-center justify-between pt-1 border-t border-gray-200/60">
                       <span className="font-semibold text-gray-500">Confidence:</span>
-                      <span className="font-bold text-magenta-700">{viewingPatient.aiConfidence}%</span>
+                      <span className="font-bold text-magenta-700">{formatConfidencePercent(viewingPatient.aiConfidence)}</span>
                     </div>
                   )}
                 </div>

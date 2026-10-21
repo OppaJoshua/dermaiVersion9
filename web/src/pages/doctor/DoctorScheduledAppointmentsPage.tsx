@@ -14,6 +14,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
+import { formatConfidencePercent } from "@/lib/utils";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -867,7 +868,7 @@ export default function DoctorScheduledAppointmentsPage() {
                             Confidence:
                           </span>
                           <span className="font-bold text-slate-900">
-                            {viewingAppt.aiConfidence}%
+                            {formatConfidencePercent(viewingAppt.aiConfidence)}
                           </span>
                         </div>
                       )}

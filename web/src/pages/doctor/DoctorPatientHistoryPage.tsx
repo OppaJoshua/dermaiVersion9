@@ -21,6 +21,7 @@ import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
+import { formatConfidencePercent } from "@/lib/utils";
 
 
 
@@ -525,7 +526,7 @@ export default function DoctorPatientHistoryPage() {
                       </span>
                       {viewingAppt.aiConfidence !== undefined && (
                         <span className="text-sm font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
-                          {viewingAppt.aiConfidence}% AI Confidence
+                          {formatConfidencePercent(viewingAppt.aiConfidence)} AI Confidence
                         </span>
                       )}
                     </div>

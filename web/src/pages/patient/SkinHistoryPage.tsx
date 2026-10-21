@@ -14,6 +14,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "@/lib/supabaseClient";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
+import { formatConfidencePercent } from "@/lib/utils";
 
 interface SkinHistoryItem {
   id: string;
@@ -331,7 +332,7 @@ export default function PatientSkinHistory() {
 
                       <span className="flex items-center gap-1.5 font-semibold text-magenta-600">
                         <Activity className="w-3.5 h-3.5" />
-                        {item.confidence}% confidence
+                        {formatConfidencePercent(item.confidence)} confidence
                       </span>
                     </div>
                   </div>
@@ -535,7 +536,7 @@ export default function PatientSkinHistory() {
                   </span>
 
                   <span className="text-sm font-bold text-magenta-600">
-                    {selectedItem.confidence}%
+                    {formatConfidencePercent(selectedItem.confidence)}
                   </span>
                 </div>
 
@@ -543,7 +544,7 @@ export default function PatientSkinHistory() {
                   <div
                     className="h-full bg-linear-to-r from-magenta-400 to-magenta-600 rounded-full"
                     style={{
-                      width: `${selectedItem.confidence}%`,
+                      width: `${Math.min(Math.max(Number(selectedItem.confidence) || 0, 0), 100)}%`,
                     }}
                   />
                 </div>

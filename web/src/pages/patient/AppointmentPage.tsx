@@ -28,6 +28,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { useAuth } from "@/context/AuthContext";
+import { formatConfidencePercent } from "@/lib/utils";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 import { createPatientNotification } from "@/lib/notificationService";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
@@ -2791,7 +2792,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                       </span>
                                     )}
                                     <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200/50">
-                                      {scan.confidence.toFixed(1)}% AI confidence
+                                      {formatConfidencePercent(scan.confidence)} AI confidence
                                     </span>
                                   </div>
                                   <div className="flex items-center gap-2 text-[11px] text-gray-500 mt-0.5">
@@ -3741,7 +3742,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                             {demoCheckoutData.conditionName}
                             {demoCheckoutData.confidenceScore !== null && demoCheckoutData.confidenceScore !== undefined && (
                               <span className="text-gray-400 font-normal ml-1">
-                                ({Math.round(demoCheckoutData.confidenceScore * 100)}% match)
+                                ({formatConfidencePercent(demoCheckoutData.confidenceScore)} match)
                               </span>
                             )}
                           </span>

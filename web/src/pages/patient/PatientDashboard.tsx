@@ -10,7 +10,7 @@ import {
   ArrowUpRight,
   Stethoscope,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatConfidencePercent } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { useEffect, useState, useMemo } from "react";
 import { skinConditions } from "../public/SkinLibrary";
@@ -310,7 +310,7 @@ export default function PatientDashboard() {
             id: s.analysis_id,
             conditionId: skinConditionObj?.condition_id ?? undefined,
             condition: skinConditionObj?.name ?? "Unknown",
-            confidence: Math.round(s.confidence_score),
+            confidence: Number(s.confidence_score ?? 0),
             date: new Date(s.scanned_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
             severity: s.confidence_score >= 80 ? "High" : s.confidence_score >= 50 ? "Moderate" : "Low",
             severityColor: s.confidence_score >= 80 ? "text-red-500" : s.confidence_score >= 50 ? "text-amber-500" : "text-green-500",
@@ -518,8 +518,8 @@ export default function PatientDashboard() {
                             strokeDasharray={`${Math.min(Math.max(analysis.confidence, 0), 100)}, 100`}
                           />
                         </svg>
-                        <span className="absolute inset-0 flex items-center justify-center text-sm font-bold text-gray-900">
-                          {analysis.confidence}%
+                        <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-gray-900">
+                          {formatConfidencePercent(analysis.confidence)}
                         </span>
                       </div>
                       <div className="flex-1 min-w-0">

@@ -17,7 +17,7 @@ import {
   Info,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { cn } from "../../lib/utils";
+import { cn, formatConfidencePercent } from "../../lib/utils";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
@@ -594,7 +594,7 @@ export default function ScanSkinPage() {
           userId: user.id,
           type: "scan-completed",
           title: "AI Skin Scan Complete",
-          body: `Preliminary assessment: ${aiResult.display_name} (${Math.round(effectiveConfidence)}% confidence). View details in your skin history.`,
+          body: `Preliminary assessment: ${aiResult.display_name} (${formatConfidencePercent(effectiveConfidence)} confidence). View details in your skin history.`,
         });
       }
     } catch (err) {
@@ -1277,18 +1277,21 @@ export default function ScanSkinPage() {
                   <div className="flex items-center justify-between mb-1.5">
                     <div>
                       <span className="text-sm font-semibold text-slate-900">
-                        AI Confidence Score
+                        {scanResult.isCombined ? "Combined image evidence score" : "Model output score"}
                       </span>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Preliminary pattern similarity score — not a clinical diagnosis or calibrated probability.
+                      </p>
                     </div>
-                    <span className="text-xl font-bold text-magenta-600">
-                      {Math.round(scanResult.confidence)}%
+                    <span className="text-xl font-bold text-magenta-600 shrink-0 ml-4">
+                      {formatConfidencePercent(scanResult.confidence)}
                     </span>
                   </div>
-                  <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+                  <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden mt-2">
                     <motion.div
                       className="h-full bg-linear-to-r from-magenta-500 to-magenta-600 rounded-full"
                       initial={{ width: "0%" }}
-                      animate={{ width: `${Math.round(scanResult.confidence)}%` }}
+                      animate={{ width: `${Math.min(Math.max(Number(scanResult.confidence) || 0, 0), 100)}%` }}
                       transition={{ duration: 1, delay: 0.2 }}
                     />
                   </div>

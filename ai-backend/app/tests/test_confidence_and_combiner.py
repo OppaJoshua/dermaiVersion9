@@ -196,6 +196,98 @@ class TestConfidenceAndCombiner(unittest.TestCase):
         self.assertAlmostEqual(total_prob, 100.0, places=1)
 
 
+    def test_combiner_wide_zero_support_for_primary(self):
+        """When wide-view provides 0.0% support for the primary class, 70/30 weighting strictly computes 0.70 * primary."""
+        primary_result = {
+            "predicted_class": "Vitiligo",
+            "display_name": "Vitiligo",
+            "confidence": 80.00,
+            "confidence_level": "high",
+            "probabilities": {"Vitiligo": 80.00, "Acne_Vulgaris": 5.00, "Melasma": 5.00, "Atopic_Dermatitis": 5.00, "Contact_Dermatitis": 5.00},
+        }
+        supporting_result = {
+            "status": "valid",
+            "predicted_class": "Acne_Vulgaris",
+            "display_name": "Acne Vulgaris",
+            "confidence": 95.00,
+            "confidence_level": "high",
+            "probabilities": {"Acne_Vulgaris": 95.00, "Vitiligo": 0.00, "Melasma": 2.00, "Atopic_Dermatitis": 2.00, "Contact_Dermatitis": 1.00},
+        }
+        combined = combine_image_predictions(primary_result, supporting_result)
+
+        self.assertEqual(combined["predicted_class"], "Vitiligo")
+        self.assertFalse(combined["agreement"])
+        self.assertTrue(combined["is_combined"])
+        # 0.70 * 80.00 + 0.30 * 0.00 = 56.00
+        self.assertEqual(combined["combined_evidence_score"], 56.00)
+        self.assertEqual(combined["confidence"], 80.00)
+
+    def test_combiner_scores_near_100_and_0(self):
+        """Combiner correctly handles extreme values at 100.0% and 0.0% without error or overflow."""
+        # Near 100% agreement
+        primary_100 = {
+            "predicted_class": "Melasma",
+            "display_name": "Melasma",
+            "confidence": 100.00,
+            "confidence_level": "high",
+            "probabilities": {"Melasma": 100.00, "Acne_Vulgaris": 0.0, "Vitiligo": 0.0, "Atopic_Dermatitis": 0.0, "Contact_Dermatitis": 0.0},
+        }
+        supporting_100 = {
+            "status": "valid",
+            "predicted_class": "Melasma",
+            "display_name": "Melasma",
+            "confidence": 100.00,
+            "confidence_level": "high",
+            "probabilities": {"Melasma": 100.00, "Acne_Vulgaris": 0.0, "Vitiligo": 0.0, "Atopic_Dermatitis": 0.0, "Contact_Dermatitis": 0.0},
+        }
+        combined_100 = combine_image_predictions(primary_100, supporting_100)
+        self.assertEqual(combined_100["combined_evidence_score"], 100.00)
+        self.assertTrue(combined_100["agreement"])
+
+        # 0.0% primary and supporting
+        primary_0 = {
+            "predicted_class": "Acne_Vulgaris",
+            "display_name": "Acne Vulgaris",
+            "confidence": 0.00,
+            "confidence_level": "low",
+            "probabilities": {"Acne_Vulgaris": 0.00, "Melasma": 0.0, "Vitiligo": 0.0, "Atopic_Dermatitis": 0.0, "Contact_Dermatitis": 0.0},
+        }
+        supporting_0 = {
+            "status": "valid",
+            "predicted_class": "Acne_Vulgaris",
+            "display_name": "Acne Vulgaris",
+            "confidence": 0.00,
+            "confidence_level": "low",
+            "probabilities": {"Acne_Vulgaris": 0.00, "Melasma": 0.0, "Vitiligo": 0.0, "Atopic_Dermatitis": 0.0, "Contact_Dermatitis": 0.0},
+        }
+        combined_0 = combine_image_predictions(primary_0, supporting_0)
+        self.assertEqual(combined_0["combined_evidence_score"], 0.00)
+
+    def test_combiner_decimal_precision_and_determinism(self):
+        """Combiner preserves 2-decimal rounding precision and produces deterministic results across invocations."""
+        primary_result = {
+            "predicted_class": "Contact_Dermatitis",
+            "display_name": "Contact Dermatitis",
+            "confidence": 77.77,
+            "confidence_level": "high",
+            "probabilities": {"Contact_Dermatitis": 77.77, "Acne_Vulgaris": 5.0, "Melasma": 5.0, "Vitiligo": 2.23, "Atopic_Dermatitis": 10.0},
+        }
+        supporting_result = {
+            "status": "valid",
+            "predicted_class": "Contact_Dermatitis",
+            "display_name": "Contact Dermatitis",
+            "confidence": 33.33,
+            "confidence_level": "low",
+            "probabilities": {"Contact_Dermatitis": 33.33, "Acne_Vulgaris": 16.67, "Melasma": 20.0, "Vitiligo": 10.0, "Atopic_Dermatitis": 20.0},
+        }
+        # 0.70 * 77.77 + 0.30 * 33.33 = 54.439 + 9.999 = 64.438 -> rounded to 64.44
+        run_1 = combine_image_predictions(primary_result, supporting_result)
+        run_2 = combine_image_predictions(primary_result, supporting_result)
+
+        self.assertEqual(run_1["combined_evidence_score"], 64.44)
+        self.assertEqual(run_1, run_2, "Combiner must be deterministic")
+
+
 if __name__ == "__main__":
     unittest.main()
 

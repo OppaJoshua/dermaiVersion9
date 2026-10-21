@@ -16,6 +16,11 @@ import {
   compareAIAndQuestionnaire,
 } from "../lib/diseaseMappingService";
 import type { PredictionResult } from "../lib/aiApi";
+import {
+  formatConfidencePercent,
+  formatConfidenceFraction,
+  formatConfidenceScore,
+} from "../lib/utils";
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -209,6 +214,52 @@ assert(bookingContextPayload.confidence === 57, `Expected 57, got ${bookingConte
 const bookingQueryParam = encodeURIComponent(String(Math.round(effectiveScoreDualDisagree)));
 assert(bookingQueryParam === "57", `Expected param '57', got '${bookingQueryParam}'`);
 console.log("✓ Booking context properly preserves the effective combined confidence (57%).");
+
+// ── Test 7: Shared Confidence Formatting Utility ─────────────────────────────
+console.log("\n[Test 7] Testing formatConfidencePercent, formatConfidenceFraction, and formatConfidenceScore...");
+
+// 7a: Standard percentage values format to 1 decimal place without artificial clamping
+assert(formatConfidencePercent(99.86) === "99.9%", `Expected '99.9%', got '${formatConfidencePercent(99.86)}'`);
+assert(formatConfidencePercent(100) === "100.0%", `Expected '100.0%', got '${formatConfidencePercent(100)}'`);
+assert(formatConfidencePercent(0) === "0.0%", `Expected '0.0%', got '${formatConfidencePercent(0)}'`);
+assert(formatConfidencePercent(99.95) === "100.0%", `Expected '100.0%', got '${formatConfidencePercent(99.95)}'`);
+assert(formatConfidencePercent(85.0) === "85.0%", `Expected '85.0%', got '${formatConfidencePercent(85.0)}'`);
+assert(formatConfidencePercent(65.5) === "65.5%", `Expected '65.5%', got '${formatConfidencePercent(65.5)}'`);
+
+// 7b: No ambiguous automatic guessing — 0.85 as a percentage formats as 0.9%
+assert(formatConfidencePercent(0.85) === "0.9%", `Expected '0.9%', got '${formatConfidencePercent(0.85)}'`);
+
+// 7c: Explicit probability fraction unit — 0.85 as a fraction formats as 85.0%
+assert(formatConfidencePercent(0.85, "fraction") === "85.0%", `Expected '85.0%', got '${formatConfidencePercent(0.85, "fraction")}'`);
+assert(formatConfidenceFraction(0.85) === "85.0%", `Expected '85.0%', got '${formatConfidenceFraction(0.85)}'`);
+assert(formatConfidenceFraction(1.0) === "100.0%", `Expected '100.0%', got '${formatConfidenceFraction(1.0)}'`);
+assert(formatConfidenceFraction(0.0) === "0.0%", `Expected '0.0%', got '${formatConfidenceFraction(0.0)}'`);
+
+// 7d: Boundary and invalid inputs safely return fallback
+assert(formatConfidencePercent(null) === "—", `Expected '—', got '${formatConfidencePercent(null)}'`);
+assert(formatConfidencePercent(undefined) === "—", `Expected '—', got '${formatConfidencePercent(undefined)}'`);
+assert(formatConfidencePercent(NaN) === "—", `Expected '—', got '${formatConfidencePercent(NaN)}'`);
+assert(formatConfidencePercent(Infinity) === "—", `Expected '—', got '${formatConfidencePercent(Infinity)}'`);
+assert(formatConfidencePercent(-Infinity) === "—", `Expected '—', got '${formatConfidencePercent(-Infinity)}'`);
+assert(formatConfidencePercent(-10) === "—", `Expected '—', got '${formatConfidencePercent(-10)}'`);
+assert(formatConfidencePercent("") === "—", `Expected '—', got '${formatConfidencePercent("")}'`);
+assert(formatConfidencePercent("not-a-number") === "—", `Expected '—', got '${formatConfidencePercent("not-a-number")}'`);
+assert(formatConfidencePercent(150) === "—", `Expected '—' for out-of-range percent, got '${formatConfidencePercent(150)}'`);
+assert(formatConfidenceFraction(1.5) === "—", `Expected '—' for out-of-range fraction, got '${formatConfidenceFraction(1.5)}'`);
+
+// 7e: Numeric strings and valid boundary values consistent with existing API contracts
+assert(formatConfidencePercent("94.62") === "94.6%", `Expected '94.6%', got '${formatConfidencePercent("94.62")}'`);
+assert(formatConfidencePercent("100") === "100.0%", `Expected '100.0%', got '${formatConfidencePercent("100")}'`);
+assert(formatConfidencePercent("0") === "0.0%", `Expected '0.0%', got '${formatConfidencePercent("0")}'`);
+assert(formatConfidencePercent("0.85", "fraction") === "85.0%", `Expected '85.0%', got '${formatConfidencePercent("0.85", "fraction")}'`);
+
+// 7f: formatConfidenceScore returns numeric text without '%' symbol
+assert(formatConfidenceScore(99.86) === "99.9", `Expected '99.9', got '${formatConfidenceScore(99.86)}'`);
+assert(formatConfidenceScore(100) === "100.0", `Expected '100.0', got '${formatConfidenceScore(100)}'`);
+assert(formatConfidenceScore(0.85, "fraction") === "85.0", `Expected '85.0', got '${formatConfidenceScore(0.85, "fraction")}'`);
+assert(formatConfidenceScore(null) === "—", `Expected '—', got '${formatConfidenceScore(null)}'`);
+
+console.log("✓ Shared confidence formatting verified: explicit units, standard rounding, no artificial clamping, and safe invalid handling.");
 
 console.log("\n=======================================================");
 console.log("  ALL CONFIDENCE DISPLAY TESTS PASSED SUCCESSFULLY!    ");

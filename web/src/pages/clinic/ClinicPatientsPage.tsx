@@ -20,7 +20,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { cn } from "@/lib/utils";
+import { cn, formatConfidencePercent } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
@@ -1288,7 +1288,7 @@ export default function ClinicPatientsPage() {
                                 </span>
                                 {appt.confidence !== undefined && (
                                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-magenta-100 text-magenta-800">
-                                    {appt.confidence}% Confidence
+                                    {formatConfidencePercent(appt.confidence)} Confidence
                                   </span>
                                 )}
                               </div>
