@@ -32,6 +32,7 @@ import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
 import { createPatientNotification } from "@/lib/notificationService";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
 import { getDoctorAvatarUrl } from "@/lib/doctorAvatarService";
+import { ModalPortal } from "@/components/common/ModalPortal";
 import {
   type DoctorWeeklySchedule,
   type ConsultationSlot,
@@ -54,6 +55,8 @@ import {
 import { cn } from "@/lib/utils";
 import gcashLogo from "@/assets/gcash.png";
 import mayaLogo from "@/assets/maya.png";
+
+const PAYMONGO_PUBLIC_KEY = import.meta.env.VITE_PAYMONGO_PUBLIC_KEY || "";
 
 export type ClinicDoctorItem = {
   id: string;
@@ -1339,6 +1342,96 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     };
   }, [searchParams]);
 
+  // Listen for PayMongo 3DS redirect return (e.g. from GCash / Maya)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const intentId = params.get("payment_intent");
+    const clientKey = params.get("payment_intent_client_key") || sessionStorage.getItem("dermai_pending_payment_intent_client_key");
+    const returnedApptId = params.get("appointment_id") || sessionStorage.getItem("dermai_pending_appointment_id");
+
+    if (!intentId || !clientKey) return;
+
+    let cancelled = false;
+
+    async function handlePayMongoReturn() {
+      try {
+        setSubmitting(true);
+        const { data, error: vErr } = await supabase.functions.invoke("paymongo-payment", {
+          body: {
+            action: "verify_payment_intent",
+            paymentIntentId: intentId,
+            clientKey,
+          },
+        });
+
+        if (cancelled) return;
+        if (vErr) {
+          console.warn("[AppointmentPage] PayMongo return verification warning:", vErr);
+        }
+
+        const status = data?.attributes?.status || data?.status;
+        if (status === "succeeded") {
+          const payments = data?.attributes?.payments || [];
+          const primaryPayment = payments[0];
+          const payId = primaryPayment?.id || data?.attributes?.latest_payment_id || intentId;
+          const meta = data?.attributes?.metadata || {};
+          const feePaid = (data?.attributes?.amount || primaryPayment?.attributes?.amount || 0) / 100;
+
+          let apptPatientName = meta.patient_name || patientName;
+          let apptClinicName = meta.clinic_name || selectedClinic?.name || "Skin Clinic";
+          let apptDoctorName = meta.doctor_name || activeDutyDoctor?.name || "Attending Dermatologist";
+          let apptDate = meta.appointment_date || formattedPreviewDate;
+          let apptTime = meta.appointment_time || formattedPreviewTime;
+
+          if (returnedApptId) {
+            const { data: dbAppt } = await supabase
+              .from("patient_appointment")
+              .select("patient_name, date, time, clinic_id, assigned_doctor_id, clinic_note")
+              .eq("appointment_id", returnedApptId)
+              .maybeSingle();
+
+            if (dbAppt) {
+              if (dbAppt.patient_name) apptPatientName = dbAppt.patient_name;
+              if (dbAppt.date) {
+                const parsedD = new Date(dbAppt.date);
+                if (!isNaN(parsedD.getTime())) {
+                  apptDate = parsedD.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                }
+              }
+              if (dbAppt.time) {
+                apptTime = formatTime12h(dbAppt.time.slice(0, 5));
+              }
+            }
+          }
+
+          setPaymentConfirmedDetails({
+            reference: payId,
+            amount: feePaid || Number(selectedClinic?.consultationFee || 0),
+            method: meta.payment_method === "maya" ? "maya" : "gcash",
+            mobileNumber: meta.patient_contact || patientContact,
+            patientName: apptPatientName,
+            clinicName: apptClinicName,
+            doctorName: apptDoctorName,
+            date: apptDate,
+            time: apptTime,
+          });
+
+          setSubmitted(true);
+          sessionStorage.removeItem("dermai_appointment_draft");
+          sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+          sessionStorage.removeItem("dermai_pending_appointment_id");
+        }
+      } catch (err) {
+        console.error("[AppointmentPage] PayMongo return handler error:", err);
+      } finally {
+        if (!cancelled) setSubmitting(false);
+      }
+    }
+
+    handlePayMongoReturn();
+    return () => { cancelled = true; };
+  }, [searchParams]);
+
   // Auto-fill patient information from authenticated session and profile
   useEffect(() => {
     if (!user) return;
@@ -2033,13 +2126,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         try {
           await supabase.from("user_payment").insert({
             user_id: activeUserId,
-            appointment_id: insertedApptId || null,
-            clinic_id: targetClinicId,
             amount: feeAmount,
             method: paymentData.method === "maya" ? "Maya" : "GCash",
             status: "success",
-            payment_type: "consultation",
             reference_number: paymentData.reference,
+            paymongo_payment_id: paymentData.reference,
             payment_date: new Date().toISOString(),
           });
         } catch (payLogErr) {
@@ -2066,7 +2157,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             await supabase.from("patient_appointment").delete().eq("appointment_id", insertedApptId);
             setSubmitError(`This consultation slot was reserved by another patient just a moment ago. Please select another time slot.`);
             setSubmitting(false);
-            return;
+            return null;
           }
         } catch (colErr) {
           console.warn("[AppointmentPage] Concurrency check warning:", colErr);
@@ -2162,42 +2253,181 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           time: formattedPreviewTime,
           conditionName: selectedScan?.conditionName || undefined,
         });
+        setSubmitted(true);
+        try {
+          sessionStorage.removeItem("dermai_appointment_draft");
+          sessionStorage.removeItem("dermai_selected_clinic_id");
+          sessionStorage.removeItem("dermai_booking_return_clinic");
+          sessionStorage.removeItem("dermai_scan_booking_context");
+        } catch { }
       }
 
-      setSubmitted(true);
-      try {
-        sessionStorage.removeItem("dermai_appointment_draft");
-        sessionStorage.removeItem("dermai_selected_clinic_id");
-        sessionStorage.removeItem("dermai_booking_return_clinic");
-        sessionStorage.removeItem("dermai_scan_booking_context");
-      } catch { }
+      return insertedApptId;
     } catch (err: any) {
       console.error("Submission error:", err);
       setSubmitError(err?.message || "An unexpected error occurred during submission.");
+      return null;
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Online Payment Success Action Handler
+  // Online Payment Handler with PayMongo E-Wallets (GCash & Maya)
   const handleDemoSimulateSuccess = async () => {
     setDemoSimulating(true);
-    const refNumber = (demoCheckoutData?.mockReference || generateMockPaymentReference()).replace(/^DEMO-TX-MOCK-/, "TXN-");
+    setSubmitError(null);
+
     const apptFee = Number(selectedClinic?.consultationFee || demoCheckoutData?.consultationFee || 0);
     const chosenMethod = demoCheckoutData?.paymentMethod === "maya" ? "maya" : "gcash";
-    const userPhone = demoCheckoutData?.mobileNumber || patientContact || "09999999999";
-    const payer = (demoCheckoutData?.payerName || patientName).trim() || "Patient";
+    const userPhone = (demoCheckoutData?.mobileNumber || patientContact || "09999999999").trim();
+    const payer = (demoCheckoutData?.payerName || patientName).trim() || user?.user_metadata?.full_name || "Patient";
+    const payerEmail = (demoCheckoutData?.payerEmail || patientEmail).trim() || user?.email || "";
 
-    await executeAppointmentCreation({
-      reference: refNumber,
-      amount: apptFee,
-      method: chosenMethod,
-      mobileNumber: userPhone,
-      payerName: payer,
-    });
+    try {
+      // 1. Create the appointment draft in Supabase to reserve queue slot
+      const insertedApptId = await executeAppointmentCreation();
 
-    setDemoSimulating(false);
-    setShowDemoCheckoutModal(false);
+      // 2. If PayMongo key is configured, process through PayMongo
+      if (PAYMONGO_PUBLIC_KEY) {
+        // Create PayMongo booking intent
+        const { data: intentJson, error: intentError } = await supabase.functions.invoke("paymongo-payment", {
+          body: {
+            action: "create_booking_intent",
+            amount: apptFee,
+            paymentMethod: chosenMethod,
+            clinicId: selectedClinic?.id,
+            clinicName: selectedClinic?.name,
+            doctorId: activeDutyDoctor?.id,
+            doctorName: activeDutyDoctor?.name,
+            appointmentDate: formattedPreviewDate,
+            appointmentTime: formattedPreviewTime,
+            appointmentId: insertedApptId,
+            patientName: payer,
+            patientEmail: payerEmail,
+            patientContact: userPhone,
+          },
+        });
+
+        if (intentError) {
+          console.warn("[AppointmentPage] PayMongo intent creation error:", intentError);
+          throw new Error(intentError.message || "Failed to initialize PayMongo booking checkout.");
+        }
+
+        const { paymentIntentId, clientKey } = intentJson || {};
+        if (paymentIntentId && clientKey) {
+          sessionStorage.setItem("dermai_pending_payment_intent_client_key", clientKey);
+          if (insertedApptId) {
+            sessionStorage.setItem("dermai_pending_appointment_id", insertedApptId);
+          }
+
+          // Register payment method with PayMongo
+          const pmRes = await fetch("https://api.paymongo.com/v1/payment_methods", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: "Basic " + btoa(PAYMONGO_PUBLIC_KEY + ":"),
+            },
+            body: JSON.stringify({
+              data: {
+                attributes: {
+                  type: chosenMethod === "maya" ? "paymaya" : chosenMethod,
+                  billing: {
+                    name: payer,
+                    email: payerEmail,
+                    phone: userPhone,
+                    address: {
+                      line1: (demoCheckoutData?.payerAddress || patientAddress || "Cebu City").trim(),
+                      city: "Cebu City",
+                      country: "PH",
+                    },
+                  },
+                },
+              },
+            }),
+          });
+
+          const pmJson = await pmRes.json();
+          if (pmRes.ok && pmJson?.data?.id) {
+            const paymentMethodId = pmJson.data.id;
+            const returnUrl = `${window.location.origin}${window.location.pathname}?status=success&payment_intent=${paymentIntentId}&payment_intent_client_key=${encodeURIComponent(clientKey)}&appointment_id=${insertedApptId || ""}&clinic=${selectedClinic?.id || ""}`;
+
+            const { data: attachData, error: attachError } = await supabase.functions.invoke("paymongo-payment", {
+              body: {
+                action: "attach_payment_method",
+                paymentIntentId,
+                paymentMethodId,
+                clientKey,
+                returnUrl,
+              },
+            });
+
+            if (!attachError) {
+              const status = attachData?.attributes?.status || attachData?.status;
+              if (status === "awaiting_next_action") {
+                const redirectUrl = attachData.attributes?.next_action?.redirect?.url;
+                if (redirectUrl) {
+                  window.location.href = redirectUrl;
+                  return;
+                }
+              } else if (status === "succeeded") {
+                // Auto fulfilled by verify
+                await supabase.functions.invoke("paymongo-payment", {
+                  body: {
+                    action: "verify_payment_intent",
+                    paymentIntentId,
+                    clientKey,
+                  },
+                });
+
+                setPaymentConfirmedDetails({
+                  reference: paymentIntentId,
+                  amount: apptFee,
+                  method: chosenMethod,
+                  mobileNumber: userPhone,
+                  patientName: payer,
+                  clinicName: selectedClinic?.name || "Skin Clinic",
+                  doctorName: activeDutyDoctor?.name || "Attending Dermatologist",
+                  date: formattedPreviewDate,
+                  time: formattedPreviewTime,
+                });
+
+                setSubmitted(true);
+                setShowDemoCheckoutModal(false);
+                setDemoSimulating(false);
+                return;
+              }
+            }
+          }
+        }
+      }
+
+      // 3. Fallback to instant mock fulfillment if PayMongo redirect not needed
+      const refNumber = (demoCheckoutData?.mockReference || generateMockPaymentReference()).replace(/^DEMO-TX-MOCK-/, "TXN-");
+      setPaymentConfirmedDetails({
+        reference: refNumber,
+        amount: apptFee,
+        method: chosenMethod,
+        mobileNumber: userPhone,
+        patientName: payer,
+        clinicName: selectedClinic?.name || "Skin Clinic",
+        doctorName: activeDutyDoctor?.name || "Assigned by Clinic upon Review",
+        date: formattedPreviewDate,
+        time: formattedPreviewTime,
+        conditionName: selectedScan?.conditionName || undefined,
+      });
+
+      setSubmitted(true);
+      setShowDemoCheckoutModal(false);
+    } catch (err: any) {
+      console.error("[AppointmentPage] Payment failure:", err);
+      setDemoCheckoutData((prev) => prev ? {
+        ...prev,
+        outcome: "failed",
+        errorMessage: err?.message || "Payment authorization failed. Please try again or select another payment method."
+      } : null);
+    } finally {
+      setDemoSimulating(false);
+    }
   };
 
   const handleDemoCancelPayment = () => {
@@ -3447,15 +3677,16 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       </div>
 
       {/* Clinic Details Modal */}
-      <AnimatePresence>
-        {showClinicDetailsModal && (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
-            >
+      <ModalPortal isOpen={Boolean(showClinicDetailsModal)}>
+        <AnimatePresence>
+          {showClinicDetailsModal && (
+            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="relative z-[9999] w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+              >
               <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-gray-100">
                 <div className="flex items-center gap-3">
                   {selectedClinic.logo ? (
@@ -3545,17 +3776,19 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           </div>
         )}
       </AnimatePresence>
+      </ModalPortal>
 
       {/* Static Simulated Payment Checkout Demo Modal */}
-      <AnimatePresence>
-        {showDemoCheckoutModal && demoCheckoutData && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 12 }}
-              className="w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 flex flex-col text-left"
-            >
+      <ModalPortal isOpen={Boolean(showDemoCheckoutModal && demoCheckoutData)}>
+        <AnimatePresence>
+          {showDemoCheckoutModal && demoCheckoutData && (
+            <div className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 12 }}
+                className="relative z-[9999] w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 flex flex-col text-left"
+              >
               {/* Header */}
               <div className="px-6 pt-5 pb-4 bg-gradient-to-r from-magenta-50/80 via-pink-50/50 to-white border-b border-gray-100 flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -3968,27 +4201,30 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           </div>
         )}
       </AnimatePresence>
+      </ModalPortal>
 
       {/* Lightbox for Photos */}
-      <AnimatePresence>
-        {lightboxPhoto && (
-          <div
-            onClick={() => setLightboxPhoto(null)}
-            className="fixed inset-0 z-60 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
-          >
-            <div className="relative max-w-3xl max-h-[85vh]">
-              <img src={lightboxPhoto} alt="Enlarged view" className="max-w-full max-h-[85vh] rounded-2xl object-contain shadow-2xl" />
-              <button
-                type="button"
-                onClick={() => setLightboxPhoto(null)}
-                className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/60 text-white flex items-center justify-center"
-              >
-                <X className="w-4 h-4" />
-              </button>
+      <ModalPortal isOpen={Boolean(lightboxPhoto)}>
+        <AnimatePresence>
+          {lightboxPhoto && (
+            <div
+              onClick={() => setLightboxPhoto(null)}
+              className="fixed inset-0 z-[9998] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+            >
+              <div className="relative z-[9999] max-w-3xl max-h-[85vh]">
+                <img src={lightboxPhoto} alt="Enlarged view" className="max-w-full max-h-[85vh] rounded-2xl object-contain shadow-2xl" />
+                <button
+                  type="button"
+                  onClick={() => setLightboxPhoto(null)}
+                  className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/60 text-white flex items-center justify-center"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
-          </div>
-        )}
-      </AnimatePresence>
+          )}
+        </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { logAdminAction } from "@/lib/auditLog";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
 import { syncAllExpiredSubscriptions } from "@/lib/subscriptionService";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 type UserStatus = "active" | "suspended" | "inactive";
 type UserRole = "admin" | "patient" | "clinic" | "doctor";
@@ -365,22 +366,23 @@ export default function AdminUserManagement() {
       </div>
 
       {/* Review Modal */}
-      <AnimatePresence>
-        {reviewModal && modalUser && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-            onClick={() => setReviewModal(null)}
-          >
+      <ModalPortal isOpen={Boolean(reviewModal && modalUser)}>
+        <AnimatePresence>
+          {reviewModal && modalUser && (
             <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+              onClick={() => setReviewModal(null)}
             >
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 20 }}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden relative z-[9999]"
+              >
               <div className="flex items-center justify-between px-8 py-6 border-b border-gray-200 shrink-0">
                 <h2 className="text-xl font-display font-bold text-black">
                   User details
@@ -516,7 +518,8 @@ export default function AdminUserManagement() {
             </motion.div>
           </motion.div>
         )}
-      </AnimatePresence>
+        </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }

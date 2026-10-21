@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { ShieldCheck, FileText, AlertTriangle, X, Check } from "lucide-react";
-
+import { ModalPortal } from "./ModalPortal";
 
 export interface SubscriptionAgreementModalProps {
   open: boolean;
@@ -20,9 +20,10 @@ export default function SubscriptionAgreementModal({
   if (!open) return null;
 
   return (
-    <AnimatePresence>
-      <div className="fixed inset-0 z-[99999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-        <motion.div
+    <ModalPortal isOpen={open}>
+      <AnimatePresence>
+        <div className="fixed inset-0 z-[99998] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <motion.div
           initial={{ opacity: 0, scale: 0.95, y: 10 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 10 }}
@@ -162,5 +163,6 @@ export default function SubscriptionAgreementModal({
         </motion.div>
       </div>
     </AnimatePresence>
+    </ModalPortal>
   );
 }

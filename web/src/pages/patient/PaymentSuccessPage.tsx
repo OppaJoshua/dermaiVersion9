@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { useAuth } from "@/context/AuthContext";
 import { splitVat, calculatePricing } from "@/lib/vat";
+import { validateAndSyncSubscription, upgradeSubscriptionToPro } from "@/lib/subscriptionService";
 
 export default function PaymentSuccessPage() {
   const navigate = useNavigate();
@@ -140,14 +141,14 @@ export default function PaymentSuccessPage() {
           payment?.attributes?.payment_method_details?.type ||
           "";
 
-        setPaymentMethod(
+        const methodLabel =
           methodType === "paymaya"
             ? "Maya"
             : methodType === "gcash"
             ? "GCash"
-            : methodType || "Online Payment"
-        );
+            : methodType || "Online Payment";
 
+        setPaymentMethod(methodLabel);
         setPaymentDate(new Date().toISOString());
 
         sessionStorage.removeItem("dermai_pending_billing_cycle");
@@ -156,16 +157,77 @@ export default function PaymentSuccessPage() {
         sessionStorage.removeItem("dermai_pending_plan_vat_amount");
         sessionStorage.removeItem("dermai_pending_plan_total_price");
 
+        // -------------------------------------------------------------
+        // IMMEDIATE PLAN ACTIVATION, PROFILE SYNC & CACHE INVALIDATION
+        // -------------------------------------------------------------
+        const metadata = attributes?.metadata ?? {};
+        let targetUserId = user?.id || metadata.user_id;
+        if (!targetUserId) {
+          try {
+            const { data: authData } = await supabase.auth.getUser();
+            targetUserId = authData?.user?.id;
+          } catch {}
+        }
+
+        const billingCycle = (metadata.billing_cycle || sessionStorage.getItem("dermai_pending_billing_cycle") || "monthly") as "monthly" | "yearly";
+        const planId = metadata.plan_id;
+        const tierLabel = billingCycle === "yearly" ? "Pro (Annual)" : "Pro";
+        const chargedAmount = typeof amountInCentavos === "number" ? amountInCentavos / 100 : 0;
+
+        if (targetUserId) {
+          try {
+            // Fulfill DB activation, user profile sync, notification and audit log
+            await upgradeSubscriptionToPro(targetUserId, {
+              planId,
+              billingCycle,
+              paymentMethod: methodLabel,
+              paymongoPaymentId,
+              amount: chargedAmount,
+            });
+            console.log("[PaymentSuccessPage] Pro subscription activated and synced for user:", targetUserId);
+          } catch (subErr) {
+            console.warn("[PaymentSuccessPage] upgradeSubscriptionToPro fallback warning:", subErr);
+            await validateAndSyncSubscription(targetUserId);
+          }
+
+          // Clear stale cached plan claims in localStorage so header badge and layout immediately show 'Pro'
+          try {
+            const direct = localStorage.getItem(`derm_profile_${targetUserId}`);
+            const parsedDirect = direct ? JSON.parse(direct) : {};
+            localStorage.setItem(
+              `derm_profile_${targetUserId}`,
+              JSON.stringify({ ...parsedDirect, membershipTier: tierLabel, userId: targetUserId })
+            );
+
+            const globalCached = localStorage.getItem("dermai_patient_profile");
+            const parsedGlobal = globalCached ? JSON.parse(globalCached) : {};
+            localStorage.setItem(
+              "dermai_patient_profile",
+              JSON.stringify({ ...parsedGlobal, membershipTier: tierLabel, userId: targetUserId })
+            );
+          } catch {}
+
+          // Invalidate and refetch active subscription queries via custom events
+          window.dispatchEvent(
+            new CustomEvent("dermai_subscription_updated", {
+              detail: { userId: targetUserId, tier: tierLabel, status: "active" },
+            })
+          );
+          window.dispatchEvent(new CustomEvent("derm_profile_updated"));
+          window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+          window.dispatchEvent(new Event("storage"));
+        }
+
         logAuditEvent({
-          userId: user?.id,
+          userId: targetUserId || user?.id,
           role: "patient",
           category: "Subscription",
           action: "Payment Completed",
           target: `PayMongo ID: ${paymongoPaymentId}`,
-          details: `Patient completed payment of ₱${(typeof amountInCentavos === "number" ? amountInCentavos / 100 : 0).toLocaleString()} via ${methodType === "paymaya" ? "Maya" : methodType === "gcash" ? "GCash" : methodType || "Online Payment"}.`,
+          details: `Patient completed payment of ₱${chargedAmount.toLocaleString()} via ${methodLabel}.`,
           metadata: {
             paymentId: paymongoPaymentId,
-            amount: typeof amountInCentavos === "number" ? amountInCentavos / 100 : null,
+            amount: chargedAmount,
             method: methodType,
           },
         }).catch(() => {});
@@ -386,8 +448,13 @@ export default function PaymentSuccessPage() {
 
             <button
               type="button"
-              onClick={() => navigate("/dashboard")}
-              className="mt-7 w-full rounded-xl bg-[#A21D5C] text-white py-3 text-sm font-semibold tracking-wide hover:bg-[#7E1448] focus:outline-none focus:ring-2 focus:ring-[#A21D5C]/40 focus:ring-offset-2 transition-colors"
+              onClick={async () => {
+                if (user?.id) {
+                  await validateAndSyncSubscription(user.id);
+                }
+                navigate("/dashboard");
+              }}
+              className="mt-7 w-full rounded-xl bg-[#A21D5C] text-white py-3 text-sm font-semibold tracking-wide hover:bg-[#7E1448] focus:outline-none focus:ring-2 focus:ring-[#A21D5C]/40 focus:ring-offset-2 transition-colors cursor-pointer"
             >
               Continue to Dashboard
             </button>

@@ -194,14 +194,14 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
     <div className="min-h-screen bg-[#F1F3F7] text-slate-800 flex font-sans">
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs z-[1090] lg:hidden"
+          className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs z-25 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
       <aside
         className={cn(
-          "flex flex-col w-[260px] bg-white border-r border-slate-200/80 min-h-screen fixed left-0 top-0 z-[1100] transition-transform duration-300 shadow-[1px_0_10px_rgba(0,0,0,0.02)]",
+          "flex flex-col w-[260px] bg-white border-r border-slate-200/80 min-h-screen fixed left-0 top-0 z-30 transition-transform duration-300 shadow-[1px_0_10px_rgba(0,0,0,0.02)]",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
@@ -310,7 +310,7 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
 
       <main className="flex-1 lg:ml-[260px] min-h-screen flex flex-col min-w-0">
         {/* Top Header */}
-        <div className="bg-white border-b border-slate-200/80 px-5 sm:px-8 h-18 flex items-center justify-between sticky top-0 z-[1000] shadow-xs">
+        <div className="bg-white border-b border-slate-200/80 px-5 sm:px-8 h-18 flex items-center justify-between sticky top-0 z-20 shadow-xs">
           <div className="flex items-center gap-3">
             <button
               className="lg:hidden p-2 rounded-xl hover:bg-slate-50 text-slate-500"
@@ -327,7 +327,7 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
 
           <div className="flex items-center gap-3">
             {/* Notification Bell */}
-            <div ref={bellRef} className="relative z-[1050]">
+            <div ref={bellRef} className="relative z-50">
               <button
                 onClick={() => setBellOpen((prev) => !prev)}
                 className="relative p-2.5 rounded-xl hover:bg-slate-50 text-slate-500 transition-colors border border-slate-100 shadow-2xs"
@@ -341,7 +341,7 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
               </button>
 
               {bellOpen && (
-                <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-slate-100 z-[1050] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
                   <DoctorNotifications isDropdown onClose={() => setBellOpen(false)} />
                 </div>
               )}

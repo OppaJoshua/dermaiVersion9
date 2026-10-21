@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { sendReceiptEmail } from "./emailReceipt.ts";
+import { sendReceiptEmail, sendBookingReceiptEmail } from "./emailReceipt.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -265,15 +265,15 @@ Deno.serve(async (req: Request) => {
 
     let metadata = paymentAttributes?.metadata ?? {};
 
-    if (!metadata?.user_id || !metadata?.plan_id || !metadata?.billing_cycle) {
+    if (!metadata?.user_id || (!metadata?.plan_id && metadata?.payment_type !== "appointment_booking")) {
       const eventMetadata = paymentData?.attributes?.metadata ?? {};
-      if (eventMetadata?.user_id && eventMetadata?.plan_id && eventMetadata?.billing_cycle) {
+      if (eventMetadata?.user_id) {
         metadata = eventMetadata;
       }
     }
 
     if (
-      (!metadata?.user_id || !metadata?.plan_id || !metadata?.billing_cycle) &&
+      (!metadata?.user_id || (!metadata?.plan_id && metadata?.payment_type !== "appointment_booking")) &&
       paymentIntentId
     ) {
       const paymentIntentResponse = await fetch(
@@ -294,6 +294,163 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // =========================================================================
+    // APPOINTMENT BOOKING PAYMENT WEBHOOK BRANCH
+    // =========================================================================
+    if (metadata?.payment_type === "appointment_booking") {
+      console.log("[webhook] Processing appointment booking payment:", {
+        paymongoPaymentId,
+        paymentIntentId,
+        userId: metadata.user_id,
+        appointmentId: metadata.appointment_id,
+        clinicName: metadata.clinic_name,
+      });
+
+      const amountInCentavos = paymentAttributes?.amount;
+      if (typeof amountInCentavos !== "number" || amountInCentavos <= 0) {
+        throw new Error("PayMongo payment amount is missing or invalid for booking");
+      }
+      const amount = amountInCentavos / 100;
+      const paymentDateIso = new Date().toISOString();
+      const paymentMethodType: string =
+        paymentAttributes?.source?.type ||
+        paymentAttributes?.payment_method_details?.type ||
+        metadata?.payment_method ||
+        "gcash";
+
+      const paymentMethodLabel =
+        paymentMethodType === "paymaya" || paymentMethodType === "maya"
+          ? "Maya"
+          : paymentMethodType === "gcash"
+          ? "GCash"
+          : paymentMethodType;
+
+      const appointmentId = metadata.appointment_id || null;
+      const userId = metadata.user_id || null;
+
+      // 1. Check for existing payment to prevent duplicate records
+      const { data: existingPayment } = await supabase
+        .from("user_payment")
+        .select("payment_id")
+        .eq("paymongo_payment_id", paymongoPaymentId)
+        .maybeSingle();
+
+      if (!existingPayment && userId) {
+        const { error: paymentInsertError } = await supabase
+          .from("user_payment")
+          .insert({
+            amount,
+            payment_date: paymentDateIso,
+            method: paymentMethodType,
+            status: "success",
+            user_id: userId,
+            plan_id: null,
+            billing_cycle: null,
+            reference_number: paymongoPaymentId,
+            paymongo_payment_id: paymongoPaymentId,
+            paymongo_payment_intent_id: paymentIntentId,
+          });
+
+        if (paymentInsertError) {
+          console.error("[webhook] user_payment insert error for booking:", paymentInsertError);
+        } else {
+          console.log("[webhook] Successful booking payment recorded in user_payment:", paymongoPaymentId);
+        }
+      }
+
+      // 2. Update patient_appointment table if appointmentId is present
+      if (appointmentId) {
+        const paySummary = `Paid Online (${paymentMethodLabel} Ref: ${paymongoPaymentId})`;
+        const { data: currentAppt } = await supabase
+          .from("patient_appointment")
+          .select("clinic_note")
+          .eq("appointment_id", appointmentId)
+          .maybeSingle();
+
+        const existingNote = currentAppt?.clinic_note || "";
+        const updatedNote = existingNote.includes("Paid Online")
+          ? existingNote
+          : existingNote ? `${existingNote} | ${paySummary}` : paySummary;
+
+        const { error: apptUpdateError } = await supabase
+          .from("patient_appointment")
+          .update({
+            clinic_note: updatedNote,
+            check_in_status: "scheduled",
+          })
+          .eq("appointment_id", appointmentId);
+
+        if (apptUpdateError) {
+          console.warn("[webhook] patient_appointment update note:", apptUpdateError.message);
+        } else {
+          console.log("[webhook] patient_appointment updated for booking:", appointmentId);
+        }
+      }
+
+      // 3. Resolve recipient email and send consultation booking receipt
+      let recipientEmail = metadata.patient_email || null;
+      if (!recipientEmail && userId) {
+        try {
+          const { data: authUser } = await supabase.auth.admin.getUserById(userId);
+          recipientEmail = authUser?.user?.email || null;
+        } catch {
+          /* ignore error fetching user */
+        }
+      }
+
+      if (recipientEmail) {
+        try {
+          await sendBookingReceiptEmail({
+            patientEmail: recipientEmail,
+            patientName: metadata.patient_name || "Patient",
+            clinicName: metadata.clinic_name || "Skin Clinic",
+            doctorName: metadata.doctor_name || "Attending Dermatologist",
+            appointmentDate: metadata.appointment_date || "Scheduled Date",
+            appointmentTime: metadata.appointment_time || "Scheduled Time",
+            paymentMethod: paymentMethodLabel,
+            amount,
+            paymentDate: paymentDateIso,
+            paymongoPaymentId,
+          });
+
+          await recordAuditLog({
+            userId,
+            action: "Consultation Receipt Email Sent",
+            target: recipientEmail,
+            details: `Consultation receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${amount.toFixed(2)}).`,
+            metadata: {
+              amount,
+              transactionId: paymongoPaymentId,
+              appointmentId,
+            },
+          });
+        } catch (mailErr) {
+          console.warn("[webhook] Booking receipt email dispatch warning:", mailErr);
+        }
+      }
+
+      // 4. Mark webhook event processed
+      await supabase
+        .from("paymongo_webhook_event")
+        .update({
+          status: "processed",
+          processed_at: new Date().toISOString(),
+        })
+        .eq("event_id", eventId);
+
+      return jsonResponse({
+        received: true,
+        message: "Appointment booking payment processed successfully.",
+        eventId,
+        paymentIntentId,
+        paymongoPaymentId,
+        appointmentId,
+      });
+    }
+
+    // =========================================================================
+    // BRANCH 2: SUBSCRIPTION PAYMENT WEBHOOK (Existing logic untouched)
+    // =========================================================================
     if (!metadata?.user_id) {
       throw new Error("Payment metadata is missing user_id");
     }
@@ -350,8 +507,6 @@ Deno.serve(async (req: Request) => {
       .eq("paymongo_payment_id", paymongoPaymentId)
       .maybeSingle();
 
-    let isNewPayment = false;
-
     if (!existingPayment) {
       const paymentRecord = {
         amount: finalAmountPaid,
@@ -373,7 +528,6 @@ Deno.serve(async (req: Request) => {
       if (paymentInsertError) {
         console.error("user_payment insert error:", paymentInsertError);
       } else {
-        isNewPayment = true;
         console.log("Successful payment recorded in user_payment:", paymongoPaymentId);
       }
     } else {
@@ -448,6 +602,83 @@ Deno.serve(async (req: Request) => {
     } else {
       console.log("Subscription activated successfully:", metadata.user_id);
     }
+
+    // Synchronize User Profile (safely updates plan_tier or updated_at)
+    try {
+      const { error: profileErr } = await supabase
+        .from("user")
+        .update({
+          plan_tier: "pro",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", metadata.user_id);
+
+      if (profileErr) {
+        await supabase
+          .from("user")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("user_id", metadata.user_id);
+      }
+      console.log("[webhook] user profile synchronized for Pro tier:", metadata.user_id);
+    } catch (profErr) {
+      console.warn("[webhook] User profile sync warning:", profErr);
+    }
+
+    // In-app notification welcoming patient to Pro tier (prevent duplicate)
+    try {
+      const { data: existingNotif } = await supabase
+        .from("user_notification")
+        .select("notif_id")
+        .eq("user_id", metadata.user_id)
+        .eq("subtype", "subscription_upgraded")
+        .gte("created_at", new Date(Date.now() - 3600000).toISOString())
+        .limit(1)
+        .maybeSingle();
+
+      if (!existingNotif) {
+        const formattedEndDate = periodEnd.toLocaleDateString("en-PH", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+        const { error: notifErr } = await supabase
+          .from("user_notification")
+          .insert({
+            user_id: metadata.user_id,
+            type: "subscription",
+            subtype: "subscription_upgraded",
+            title: "Welcome to DermAI Pro!",
+            body: `Your payment was successful. You now have unlimited AI skin scans and Pro features enabled until ${formattedEndDate}.`,
+            is_read: false,
+            created_at: new Date().toISOString(),
+          });
+        if (notifErr) {
+          console.warn("[webhook] user_notification insert warning:", notifErr.message);
+        } else {
+          console.log("[webhook] user_notification created for Pro upgrade:", metadata.user_id);
+        }
+      }
+    } catch (notifErr) {
+      console.warn("[webhook] user_notification warning:", notifErr);
+    }
+
+    // Record 'Subscription Upgraded' in system_audit_log
+    await recordAuditLog({
+      userId: metadata.user_id,
+      action: "Subscription Upgraded",
+      target: `User #${metadata.user_id}`,
+      details: "Patient upgraded to Pro plan following successful payment.",
+      metadata: {
+        planId: metadata.plan_id,
+        planName,
+        billingCycle,
+        paymentMethod: paymentMethodLabel,
+        amount,
+        transactionId: paymongoPaymentId,
+        currentPeriodStart: periodStart.toISOString(),
+        currentPeriodEnd: periodEnd.toISOString(),
+      },
+    });
 
     // Check if receipt email was already sent
     const { data: alreadySentLog } = await supabase

@@ -53,6 +53,8 @@ type AppointmentRecord = {
   patientAvatar?: string;
   skinPhotoUrl?: string;
   checkInStatus?: "scheduled" | "arrived" | "in-consultation" | "completed" | "no-show";
+  paymentStatus?: string;
+  paymentAmount?: number;
 };
 
 type ClinicDoctorInfo = {
@@ -252,6 +254,7 @@ export default function ClinicDashboardPage() {
   const now = new Date();
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [doctors, setDoctors] = useState<ClinicDoctorInfo[]>([]);
+  const [clinicFee, setClinicFee] = useState<number>(500);
   const [timeframe, setTimeframe] = useState<"week" | "month" | "last-month" | "year">("month");
   const [chartMode, setChartMode] = useState<"trend" | "conditions">("trend");
   const [scheduleDate, setScheduleDate] = useState<Date>(new Date());
@@ -350,6 +353,18 @@ export default function ClinicDashboardPage() {
                 status: d.status || "Active",
               });
             });
+          }
+        } catch { }
+
+        try {
+          const { data: clinicRow } = await supabase
+            .from("clinic")
+            .select("consultation_fee")
+            .eq("clinic_id", resolvedClinicId)
+            .maybeSingle();
+
+          if (clinicRow?.consultation_fee && !cancelled) {
+            setClinicFee(Number(clinicRow.consultation_fee));
           }
         } catch { }
 
@@ -461,6 +476,29 @@ export default function ClinicDashboardPage() {
         const parsedDate = parseDateStringSafe(a.date);
         const assignedDocName = a.assigned_doctor_id ? docMap.get(a.assigned_doctor_id) : undefined;
 
+        const isPaidOnline = Boolean(
+          a.clinic_note &&
+          /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(a.clinic_note)
+        );
+        const isExplicitPaid =
+          a.payment_status === "paid" ||
+          a.status === "completed" ||
+          a.check_in_status === "completed" ||
+          a.status === "confirmed" ||
+          a.status === "accepted" ||
+          a.doctor_status === "approved" ||
+          isPaidOnline;
+
+        let extractedAmount: number | undefined;
+        if (a.payment_amount) {
+          extractedAmount = Number(a.payment_amount);
+        } else if (a.clinic_note) {
+          const match = a.clinic_note.match(/(?:amount|fee|paid):\s*(?:₱|PHP)?\s*([\d,]+(?:\.\d+)?)/i);
+          if (match) {
+            extractedAmount = parseFloat(match[1].replace(/,/g, ""));
+          }
+        }
+
         return {
           id: a.appointment_id,
           clinicId: resolvedClinicId || a.clinic_id || 0,
@@ -484,6 +522,8 @@ export default function ClinicDashboardPage() {
           patientAvatar: userAvatar,
           skinPhotoUrl: a.skin_photo_url || undefined,
           checkInStatus: a.check_in_status || undefined,
+          paymentStatus: a.payment_status || (isExplicitPaid ? "paid" : undefined),
+          paymentAmount: extractedAmount,
         };
       });
 
@@ -506,6 +546,26 @@ export default function ClinicDashboardPage() {
                     ? localItem.patientAvatar
                     : undefined;
                   const parsedDate = parseDateStringSafe(localItem.date);
+
+                  const isPaidOnline = Boolean(
+                    localItem.clinicNote &&
+                    /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(localItem.clinicNote)
+                  );
+                  const isExplicitPaid =
+                    localItem.paymentStatus === "paid" ||
+                    localItem.status === "completed" ||
+                    localItem.status === "confirmed" ||
+                    localItem.status === "accepted" ||
+                    localItem.doctorStatus === "approved" ||
+                    isPaidOnline;
+
+                  let extractedAmount: number | undefined = localItem.paymentAmount ? Number(localItem.paymentAmount) : undefined;
+                  if (!extractedAmount && localItem.clinicNote) {
+                    const match = localItem.clinicNote.match(/(?:amount|fee|paid):\s*(?:₱|PHP)?\s*([\d,]+(?:\.\d+)?)/i);
+                    if (match) {
+                      extractedAmount = parseFloat(match[1].replace(/,/g, ""));
+                    }
+                  }
 
                   mapped.push({
                     id: localItem.id,
@@ -530,6 +590,8 @@ export default function ClinicDashboardPage() {
                     patientAvatar: localUserAvatar,
                     skinPhotoUrl: localItem.skinPhotoUrl || undefined,
                     checkInStatus: localItem.checkInStatus || localItem.check_in_status || undefined,
+                    paymentStatus: localItem.paymentStatus || (isExplicitPaid ? "paid" : undefined),
+                    paymentAmount: extractedAmount,
                   });
                 }
               }
@@ -635,20 +697,43 @@ export default function ClinicDashboardPage() {
       });
   }, [appointments]);
 
-  // 3. Upcoming appointments (future scheduled consultations after today)
-  const upcomingAppointmentsCount = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return appointments.filter((a) => {
-      if (a.status === "rejected" || a.status === "completed") return false;
-      if (a.checkInStatus === "completed" || a.checkInStatus === "no-show") return false;
-      const d = parseDateStringSafe(a.rawDate || a.date);
-      if (!d) return a.status === "pending" || a.doctorStatus === "pending-review";
-      const apptDate = new Date(d);
-      apptDate.setHours(0, 0, 0, 0);
-      return apptDate.getTime() > today.getTime();
-    }).length;
-  }, [appointments]);
+  // 3. Total revenue from completed/paid consultations for active clinic
+  const { paidAppointmentsCount, formattedRevenue } = useMemo(() => {
+    let revenue = 0;
+    let count = 0;
+
+    appointments.forEach((a) => {
+      const isPaidOnline = Boolean(
+        a.clinicNote &&
+        /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(a.clinicNote)
+      );
+
+      const isCompletedOrActive =
+        a.status === "completed" ||
+        a.checkInStatus === "completed" ||
+        a.status === "scheduled" ||
+        a.status === "accepted" ||
+        a.doctorStatus === "approved";
+
+      const isPaid =
+        a.paymentStatus === "paid" ||
+        isPaidOnline ||
+        (isCompletedOrActive && a.status !== "rejected" && a.doctorStatus !== "rejected");
+
+      if (isPaid) {
+        count += 1;
+        const fee = a.paymentAmount && a.paymentAmount > 0 ? a.paymentAmount : clinicFee;
+        revenue += fee;
+      }
+    });
+
+    const formatted = `₱${revenue.toLocaleString("en-PH", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+
+    return { totalRevenue: revenue, paidAppointmentsCount: count, formattedRevenue: formatted };
+  }, [appointments, clinicFee]);
 
   // 4. Configured or average consultation slot time (minutes)
   const avgTimeMinutes = useMemo(() => {
@@ -1101,17 +1186,17 @@ export default function ClinicDashboardPage() {
       link: "/clinic/appointments",
     },
     {
-      label: "Upcoming Appointments",
-      value: String(upcomingAppointmentsCount),
+      label: "Total Revenue",
+      value: formattedRevenue,
       unit: undefined,
       sub:
-        upcomingAppointmentsCount > 0
-          ? upcomingAppointmentsCount === 1
-            ? "1 scheduled ahead"
-            : `${upcomingAppointmentsCount} scheduled ahead`
-          : "No upcoming dates",
+        paidAppointmentsCount > 0
+          ? paidAppointmentsCount === 1
+            ? "From 1 paid consultation"
+            : `From ${paidAppointmentsCount} paid consultations`
+          : "All-time clinic earnings",
       highlight: false,
-      link: "/clinic/appointments",
+      link: "/clinic/patients",
     },
     {
       label: "Avg. Time per Appointment",
@@ -1266,7 +1351,12 @@ export default function ClinicDashboardPage() {
                       </div>
 
                       <div className="relative mt-3">
-                        <p className="flex items-baseline gap-1 text-3xl font-extrabold leading-none tracking-tight">
+                        <p
+                          className={cn(
+                            "flex items-baseline gap-1 font-extrabold leading-none tracking-tight",
+                            card.value.length > 8 ? "text-2xl xl:text-3xl" : "text-3xl"
+                          )}
+                        >
                           {card.value}
                           {card.unit && <span className="text-xs font-semibold text-gray-400">{card.unit}</span>}
                         </p>

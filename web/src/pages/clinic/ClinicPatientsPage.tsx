@@ -26,6 +26,7 @@ import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 import { isAppointmentPastScheduled } from "@/lib/schedulingService";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 /* ── Types ────────────────────────────────────────────────────────── */
 
@@ -1060,22 +1061,23 @@ export default function ClinicPatientsPage() {
       </div>
 
       {/* ── 5. Patient Details & Complete Appointment History Modal ─────── */}
-      <AnimatePresence>
-        {selectedPatient && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={() => setSelectedPatient(null)}
-          >
+      <ModalPortal isOpen={Boolean(selectedPatient)}>
+        <AnimatePresence>
+          {selectedPatient && (
             <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 10 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 10 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden text-left"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+              onClick={() => setSelectedPatient(null)}
             >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0, y: 10 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.95, opacity: 0, y: 10 }}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden text-left relative z-[9999]"
+              >
               {/* Modal Header */}
               <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
                 <div className="flex items-center gap-3.5">
@@ -1414,37 +1416,40 @@ export default function ClinicPatientsPage() {
             </motion.div>
           </motion.div>
         )}
-      </AnimatePresence>
+        </AnimatePresence>
+      </ModalPortal>
 
       {/* ── 6. Fullscreen Skin Photo Lightbox Modal ──────────────────── */}
-      <AnimatePresence>
-        {lightboxPhoto && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-60 bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
-            onClick={() => setLightboxPhoto(null)}
-          >
-            <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
-              <button
-                type="button"
-                onClick={() => setLightboxPhoto(null)}
-                className="absolute -top-12 right-0 p-2 rounded-full bg-white/20 hover:bg-white/30 text-white transition-colors cursor-pointer"
-                title="Close fullscreen preview"
-              >
-                <X className="w-6 h-6" />
-              </button>
-              <img
-                src={lightboxPhoto}
-                alt="Enlarged skin lesion inspection"
-                className="max-h-[82vh] max-w-[90vw] object-contain rounded-2xl shadow-2xl border border-white/20 bg-black/40"
-              />
-              <p className="text-xs text-white/70 mt-3 font-medium">Click outside or press X to close</p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <ModalPortal isOpen={Boolean(lightboxPhoto)}>
+        <AnimatePresence>
+          {lightboxPhoto && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9998] bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
+              onClick={() => setLightboxPhoto(null)}
+            >
+              <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center z-[9999]" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  onClick={() => setLightboxPhoto(null)}
+                  className="absolute -top-12 right-0 p-2 rounded-full bg-white/20 hover:bg-white/30 text-white transition-colors cursor-pointer"
+                  title="Close fullscreen preview"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+                <img
+                  src={lightboxPhoto}
+                  alt="Enlarged skin lesion inspection"
+                  className="max-h-[82vh] max-w-[90vw] object-contain rounded-2xl shadow-2xl border border-white/20 bg-black/40"
+                />
+                <p className="text-xs text-white/70 mt-3 font-medium">Click outside or press X to close</p>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }

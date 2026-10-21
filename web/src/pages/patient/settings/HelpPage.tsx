@@ -18,6 +18,7 @@ import {
   getHelpdeskTicketsAsync,
 } from "@/lib/store";
 import { supabase } from "@/lib/supabaseClient";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 const guideSteps = [
   {
@@ -462,57 +463,59 @@ export default function HelpPage() {
       </div>
 
       {/* User Guide Modal */}
-      {showGuide && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between px-7 py-5 border-b border-gray-200">
-              <div>
-                <h2 className="text-lg font-semibold text-black">User guide</h2>
-                <p className="text-sm text-gray-600">Getting started with DermAI features</p>
-              </div>
-              <button
-                onClick={() => setShowGuide(false)}
-                className="p-2 rounded-md hover:bg-gray-100 text-gray-500 hover:text-black transition-colors cursor-pointer"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Guide Steps */}
-            <div className="overflow-y-auto px-7 py-6 space-y-7">
-              {guideSteps.map((section, si) => (
-                <div key={si} className="space-y-3">
-                  <h3 className="text-sm font-semibold text-black">
-                    Step {si + 1}: {section.title}
-                  </h3>
-                  <ol className="space-y-2">
-                    {section.steps.map((step, i) => (
-                      <li key={i} className="flex items-start gap-3">
-                        <span className="shrink-0 w-5 text-sm font-semibold text-magenta-700 tabular-nums">
-                          {i + 1}.
-                        </span>
-                        <p className="text-sm text-gray-700 leading-relaxed">{step}</p>
-                      </li>
-                    ))}
-                  </ol>
+      <ModalPortal isOpen={Boolean(showGuide)}>
+        {showGuide && (
+          <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+            <div className="relative z-[9999] bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between px-7 py-5 border-b border-gray-200">
+                <div>
+                  <h2 className="text-lg font-semibold text-black">User guide</h2>
+                  <p className="text-sm text-gray-600">Getting started with DermAI features</p>
                 </div>
-              ))}
-            </div>
+                <button
+                  onClick={() => setShowGuide(false)}
+                  className="p-2 rounded-md hover:bg-gray-100 text-gray-500 hover:text-black transition-colors cursor-pointer"
+                  aria-label="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
 
-            {/* Guide Footer */}
-            <div className="px-7 py-4 border-t border-gray-200 bg-gray-50">
-              <button
-                onClick={() => setShowGuide(false)}
-                className="w-full py-2.5 rounded-md bg-magenta-600 text-white text-sm font-medium hover:bg-magenta-700 transition-colors cursor-pointer"
-              >
-                Got it
-              </button>
+              {/* Guide Steps */}
+              <div className="overflow-y-auto px-7 py-6 space-y-7">
+                {guideSteps.map((section, si) => (
+                  <div key={si} className="space-y-3">
+                    <h3 className="text-sm font-semibold text-black">
+                      Step {si + 1}: {section.title}
+                    </h3>
+                    <ol className="space-y-2">
+                      {section.steps.map((step, i) => (
+                        <li key={i} className="flex items-start gap-3">
+                          <span className="shrink-0 w-5 text-sm font-semibold text-magenta-700 tabular-nums">
+                            {i + 1}.
+                          </span>
+                          <p className="text-sm text-gray-700 leading-relaxed">{step}</p>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ))}
+              </div>
+
+              {/* Guide Footer */}
+              <div className="px-7 py-4 border-t border-gray-200 bg-gray-50">
+                <button
+                  onClick={() => setShowGuide(false)}
+                  className="w-full py-2.5 rounded-md bg-magenta-600 text-white text-sm font-medium hover:bg-magenta-700 transition-colors cursor-pointer"
+                >
+                  Got it
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalPortal>
     </div>
   );
 }

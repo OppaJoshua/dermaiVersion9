@@ -7,6 +7,7 @@ import { logAuditEvent } from "@/utils/auditLogger";
 import { withVat, splitVat, calculatePricing } from "@/lib/vat";
 import { validateAndSyncSubscription } from "@/lib/subscriptionService";
 import { cn } from "@/lib/utils";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 interface SubData {
   isPro: boolean;
@@ -592,139 +593,141 @@ export default function BillingSettingsPage() {
     </div>
 
       {/* Billing History Payment Details Modal */}
-      {selectedPayment && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-6 backdrop-blur-sm"
-          onClick={() => setSelectedPayment(null)}
-        >
+      <ModalPortal isOpen={Boolean(selectedPayment)}>
+        {selectedPayment && (
           <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="payment-details-title"
-            className="my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-[#F4C9DC] bg-white shadow-[0_10px_40px_-12px_rgba(162,29,92,0.25)]"
-            onClick={(event) => event.stopPropagation()}
+            className="fixed inset-0 z-[9998] flex items-center justify-center overflow-y-auto bg-black/50 px-4 py-6 backdrop-blur-sm"
+            onClick={() => setSelectedPayment(null)}
           >
-            <div className="relative bg-gradient-to-br from-[#A21D5C] to-[#7E1448] px-6 pb-12 pt-7 text-center sm:px-8">
-              <button
-                type="button"
-                onClick={() => setSelectedPayment(null)}
-                aria-label="Close payment details"
-                className="absolute right-3 top-3 rounded-lg p-2 text-white/80 transition-colors hover:bg-white/10 hover:text-white"
-              >
-                <X size={20} />
-              </button>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-pink-100/90">
-                DermAI
-              </p>
-              <h2 id="payment-details-title" className="mt-1 text-sm tracking-wide text-pink-100/90">
-                DermAI - Official Payment Receipt
-              </h2>
-            </div>
-
-            <div className="relative z-10 -mt-9 w-[72px] h-[72px] rounded-full bg-white border-4 border-white shadow-md flex items-center justify-center mx-auto">
-              <div className="w-full h-full rounded-full bg-emerald-50 flex items-center justify-center">
-                <CheckCircle2 className="w-9 h-9 text-emerald-600" />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="payment-details-title"
+              className="relative z-[9999] my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-[#F4C9DC] bg-white shadow-[0_10px_40px_-12px_rgba(162,29,92,0.25)]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="relative bg-gradient-to-br from-[#A21D5C] to-[#7E1448] px-6 pb-12 pt-7 text-center sm:px-8">
+                <button
+                  type="button"
+                  onClick={() => setSelectedPayment(null)}
+                  aria-label="Close payment details"
+                  className="absolute right-3 top-3 rounded-lg p-2 text-white/80 transition-colors hover:bg-white/10 hover:text-white cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-pink-100/90">
+                  DermAI
+                </p>
+                <h2 id="payment-details-title" className="mt-1 text-sm tracking-wide text-pink-100/90">
+                  DermAI - Official Payment Receipt
+                </h2>
               </div>
 
-            </div>
+              <div className="relative z-10 -mt-9 w-[72px] h-[72px] rounded-full bg-white border-4 border-white shadow-md flex items-center justify-center mx-auto">
+                <div className="w-full h-full rounded-full bg-emerald-50 flex items-center justify-center">
+                  <CheckCircle2 className="w-9 h-9 text-emerald-600" />
+                </div>
 
-            <div className="px-5 pb-6 pt-4 sm:px-8 sm:pb-8">
-              <div className="text-center">
-                <p className="text-xl font-semibold tracking-tight text-gray-900 sm:text-2xl">
-                  Payment Details
-                </p>
-                <p className="mt-1 text-sm leading-relaxed text-gray-500">
-                  Your DermAI subscription transaction record.
-                </p>
               </div>
 
-              <div className="mt-6 rounded-xl border border-[#F4C9DC] bg-[#FDF2F7] px-5 py-5 text-center sm:px-6">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">
-                  Total Paid
-                </p>
-                <p className="mt-1 break-words text-3xl font-bold tracking-tight text-[#A21D5C]">
-                  {selectedPayment.amount}
-                </p>
+              <div className="px-5 pb-6 pt-4 sm:px-8 sm:pb-8">
+                <div className="text-center">
+                  <p className="text-xl font-semibold tracking-tight text-gray-900 sm:text-2xl">
+                    Payment Details
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-gray-500">
+                    Your DermAI subscription transaction record.
+                  </p>
+                </div>
+
+                <div className="mt-6 rounded-xl border border-[#F4C9DC] bg-[#FDF2F7] px-5 py-5 text-center sm:px-6">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">
+                    Total Paid
+                  </p>
+                  <p className="mt-1 break-words text-3xl font-bold tracking-tight text-[#A21D5C]">
+                    {selectedPayment.amount}
+                  </p>
+                </div>
+
+                <div className="pt-6">
+                  <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">
+                    Payment Details
+                  </h3>
+                  <dl className="divide-y divide-gray-100 text-sm">
+                    <div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+                      <dt className="shrink-0 text-gray-500">Account</dt>
+                      <dd className="break-all font-medium text-gray-900 sm:text-right">
+                        {user?.email || "Patient Account"}
+                      </dd>
+                    </div>
+                    <div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+                      <dt className="shrink-0 text-gray-500">Description</dt>
+                      <dd className="font-medium text-gray-900 sm:text-right">
+                        DermAI Subscription
+                      </dd>
+                    </div>
+
+                    <div className="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+                      <dt className="shrink-0 text-gray-500">Payment Method</dt>
+                      <dd className="flex items-center gap-2 font-medium text-gray-900 sm:justify-end">
+                        <CreditCard className="h-4 w-4 shrink-0 text-[#A21D5C]" />
+                        {selectedPayment.method.toLowerCase().includes("gcash")
+                          ? "GCash"
+                          : selectedPayment.method.toLowerCase().includes("maya") ||
+                              selectedPayment.method.toLowerCase().includes("paymaya")
+                            ? "Maya"
+                            : selectedPayment.method || "Online Payment"}
+                      </dd>
+                    </div>
+                    <div className="flex flex-col gap-1 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+                      <dt className="shrink-0 text-gray-500">Date</dt>
+                      <dd className="flex items-start gap-2 font-medium text-gray-900 sm:max-w-[70%] sm:justify-end sm:text-right">
+                        <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-[#A21D5C]" />
+                        <span>
+                          {selectedPayment.paymentDate
+                            ? new Date(selectedPayment.paymentDate).toLocaleString("en-PH", {
+                                dateStyle: "long",
+                                timeStyle: "short",
+                              })
+                            : "Not provided"}
+                        </span>
+                      </dd>
+                    </div>
+                    <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+                      <dt className="shrink-0 text-gray-500">Transaction ID</dt>
+                      <dd className="max-w-full break-all rounded-md border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-xs text-gray-700 sm:max-w-[70%] sm:text-right">
+                        {selectedPayment.paymentId}
+                      </dd>
+                    </div>
+                    <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+                      <dt className="shrink-0 text-gray-500">Status</dt>
+                      <dd>
+                        <span
+                          className={
+                            ["paid", "success"].includes(selectedPayment.status.toLowerCase())
+                              ? "inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
+                              : "inline-flex rounded-full border border-[#F4C9DC] bg-[#FDF2F7] px-3 py-1 text-xs font-semibold text-[#A21D5C]"
+                          }
+                        >
+                          {selectedPayment.status}
+                        </span>
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedPayment(null)}
+                  className="mt-6 w-full rounded-xl bg-[#A21D5C] px-4 py-3 text-sm font-semibold tracking-wide text-white transition-colors hover:bg-[#7E1448] focus:outline-none focus:ring-2 focus:ring-[#A21D5C]/40 focus:ring-offset-2 cursor-pointer"
+                >
+                  Close Receipt
+                </button>
               </div>
-
-              <div className="pt-6">
-                <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">
-                  Payment Details
-                </h3>
-                <dl className="divide-y divide-gray-100 text-sm">
-                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
-                    <dt className="shrink-0 text-gray-500">Account</dt>
-                    <dd className="break-all font-medium text-gray-900 sm:text-right">
-                      {user?.email || "Patient Account"}
-                    </dd>
-                  </div>
-                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
-                    <dt className="shrink-0 text-gray-500">Description</dt>
-                    <dd className="font-medium text-gray-900 sm:text-right">
-                      DermAI Subscription
-                    </dd>
-                  </div>
-
-                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-                    <dt className="shrink-0 text-gray-500">Payment Method</dt>
-                    <dd className="flex items-center gap-2 font-medium text-gray-900 sm:justify-end">
-                      <CreditCard className="h-4 w-4 shrink-0 text-[#A21D5C]" />
-                      {selectedPayment.method.toLowerCase().includes("gcash")
-                        ? "GCash"
-                        : selectedPayment.method.toLowerCase().includes("maya") ||
-                            selectedPayment.method.toLowerCase().includes("paymaya")
-                          ? "Maya"
-                          : selectedPayment.method || "Online Payment"}
-                    </dd>
-                  </div>
-                  <div className="flex flex-col gap-1 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-                    <dt className="shrink-0 text-gray-500">Date</dt>
-                    <dd className="flex items-start gap-2 font-medium text-gray-900 sm:max-w-[70%] sm:justify-end sm:text-right">
-                      <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-[#A21D5C]" />
-                      <span>
-                        {selectedPayment.paymentDate
-                          ? new Date(selectedPayment.paymentDate).toLocaleString("en-PH", {
-                              dateStyle: "long",
-                              timeStyle: "short",
-                            })
-                          : "Not provided"}
-                      </span>
-                    </dd>
-                  </div>
-                  <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-                    <dt className="shrink-0 text-gray-500">Transaction ID</dt>
-                    <dd className="max-w-full break-all rounded-md border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-xs text-gray-700 sm:max-w-[70%] sm:text-right">
-                      {selectedPayment.paymentId}
-                    </dd>
-                  </div>
-                  <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-                    <dt className="shrink-0 text-gray-500">Status</dt>
-                    <dd>
-                      <span
-                        className={
-                          ["paid", "success"].includes(selectedPayment.status.toLowerCase())
-                            ? "inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
-                            : "inline-flex rounded-full border border-[#F4C9DC] bg-[#FDF2F7] px-3 py-1 text-xs font-semibold text-[#A21D5C]"
-                        }
-                      >
-                        {selectedPayment.status}
-                      </span>
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setSelectedPayment(null)}
-                className="mt-6 w-full rounded-xl bg-[#A21D5C] px-4 py-3 text-sm font-semibold tracking-wide text-white transition-colors hover:bg-[#7E1448] focus:outline-none focus:ring-2 focus:ring-[#A21D5C]/40 focus:ring-offset-2"
-              >
-                Close Receipt
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalPortal>
     </>
   );
 }

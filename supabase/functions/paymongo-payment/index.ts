@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { sendReceiptEmail } from "./emailReceipt.ts";
+import { sendReceiptEmail, sendBookingReceiptEmail } from "./emailReceipt.ts";
 
 const PAYMONGO_API = "https://api.paymongo.com/v1";
 
@@ -98,6 +98,7 @@ async function fulfillPaymentAndSendEmail({
   paymentIntentId: string | null;
   amountInCentavos: number;
   paymentMethodType: string;
+  // deno-lint-ignore no-explicit-any
   metadata: Record<string, any>;
   userAuthEmail?: string | null;
 }) {
@@ -143,14 +144,7 @@ async function fulfillPaymentAndSendEmail({
     planName = billingCycle === "yearly" ? "Pro (Annual)" : "Pro";
   }
 
-  const basePrice =
-    planRecord?.price != null
-      ? Number(planRecord.price)
-      : Number(metadata?.base_amount ?? metadata?.base_price ?? metadata?.net_amount ?? grossAmount / 1.12);
-
-  const vatAmount = Math.round((grossAmount - basePrice) * 100) / 100;
   const finalAmountPaid = grossAmount;
-  const baseAmount = basePrice;
 
   // 2. Resolve recipient: account email first (auth.users, then public.user),
   //    then the email attached to the payment intent. No fallback beyond these.
@@ -197,8 +191,6 @@ async function fulfillPaymentAndSendEmail({
     .eq("paymongo_payment_id", paymongoPaymentId)
     .maybeSingle();
 
-  let isNewPayment = false;
-
   if (!existingPayment) {
     const paymentRecord = {
       amount: finalAmountPaid,
@@ -220,7 +212,6 @@ async function fulfillPaymentAndSendEmail({
     if (insertErr) {
       console.error("[fulfillPayment] user_payment insert error:", insertErr);
     } else {
-      isNewPayment = true;
       console.log("[fulfillPayment] user_payment recorded successfully:", paymongoPaymentId);
     }
   } else {
@@ -262,6 +253,83 @@ async function fulfillPaymentAndSendEmail({
   } else {
     console.log("[fulfillPayment] user_plan_subscription activated for user:", userId);
   }
+
+  // 4b. Synchronize User Profile (safely updates plan_tier or updated_at)
+  try {
+    const { error: profileErr } = await adminSupabase
+      .from("user")
+      .update({
+        plan_tier: "pro",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("user_id", userId);
+
+    if (profileErr) {
+      await adminSupabase
+        .from("user")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("user_id", userId);
+    }
+    console.log("[fulfillPayment] user profile synchronized for Pro tier:", userId);
+  } catch (profErr) {
+    console.warn("[fulfillPayment] User profile sync warning:", profErr);
+  }
+
+  // 4c. In-app notification welcoming patient to Pro tier (prevent duplicate)
+  try {
+    const { data: existingNotif } = await adminSupabase
+      .from("user_notification")
+      .select("notif_id")
+      .eq("user_id", userId)
+      .eq("subtype", "subscription_upgraded")
+      .gte("created_at", new Date(Date.now() - 3600000).toISOString())
+      .limit(1)
+      .maybeSingle();
+
+    if (!existingNotif) {
+      const formattedEndDate = periodEnd.toLocaleDateString("en-PH", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+      const { error: notifErr } = await adminSupabase
+        .from("user_notification")
+        .insert({
+          user_id: userId,
+          type: "subscription",
+          subtype: "subscription_upgraded",
+          title: "Welcome to DermAI Pro!",
+          body: `Your payment was successful. You now have unlimited AI skin scans and Pro features enabled until ${formattedEndDate}.`,
+          is_read: false,
+          created_at: new Date().toISOString(),
+        });
+      if (notifErr) {
+        console.warn("[fulfillPayment] user_notification insert warning:", notifErr.message);
+      } else {
+        console.log("[fulfillPayment] user_notification created for Pro upgrade:", userId);
+      }
+    }
+  } catch (notifErr) {
+    console.warn("[fulfillPayment] user_notification warning:", notifErr);
+  }
+
+  // 4d. Record 'Subscription Upgraded' in system_audit_log
+  await recordAuditLog({
+    userId,
+    action: "Subscription Upgraded",
+    target: `User #${userId}`,
+    details: "Patient upgraded to Pro plan following successful payment.",
+    metadata: {
+      planId,
+      planName,
+      billingCycle,
+      paymentMethod: paymentMethodLabel,
+      amount: grossAmount,
+      transactionId: paymongoPaymentId,
+      currentPeriodStart: periodStart.toISOString(),
+      currentPeriodEnd: periodEnd.toISOString(),
+    },
+  });
 
   // 5. Send Receipt Email (Idempotent: check system_audit_log for prior delivery)
   let emailDispatched = false;
@@ -332,6 +400,201 @@ async function fulfillPaymentAndSendEmail({
 
   return {
     fulfilled: true,
+    emailDispatched,
+    emailError: emailErrorMsg,
+    recipientEmail,
+    amount: grossAmount,
+  };
+}
+
+/**
+ * Fulfills clinic consultation appointment payment in database and sends booking receipt email
+ */
+async function fulfillBookingPaymentAndSendEmail({
+  paymongoPaymentId,
+  paymentIntentId,
+  amountInCentavos,
+  paymentMethodType,
+  metadata,
+  userAuthEmail,
+}: {
+  paymongoPaymentId: string;
+  paymentIntentId: string | null;
+  amountInCentavos: number;
+  paymentMethodType: string;
+  // deno-lint-ignore no-explicit-any
+  metadata: Record<string, any>;
+  userAuthEmail?: string | null;
+}) {
+  console.log("[fulfillBookingPayment] Initiating fulfillment for booking payment:", {
+    paymongoPaymentId,
+    paymentIntentId,
+    amountInCentavos,
+    paymentMethodType,
+    userId: metadata?.user_id,
+    appointmentId: metadata?.appointment_id,
+  });
+
+  const userId = metadata?.user_id;
+  const appointmentId = metadata?.appointment_id;
+
+  if (!userId) {
+    throw new Error("Booking payment metadata is missing user_id");
+  }
+  if (!Number.isFinite(amountInCentavos) || amountInCentavos <= 0) {
+    throw new Error("PayMongo payment amount is missing or invalid");
+  }
+
+  const grossAmount = amountInCentavos / 100;
+  const paymentDateIso = new Date().toISOString();
+
+  const paymentMethodLabel =
+    paymentMethodType === "paymaya" || paymentMethodType === "maya"
+      ? "Maya"
+      : paymentMethodType === "gcash"
+      ? "GCash"
+      : paymentMethodType;
+
+  // 1. Resolve recipient email
+  let recipientEmail: string | null = metadata?.patient_email || null;
+  if (!recipientEmail && userAuthEmail) {
+    recipientEmail = userAuthEmail;
+  }
+    if (!recipientEmail) {
+      try {
+        const { data: authUserData } = await adminSupabase.auth.admin.getUserById(userId);
+        recipientEmail = authUserData?.user?.email || null;
+      } catch {
+        /* ignore error fetching user email */
+      }
+    }
+    if (!recipientEmail) {
+      try {
+        const { data: userRow } = await adminSupabase
+          .from("user")
+          .select("email")
+          .eq("user_id", userId)
+          .maybeSingle();
+        recipientEmail = userRow?.email || null;
+      } catch {
+        /* ignore error fetching user row email */
+      }
+    }
+
+  // 2. Check for existing payment record to avoid duplication
+  const { data: existingPayment } = await adminSupabase
+    .from("user_payment")
+    .select("payment_id")
+    .eq("paymongo_payment_id", paymongoPaymentId)
+    .maybeSingle();
+
+  if (!existingPayment) {
+    const { error: insertErr } = await adminSupabase
+      .from("user_payment")
+      .insert({
+        amount: grossAmount,
+        payment_date: paymentDateIso,
+        method: paymentMethodType,
+        status: "success",
+        user_id: userId,
+        plan_id: null,
+        billing_cycle: null,
+        reference_number: paymongoPaymentId,
+        paymongo_payment_id: paymongoPaymentId,
+        paymongo_payment_intent_id: paymentIntentId,
+      });
+
+    if (insertErr) {
+      console.error("[fulfillBookingPayment] user_payment insert error:", insertErr);
+    } else {
+      console.log("[fulfillBookingPayment] user_payment recorded for booking:", paymongoPaymentId);
+    }
+  }
+
+  // 3. Update appointment record if appointmentId is provided
+  if (appointmentId) {
+    const paySummary = `Paid Online (${paymentMethodLabel} Ref: ${paymongoPaymentId})`;
+    const { data: currentAppt } = await adminSupabase
+      .from("patient_appointment")
+      .select("clinic_note")
+      .eq("appointment_id", appointmentId)
+      .maybeSingle();
+
+    const existingNote = currentAppt?.clinic_note || "";
+    const updatedNote = existingNote.includes("Paid Online")
+      ? existingNote
+      : existingNote ? `${existingNote} | ${paySummary}` : paySummary;
+
+    const { error: apptErr } = await adminSupabase
+      .from("patient_appointment")
+      .update({
+        clinic_note: updatedNote,
+        check_in_status: "scheduled",
+      })
+      .eq("appointment_id", appointmentId);
+
+    if (apptErr) {
+      console.warn("[fulfillBookingPayment] patient_appointment update note:", apptErr.message);
+    } else {
+      console.log("[fulfillBookingPayment] patient_appointment updated for booking:", appointmentId);
+    }
+  }
+
+  // 4. Send Receipt Email (Idempotent: check system_audit_log for prior delivery)
+  let emailDispatched = false;
+  let emailErrorMsg: string | null = null;
+
+  if (recipientEmail) {
+    const { data: alreadySentLog } = await adminSupabase
+      .from("system_audit_log")
+      .select("log_id")
+      .eq("action", "Consultation Receipt Email Sent")
+      .ilike("details", `%${paymongoPaymentId}%`)
+      .maybeSingle();
+
+    if (alreadySentLog) {
+      console.log("[fulfillBookingPayment] Consultation receipt email already sent previously:", paymongoPaymentId);
+      emailDispatched = true;
+    } else {
+      try {
+        const dispatchResult = await sendBookingReceiptEmail({
+          patientEmail: recipientEmail,
+          patientName: metadata?.patient_name || "Patient",
+          clinicName: metadata?.clinic_name || "Skin Clinic",
+          doctorName: metadata?.doctor_name || "Attending Dermatologist",
+          appointmentDate: metadata?.appointment_date || "Scheduled Date",
+          appointmentTime: metadata?.appointment_time || "Scheduled Time",
+          paymentMethod: paymentMethodLabel,
+          amount: grossAmount,
+          paymentDate: paymentDateIso,
+          paymongoPaymentId,
+        });
+
+        emailDispatched = dispatchResult.success;
+
+        await recordAuditLog({
+          userId,
+          action: "Consultation Receipt Email Sent",
+          target: recipientEmail,
+          details: `Consultation receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${grossAmount.toFixed(2)}).`,
+          metadata: {
+            provider: dispatchResult.provider,
+            messageId: dispatchResult.messageId,
+            amount: grossAmount,
+            transactionId: paymongoPaymentId,
+            appointmentId,
+          },
+        });
+      } catch (mailErr) {
+        emailErrorMsg = mailErr instanceof Error ? mailErr.message : String(mailErr);
+        console.warn("[fulfillBookingPayment] Consultation receipt email warning:", emailErrorMsg);
+      }
+    }
+  }
+
+  return {
+    fulfilled: true,
+    paymentType: "appointment_booking",
     emailDispatched,
     emailError: emailErrorMsg,
     recipientEmail,
@@ -588,6 +851,111 @@ Deno.serve(async (req: Request) => {
     }
 
     // =========================================================
+    // ACTION 1B: CREATE BOOKING PAYMENT INTENT (Clinic Consultations)
+    // =========================================================
+    if (action === "create_booking_intent") {
+      const {
+        amount,
+        consultationFee,
+        paymentMethod,
+        clinicId,
+        clinicName,
+        doctorId,
+        doctorName,
+        appointmentDate,
+        appointmentTime,
+        appointmentId,
+        patientName,
+        patientEmail,
+        patientContact,
+      } = body;
+
+      const userId = user.id;
+      if (!paymentMethod) {
+        throw new Error("Payment method is required");
+      }
+      if (paymentMethod !== "gcash" && paymentMethod !== "maya") {
+        throw new Error("Only GCash and Maya are supported");
+      }
+      if (!clinicId) {
+        throw new Error("Clinic ID is required");
+      }
+
+      const rawAmount = Number(amount ?? consultationFee ?? 0);
+      if (isNaN(rawAmount) || rawAmount <= 0) {
+        throw new Error("Valid consultation fee amount is required");
+      }
+
+      // Consultation fee is VAT inclusive (gross amount)
+      const grossAmount = Math.round(rawAmount * 100) / 100;
+      const basePrice = Math.round((grossAmount / (1 + VAT_RATE)) * 100) / 100;
+      const vatAmount = Math.round((grossAmount - basePrice) * 100) / 100;
+      const amountInCentavos = Math.round(grossAmount * 100);
+
+      const resolvedEmail = patientEmail || user.email;
+
+      const response = await fetch(`${PAYMONGO_API}/payment_intents`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          data: {
+            attributes: {
+              amount: amountInCentavos,
+              currency: "PHP",
+              payment_method_allowed: [
+                paymentMethod === "maya" ? "paymaya" : paymentMethod,
+              ],
+              description: `Consultation - ${clinicName || "Skin Clinic"}`,
+              metadata: {
+                payment_type: "appointment_booking",
+                user_id: userId,
+                clinic_id: clinicId,
+                clinic_name: clinicName || "Skin Clinic",
+                doctor_id: doctorId || "",
+                doctor_name: doctorName || "Attending Dermatologist",
+                appointment_date: appointmentDate || "",
+                appointment_time: appointmentTime || "",
+                appointment_id: appointmentId || "",
+                payment_method: paymentMethod,
+                patient_name: patientName || "Patient",
+                patient_email: resolvedEmail,
+                patient_contact: patientContact || "",
+                base_amount: basePrice.toFixed(2),
+                vat_amount: vatAmount.toFixed(2),
+                total_amount: grossAmount.toFixed(2),
+                amount_paid: grossAmount.toFixed(2),
+              },
+            },
+          },
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("PayMongo create booking intent error:", data);
+        return jsonResponse(
+          {
+            error:
+              data?.errors?.[0]?.detail ||
+              "Failed to create PayMongo booking payment intent",
+          },
+          response.status
+        );
+      }
+
+      return jsonResponse({
+        paymentIntentId: data.data.id,
+        clientKey: data.data.attributes.client_key,
+        status: data.data.attributes.status,
+        basePrice,
+        vatAmount,
+        totalPrice: grossAmount,
+        amountInCentavos,
+      });
+    }
+
+    // =========================================================
     // ACTION 2: ATTACH PAYMENT METHOD
     // =========================================================
     if (action === "attach_payment_method") {
@@ -735,14 +1103,25 @@ Deno.serve(async (req: Request) => {
             throw new Error("Payment does not belong to the authenticated user");
           }
 
-          fulfillmentResult = await fulfillPaymentAndSendEmail({
-            paymongoPaymentId,
-            paymentIntentId,
-            amountInCentavos,
-            paymentMethodType,
-            metadata,
-            userAuthEmail: user.email,
-          });
+          if (metadata?.payment_type === "appointment_booking") {
+            fulfillmentResult = await fulfillBookingPaymentAndSendEmail({
+              paymongoPaymentId,
+              paymentIntentId,
+              amountInCentavos,
+              paymentMethodType,
+              metadata,
+              userAuthEmail: user.email,
+            });
+          } else {
+            fulfillmentResult = await fulfillPaymentAndSendEmail({
+              paymongoPaymentId,
+              paymentIntentId,
+              amountInCentavos,
+              paymentMethodType,
+              metadata,
+              userAuthEmail: user.email,
+            });
+          }
         } catch (fulfillmentError) {
           console.error("[verify_payment_intent] Fulfillment error:", fulfillmentError);
           fulfillmentResult = {
@@ -816,14 +1195,23 @@ Deno.serve(async (req: Request) => {
         throw new Error("Payment does not belong to the authenticated user");
       }
 
-      const fulfillmentResult = await fulfillPaymentAndSendEmail({
-        paymongoPaymentId,
-        paymentIntentId,
-        amountInCentavos,
-        paymentMethodType,
-        metadata,
-        userAuthEmail: user.email,
-      });
+      const fulfillmentResult = metadata?.payment_type === "appointment_booking"
+        ? await fulfillBookingPaymentAndSendEmail({
+            paymongoPaymentId,
+            paymentIntentId,
+            amountInCentavos,
+            paymentMethodType,
+            metadata,
+            userAuthEmail: user.email,
+          })
+        : await fulfillPaymentAndSendEmail({
+            paymongoPaymentId,
+            paymentIntentId,
+            amountInCentavos,
+            paymentMethodType,
+            metadata,
+            userAuthEmail: user.email,
+          });
 
       return jsonResponse({
         success: true,
@@ -848,14 +1236,24 @@ Deno.serve(async (req: Request) => {
         throw new Error("paymongoPaymentId is required");
       }
 
-      const fulfillmentResult = await fulfillPaymentAndSendEmail({
-        paymongoPaymentId,
-        paymentIntentId: paymentIntentId || null,
-        amountInCentavos: Number(amountInCentavos) || 19900,
-        paymentMethodType: paymentMethodType || "gcash",
-        metadata: metadata || {},
-        userAuthEmail: userAuthEmail || user.email,
-      });
+      const isBooking = metadata?.payment_type === "appointment_booking";
+      const fulfillmentResult = isBooking
+        ? await fulfillBookingPaymentAndSendEmail({
+            paymongoPaymentId,
+            paymentIntentId: paymentIntentId || null,
+            amountInCentavos: Number(amountInCentavos) || 10000,
+            paymentMethodType: paymentMethodType || "gcash",
+            metadata: metadata || {},
+            userAuthEmail: userAuthEmail || user.email,
+          })
+        : await fulfillPaymentAndSendEmail({
+            paymongoPaymentId,
+            paymentIntentId: paymentIntentId || null,
+            amountInCentavos: Number(amountInCentavos) || 19900,
+            paymentMethodType: paymentMethodType || "gcash",
+            metadata: metadata || {},
+            userAuthEmail: userAuthEmail || user.email,
+          });
 
       return jsonResponse({
         success: true,
@@ -866,7 +1264,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse(
       {
         error:
-          "Invalid action. Use create_intent, attach_payment_method, verify_payment_intent, send_receipt_email, or fulfill_payment.",
+          "Invalid action. Use create_intent, create_booking_intent, attach_payment_method, verify_payment_intent, send_receipt_email, or fulfill_payment.",
       },
       400
     );

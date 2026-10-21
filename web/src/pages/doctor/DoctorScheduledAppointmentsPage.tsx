@@ -14,6 +14,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -714,20 +715,21 @@ export default function DoctorScheduledAppointmentsPage() {
       </div>
 
       {/* ================= CONSULTATION & CLINICAL RESULT MODAL ================= */}
-      <AnimatePresence>
-        {viewingAppt && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-xs"
-            onClick={() => setViewingAppt(null)}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 8 }}
-              transition={{ duration: 0.2 }}
-              className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col my-auto"
-              onClick={(e) => e.stopPropagation()}
+      <ModalPortal isOpen={Boolean(viewingAppt)}>
+        <AnimatePresence>
+          {viewingAppt && (
+            <div
+              className="fixed inset-0 z-[9998] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-xs"
+              onClick={() => setViewingAppt(null)}
             >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                transition={{ duration: 0.2 }}
+                className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col my-auto relative z-[9999]"
+                onClick={(e) => e.stopPropagation()}
+              >
               {/* Header */}
               <div className="bg-white border-b border-slate-100 px-4 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2 min-w-0">
@@ -992,7 +994,8 @@ export default function DoctorScheduledAppointmentsPage() {
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+        </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }

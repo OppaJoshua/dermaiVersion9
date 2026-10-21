@@ -21,6 +21,7 @@ import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 
 
@@ -418,23 +419,24 @@ export default function DoctorPatientHistoryPage() {
       )}
 
       {/* Detail Modal */}
-      <AnimatePresence>
-        {viewingAppt && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
-            onClick={() => setViewingAppt(null)}
-          >
+      <ModalPortal isOpen={Boolean(viewingAppt)}>
+        <AnimatePresence>
+          {viewingAppt && (
             <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.96, y: 12 }}
-              transition={{ duration: 0.2 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh]"
-              onClick={(e) => e.stopPropagation()}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+              onClick={() => setViewingAppt(null)}
             >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96, y: 12 }}
+                transition={{ duration: 0.2 }}
+                className="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh] relative z-[9999]"
+                onClick={(e) => e.stopPropagation()}
+              >
               {/* Header */}
               <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-gray-100 shrink-0">
                 <div className="min-w-0">
@@ -693,34 +695,37 @@ export default function DoctorPatientHistoryPage() {
             </motion.div>
           </motion.div>
         )}
-      </AnimatePresence>
+        </AnimatePresence>
+      </ModalPortal>
 
       {/* Lightbox Modal */}
-      <AnimatePresence>
-        {lightboxPhoto && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-60 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm"
-            onClick={() => setLightboxPhoto(null)}
-          >
-            <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
-              <button
-                onClick={() => setLightboxPhoto(null)}
-                className="absolute -top-10 right-0 text-white hover:text-gray-300 p-1 cursor-pointer"
-              >
-                <X className="w-6 h-6" />
-              </button>
-              <img
-                src={lightboxPhoto}
-                alt="Skin Photo Full Size"
-                className="max-h-[85vh] max-w-full object-contain rounded-xl border border-white/20"
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <ModalPortal isOpen={Boolean(lightboxPhoto)}>
+        <AnimatePresence>
+          {lightboxPhoto && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9998] bg-black/85 flex items-center justify-center p-4 backdrop-blur-md"
+              onClick={() => setLightboxPhoto(null)}
+            >
+              <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center z-[9999]">
+                <button
+                  onClick={() => setLightboxPhoto(null)}
+                  className="absolute -top-10 right-0 text-white hover:text-gray-300 p-1 cursor-pointer"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+                <img
+                  src={lightboxPhoto}
+                  alt="Skin Photo Full Size"
+                  className="max-h-[85vh] max-w-full object-contain rounded-xl border border-white/20 shadow-2xl"
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }
