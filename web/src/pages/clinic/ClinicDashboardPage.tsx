@@ -19,6 +19,8 @@ import { motion } from "framer-motion";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { supabase } from "@/lib/supabaseClient";
 import { cn } from "@/lib/utils";
+import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
+import { PatientAvatar } from "@/components/common/PatientAvatar";
 import {
   parseDoctorSchedule,
   formatTime12h,
@@ -47,6 +49,7 @@ type AppointmentRecord = {
   doctorNote?: string;
   doctorReviewedAt?: string;
   createdAt: string;
+  userId?: string;
   patientName?: string;
   patientEmail?: string;
   patientAge?: number;
@@ -62,6 +65,8 @@ type ClinicDoctorInfo = {
   name: string;
   photo?: string;
   photo_url?: string;
+  userId?: string;
+  user_id?: string;
   specialization?: string;
   specializations?: { id?: string; name: string }[];
   dutyDays?: string[];
@@ -185,19 +190,7 @@ function DashboardDoctorAvatar({ name, photo }: { name: string; photo?: string }
     initials = letters.slice(0, 2).toUpperCase() || "DR";
   }
 
-  let resolvedPhoto = photo;
-  if (
-    resolvedPhoto &&
-    !resolvedPhoto.startsWith("http") &&
-    !resolvedPhoto.startsWith("data:") &&
-    !resolvedPhoto.startsWith("blob:")
-  ) {
-    try {
-      const cleanPath = resolvedPhoto.replace(/^avatars\//, "");
-      const { data: pubData } = supabase.storage.from("avatars").getPublicUrl(cleanPath);
-      if (pubData?.publicUrl) resolvedPhoto = pubData.publicUrl;
-    } catch { }
-  }
+  const resolvedPhoto = resolveAvatarUrl(photo);
 
   if (resolvedPhoto && !imgError) {
     return (
@@ -323,6 +316,8 @@ export default function ClinicDashboardPage() {
               duty_schedule,
               status,
               photo_url,
+              user_id,
+              user:user_id ( avatar_url ),
               doctor_specializations (
                 specialization_id,
                 specializations (
@@ -336,10 +331,14 @@ export default function ClinicDashboardPage() {
             docRows.forEach((d: any) => {
               docMap.set(d.doctor_id, d.doctor_name);
               const specs = d.doctor_specializations?.map((ds: any) => ds.specializations).filter(Boolean) || [];
+              const userObj = Array.isArray(d.user) ? d.user[0] : d.user;
+              const resolvedPhoto = resolveAvatarUrl(d.photo_url || userObj?.avatar_url);
               loadedDoctors.push({
                 id: d.doctor_id,
                 name: d.doctor_name,
-                photo: d.photo_url,
+                photo: resolvedPhoto,
+                userId: d.user_id,
+                user_id: d.user_id,
                 specializations: specs,
                 specialization: specs[0]?.name,
                 dutyDays: Array.isArray(d.duty_days)
@@ -469,9 +468,11 @@ export default function ClinicDashboardPage() {
         const pName = a.patient_name || userObj?.full_name || "Patient";
 
         // Use user's real avatar_url or undefined (NEVER use skin_photo_url as profile avatar)
-        const userAvatar = (userObj?.avatar_url && !userObj.avatar_url.includes("scan-uploads"))
-          ? userObj.avatar_url
-          : undefined;
+        const userAvatar = resolveAvatarUrl(
+          userObj?.avatar_url && !userObj.avatar_url.includes("scan-uploads")
+            ? userObj.avatar_url
+            : undefined
+        );
 
         const parsedDate = parseDateStringSafe(a.date);
         const assignedDocName = a.assigned_doctor_id ? docMap.get(a.assigned_doctor_id) : undefined;
@@ -517,6 +518,7 @@ export default function ClinicDashboardPage() {
           doctorNote: a.doctor_note || undefined,
           doctorReviewedAt: a.doctor_reviewed_at || undefined,
           createdAt: a.created_at || a.date || new Date().toISOString(),
+          userId: a.user_id || undefined,
           patientName: pName,
           patientEmail: a.patient_email || undefined,
           patientAvatar: userAvatar,
@@ -542,9 +544,11 @@ export default function ClinicDashboardPage() {
                 );
                 if (isMatch) {
                   const localPName = localItem.patientName || "Patient";
-                  const localUserAvatar = (localItem.patientAvatar && !localItem.patientAvatar.includes("scan-uploads"))
-                    ? localItem.patientAvatar
-                    : undefined;
+                  const localUserAvatar = resolveAvatarUrl(
+                    localItem.patientAvatar && !localItem.patientAvatar.includes("scan-uploads")
+                      ? localItem.patientAvatar
+                      : undefined
+                  );
                   const parsedDate = parseDateStringSafe(localItem.date);
 
                   const isPaidOnline = Boolean(
@@ -1653,7 +1657,13 @@ export default function ClinicDashboardPage() {
                           <div className="col-span-3 sm:col-span-2">
                             <span className="text-sm font-bold text-gray-900">{timeStr}</span>
                           </div>
-                          <div className="col-span-3 sm:col-span-4 pr-3">
+                          <div className="col-span-3 sm:col-span-4 pr-3 flex items-center gap-2.5 min-w-0">
+                            <PatientAvatar
+                              name={pName}
+                              photoUrl={appt.patientAvatar}
+                              userId={appt.userId}
+                              className="w-8 h-8 shrink-0 text-xs"
+                            />
                             <p className="text-sm font-bold text-gray-900 leading-snug truncate group-hover:text-[#801336] transition-colors">{pName}</p>
                           </div>
                           <div className="col-span-3 sm:col-span-4 pr-3">

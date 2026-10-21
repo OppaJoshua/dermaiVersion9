@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
@@ -11,14 +11,15 @@ import {
   Calendar,
   Stethoscope,
   AlertTriangle,
+  AlertCircle,
+  UserCheck,
   X,
-  History,
-  ChevronDown,
-  ChevronUp,
   RotateCcw,
 } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 import { ModalPortal } from "@/components/common/ModalPortal";
+import { SelectAlternateDoctorModal } from "./SelectAlternateDoctorModal";
 
 interface Appointment {
   id: string;
@@ -27,6 +28,8 @@ interface Appointment {
   doctor: string;
   assignedDoctorName?: string;
   assignedDoctorId?: string;
+  previousDoctorId?: string;
+  previousDoctorName?: string;
   doctorStatus?: "pending-review" | "approved" | "rejected";
   hasDate: boolean;
   date: string;
@@ -41,6 +44,7 @@ interface Appointment {
   doctorDiagnosis?: string;
   rejectionReason?: string;
   createdAt?: string;
+  doctorReviewedAt?: string;
   userId?: string;
   patientEmail?: string;
   primaryScanId?: string;
@@ -63,37 +67,6 @@ function getStepIndex(app: Appointment): number {
   if (app.status === "Scheduled" || app.doctorStatus === "approved") return 2;
   if (app.status === "Pending") return 1;
   return 0;
-}
-
-function formatHistoryAction(entry: AppointmentHistoryEntry): string {
-  switch (entry.action) {
-    case "created":
-      return "Consultation request initially created.";
-    case "doctor_assigned":
-      return `Doctor assigned: ${entry.newDoctorName || "Attending Dermatologist"}.`;
-    case "doctor_reassigned":
-      return `Doctor reassigned from ${entry.previousDoctorName || "Previous Doctor"} to ${entry.newDoctorName || "Replacement Doctor"}.`;
-    case "doctor_approved":
-      return "Attending doctor approved and finalized schedule.";
-    case "doctor_rejected":
-      return "Doctor declined case. Clinic reassignment initiated.";
-    case "patient_reschedule_needed":
-      return entry.reason ? `Schedule note: ${entry.reason}` : "Schedule update noted.";
-    case "reschedule_requested":
-      return `Patient submitted reschedule request for ${entry.requestedDate || "new date"} at ${entry.requestedTime || "new time"}.`;
-    case "reschedule_accepted":
-      return `Clinic approved reschedule to ${entry.newDate} at ${entry.newTime}.`;
-    case "reschedule_declined":
-      return "Clinic declined reschedule request. Original schedule maintained.";
-    case "reschedule_withdrawn":
-      return "Patient withdrew pending reschedule request.";
-    case "cancelled":
-      return "Appointment cancelled.";
-    case "completed":
-      return "Consultation completed.";
-    default:
-      return "Appointment record updated.";
-  }
 }
 
 function StatusBadge({ app }: { app: Appointment }) {
@@ -145,8 +118,8 @@ function StatusBadge({ app }: { app: Appointment }) {
   // Pending / Review states
   if (app.doctorStatus === "rejected") {
     return (
-      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-rose-100 text-rose-700 border border-rose-200">
-        Clinic Reassigning
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-200">
+        Action Required • Select Doctor
       </span>
     );
   }
@@ -165,7 +138,6 @@ function StatusBadge({ app }: { app: Appointment }) {
 }
 
 function StatusTracker({ app }: { app: Appointment }) {
-  const [showHistory, setShowHistory] = useState(false);
   const isCancelled = app.status === "Cancelled" || app.status === "Rejected" || app.checkInStatus === "no-show";
   const activeStep = isCancelled ? -1 : getStepIndex(app);
 
@@ -387,15 +359,56 @@ function StatusTracker({ app }: { app: Appointment }) {
                 </p>
               </div>
             ) : isDoctorDeclined ? (
-              <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-xl p-3 text-rose-900">
-                <AlertTriangle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-xs font-bold text-rose-800">Clinic Reassigning Doctor</p>
-                  <p className="text-[11px] text-rose-700 mt-0.5 leading-relaxed">
-                    The previously assigned doctor was unavailable for your requested schedule. <strong className="inline-flex items-center gap-1 text-rose-950 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> is reassigning an available dermatologist to review your request.
-                  </p>
-                </div>
-              </div>
+              (() => {
+                const declinedTimestamp = app.doctorReviewedAt
+                  ? new Date(app.doctorReviewedAt).getTime()
+                  : app.createdAt
+                  ? new Date(app.createdAt).getTime()
+                  : Date.now();
+                const remainingMs = Math.max(0, declinedTimestamp + 24 * 3600 * 1000 - Date.now());
+                const is24HourExpired = remainingMs <= 0;
+                const hoursLeft = Math.floor(remainingMs / (1000 * 60 * 60));
+                const minsLeft = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+                const timeRemainingStr = hoursLeft > 0 ? `${hoursLeft}h ${minsLeft}m` : `${minsLeft}m`;
+
+                return is24HourExpired ? (
+                  <div className="flex items-start gap-2.5 bg-rose-50 border border-rose-200 rounded-xl p-3 text-rose-900">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-xs font-bold text-rose-800">Clinic Reassigning Doctor</p>
+                      <p className="text-[11px] text-rose-700 mt-0.5 leading-relaxed">
+                        The 24-hour alternate doctor selection period has expired. <strong className="inline-flex items-center gap-1 text-rose-950 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> will reassign an available doctor on your behalf.
+                      </p>
+                      {app.doctorNote && (
+                        <p className="text-[11px] text-rose-800/80 italic mt-1.5 pt-1.5 border-t border-rose-200/70">
+                          <strong>Doctor's Reason:</strong> "{app.doctorNote}"
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50/90 p-3.5 text-rose-950 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-1.5 text-rose-900 font-bold text-xs uppercase tracking-wider">
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>Action Required: Select Alternate Doctor</span>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-900 border border-rose-200 font-bold text-[10px] flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-rose-600" />
+                        <span>{timeRemainingStr} remaining</span>
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-rose-800 leading-relaxed">
+                      The previously assigned doctor was unavailable for your requested schedule. Please select an alternate dermatologist within <strong>{timeRemainingStr}</strong> to keep your booked consultation schedule at <strong>no extra charge</strong>.
+                    </p>
+                    {app.doctorNote && (
+                      <p className="text-[11px] text-rose-900/90 italic bg-white/80 rounded-lg p-2 border border-rose-200/70">
+                        <span className="font-semibold text-rose-950 not-italic">Doctor's Note:</span> "{app.doctorNote}"
+                      </p>
+                    )}
+                  </div>
+                );
+              })()
             ) : isUnderDoctorReview ? (
               <div className="flex items-start gap-2 bg-sky-50 border border-sky-200 rounded-xl p-3 text-sky-900">
                 <Stethoscope className="w-4 h-4 text-sky-600 mt-0.5 shrink-0" />
@@ -418,8 +431,11 @@ function StatusTracker({ app }: { app: Appointment }) {
               </div>
             )}
 
-            {/* Doctor Clinical Diagnosis / Assessment Card (only when a real clinical diagnosis exists) */}
-            {app.doctorDiagnosis &&
+            {/* Doctor Clinical Diagnosis / Assessment Card (only when a real clinical diagnosis exists and doctor did not decline) */}
+            {!isDoctorDeclined &&
+              app.status !== "Cancelled" &&
+              app.status !== "Rejected" &&
+              app.doctorDiagnosis &&
               !app.doctorDiagnosis.toLowerCase().includes("general dermatol") &&
               !app.doctorDiagnosis.toLowerCase().includes("general consult") && (
                 <div className="rounded-xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200 p-3.5 shadow-2xs">
@@ -436,62 +452,6 @@ function StatusTracker({ app }: { app: Appointment }) {
                 </div>
               )}
 
-            {app.clinicNote && !isCancelled && (
-              <div className="text-[11px] text-gray-600 bg-white border border-gray-200/80 rounded-xl px-3 py-2">
-                <strong className="text-gray-700">Clinic Note:</strong> {app.clinicNote}
-              </div>
-            )}
-
-            {/* Rule 5: Traceable Appointment History Audit Trail */}
-            {app.appointmentHistory && app.appointmentHistory.length > 0 && (
-              <div className="pt-2 border-t border-gray-200/60">
-                <button
-                  type="button"
-                  onClick={() => setShowHistory((prev) => !prev)}
-                  className="flex items-center justify-between w-full text-left text-[11px] font-semibold text-gray-500 hover:text-gray-800 transition py-1 cursor-pointer"
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <History className="w-3.5 h-3.5 text-magenta-500" />
-                    <span>Appointment History ({app.appointmentHistory.length} event{app.appointmentHistory.length > 1 ? "s" : ""})</span>
-                  </span>
-                  {showHistory ? (
-                    <ChevronUp className="w-3.5 h-3.5 text-gray-400" />
-                  ) : (
-                    <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
-                  )}
-                </button>
-
-                {showHistory && (
-                  <div className="mt-2 space-y-1.5 pl-2.5 border-l-2 border-magenta-300">
-                    {app.appointmentHistory.map((item, idx) => (
-                      <div key={idx} className="p-2 rounded-xl bg-white border border-gray-100 text-[11px] text-gray-600 shadow-2xs">
-                        <div className="flex items-center justify-between text-[10px] text-gray-400 font-medium mb-0.5">
-                          <span className="uppercase font-bold text-gray-500 tracking-wider">
-                            {item.actor === "patient" ? "Patient" : item.actor === "clinic" ? "Clinic" : item.actor === "doctor" ? "Doctor" : "System"}
-                          </span>
-                          <span>
-                            {new Date(item.timestamp).toLocaleString("en-PH", {
-                              timeZone: "Asia/Manila",
-                              month: "short",
-                              day: "numeric",
-                              hour: "numeric",
-                              minute: "2-digit",
-                              hour12: true,
-                            })}
-                          </span>
-                        </div>
-                        <p className="text-gray-900 font-medium">{formatHistoryAction(item)}</p>
-                        {item.reason && (
-                          <p className="text-[10px] text-gray-500 italic mt-0.5">
-                            Note: "{item.reason}"
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </>
       )}
@@ -504,11 +464,13 @@ function AppointmentCard({
   onCancel,
   onReschedule,
   onWithdrawReschedule,
+  onSelectAlternateDoctor,
 }: {
   app: Appointment;
   onCancel?: (app: Appointment) => void;
   onReschedule?: (app: Appointment) => void;
   onWithdrawReschedule?: (app: Appointment) => void;
+  onSelectAlternateDoctor?: (app: Appointment) => void;
 }) {
   const isFinalized = app.status === "Scheduled" || app.doctorStatus === "approved" || app.status === "Completed";
   const isConfirmed = app.status === "Scheduled" || app.status === "Completed";
@@ -517,6 +479,23 @@ function AppointmentCard({
   const canCancel = app.status === "Pending" && !isFinalized;
   // Patient can request reschedule as long as consultation is active (Rule 1)
   const canRequestReschedule = !isTerminal && app.checkInStatus !== "no-show";
+
+  const rawStatus = (app.status || "").toLowerCase();
+  const docStatus = (app.doctorStatus || "").toLowerCase();
+  const isDeclined =
+    docStatus === "rejected" ||
+    rawStatus === "rejected" ||
+    rawStatus === "declined" ||
+    rawStatus === "clinic_reassigning" ||
+    rawStatus === "needs_doctor";
+
+  const declinedTimestamp = app.doctorReviewedAt
+    ? new Date(app.doctorReviewedAt).getTime()
+    : app.createdAt
+    ? new Date(app.createdAt).getTime()
+    : Date.now();
+  const is24HourExpired = Date.now() - (isNaN(declinedTimestamp) ? Date.now() : declinedTimestamp) > 24 * 3600 * 1000;
+  const canChooseAlternateDoctor = isDeclined && !is24HourExpired;
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-white shadow-xs hover:border-gray-200 transition-all duration-200 overflow-hidden">
@@ -568,37 +547,56 @@ function AppointmentCard({
 
         {/* Action Controls */}
         <div className="mt-4 pt-3 border-t border-gray-100 flex flex-wrap items-center justify-between gap-2.5">
-          {app.rescheduleRequested ? (
-            <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Primary 'Select Alternate Doctor' button styled in brand #A21D5C */}
+            {canChooseAlternateDoctor && (
               <button
                 type="button"
-                onClick={() => onWithdrawReschedule && onWithdrawReschedule(app)}
-                className="text-xs font-semibold text-rose-600 hover:text-rose-700 px-3 py-1.5 rounded-xl border border-rose-200 hover:bg-rose-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                onClick={() => onSelectAlternateDoctor && onSelectAlternateDoctor(app)}
+                className="text-xs font-bold text-white bg-[#A21D5C] hover:bg-[#88184d] px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-[0.98]"
               >
-                <X className="w-3.5 h-3.5" />
-                <span>Withdraw Reschedule Request</span>
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>Select Alternate Doctor</span>
               </button>
+            )}
+
+            {app.rescheduleRequested ? (
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => onWithdrawReschedule && onWithdrawReschedule(app)}
+                  className="text-xs font-semibold text-rose-600 hover:text-rose-700 px-3 py-1.5 rounded-xl border border-rose-200 hover:bg-rose-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Withdraw Reschedule Request</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onReschedule && onReschedule(app)}
+                  className="text-xs font-semibold text-purple-700 hover:text-purple-800 px-3 py-1.5 rounded-xl border border-purple-200 hover:bg-purple-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Change Requested Slot</span>
+                </button>
+              </div>
+            ) : canRequestReschedule && !isDeclined ? (
               <button
                 type="button"
                 onClick={() => onReschedule && onReschedule(app)}
-                className="text-xs font-semibold text-purple-700 hover:text-purple-800 px-3 py-1.5 rounded-xl border border-purple-200 hover:bg-purple-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                className="text-xs font-semibold text-magenta-700 hover:text-magenta-800 px-3.5 py-1.5 rounded-xl border border-magenta-200 hover:bg-magenta-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
               >
-                <Clock className="w-3.5 h-3.5" />
-                <span>Change Requested Slot</span>
+                <Calendar className="w-3.5 h-3.5 text-magenta-600" />
+                <span>Request Reschedule</span>
               </button>
-            </div>
-          ) : canRequestReschedule ? (
-            <button
-              type="button"
-              onClick={() => onReschedule && onReschedule(app)}
-              className="text-xs font-semibold text-magenta-700 hover:text-magenta-800 px-3.5 py-1.5 rounded-xl border border-magenta-200 hover:bg-magenta-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
-            >
-              <Calendar className="w-3.5 h-3.5 text-magenta-600" />
-              <span>Request Reschedule</span>
-            </button>
-          ) : (
-            <div />
-          )}
+            ) : null}
+
+            {isDeclined && is24HourExpired && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-700 font-medium">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>24-hour window expired • Clinic is assigning doctor</span>
+              </div>
+            )}
+          </div>
 
           {canCancel && (
             <button
@@ -615,13 +613,98 @@ function AppointmentCard({
   );
 }
 
+function getCachedAppointments(): Appointment[] {
+  try {
+    const rawLocal = localStorage.getItem("dermai_clinic_appointments");
+    if (!rawLocal) return [];
+    const parsedLocal = JSON.parse(rawLocal);
+    if (!Array.isArray(parsedLocal)) return [];
+    return parsedLocal
+      .map((localItem: any) => {
+        const pDate = localItem.date ? new Date(localItem.date) : null;
+        const isValid = pDate && !isNaN(pDate.getTime());
+        let formattedLocalTime = "Time pending";
+        if (localItem.time && localItem.time !== "Time pending") {
+          if (localItem.time.includes("AM") || localItem.time.includes("PM")) {
+            formattedLocalTime = localItem.time;
+          } else if (localItem.time.includes(":")) {
+            const [h, m] = localItem.time.split(":").map(Number);
+            const ampm = (h || 0) >= 12 ? "PM" : "AM";
+            const hr = (h || 0) % 12 || 12;
+            formattedLocalTime = `${hr}:${String(m || 0).padStart(2, "0")} ${ampm}`;
+          } else {
+            formattedLocalTime = localItem.time;
+          }
+        } else if (isValid && localItem.date?.includes("T")) {
+          formattedLocalTime = pDate.toLocaleTimeString("en-PH", {
+            timeZone: "Asia/Manila",
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+          });
+        }
+
+        return {
+          id: localItem.id || localItem.appointment_id,
+          clinicId: localItem.clinicId || localItem.clinic_id,
+          clinicName: localItem.clinicName || "Skin Clinic",
+          doctor: localItem.doctor || (localItem.assignedDoctorName ? `Dr. ${localItem.assignedDoctorName.replace(/^dr\.\s*/i, "")}` : "To be assigned"),
+          assignedDoctorName: localItem.assignedDoctorName,
+          assignedDoctorId: localItem.assignedDoctorId,
+          previousDoctorId: localItem.previousDoctorId,
+          previousDoctorName: localItem.previousDoctorName,
+          doctorStatus: localItem.doctorStatus,
+          hasDate: Boolean(isValid || localItem.date),
+          date: isValid
+            ? pDate.toLocaleDateString("en-PH", { timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric" })
+            : (localItem.date || "Date pending"),
+          time: formattedLocalTime,
+          status: (localItem.status === "cancelled" ? "Cancelled" : localItem.status === "confirmed" || localItem.status === "scheduled" || localItem.doctorStatus === "approved" ? "Scheduled" : localItem.status === "completed" ? "Completed" : localItem.status === "rejected" ? "Rejected" : "Pending") as Appointment["status"],
+          clinicNote: localItem.clinicNote,
+          doctorNote: localItem.doctorNote,
+          doctorDiagnosis: localItem.conditionName || localItem.aiConditionName || localItem.doctorDiagnosis,
+          createdAt: localItem.createdAt || new Date().toISOString(),
+          userId: localItem.userId,
+          patientEmail: localItem.patientEmail,
+          primaryScanId: localItem.primaryScanId,
+          rescheduleRequested: Boolean(localItem.rescheduleRequested || localItem.reschedule_requested),
+          rescheduleDate: localItem.rescheduleDate || localItem.reschedule_date,
+          rescheduleTime: localItem.rescheduleTime || localItem.reschedule_time,
+          rescheduleReason: localItem.rescheduleReason || localItem.reschedule_reason,
+          needsPatientReschedule: Boolean(localItem.needsPatientReschedule || localItem.needs_patient_reschedule),
+          appointmentHistory: localItem.appointmentHistory || localItem.appointment_history || [],
+          paymentStatus: localItem.paymentStatus || "paid",
+          paymentAmount: localItem.paymentAmount ? Number(localItem.paymentAmount) : undefined,
+          paymentReference: localItem.paymentReference || undefined,
+          paidAt: localItem.paidAt || undefined,
+        };
+      })
+      .filter((a: any) => {
+        const paySt = String(a.paymentStatus || "").toLowerCase().trim();
+        return paySt !== "pending_hold" && paySt !== "expired" && paySt !== "failed";
+      });
+  } catch {
+    return [];
+  }
+}
+
 const AppointmentStatusPage: React.FC = () => {
   const { user } = useAuth();
-  const [allAppointments, setAllAppointments] = useState<Appointment[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [allAppointments, setAllAppointments] = useState<Appointment[]>(() => getCachedAppointments());
   const [cancellingAppt, setCancellingAppt] = useState<Appointment | null>(null);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+
+  // Search parameters for notification routing & modal trigger
+  const [searchParams] = useSearchParams();
+  const paramApptId = searchParams.get("appointment_id") || searchParams.get("appointment");
+  const paramAction = searchParams.get("action");
+
+  // Tabs state
+  const [activeTab, setActiveTab] = useState<"upcoming" | "past">("upcoming");
+
+  // Reassign Alternate Doctor Modal State
+  const [reassignModalAppt, setReassignModalAppt] = useState<Appointment | null>(null);
 
   // Reschedule Modal State
   const [rescheduleModalAppt, setRescheduleModalAppt] = useState<Appointment | null>(null);
@@ -638,14 +721,23 @@ const AppointmentStatusPage: React.FC = () => {
   const [withdrawModalAppt, setWithdrawModalAppt] = useState<Appointment | null>(null);
   const [withdrawSaving, setWithdrawSaving] = useState(false);
 
+  // Auto-open Alternate Doctor Modal if routed with ?appointment_id=[id]&action=reassign
+  useEffect(() => {
+    if (!paramApptId || allAppointments.length === 0) return;
+    const targetAppt = allAppointments.find((a) => a.id === paramApptId);
+    if (targetAppt) {
+      if (paramAction === "reassign") {
+        setReassignModalAppt(targetAppt);
+      }
+    }
+  }, [paramApptId, paramAction, allAppointments]);
+
   const fetchAppointments = useCallback(async () => {
-    setLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userId = user?.id || session?.user?.id;
       const userEmail = user?.email || session?.user?.email;
       if (!userId && !userEmail) {
-        setLoading(false);
         return;
       }
 
@@ -661,6 +753,7 @@ const AppointmentStatusPage: React.FC = () => {
           doctor_note,
           ai_condition_name,
           assigned_doctor_id,
+          doctor_reviewed_at,
           created_at,
           queue_number,
           batch_time,
@@ -775,7 +868,10 @@ const AppointmentStatusPage: React.FC = () => {
 
           let docDiagnosis = "";
           let docNoteClean = "";
-          if (a.doctor_note) {
+          if (isDocRejected) {
+            // When doctor declined/rejected, doctor_note is their rejection note, NOT a diagnosis
+            docNoteClean = a.doctor_note ? a.doctor_note.trim() : "";
+          } else if (a.doctor_note) {
             const match = a.doctor_note.match(/^Diagnosis:\s*([^|\n]+)(?:[|\n]\s*(?:Note:\s*)?(.*))?$/is);
             if (match) {
               docDiagnosis = match[1]?.trim() || "";
@@ -805,6 +901,10 @@ const AppointmentStatusPage: React.FC = () => {
               ? docNameMap.get(a.assigned_doctor_id)
               : undefined,
             assignedDoctorId: !isDocRejected ? (a.assigned_doctor_id || undefined) : undefined,
+            previousDoctorId: a.assigned_doctor_id || undefined,
+            previousDoctorName: a.assigned_doctor_id && docNameMap.has(a.assigned_doctor_id)
+              ? docNameMap.get(a.assigned_doctor_id)
+              : undefined,
             doctorStatus: a.doctor_status || undefined,
             hasDate: Boolean(isValidDate),
             date: dateStr,
@@ -816,9 +916,10 @@ const AppointmentStatusPage: React.FC = () => {
             status: displayStatus,
             clinicNote: a.clinic_note || undefined,
             doctorNote: docNoteClean || undefined,
-            doctorDiagnosis: docDiagnosis || undefined,
+            doctorDiagnosis: !isDocRejected ? (docDiagnosis || undefined) : undefined,
             rejectionReason: a.clinic_note || undefined,
             createdAt: a.created_at,
+            doctorReviewedAt: a.doctor_reviewed_at || undefined,
             userId: a.user_id || undefined,
             patientEmail: a.patient_email || undefined,
             primaryScanId,
@@ -916,8 +1017,6 @@ const AppointmentStatusPage: React.FC = () => {
       }
     } catch (err) {
       console.error("Failed to load appointments:", err);
-    } finally {
-      setLoading(false);
     }
   }, [user]);
 
@@ -1258,6 +1357,25 @@ const AppointmentStatusPage: React.FC = () => {
   now.setHours(0, 0, 0, 0);
 
   const upcomingAppointments = allAppointments.filter((a) => {
+    // If appointment is declined but within 24h re-selection window, keep it active in Upcoming!
+    const rawSt = (a.status || "").toLowerCase();
+    const docSt = (a.doctorStatus || "").toLowerCase();
+    const isDeclined =
+      docSt === "rejected" ||
+      rawSt === "rejected" ||
+      rawSt === "declined" ||
+      rawSt === "clinic_reassigning" ||
+      rawSt === "needs_doctor";
+
+    const declinedTimestamp = a.doctorReviewedAt
+      ? new Date(a.doctorReviewedAt).getTime()
+      : a.createdAt
+      ? new Date(a.createdAt).getTime()
+      : Date.now();
+    const is24HourExpired = Date.now() - (isNaN(declinedTimestamp) ? Date.now() : declinedTimestamp) > 24 * 3600 * 1000;
+
+    if (isDeclined && !is24HourExpired) return true;
+
     // Past or terminal states never go in Upcoming
     if (a.status === "Completed" || a.status === "Rejected" || a.status === "Cancelled") return false;
     if (a.checkInStatus === "no-show") return false;
@@ -1275,6 +1393,25 @@ const AppointmentStatusPage: React.FC = () => {
   });
 
   const pastAppointments = allAppointments.filter((a) => {
+    const rawSt = (a.status || "").toLowerCase();
+    const docSt = (a.doctorStatus || "").toLowerCase();
+    const isDeclined =
+      docSt === "rejected" ||
+      rawSt === "rejected" ||
+      rawSt === "declined" ||
+      rawSt === "clinic_reassigning" ||
+      rawSt === "needs_doctor";
+
+    const declinedTimestamp = a.doctorReviewedAt
+      ? new Date(a.doctorReviewedAt).getTime()
+      : a.createdAt
+      ? new Date(a.createdAt).getTime()
+      : Date.now();
+    const is24HourExpired = Date.now() - (isNaN(declinedTimestamp) ? Date.now() : declinedTimestamp) > 24 * 3600 * 1000;
+
+    // If declined but still within 24h, it's active in Upcoming, not Past
+    if (isDeclined && !is24HourExpired) return false;
+
     if (a.status === "Rejected" || a.status === "Cancelled" || a.status === "Completed") return true;
     if (a.checkInStatus === "no-show") return true;
     if (a.status === "Scheduled") {
@@ -1285,15 +1422,6 @@ const AppointmentStatusPage: React.FC = () => {
   });
 
   const renderCards = (apps: Appointment[]) => {
-    if (loading) {
-      return (
-        <div className="flex flex-col items-center justify-center py-14 gap-3">
-          <div className="w-8 h-8 border-3 border-magenta-200 border-t-magenta-600 rounded-full animate-spin" />
-          <p className="text-sm text-gray-500 font-medium">Loading your appointments...</p>
-        </div>
-      );
-    }
-
     if (apps.length === 0) {
       return (
         <div className="flex flex-col items-center justify-center py-14 gap-3">
@@ -1315,6 +1443,7 @@ const AppointmentStatusPage: React.FC = () => {
             onCancel={(item) => setCancellingAppt(item)}
             onReschedule={(item) => handleOpenRescheduleModal(item)}
             onWithdrawReschedule={(item) => setWithdrawModalAppt(item)}
+            onSelectAlternateDoctor={(item) => setReassignModalAppt(item)}
           />
         ))}
       </div>
@@ -1345,7 +1474,7 @@ const AppointmentStatusPage: React.FC = () => {
       )}
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-        <Tabs defaultValue="upcoming">
+        <Tabs value={activeTab} onValueChange={(val: string) => setActiveTab(val as "upcoming" | "past")}>
           <div className="px-5 pt-5">
             <TabsList className="w-full grid grid-cols-2 rounded-xl bg-gray-100 p-1 h-auto">
               <TabsTrigger
@@ -1373,6 +1502,19 @@ const AppointmentStatusPage: React.FC = () => {
           </div>
         </Tabs>
       </div>
+
+      {/* Select Alternate Doctor Modal */}
+      <SelectAlternateDoctorModal
+        isOpen={Boolean(reassignModalAppt)}
+        onClose={() => setReassignModalAppt(null)}
+        appointment={reassignModalAppt}
+        clinicId={reassignModalAppt?.clinicId ? String(reassignModalAppt.clinicId) : undefined}
+        appointmentId={reassignModalAppt?.id}
+        onSuccess={(newDoctorName) => {
+          setSuccessToast(`Successfully assigned consultation to Dr. ${newDoctorName.replace(/^dr\.\s*/i, "")}. The doctor has been notified for review.`);
+          fetchAppointments();
+        }}
+      />
 
       {/* Patient Reschedule Request Modal */}
       <ModalPortal isOpen={Boolean(rescheduleModalAppt)}>

@@ -36,6 +36,7 @@ import SubscriptionChoicePage from "./pages/patient/SubscriptionChoicePage";
 import HelpPage from "./pages/patient/settings/HelpPage";
 import BillingSettingsPage from "./pages/patient/settings/BillingSettingsPage";
 import PatientNotifications from "./pages/patient/PatientNotifications";
+import ReassignDoctorPage from "./pages/patient/ReassignDoctorPage";
 
 // Clinic Pages
 import ClinicDashboardPage from "./pages/clinic/ClinicDashboardPage";
@@ -77,6 +78,7 @@ function App() {
     location.pathname.startsWith("/clinic") ||
     location.pathname.startsWith("/doctor") ||
     location.pathname.startsWith("/dashboard") ||
+    location.pathname.startsWith("/patient") ||
     location.pathname.startsWith("/user") ||
     location.pathname.startsWith("/auth") ||
     location.pathname === "/appointment" ||
@@ -119,6 +121,7 @@ function App() {
         <Route path="/dashboard/appointment" element={<UserLayout><AppointmentPage /></UserLayout>} />
         <Route path="/appointment" element={<UserLayout><AppointmentPage /></UserLayout>} />
         <Route path="/dashboard/appointment-status" element={<UserLayout><AppointmentStatusPage /></UserLayout>} />
+        <Route path="/patient/appointment-status" element={<UserLayout><AppointmentStatusPage /></UserLayout>} />
         <Route path="/dashboard/subscription-status" element={<UserLayout><SubscriptionStatusPage /></UserLayout>} />
         <Route path="/dashboard/upgrade" element={<UserLayout><SubscriptionUpgradePage /></UserLayout>} />
         {/* Standalone payment success page - no patient sidebar/header */}
@@ -134,6 +137,8 @@ function App() {
         <Route path="/dashboard/settings/billing" element={<UserLayout><BillingSettingsPage /></UserLayout>} />
         <Route path="/dashboard/notifications" element={<UserLayout><PatientNotifications /></UserLayout>} />
         <Route path="/patient/notifications" element={<Navigate to="/dashboard/notifications" replace />} />
+        <Route path="/patient/appointments/:appointmentId/reassign" element={<UserLayout><ReassignDoctorPage /></UserLayout>} />
+        <Route path="/dashboard/appointments/:appointmentId/reassign" element={<UserLayout><ReassignDoctorPage /></UserLayout>} />
 
         {/* Clinic Routes */}
         <Route path="/clinic" element={<ClinicLayout><ClinicDashboardPage /></ClinicLayout>} />

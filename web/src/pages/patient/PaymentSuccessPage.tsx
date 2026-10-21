@@ -184,7 +184,6 @@ export default function PaymentSuccessPage() {
               paymongoPaymentId,
               amount: chargedAmount,
             });
-            console.log("[PaymentSuccessPage] Pro subscription activated and synced for user:", targetUserId);
           } catch (subErr) {
             console.warn("[PaymentSuccessPage] upgradeSubscriptionToPro fallback warning:", subErr);
             await validateAndSyncSubscription(targetUserId);

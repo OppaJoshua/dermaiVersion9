@@ -1309,6 +1309,7 @@ export interface AppointmentHistoryEntry {
     | "doctor_reassigned"
     | "doctor_approved"
     | "doctor_rejected"
+    | "alternate_doctor_selected"
     | "reschedule_requested"
     | "reschedule_accepted"
     | "reschedule_declined"

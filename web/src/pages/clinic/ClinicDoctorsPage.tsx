@@ -29,6 +29,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
+import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { logAuditEvent } from "@/utils/auditLogger";
 import SpecializationMultiSelect, {
   type SpecializationOption,
@@ -64,6 +65,8 @@ export type DoctorAccount = {
   contactNumber?: string;
   prcLicense?: string;
   photo?: string;
+  userId?: string;
+  user_id?: string;
   specialization?: string;
   specializations: SpecializationOption[];
   clinicName: string;
@@ -78,22 +81,6 @@ export type DoctorAccount = {
 };
 
 /* ── Constants ────────────────────────────────────────────────────── */
-const DEFAULT_SPECIALIZATIONS: SpecializationOption[] = [
-  { id: "spec-1", name: "General Dermatology" },
-  { id: "spec-2", name: "Clinical Dermatology" },
-  { id: "spec-3", name: "Cosmetic Dermatology" },
-  { id: "spec-4", name: "Aesthetic Dermatology" },
-  { id: "spec-5", name: "Pediatric Dermatology" },
-  { id: "spec-6", name: "Dermatologic Surgery" },
-  { id: "spec-7", name: "Dermatopathology" },
-  { id: "spec-8", name: "Dermatology Oncology" },
-  { id: "spec-9", name: "Hair & Scalp Dermatology" },
-  { id: "spec-10", name: "Nail Dermatology" },
-  { id: "spec-11", name: "Immunodermatology" },
-  { id: "spec-12", name: "Contact Dermatitis & Allergy" },
-  { id: "spec-13", name: "Photodermatology" },
-  { id: "spec-14", name: "Dermatology & Venereology" },
-];
 
 
 
@@ -243,19 +230,7 @@ function OnDutyDoctorAvatar({ name, photo }: { name: string; photo?: string }) {
     initials = letters.slice(0, 2).toUpperCase() || "DR";
   }
 
-  let resolvedPhoto = photo;
-  if (
-    resolvedPhoto &&
-    !resolvedPhoto.startsWith("http") &&
-    !resolvedPhoto.startsWith("data:") &&
-    !resolvedPhoto.startsWith("blob:")
-  ) {
-    try {
-      const cleanPath = resolvedPhoto.replace(/^avatars\//, "");
-      const { data: pubData } = supabase.storage.from("avatars").getPublicUrl(cleanPath);
-      if (pubData?.publicUrl) resolvedPhoto = pubData.publicUrl;
-    } catch { }
-  }
+  const resolvedPhoto = resolveAvatarUrl(photo);
 
   if (resolvedPhoto && !imgError) {
     return (
@@ -295,19 +270,7 @@ function RegisteredDoctorAvatar({ name, photo }: { name: string; photo?: string 
     initials = letters.slice(0, 2).toUpperCase() || "DR";
   }
 
-  let resolvedPhoto = photo;
-  if (
-    resolvedPhoto &&
-    !resolvedPhoto.startsWith("http") &&
-    !resolvedPhoto.startsWith("data:") &&
-    !resolvedPhoto.startsWith("blob:")
-  ) {
-    try {
-      const cleanPath = resolvedPhoto.replace(/^avatars\//, "");
-      const { data: pubData } = supabase.storage.from("avatars").getPublicUrl(cleanPath);
-      if (pubData?.publicUrl) resolvedPhoto = pubData.publicUrl;
-    } catch { }
-  }
+  const resolvedPhoto = resolveAvatarUrl(photo);
 
   if (resolvedPhoto && !imgError) {
     return (
@@ -587,7 +550,7 @@ export default function ClinicDoctorsPage() {
   const [activeTab, setActiveTab] = useState<"register" | "schedule">("register");
 
   // Dynamic specializations
-  const [specializations, setSpecializations] = useState<SpecializationOption[]>(DEFAULT_SPECIALIZATIONS);
+  const [specializations, setSpecializations] = useState<SpecializationOption[]>([]);
   const [loadingSpecializations, setLoadingSpecializations] = useState(false);
 
   // Doctors list (Clinic isolated)
@@ -1115,11 +1078,13 @@ export default function ClinicDoctorsPage() {
         .select("id, name")
         .order("name", { ascending: true });
 
-      if (!error && data && data.length > 0) {
+      if (error) {
+        console.error("Error fetching specializations:", error);
+      } else if (data) {
         setSpecializations(data);
       }
-    } catch {
-      // Using DEFAULT_SPECIALIZATIONS
+    } catch (err) {
+      console.error("Failed to fetch specializations:", err);
     } finally {
       setLoadingSpecializations(false);
     }
@@ -1138,6 +1103,8 @@ export default function ClinicDoctorsPage() {
           contact_number,
           prc_license,
           photo_url,
+          user_id,
+          user:user_id ( avatar_url ),
           duty_days,
           duty_start_time,
           duty_end_time,
@@ -1218,11 +1185,14 @@ export default function ClinicDoctorsPage() {
             });
           }
 
-          const preservedPhoto =
+          const userObj = Array.isArray(doc.user) ? doc.user[0] : doc.user;
+          const rawPhoto =
             doc.photo_url ||
+            userObj?.avatar_url ||
             localPhotoMap.get(String(doc.doctor_id)) ||
             (doc.email ? localPhotoMap.get(String(doc.email).toLowerCase().trim()) : undefined) ||
             undefined;
+          const preservedPhoto = resolveAvatarUrl(rawPhoto);
 
           return {
             id: doc.doctor_id,
@@ -1231,6 +1201,8 @@ export default function ClinicDoctorsPage() {
             contactNumber: doc.contact_number || "",
             prcLicense: doc.prc_license || "",
             photo: preservedPhoto,
+            userId: doc.user_id,
+            user_id: doc.user_id,
             dutyDays: parsedDutyDays,
             dutyStartTime: doc.duty_start_time || "08:00",
             dutyEndTime: doc.duty_end_time || "17:00",
@@ -1936,19 +1908,7 @@ export default function ClinicDoctorsPage() {
     setEditingDoctor(doc);
     setEditError("");
 
-    const resolvedPhoto = doc.photo
-      ? doc.photo.startsWith("http") || doc.photo.startsWith("data:") || doc.photo.startsWith("blob:")
-        ? doc.photo
-        : (() => {
-          try {
-            const cleanPath = doc.photo.replace(/^avatars\//, "");
-            const { data: pubData } = supabase.storage.from("avatars").getPublicUrl(cleanPath);
-            return pubData?.publicUrl || doc.photo;
-          } catch {
-            return doc.photo;
-          }
-        })()
-      : "";
+    const resolvedPhoto = resolveAvatarUrl(doc.photo) || "";
 
     setEditForm({
       name: doc.name || "",
@@ -2635,6 +2595,15 @@ export default function ClinicDoctorsPage() {
                             className="px-3.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors cursor-pointer shadow-2xs"
                           >
                             Details
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTarget(doc.id)}
+                            className="px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-medium transition-colors cursor-pointer shadow-2xs inline-flex items-center gap-1"
+                            title="Remove doctor"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">Remove</span>
                           </button>
                         </div>
                       </div>
@@ -4026,6 +3995,19 @@ export default function ClinicDoctorsPage() {
                     {selectedDoctorForDetails.status === "Active"
                       ? "Deactivate Doctor"
                       : "Re-activate Doctor"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const doc = selectedDoctorForDetails;
+                      setSelectedDoctorForDetails(null);
+                      setDeleteTarget(doc.id);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Remove</span>
                   </button>
 
                   <button

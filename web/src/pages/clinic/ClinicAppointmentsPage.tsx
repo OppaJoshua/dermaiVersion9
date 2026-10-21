@@ -1,5 +1,6 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import {
+  AlertCircle,
   AlertTriangle,
   Calendar,
   CheckCircle2,
@@ -25,6 +26,8 @@ import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
+import { PatientAvatar } from "@/components/common/PatientAvatar";
+import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { createPatientNotification } from "@/lib/notificationService";
 import {
@@ -98,6 +101,7 @@ type AppointmentRecord = {
   paymentAmount?: number;
   paymentMethod?: string;
   paymentReference?: string;
+  questionnaireAnswers?: any;
 };
 
 type DoctorAccount = {
@@ -129,25 +133,6 @@ function formatDoctorDisplay(name?: string): string {
   return `Dr. ${cleaned}`;
 }
 
-function getPatientInitials(name?: string): string {
-  if (!name) return "PT";
-  const trimmed = name.trim();
-  if (trimmed.includes(",")) {
-    const parts = trimmed.split(",").map((p) => p.trim()).filter(Boolean);
-    if (parts.length >= 2) {
-      const lastInitial = parts[0].charAt(0).toUpperCase();
-      const firstInitial = parts[1].charAt(0).toUpperCase();
-      return `${lastInitial}${firstInitial}`;
-    }
-  }
-  const parts = trimmed.split(/\s+/).filter(Boolean);
-  if (parts.length === 1) {
-    return parts[0].slice(0, 2).toUpperCase();
-  }
-  const firstInitial = parts[0].charAt(0).toUpperCase();
-  const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
-  return `${firstInitial}${lastInitial}`;
-}
 
 function formatAppointmentTime(timeStr?: string): string {
   if (!timeStr) return "TBD";
@@ -308,8 +293,6 @@ export default function ClinicAppointmentsPage() {
       } catch { }
     }
 
-    console.log("[ClinicAppointments] resolvedClinicId =", resolvedClinicId);
-
     // Step 2b: Fetch clinic consultation fee
     let resolvedFee = 500;
     if (resolvedClinicId) {
@@ -328,27 +311,43 @@ export default function ClinicAppointmentsPage() {
       }
     }
 
-    // 1. Fetch clinic doctors from clinic_doctor table
+    // 1. Fetch clinic doctors from clinic_doctor table (joining user profile avatar)
     let docRows: any[] = [];
     if (resolvedClinicId) {
       const { data, error: docErr } = await supabase
         .from("clinic_doctor")
-        .select("doctor_id, doctor_name, email, photo_url, status, duty_schedule, clinic_id")
+        .select(`
+          doctor_id,
+          doctor_name,
+          email,
+          photo_url,
+          user_id,
+          status,
+          duty_schedule,
+          clinic_id,
+          user:user_id ( avatar_url )
+        `)
         .eq("clinic_id", resolvedClinicId);
-      console.log("[ClinicAppointments] clinic_doctor rows:", data?.length ?? 0, docErr?.message);
+      if (docErr) {
+        console.warn("[ClinicAppointmentsPage] Failed to fetch clinic_doctor:", docErr.message);
+      }
       if (data && data.length > 0) {
         docRows = data.filter((d: any) => (d.status || "").toLowerCase() !== "inactive");
-        setClinicDoctors(docRows.map((d: any) => ({
-          id: d.doctor_id,
-          name: d.doctor_name,
-          email: d.email || "",
-          photo: d.photo_url || undefined,
-          specialization: "Dermatology",
-          clinicName: clinicName || "Clinic",
-          clinicId: resolvedClinicId || undefined,
-          dutySchedule: d.duty_schedule || undefined,
-          status: d.status || "Active",
-        })));
+        setClinicDoctors(docRows.map((d: any) => {
+          const userObj = Array.isArray(d.user) ? d.user[0] : d.user;
+          const rawPhoto = d.photo_url || userObj?.avatar_url;
+          return {
+            id: d.doctor_id,
+            name: d.doctor_name,
+            email: d.email || "",
+            photo: resolveAvatarUrl(rawPhoto),
+            specialization: "Dermatology",
+            clinicName: clinicName || "Clinic",
+            clinicId: resolvedClinicId || undefined,
+            dutySchedule: d.duty_schedule || undefined,
+            status: d.status || "Active",
+          };
+        }));
       }
     }
 
@@ -362,7 +361,7 @@ export default function ClinicAppointmentsPage() {
               id: d.id,
               name: d.name,
               email: d.email || "",
-              photo: d.photo || d.photo_url || undefined,
+              photo: resolveAvatarUrl(d.photo || d.photo_url),
               specialization: d.specialization || "Dermatology",
               clinicName: clinicName || d.clinicName || "Clinic",
               clinicId: resolvedClinicId || d.clinicId || undefined,
@@ -374,17 +373,18 @@ export default function ClinicAppointmentsPage() {
       } catch { }
     }
 
-    // 2. Fetch appointments from patient_appointment table
+    // 2. Fetch appointments from patient_appointment table (joining user profile for real avatar)
     let dbAppts: any[] = [];
     if (resolvedClinicId) {
       // Try exact match first
       const { data: apptRows, error: apptErr } = await supabase
         .from("patient_appointment")
-        .select("*")
+        .select(`
+          *,
+          user:user_id ( full_name, email, avatar_url )
+        `)
         .eq("clinic_id", resolvedClinicId)
         .order("created_at", { ascending: false });
-
-      console.log("[ClinicAppointments] patient_appointment rows (filtered):", apptRows?.length ?? 0, apptErr?.message);
 
       if (apptErr) {
         console.warn("[ClinicAppointmentsPage] Failed to fetch patient_appointment from Supabase:", apptErr.message);
@@ -392,13 +392,14 @@ export default function ClinicAppointmentsPage() {
         dbAppts = apptRows;
       } else {
         // Fallback: fetch all and filter client-side (handles type mismatch e.g. int vs string)
-        const { data: allAppts, error: allErr } = await supabase
+        const { data: allAppts } = await supabase
           .from("patient_appointment")
-          .select("*")
+          .select(`
+            *,
+            user:user_id ( full_name, email, avatar_url )
+          `)
           .order("created_at", { ascending: false })
           .limit(200);
-
-        console.log("[ClinicAppointments] all patient_appointment rows:", allAppts?.length ?? 0, allErr?.message);
 
         if (allAppts && allAppts.length > 0) {
           dbAppts = allAppts.filter((r: any) =>
@@ -406,8 +407,37 @@ export default function ClinicAppointmentsPage() {
             r.clinic_id !== undefined &&
             String(r.clinic_id) === String(resolvedClinicId)
           );
-          console.log("[ClinicAppointments] client-side filtered rows:", dbAppts.length);
         }
+      }
+    }
+
+    // 3. Batch resolve patient profile pictures from user table to ensure 100% real avatar coverage
+    const userProfileMap = new Map<string, string>();
+    const userIds = Array.from(new Set(dbAppts.map((a: any) => a.user_id).filter(Boolean)));
+    const patientEmails = Array.from(new Set(dbAppts.map((a: any) => a.patient_email?.toLowerCase().trim()).filter(Boolean)));
+
+    if (userIds.length > 0 || patientEmails.length > 0) {
+      try {
+        let orFilters: string[] = [];
+        if (userIds.length > 0) orFilters.push(`user_id.in.(${userIds.join(",")})`);
+        if (patientEmails.length > 0) orFilters.push(`email.in.(${patientEmails.map((e) => `"${e}"`).join(",")})`);
+
+        const { data: userProfiles } = await supabase
+          .from("user")
+          .select("user_id, email, avatar_url")
+          .or(orFilters.join(","));
+
+        if (userProfiles) {
+          userProfiles.forEach((u: any) => {
+            const resolved = resolveAvatarUrl(u.avatar_url);
+            if (resolved) {
+              if (u.user_id) userProfileMap.set(u.user_id, resolved);
+              if (u.email) userProfileMap.set(u.email.toLowerCase().trim(), resolved);
+            }
+          });
+        }
+      } catch (uErr) {
+        console.warn("[ClinicAppointmentsPage] User avatar batch lookup warning:", uErr);
       }
     }
 
@@ -525,14 +555,25 @@ export default function ClinicAppointmentsPage() {
       }
       const payAmount = a.payment_amount || qAnswers.payment_amount || resolvedFee;
 
+      // Resolve real patient profile avatar from user join or userProfileMap
+      const userObj = Array.isArray(a.user) ? a.user[0] : a.user;
+      const rawPatientAvatar =
+        userObj?.avatar_url ||
+        (a.user_id ? userProfileMap.get(a.user_id) : undefined) ||
+        (a.patient_email ? userProfileMap.get(a.patient_email.toLowerCase().trim()) : undefined) ||
+        a.patient_avatar ||
+        qAnswers.patient_avatar;
+      const resolvedPatientAvatar = resolveAvatarUrl(rawPatientAvatar);
+
       return {
         id: a.appointment_id,
         clinicId: 0,
         clinicName: clinicName || "Clinic",
-        patientName: a.patient_name || "Patient",
+        patientName: a.patient_name || userObj?.full_name || "Patient",
         patientAge: calculatedAge,
         patientGender: a.patient_gender || undefined,
         patientBirthdate: a.patient_birthdate || undefined,
+        patientAvatar: resolvedPatientAvatar,
         patientEmail: a.patient_email || undefined,
         patientAddress: a.patient_address || undefined,
         patientContact: a.patient_contact || undefined,
@@ -612,11 +653,18 @@ export default function ClinicAppointmentsPage() {
                   if (refMatch) localRef = refMatch[1];
                 }
 
+                const localUserAvatar = resolveAvatarUrl(
+                  localItem.patientAvatar ||
+                  (localItem.userId ? userProfileMap.get(localItem.userId) : undefined) ||
+                  (localItem.patientEmail ? userProfileMap.get(localItem.patientEmail.toLowerCase().trim()) : undefined)
+                );
+
                 mapped.push({
                   id: localItem.id,
                   clinicId: 0,
                   clinicName: localItem.clinicName || clinicName || "Clinic",
                   patientName: localItem.patientName || "Patient",
+                  patientAvatar: localUserAvatar,
                   patientEmail: localItem.patientEmail || undefined,
                   patientAddress: localItem.patientAddress || undefined,
                   patientContact: localItem.patientContact || undefined,
@@ -665,7 +713,6 @@ export default function ClinicAppointmentsPage() {
       }
     } catch { }
 
-    console.log("[ClinicAppointments] final mapped appointments:", mapped.length);
     setAppointments(mapped);
     try {
       localStorage.setItem("dermai_clinic_appointments", JSON.stringify(mapped));
@@ -1172,6 +1219,38 @@ export default function ClinicAppointmentsPage() {
     setRejectError("");
   };
 
+  // Check if patient's 24-hour doctor self-selection privilege window is active
+  const getPatientPrivilegeStatus = useCallback((appt?: AppointmentRecord | null) => {
+    if (!appt) return { isLocked: false, hoursRemaining: 0, minutesRemaining: 0, isWaived: false };
+    const qa = appt.questionnaireAnswers;
+    const isWaived = Boolean(qa?.patient_requested_clinic_reassign || qa?.patient_privilege_waived);
+    if (isWaived) {
+      return { isLocked: false, hoursRemaining: 0, minutesRemaining: 0, isWaived: true };
+    }
+
+    const declinedAtStr =
+      appt.doctorReviewedAt ||
+      qa?.declined_at ||
+      qa?.appointment_history?.findLast?.((h: any) =>
+        String(h.action || "").includes("decline") || String(h.action || "").includes("reject")
+      )?.timestamp ||
+      appt.createdAt ||
+      new Date().toISOString();
+
+    const declinedTime = new Date(declinedAtStr).getTime();
+    const validDeclinedTime = isNaN(declinedTime) ? Date.now() : declinedTime;
+    const expiresAt = validDeclinedTime + 24 * 3600 * 1000;
+    const remainingMs = expiresAt - Date.now();
+
+    if (remainingMs <= 0) {
+      return { isLocked: false, hoursRemaining: 0, minutesRemaining: 0, isWaived: false };
+    }
+
+    const hrs = Math.floor(remainingMs / (1000 * 60 * 60));
+    const mins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+    return { isLocked: true, hoursRemaining: hrs, minutesRemaining: mins, isWaived: false };
+  }, []);
+
   // Compute real-time availability for doctor reassignment modal
   const reassignAvailability = useMemo(() => {
     if (!assignDoctorModal || !assignDoctorModal.isReassign) {
@@ -1206,6 +1285,15 @@ export default function ClinicAppointmentsPage() {
     }
 
     const targetAppt = appointments.find((a) => a.id === assignDoctorModal.appointmentId);
+
+    // Rule: Enforce 24-hour patient privilege window
+    if (assignDoctorModal.isReassign) {
+      const privilege = getPatientPrivilegeStatus(targetAppt);
+      if (privilege.isLocked) {
+        setAssignError(`Cannot reassign doctor: Patient has an active 24-hour privilege window (${privilege.hoursRemaining}h ${privilege.minutesRemaining}m remaining) to select their own doctor.`);
+        return;
+      }
+    }
 
     // Rule 6: Validate doctor-clinic association, shift schedule, slot conflict, shift capacity
     if (assignDoctorModal.isReassign) {
@@ -2013,7 +2101,6 @@ export default function ClinicAppointmentsPage() {
               ) : (
                 <div className="divide-y divide-gray-100">
                   {selectedDayAppointments.map((appointment) => {
-                    const initials = getPatientInitials(appointment.patientName);
                     const isEarly = isMorningTime(appointment.time);
                     const isPast = isAppointmentPastDue(appointment);
                     const isNoShow = appointment.checkInStatus === "no-show";
@@ -2034,18 +2121,28 @@ export default function ClinicAppointmentsPage() {
                       >
                         {/* Left: Avatar with Initials & Details */}
                         <div className="flex items-center gap-3.5 min-w-0">
-                          <div
+                          <PatientAvatar
+                            fullName={appointment.patientName}
+                            name={appointment.patientName}
+                            avatarUrl={appointment.patientAvatar}
+                            photoUrl={appointment.patientAvatar}
+                            userId={appointment.userId}
                             className={cn(
-                              "w-10 h-10 sm:w-11 sm:h-11 rounded-full font-bold text-xs sm:text-sm flex items-center justify-center shrink-0 border transition-all",
+                              "w-10 h-10 sm:w-11 sm:h-11 rounded-full shrink-0 border transition-all",
                               isNoShow
-                                ? "bg-rose-100 text-rose-700 border-rose-200"
+                                ? "border-rose-200"
                                 : isPast && !isCompleted
-                                ? "bg-rose-100/70 text-rose-700 border-rose-200/90"
-                                : "bg-pink-50 text-[#c0166a] border-pink-100/80"
+                                ? "border-rose-200/90"
+                                : "border-pink-100/80"
                             )}
-                          >
-                            {initials}
-                          </div>
+                            fallbackClassName={cn(
+                              isNoShow
+                                ? "bg-rose-100 text-rose-700"
+                                : isPast && !isCompleted
+                                ? "bg-rose-100/70 text-rose-700"
+                                : "bg-pink-50 text-[#c0166a]"
+                            )}
+                          />
 
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -2202,7 +2299,7 @@ export default function ClinicAppointmentsPage() {
             ))}
           </div>
 
-          <div className="space-y-3 max-h-[660px] overflow-y-auto pr-1">
+          <div className="space-y-3 max-h-[660px] overflow-y-auto pr-1 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             {displayedQueue.length === 0 && (
               <div className="border border-dashed border-gray-200 rounded-2xl p-8 text-center bg-gray-50/50">
                 <Clock className="w-8 h-8 text-gray-300 mx-auto mb-2" />
@@ -2244,20 +2341,11 @@ export default function ClinicAppointmentsPage() {
                     }`}
                 >
                   <div className="flex items-start gap-3 mb-2.5">
-                    <img
-                      src={
-                        appointment.patientAvatar ||
-                        `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                          appointment.patientName || "Patient"
-                        )}&background=fce7f3&color=c0166a`
-                      }
-                      alt={appointment.patientName || "Patient"}
-                      className="w-12 h-12 rounded-full object-cover border border-gray-200 shrink-0"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                          appointment.patientName || "Patient"
-                        )}&background=fce7f3&color=c0166a`;
-                      }}
+                    <PatientAvatar
+                      name={appointment.patientName}
+                      photoUrl={appointment.patientAvatar}
+                      userId={appointment.userId}
+                      className="w-12 h-12"
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">
@@ -2281,10 +2369,6 @@ export default function ClinicAppointmentsPage() {
                             <span className="text-gray-300">·</span>
                             <span className="text-[10px] font-semibold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
                               Face-to-Face Consultation
-                            </span>
-                            <span className="text-gray-300">·</span>
-                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded flex items-center gap-1">
-                              <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Upfront Paid
                             </span>
                           </div>
                           <p className="text-[10px] text-gray-400 mt-0.5">
@@ -2333,9 +2417,6 @@ export default function ClinicAppointmentsPage() {
                       <span>{appointment.date || "Date pending"} {appointment.batchTime ? `· ${appointment.batchTime} Batch` : appointment.time ? `· ${appointment.time}` : ""}</span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-100/90 text-emerald-800 text-[10px] font-bold flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" /> {payBadge.label}
-                      </span>
                       {isApproved && (
                         appointment.checkInStatus === "arrived" ? (
                           <span className="px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-800 font-bold text-[9px] flex items-center gap-0.5">
@@ -2355,20 +2436,40 @@ export default function ClinicAppointmentsPage() {
                   </div>
 
                   {/* Stage Workflow Banners */}
-                  {isDoctorDeclined ? (
-                    <div className="mb-2.5 p-2.5 rounded-xl bg-red-100/70 border border-red-200 text-xs text-red-900 flex items-start gap-2">
-                      <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                      <div className="min-w-0">
-                        <p className="font-bold">Declined by {formatDoctorDisplay(appointment.assignedDoctorName) || "Doctor"}:</p>
-                        <p className="text-[11px] text-red-700 italic mt-0.5">
-                          "{appointment.doctorNote || "Doctor unavailable for consultation"}"
-                        </p>
-                        <p className="text-[10px] text-red-600 mt-1 font-semibold">
-                          &rarr; Re-assign to another doctor (original schedule kept) or notify patient if none available.
-                        </p>
+                  {isDoctorDeclined ? (() => {
+                    const privilege = getPatientPrivilegeStatus(appointment);
+                    return (
+                      <div className="mb-2.5 p-2.5 rounded-xl bg-red-100/70 border border-red-200 text-xs text-red-900 flex items-start gap-2">
+                        <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold">Declined by {formatDoctorDisplay(appointment.assignedDoctorName) || "Doctor"}:</p>
+                          <p className="text-[11px] text-red-700 italic mt-0.5">
+                            "{appointment.doctorNote || "Doctor unavailable for consultation"}"
+                          </p>
+                          {privilege.isLocked ? (
+                            <div className="mt-2 px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px] flex items-center justify-between">
+                              <span className="flex items-center gap-1 font-semibold">
+                                <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                Patient Selection Window Active
+                              </span>
+                              <span className="font-bold tabular-nums text-amber-800">
+                                {privilege.hoursRemaining}h {privilege.minutesRemaining}m left
+                              </span>
+                            </div>
+                          ) : privilege.isWaived ? (
+                            <div className="mt-2 px-2.5 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-[11px] flex items-center gap-1.5 font-semibold">
+                              <AlertCircle className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                              Patient requested clinic to manually assign an alternate doctor
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-red-600 mt-1 font-semibold">
+                              &rarr; 24h patient window expired. Clinic reassignment is available.
+                            </p>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ) : isApproved ? (
+                    );
+                  })() : isApproved ? (
                     <div className="mb-2.5 p-2.5 rounded-xl bg-emerald-100/70 border border-emerald-200 text-xs text-emerald-900 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2455,7 +2556,7 @@ export default function ClinicAppointmentsPage() {
                         <div className="px-2.5 py-1.5 rounded-xl bg-emerald-50/90 border border-emerald-200/80 flex items-center justify-between text-[11px] text-emerald-900">
                           <span className="flex items-center gap-1.5 font-semibold">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                            Upfront Fee Verified: {payBadge.label}
+                            Upfront Fee Verified
                           </span>
                           <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
                             Verified
@@ -2547,55 +2648,79 @@ export default function ClinicAppointmentsPage() {
                     )}
 
                     {/* Scenario D: Doctor Declined -> RE-ASSIGN DOCTOR OR DECLINE REQUEST */}
-                    {isDoctorDeclined && (
-                      <div className="flex items-center gap-2 w-full">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedDoctorId("");
-                            setAssignDoctorModal({
-                              appointmentId: appointment.id,
-                              patientName: appointment.patientName,
-                              isReassign: true,
-                              currentDoctorId: appointment.assignedDoctorId,
-                              currentDoctorName: appointment.assignedDoctorName,
-                              doctorNote: appointment.doctorNote,
-                              targetDate: appointment.date,
-                              targetTime: appointment.time,
-                              primaryScanId: appointment.primaryScanId,
-                              userId: appointment.userId,
-                            });
-                          }}
-                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-xs cursor-pointer"
-                        >
-                          <Stethoscope className="w-3.5 h-3.5" /> Re-assign Doctor
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRejectModal({
-                              appointmentId: appointment.id,
-                              patientName: appointment.patientName || "Patient",
-                              clinicName: appointment.clinicName || clinicName,
-                              patientEmail: appointment.patientEmail,
-                            });
-                            setRejectReason(appointment.doctorNote ? `Declined by doctor: ${appointment.doctorNote}` : "Doctor unavailable.");
-                            setSelectedPresetReason("");
-                            setRejectError("");
-                          }}
-                          className="py-2.5 px-3 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
-                        >
-                          Decline Request
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setViewingPatient(appointment)}
-                          className="py-2.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
-                        >
-                          Details
-                        </button>
-                      </div>
-                    )}
+                    {isDoctorDeclined && (() => {
+                      const privilege = getPatientPrivilegeStatus(appointment);
+                      return (
+                        <div className="flex items-center gap-2 w-full">
+                          <button
+                            type="button"
+                            disabled={privilege.isLocked}
+                            onClick={() => {
+                              if (privilege.isLocked) return;
+                              setSelectedDoctorId("");
+                              setAssignDoctorModal({
+                                appointmentId: appointment.id,
+                                patientName: appointment.patientName,
+                                isReassign: true,
+                                currentDoctorId: appointment.assignedDoctorId,
+                                currentDoctorName: appointment.assignedDoctorName,
+                                doctorNote: appointment.doctorNote,
+                                targetDate: appointment.date,
+                                targetTime: appointment.time,
+                                primaryScanId: appointment.primaryScanId,
+                                userId: appointment.userId,
+                              });
+                            }}
+                            title={
+                              privilege.isLocked
+                                ? `Patient has an exclusive 24-hour privilege window to select an alternate doctor (${privilege.hoursRemaining}h ${privilege.minutesRemaining}m remaining). Clinic cannot reassign until this window expires or the patient requests clinic assistance.`
+                                : undefined
+                            }
+                            className={`flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl text-xs font-semibold transition-all shadow-xs ${
+                              privilege.isLocked
+                                ? "bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed"
+                                : "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+                            }`}
+                          >
+                            {privilege.isLocked ? (
+                              <>
+                                <Lock className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                                <span className="truncate">Locked ({privilege.hoursRemaining}h {privilege.minutesRemaining}m left)</span>
+                              </>
+                            ) : (
+                              <>
+                                <Stethoscope className="w-3.5 h-3.5" />
+                                <span>Re-assign Doctor</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRejectModal({
+                                appointmentId: appointment.id,
+                                patientName: appointment.patientName || "Patient",
+                                clinicName: appointment.clinicName || clinicName,
+                                patientEmail: appointment.patientEmail,
+                              });
+                              setRejectReason(appointment.doctorNote ? `Declined by doctor: ${appointment.doctorNote}` : "Doctor unavailable.");
+                              setSelectedPresetReason("");
+                              setRejectError("");
+                            }}
+                            className="py-2.5 px-3 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                          >
+                            Decline Request
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setViewingPatient(appointment)}
+                            className="py-2.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                          >
+                            Details
+                          </button>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               );
@@ -2658,7 +2783,7 @@ export default function ClinicAppointmentsPage() {
               </div>
 
               {/* Body */}
-              <div className="p-6 max-h-[62vh] overflow-y-auto space-y-3.5">
+              <div className="p-6 max-h-[62vh] overflow-y-auto space-y-3.5 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 {dayModalActionable.length === 0 ? (
                   <div className="border border-dashed border-gray-200 rounded-2xl p-7 text-center bg-gray-50/50">
                     {dayModalCompletedCount > 0 ? (
@@ -2693,17 +2818,12 @@ export default function ClinicAppointmentsPage() {
                       >
                         {/* Patient Info Row */}
                         <div className="flex items-center gap-3">
-                          {appt.patientAvatar ? (
-                            <img
-                              src={appt.patientAvatar}
-                              alt={appt.patientName || "Patient"}
-                              className="w-11 h-11 rounded-full object-cover border border-gray-200 shrink-0"
-                            />
-                          ) : (
-                            <div className="w-11 h-11 rounded-full bg-[#fce7f3] text-[#a81c5a] font-bold text-sm flex items-center justify-center shrink-0 tracking-tight">
-                              {getPatientInitials(appt.patientName)}
-                            </div>
-                          )}
+                          <PatientAvatar
+                            name={appt.patientName}
+                            photoUrl={appt.patientAvatar}
+                            userId={appt.userId}
+                            className="w-11 h-11"
+                          />
 
                           <div className="flex-1 min-w-0">
                             <h4 className="text-sm font-bold text-gray-900 truncate">
@@ -2999,13 +3119,11 @@ export default function ClinicAppointmentsPage() {
             {/* Header */}
             <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <img
-                  src={
-                    viewingPatient.patientAvatar ||
-                    `https://ui-avatars.com/api/?name=${encodeURIComponent(viewingPatient.patientName || "P")}&background=fce7f3&color=c0166a`
-                  }
-                  alt={viewingPatient.patientName}
-                  className="w-11 h-11 rounded-full object-cover border border-gray-200 shrink-0"
+                <PatientAvatar
+                  name={viewingPatient.patientName}
+                  photoUrl={viewingPatient.patientAvatar}
+                  userId={viewingPatient.userId}
+                  className="w-11 h-11"
                 />
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -3037,7 +3155,7 @@ export default function ClinicAppointmentsPage() {
             </div>
 
             {/* Body */}
-            <div className="p-6 space-y-4 overflow-y-auto">
+            <div className="p-6 space-y-4 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
               {/* Doctor Review Status Summary */}
               {viewingPatient.assignedDoctorName && (
                 <div className={`p-3 rounded-2xl border ${viewingPatient.doctorStatus === "approved"
@@ -3235,7 +3353,7 @@ export default function ClinicAppointmentsPage() {
                     <History className="w-4 h-4 text-magenta-600" />
                     <span>Appointment History &amp; Audit Trail</span>
                   </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                     {viewingPatient.appointmentHistory.map((item, idx) => (
                       <div key={idx} className="p-2.5 rounded-xl bg-white border border-gray-100 text-xs shadow-2xs">
                         <div className="flex items-center justify-between gap-2">
@@ -3360,73 +3478,61 @@ export default function ClinicAppointmentsPage() {
                   >
                     Confirm Decline
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const apptToReassign = viewingPatient;
-                      setViewingPatient(null);
-                      setSelectedDoctorId("");
-                      setAssignDoctorModal({
-                        appointmentId: apptToReassign.id,
-                        patientName: apptToReassign.patientName,
-                        isReassign: true,
-                        currentDoctorId: apptToReassign.assignedDoctorId,
-                        currentDoctorName: apptToReassign.assignedDoctorName,
-                        doctorNote: apptToReassign.doctorNote,
-                        targetDate: apptToReassign.date,
-                        targetTime: apptToReassign.time,
-                        primaryScanId: apptToReassign.primaryScanId,
-                        userId: apptToReassign.userId,
-                      });
-                    }}
-                    className="py-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
-                  >
-                    Re-assign Doctor
-                  </button>
+                  {(() => {
+                    const privilege = viewingPatient ? getPatientPrivilegeStatus(viewingPatient) : null;
+                    const isLocked = Boolean(privilege?.isLocked);
+                    return (
+                      <button
+                        type="button"
+                        disabled={isLocked}
+                        onClick={() => {
+                          const apptToReassign = viewingPatient;
+                          setViewingPatient(null);
+                          setSelectedDoctorId("");
+                          setAssignDoctorModal({
+                            appointmentId: apptToReassign.id,
+                            patientName: apptToReassign.patientName,
+                            isReassign: true,
+                            currentDoctorId: apptToReassign.assignedDoctorId,
+                            currentDoctorName: apptToReassign.assignedDoctorName,
+                            doctorNote: apptToReassign.doctorNote,
+                            targetDate: apptToReassign.date,
+                            targetTime: apptToReassign.time,
+                            primaryScanId: apptToReassign.primaryScanId,
+                            userId: apptToReassign.userId,
+                          });
+                        }}
+                        title={
+                          isLocked && privilege
+                            ? `Patient has an exclusive 24-hour privilege window (${privilege.hoursRemaining}h ${privilege.minutesRemaining}m remaining).`
+                            : undefined
+                        }
+                        className={`py-3 rounded-full text-xs font-semibold transition-colors shadow-sm flex items-center justify-center gap-1.5 ${
+                          isLocked
+                            ? "bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed"
+                            : "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+                        }`}
+                      >
+                        {isLocked ? (
+                          <>
+                            <Lock className="w-3.5 h-3.5 text-gray-400" />
+                            <span>Re-assign (Patient Privilege Active)</span>
+                          </>
+                        ) : (
+                          <span>Re-assign Doctor</span>
+                        )}
+                      </button>
+                    );
+                  })()}
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRejectModal({
-                        appointmentId: viewingPatient.id,
-                        patientName: viewingPatient.patientName || "Patient",
-                        clinicName: viewingPatient.clinicName || clinicName,
-                        patientEmail: viewingPatient.patientEmail,
-                      });
-                      setRejectReason("");
-                      setSelectedPresetReason("");
-                      setRejectError("");
-                      setViewingPatient(null);
-                    }}
-                    className="py-3 rounded-full border border-red-200 bg-red-50 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors cursor-pointer"
-                  >
-                    Decline Request
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const apptToAssign = viewingPatient;
-                      setViewingPatient(null);
-                      setSelectedDoctorId("");
-                      setAssignDoctorModal({
-                        appointmentId: apptToAssign.id,
-                        patientName: apptToAssign.patientName,
-                        isReassign: !!apptToAssign.assignedDoctorId,
-                        currentDoctorId: apptToAssign.assignedDoctorId,
-                        currentDoctorName: apptToAssign.assignedDoctorName,
-                        targetDate: apptToAssign.date,
-                        targetTime: apptToAssign.time,
-                        primaryScanId: apptToAssign.primaryScanId,
-                        userId: apptToAssign.userId,
-                      });
-                    }}
-                    className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
-                  >
-                    {viewingPatient.assignedDoctorId ? "Change Doctor" : "Assign Doctor for Review"}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewingPatient(null)}
+                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
               )}
             </div>
           </motion.div>
@@ -3609,7 +3715,7 @@ export default function ClinicAppointmentsPage() {
                 </button>
               </div>
             ) : (
-              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 {clinicDoctors.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-4 text-center">
                     <p className="text-xs text-gray-500">No doctors registered yet.</p>

@@ -5,17 +5,18 @@ import { useDoctorAvatar } from "@/lib/doctorAvatarService";
 
 export interface DoctorAvatarProps {
   doctorId?: string;
-  userId?: string;
+  userId?: string | null;
   doctor?: {
-    id?: string;
-    doctor_id?: string;
-    user_id?: string;
-    name?: string;
-    doctor_name?: string;
-    fullName?: string;
-    photo?: string;
-    photo_url?: string;
-    avatar_url?: string;
+    id?: string | null;
+    doctor_id?: string | null;
+    user_id?: string | null;
+    name?: string | null;
+    doctor_name?: string | null;
+    fullName?: string | null;
+    photo?: string | null;
+    photo_url?: string | null;
+    avatar_url?: string | null;
+    [key: string]: any;
   } | null;
   name?: string;
   className?: string;
@@ -95,7 +96,7 @@ export function DoctorAvatar({
 
   const initials = hasExplicitName ? getDoctorInitials(resolvedName) : "";
   const colorPalette = hasExplicitName
-    ? getAvatarColor(resolvedName || doctorId || userId)
+    ? getAvatarColor(resolvedName || doctorId || (userId ?? undefined))
     : "bg-slate-100 text-slate-400 border-slate-200";
 
   return (

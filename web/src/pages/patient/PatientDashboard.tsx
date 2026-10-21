@@ -117,10 +117,11 @@ export default function PatientDashboard() {
         setProfile({ fullName: name, profilePicture: avatar });
 
         // Fetch recent appointments
-        const { data: apptRows } = await supabase
+        const { data: apptRows, error: apptError } = await supabase
           .from("patient_appointment")
           .select(`
             appointment_id,
+            clinic_id,
             date,
             status,
             doctor_status,
@@ -130,11 +131,15 @@ export default function PatientDashboard() {
             skin_photo_url,
             primary_scan_id,
             created_at,
-            clinic:clinic_id ( name )
+            clinic:clinic_id ( clinic_id, name )
           `)
           .eq("user_id", userId)
           .order("created_at", { ascending: false })
           .limit(10);
+
+        if (apptError) {
+          console.error("Error fetching patient appointments:", apptError);
+        }
 
         // Pre-fetch scan photo for appointments that have primary_scan_id but missing skin_photo_url
         const missingScanIds = (apptRows ?? [])
@@ -203,7 +208,7 @@ export default function PatientDashboard() {
 
             return {
               id: a.appointment_id,
-              clinicId: 0,
+              clinicId: Number(a.clinic_id || clinicObj?.clinic_id || 0),
               clinicName: clinicObj?.name ?? "Clinic",
               consultationType: "face-to-face" as const,
               conditionId: a.condition_id || undefined,

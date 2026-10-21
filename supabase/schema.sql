@@ -926,6 +926,25 @@ as $$
   );
 $$;
 
+create or replace function get_available_alternate_doctors(
+  target_clinic_id uuid,
+  declined_doctor_id uuid default null
+)
+returns setof clinic_doctor
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select *
+  from clinic_doctor
+  where clinic_id = target_clinic_id
+    and (declined_doctor_id is null or doctor_id != declined_doctor_id)
+    and lower(status) = 'active';
+$$;
+
+grant execute on function get_available_alternate_doctors(uuid, uuid) to authenticated, anon, service_role;
+
 
 
 -- ============================================================================
@@ -1796,6 +1815,13 @@ create policy "Allow Upload Storage Objects" on storage.objects
 drop policy if exists "Allow Update Storage Objects" on storage.objects;
 create policy "Allow Update Storage Objects" on storage.objects
   for update using (bucket_id in ('clinic-photos', 'avatars', 'skin-scans', 'doctor-photos'));
+
+-- Allow authenticated clinic staff/doctors to view uploaded avatars
+drop policy if exists "Allow authenticated read on avatars" on storage.objects;
+create policy "Allow authenticated read on avatars"
+on storage.objects for select
+to authenticated
+using (bucket_id = 'avatars');
 
 -- Admin privilege initialization
 update "user" 

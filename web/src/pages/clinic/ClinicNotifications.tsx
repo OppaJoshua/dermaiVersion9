@@ -9,6 +9,7 @@ import {
   Megaphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { useRoleNotifications } from "@/lib/notificationService";
@@ -184,9 +185,9 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
 
                 {/* Avatar with real profile picture & graceful fallback */}
                 <div className="relative shrink-0 w-10 h-10">
-                  {item.senderAvatar ? (
+                  {resolveAvatarUrl(item.senderAvatar) ? (
                     <img
-                      src={item.senderAvatar}
+                      src={resolveAvatarUrl(item.senderAvatar)}
                       alt={item.senderName || "Sender"}
                       referrerPolicy="no-referrer"
                       className="w-10 h-10 rounded-full object-cover border border-gray-200 bg-white"

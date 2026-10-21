@@ -17,6 +17,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { isAppointmentExcludedFromIncomingQueue } from "@/lib/schedulingService";
 import { ModalPortal } from "@/components/common/ModalPortal";
+import { PatientAvatar } from "@/components/common/PatientAvatar";
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -524,15 +525,12 @@ export default function DoctorDashboardPage() {
                           {/* Name + Demographic subline */}
                           <td className="py-3.5 px-4">
                             <div className="flex items-center gap-3">
-                              <img
-                                src={
-                                  appt.patientAvatar ||
-                                  `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                                    appt.patientName || "P"
-                                  )}&background=EFF6FF&color=2563EB`
-                                }
-                                alt={appt.patientName || "Patient"}
-                                className="w-9 h-9 rounded-full object-cover border border-slate-200 shrink-0 shadow-2xs"
+                              <PatientAvatar
+                                avatarUrl={appt.patientAvatar}
+                                fullName={appt.patientName}
+                                sizeClass="w-9 h-9"
+                                borderClass="border border-slate-200"
+                                className="shrink-0 shadow-2xs"
                               />
                               <div className="min-w-0">
                                 <p className="font-bold text-slate-900 text-xs truncate">
@@ -852,15 +850,12 @@ export default function DoctorDashboardPage() {
               <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 {/* Patient Header */}
                 <div className="flex items-center gap-3.5 p-3 rounded-xl bg-slate-50/80 border border-slate-100">
-                  <img
-                    src={
-                      consultingAppt.patientAvatar ||
-                      `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                        consultingAppt.patientName || "P"
-                      )}&background=EFF6FF&color=2563EB`
-                    }
-                    alt={consultingAppt.patientName || "Patient"}
-                    className="w-12 h-12 rounded-full object-cover border border-slate-200 shrink-0"
+                  <PatientAvatar
+                    avatarUrl={consultingAppt.patientAvatar}
+                    fullName={consultingAppt.patientName}
+                    sizeClass="w-12 h-12"
+                    borderClass="border border-slate-200"
+                    className="shrink-0"
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">

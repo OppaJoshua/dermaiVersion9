@@ -95,7 +95,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     // 1. Direct user_notification records for this patient
     const { data: dbNotifs } = await supabase
       .from("user_notification")
-      .select("notif_id, type, subtype, title, body, is_read, created_at, metadata")
+      .select("notif_id, type, subtype, title, body, is_read, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(40);
@@ -120,14 +120,14 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           title: n.title,
           message: n.body || "",
           senderName:
-            (n.metadata as any)?.sender_name ||
+            (n as any).metadata?.sender_name ||
             (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : (n.subtype as any) || "DERMAI Support"),
           senderType: isTicket || isAdminSystem ? "admin" : (n.subtype as any) || "system",
           link: isTicket ? "/dashboard/settings/help" : undefined,
           timestamp: n.created_at,
           isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
           metadata: {
-            ...n.metadata,
+            ...(n as any).metadata,
             subtype: n.subtype,
           },
         });
@@ -147,6 +147,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         clinic_note,
         created_at,
         assigned_doctor_id,
+        doctor_reviewed_at,
         clinic:clinic_id (name, logo_url)
       `)
       .eq("user_id", userId)
@@ -197,12 +198,13 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             senderName: clinicName,
             senderType: "clinic",
             senderAvatar: clinicLogo,
-            link: "/dashboard/appointment-status",
-            timestamp: appt.created_at || new Date().toISOString(),
+            link: `/patient/appointment-status?appointment_id=${appt.appointment_id}&action=reassign`,
+            timestamp: appt.doctor_reviewed_at || appt.created_at || new Date().toISOString(),
             isRead: readSet.has(notifId),
             metadata: {
               appointment_id: appt.appointment_id,
-              expires_at: new Date(new Date(appt.created_at || Date.now()).getTime() + 24 * 3600 * 1000).toISOString(),
+              declined_at: appt.doctor_reviewed_at || appt.created_at || new Date().toISOString(),
+              expires_at: new Date(new Date(appt.doctor_reviewed_at || appt.created_at || Date.now()).getTime() + 24 * 3600 * 1000).toISOString(),
             },
           });
         }
@@ -539,7 +541,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
     // 5. Direct User Notifications for Doctor
     const { data: directNotifs } = await supabase
       .from("user_notification")
-      .select("notif_id, type, subtype, title, body, is_read, created_at, metadata")
+      .select("notif_id, type, subtype, title, body, is_read, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(25);
@@ -557,14 +559,14 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           title: n.title,
           message: n.body || "",
           senderName:
-            (n.metadata as any)?.sender_name ||
+            (n as any).metadata?.sender_name ||
             (isAdminSystem ? "Platform Administrator" : "DERMAI Admin"),
           senderType: isAdminSystem ? "admin" : (n.subtype as any) || "system",
           senderAvatar: (n as any).metadata?.avatar_url || (isAdminSystem ? adminAvatar : undefined),
           timestamp: n.created_at,
           isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
           metadata: {
-            ...n.metadata,
+            ...(n as any).metadata,
             subtype: n.subtype,
           },
         });
@@ -839,7 +841,7 @@ export async function fetchClinicNotifications(
     if (resolvedUserId) {
       const { data: userNotifs } = await supabase
         .from("user_notification")
-        .select("notif_id, type, subtype, title, body, is_read, created_at, metadata")
+        .select("notif_id, type, subtype, title, body, is_read, created_at")
         .eq("user_id", resolvedUserId)
         .order("created_at", { ascending: false })
         .limit(30);
@@ -861,7 +863,7 @@ export async function fetchClinicNotifications(
             title: n.title,
             message: n.body || "",
             senderName:
-              (n.metadata as any)?.sender_name ||
+              (n as any).metadata?.sender_name ||
               (isAdminSystem ? "Platform Administrator" : isApproval ? "Platform Admin" : "DERMAI Admin"),
             senderType: "admin",
             senderAvatar: adminAvatar || undefined,
@@ -869,7 +871,7 @@ export async function fetchClinicNotifications(
             timestamp: n.created_at,
             isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
             metadata: {
-              ...n.metadata,
+              ...(n as any).metadata,
               subtype: n.subtype,
               ...(isApproval ? { clinic_id: resolvedClinicId, status: "approved" } : {}),
             },

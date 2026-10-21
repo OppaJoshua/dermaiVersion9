@@ -23,6 +23,7 @@ import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
+import { PatientAvatar } from "@/components/common/PatientAvatar";
 
 
 
@@ -337,15 +338,12 @@ export default function DoctorPatientHistoryPage() {
                     >
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-3">
-                          <img
-                            src={
-                              appt.patientAvatar ||
-                              `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                                appt.patientName || "P"
-                              )}&background=dbeafe&color=1d4ed8`
-                            }
-                            alt={appt.patientName}
-                            className="w-9 h-9 rounded-full object-cover border border-gray-200 shrink-0"
+                          <PatientAvatar
+                            avatarUrl={appt.patientAvatar}
+                            fullName={appt.patientName}
+                            sizeClass="w-9 h-9"
+                            borderClass="border border-gray-200"
+                            className="shrink-0"
                           />
                           <div>
                             <p className="font-semibold text-gray-900">{appt.patientName || "Not provided"}</p>
@@ -474,15 +472,12 @@ export default function DoctorPatientHistoryPage() {
               <div className="px-4 sm:px-6 py-4 sm:py-5 space-y-4 overflow-y-auto flex-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 {/* Patient Header */}
                 <div className="flex items-center gap-4">
-                  <img
-                    src={
-                      viewingAppt.patientAvatar ||
-                      `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                        viewingAppt.patientName || "P"
-                      )}&background=EFF6FF&color=2563EB`
-                    }
-                    alt={viewingAppt.patientName}
-                    className="w-14 h-14 rounded-full object-cover border border-gray-200 shrink-0"
+                  <PatientAvatar
+                    avatarUrl={viewingAppt.patientAvatar}
+                    fullName={viewingAppt.patientName}
+                    sizeClass="w-14 h-14"
+                    borderClass="border border-gray-200"
+                    className="shrink-0"
                   />
                   <div>
                     <p className="text-lg font-bold text-gray-900">{viewingAppt.patientName || "Not provided"}</p>
