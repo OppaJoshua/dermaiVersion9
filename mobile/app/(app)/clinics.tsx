@@ -268,7 +268,7 @@ export default function ClinicsScreen() {
           key: `${zoom}_${tx}_${ty}`,
           left: dx * 256 - offsetXInTile + SCREEN_WIDTH / 2 + panOffset.x,
           top: dy * 256 - offsetYInTile + SCREEN_HEIGHT / 2 + panOffset.y,
-          url: `https://basemaps.cartocdn.com/rastertiles/voyager/${zoom}/${tx}/${ty}.png`,
+          url: `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/${zoom}/${ty}/${tx}`,
         });
       }
     }
