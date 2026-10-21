@@ -779,7 +779,7 @@ export default function RegisterClinic() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-50 bg-white/90 backdrop-blur-md flex flex-col items-center justify-center p-6 select-none"
+            className="fixed inset-0 z-[9998] bg-white/90 backdrop-blur-md flex flex-col items-center justify-center p-6 select-none"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}

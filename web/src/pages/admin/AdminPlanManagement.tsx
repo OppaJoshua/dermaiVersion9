@@ -15,6 +15,7 @@ import {
 } from "@/lib/store";
 import { logAdminAction } from "@/lib/auditLog";
 import { withVat } from "@/lib/vat";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 const BILLING_LABELS = {
   monthly: "Monthly",
@@ -308,15 +309,16 @@ export default function AdminPlanManagement() {
       </div>
 
       {/* Add / Edit Modal */}
-      {showModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
-          onClick={() => setShowModal(false)}
-        >
+      <ModalPortal isOpen={Boolean(showModal)}>
+        {showModal && (
           <div
-            className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+            onClick={() => setShowModal(false)}
           >
+            <div
+              className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden relative z-[9999]"
+              onClick={(e) => e.stopPropagation()}
+            >
             <div className="flex items-center justify-between px-8 py-6 border-b border-gray-200 shrink-0">
               <h2 className="text-xl font-display font-bold text-black">
                 {editingPlan ? "Edit plan" : "New subscription plan"}
@@ -487,38 +489,41 @@ export default function AdminPlanManagement() {
           </div>
         </div>
       )}
+      </ModalPortal>
 
       {/* Delete Confirm Modal */}
-      {deleteConfirm && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
-          onClick={() => setDeleteConfirm(null)}
-        >
+      <ModalPortal isOpen={Boolean(deleteConfirm)}>
+        {deleteConfirm && (
           <div
-            className="bg-white rounded-2xl w-full max-w-sm p-8 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+            onClick={() => setDeleteConfirm(null)}
           >
-            <h3 className="text-xl font-display font-bold text-black mb-2">Delete plan?</h3>
-            <p className="text-sm text-gray-700 mb-7 leading-relaxed">
-              <strong className="text-black">{deleteConfirm.name}</strong> will be permanently removed. Existing user subscriptions are not affected.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setDeleteConfirm(null)}
-                className="flex-1 py-2.5 rounded-lg border border-gray-300 bg-white text-sm font-semibold text-black hover:bg-gray-50 transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleDelete(deleteConfirm)}
-                className="flex-1 py-2.5 rounded-lg bg-magenta-600 text-white text-sm font-semibold hover:bg-magenta-700 transition-colors cursor-pointer"
-              >
-                Delete
-              </button>
+            <div
+              className="bg-white rounded-2xl w-full max-w-sm p-8 shadow-2xl relative z-[9999]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-xl font-display font-bold text-black mb-2">Delete plan?</h3>
+              <p className="text-sm text-gray-700 mb-7 leading-relaxed">
+                <strong className="text-black">{deleteConfirm.name}</strong> will be permanently removed. Existing user subscriptions are not affected.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setDeleteConfirm(null)}
+                  className="flex-1 py-2.5 rounded-lg border border-gray-300 bg-white text-sm font-semibold text-black hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleDelete(deleteConfirm)}
+                  className="flex-1 py-2.5 rounded-lg bg-magenta-600 text-white text-sm font-semibold hover:bg-magenta-700 transition-colors cursor-pointer"
+                >
+                  Delete
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalPortal>
     </div>
   );
 }

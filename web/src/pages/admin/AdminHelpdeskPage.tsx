@@ -17,6 +17,7 @@ import {
   deleteHelpdeskTicketAsync,
 } from "@/lib/store";
 import { supabase } from "@/lib/supabaseClient";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 type FilterStatus = "all" | "pending" | "open" | "in_progress" | "resolved";
 
@@ -613,20 +614,21 @@ export default function AdminHelpdeskPage() {
       </div>
 
       {/* Ticket detail modal */}
-      <AnimatePresence>
-        {selectedTicket && (
-          <div
-            className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 pt-16 sm:pt-24 md:pt-28 pb-12 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-            onClick={() => setSelectedTicketId(null)}
-          >
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 15 }}
-              transition={{ duration: 0.15 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-gray-100 max-h-[82vh] flex flex-col overflow-hidden"
+      <ModalPortal isOpen={Boolean(selectedTicket)}>
+        <AnimatePresence>
+          {selectedTicket && (
+            <div
+              className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+              onClick={() => setSelectedTicketId(null)}
             >
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 15 }}
+                transition={{ duration: 0.15 }}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-gray-100 max-h-[82vh] flex flex-col overflow-hidden relative z-[9999]"
+              >
               {/* Modal header */}
               <div className="flex items-start justify-between gap-4 px-6 sm:px-8 py-5 border-b border-gray-200 shrink-0">
                 <div className="min-w-0">
@@ -780,7 +782,8 @@ export default function AdminHelpdeskPage() {
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+        </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }

@@ -15,6 +15,7 @@ import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { formatConfidencePercent } from "@/lib/utils";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -576,25 +577,26 @@ export default function DoctorAppointmentsPage() {
 </div>
 
       {/* Review Modal */}
-      <AnimatePresence>
-        {reviewModal && (() => {
-          const isDirect = isDirectBooking(reviewModal.appointment);
-          const cond = getConditionDetail(reviewModal.appointment.conditionId);
-          const isAlreadyReviewed =
-            tab === "reviewed" ||
-            reviewModal.appointment.doctorStatus === "approved" ||
-            reviewModal.appointment.doctorStatus === "rejected" ||
-            reviewModal.appointment.status === "completed" ||
-            reviewModal.appointment.doctorDone;
+      <ModalPortal isOpen={Boolean(reviewModal)}>
+        <AnimatePresence>
+          {reviewModal && (() => {
+            const isDirect = isDirectBooking(reviewModal.appointment);
+            const cond = getConditionDetail(reviewModal.appointment.conditionId);
+            const isAlreadyReviewed =
+              tab === "reviewed" ||
+              reviewModal.appointment.doctorStatus === "approved" ||
+              reviewModal.appointment.doctorStatus === "rejected" ||
+              reviewModal.appointment.status === "completed" ||
+              reviewModal.appointment.doctorDone;
 
-          return (
-            <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
-              >
+            return (
+              <div className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col relative z-[9999]"
+                >
                 {/* Modal Header */}
                 <div className="bg-white border-b border-gray-100 px-4 sm:px-6 py-3.5 sm:py-4 flex items-center gap-3 sm:gap-4 shrink-0">
                   <img
@@ -1071,18 +1073,20 @@ export default function DoctorAppointmentsPage() {
             </div>
           );
         })()}
-      </AnimatePresence>
+        </AnimatePresence>
+      </ModalPortal>
 
       {/* Review Submission Feedback Modal */}
-      <AnimatePresence>
-        {successInfo && (
-          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 sm:p-7 text-center space-y-4"
-            >
+      <ModalPortal isOpen={Boolean(successInfo)}>
+        <AnimatePresence>
+          {successInfo && (
+            <div className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 sm:p-7 text-center space-y-4 relative z-[9999]"
+              >
               <div className={`w-14 h-14 rounded-2xl mx-auto flex items-center justify-center shadow-xs ${
                 successInfo.decision === "approved"
                   ? "bg-emerald-100 text-emerald-600"
@@ -1174,7 +1178,8 @@ export default function DoctorAppointmentsPage() {
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+        </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }

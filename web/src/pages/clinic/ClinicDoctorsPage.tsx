@@ -33,6 +33,7 @@ import { logAuditEvent } from "@/utils/auditLogger";
 import SpecializationMultiSelect, {
   type SpecializationOption,
 } from "@/components/clinic/SpecializationMultiSelect";
+import { ModalPortal } from "@/components/common/ModalPortal";
 import {
   type DoctorShift,
   type EffectiveShiftSettings,
@@ -3309,15 +3310,16 @@ export default function ClinicDoctorsPage() {
 
 
       {/* ── Edit Doctor Profile Modal ────────────────────────────── */}
-      <AnimatePresence>
-        {editingDoctor && (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 8 }}
-              className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[92vh] flex flex-col text-left"
-            >
+      <ModalPortal isOpen={Boolean(editingDoctor)}>
+        <AnimatePresence>
+          {editingDoctor && (
+            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                className="relative z-[9999] w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[92vh] flex flex-col text-left"
+              >
               {/* Modal Header */}
               <div className="px-6 pt-5 pb-3.5 flex items-center justify-between border-b border-gray-100 bg-gray-50/50 shrink-0">
                 <div className="flex items-center gap-2.5">
@@ -3535,17 +3537,19 @@ export default function ClinicDoctorsPage() {
           </div>
         )}
       </AnimatePresence>
+      </ModalPortal>
 
       {/* ── Register New Doctor Modal ──────────────────────────────── */}
-      <AnimatePresence>
-        {showRegisterDoctorModal && (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 8 }}
-              className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
-            >
+      <ModalPortal isOpen={Boolean(showRegisterDoctorModal)}>
+        <AnimatePresence>
+          {showRegisterDoctorModal && (
+            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                className="relative z-[9999] w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+              >
               {/* Modal Header */}
               <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-gray-100 bg-gray-50/50 shrink-0">
                 <div className="flex items-center gap-3">
@@ -3753,17 +3757,19 @@ export default function ClinicDoctorsPage() {
           </div>
         )}
       </AnimatePresence>
+      </ModalPortal>
 
       {/* ── Add Doctor Confirmation Modal ────────────────────────── */}
-      <AnimatePresence>
-        {showRegisterConfirmModal && (
-          <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 8 }}
-              className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
-            >
+      <ModalPortal isOpen={Boolean(showRegisterConfirmModal)}>
+        <AnimatePresence>
+          {showRegisterConfirmModal && (
+            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                className="relative z-[9999] w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+              >
               <div className="px-6 pt-5 pb-3 flex items-start justify-between border-b border-gray-100 bg-gray-50/50 shrink-0">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-xl bg-magenta-100 text-[#c0166a] flex items-center justify-center shrink-0">
@@ -3844,17 +3850,19 @@ export default function ClinicDoctorsPage() {
           </div>
         )}
       </AnimatePresence>
+      </ModalPortal>
 
       {/* ── Doctor Details Modal ─────────────────────────────────── */}
-      <AnimatePresence>
-        {selectedDoctorForDetails && (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 8 }}
-              className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 text-left flex flex-col"
-            >
+      <ModalPortal isOpen={Boolean(selectedDoctorForDetails)}>
+        <AnimatePresence>
+          {selectedDoctorForDetails && (
+            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                className="relative z-[9999] w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 text-left flex flex-col"
+              >
               <div className="px-6 pt-5 pb-3 flex items-start justify-between border-b border-gray-100">
                 <div>
                   <h3 className="text-sm font-bold text-gray-900">Doctor Details</h3>
@@ -4038,17 +4046,19 @@ export default function ClinicDoctorsPage() {
           </div>
         )}
       </AnimatePresence>
+      </ModalPortal>
 
       {/* ── Status Toggle Confirmation Modal ─────────────────────── */}
-      <AnimatePresence>
-        {statusConfirmDoctor && (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 8 }}
-              className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 border border-gray-100 text-center"
-            >
+      <ModalPortal isOpen={Boolean(statusConfirmDoctor)}>
+        <AnimatePresence>
+          {statusConfirmDoctor && (
+            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                className="relative z-[9999] w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 border border-gray-100 text-center"
+              >
               <div
                 className={`w-11 h-11 rounded-xl mx-auto flex items-center justify-center mb-3 ${statusConfirmDoctor.status === "Active"
                   ? "bg-amber-50 text-amber-600 border border-amber-100"
@@ -4095,17 +4105,19 @@ export default function ClinicDoctorsPage() {
           </div>
         )}
       </AnimatePresence>
+      </ModalPortal>
 
       {/* ── Delete Confirmation Modal ─────────────────────────────── */}
-      <AnimatePresence>
-        {deleteTarget && (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 8 }}
-              className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 border border-gray-100 text-center"
-            >
+      <ModalPortal isOpen={Boolean(deleteTarget)}>
+        <AnimatePresence>
+          {deleteTarget && (
+            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                className="relative z-[9999] w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 border border-gray-100 text-center"
+              >
               <div className="w-11 h-11 rounded-xl bg-red-50 text-red-600 border border-red-100 mx-auto flex items-center justify-center mb-3">
                 <Trash2 className="w-5 h-5" />
               </div>
@@ -4138,17 +4150,19 @@ export default function ClinicDoctorsPage() {
           </div>
         )}
       </AnimatePresence>
+      </ModalPortal>
 
       {/* ── How to Set Doctor Duty Hours Instructions Modal ─────── */}
-      <AnimatePresence>
-        {showInstructionsModal && (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 8 }}
-              className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
-            >
+      <ModalPortal isOpen={Boolean(showInstructionsModal)}>
+        <AnimatePresence>
+          {showInstructionsModal && (
+            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                className="relative z-[9999] w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+              >
               {/* Header */}
               <div className="px-6 pt-5 pb-3 flex items-start justify-between border-b border-gray-100 bg-pink-50/40 shrink-0">
                 <div className="flex items-center gap-2.5">
@@ -4278,6 +4292,7 @@ export default function ClinicDoctorsPage() {
           </div>
         )}
       </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }

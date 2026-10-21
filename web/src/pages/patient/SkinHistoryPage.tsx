@@ -15,6 +15,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "@/lib/supabaseClient";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 import { formatConfidencePercent } from "@/lib/utils";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 interface SkinHistoryItem {
   id: string;
@@ -386,28 +387,29 @@ export default function PatientSkinHistory() {
       )}
 
       {/* Delete Confirmation Modal */}
-      <AnimatePresence>
-        {deleteTarget && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-            onClick={() => {
-              if (!isDeleting) {
-                setDeleteTarget(null);
-                setDeleteError(null);
-              }
-            }}
-          >
+      <ModalPortal isOpen={Boolean(deleteTarget)}>
+        <AnimatePresence>
+          {deleteTarget && (
             <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 10 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 10 }}
-              transition={{ duration: 0.15 }}
-              className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-gray-100"
-              onClick={(e) => e.stopPropagation()}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+              onClick={() => {
+                if (!isDeleting) {
+                  setDeleteTarget(null);
+                  setDeleteError(null);
+                }
+              }}
             >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0, y: 10 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.95, opacity: 0, y: 10 }}
+                transition={{ duration: 0.15 }}
+                className="relative z-[9999] bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-gray-100"
+                onClick={(e) => e.stopPropagation()}
+              >
               <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-500 mb-4">
                 <Trash2 className="w-6 h-6" />
               </div>
@@ -458,24 +460,26 @@ export default function PatientSkinHistory() {
           </motion.div>
         )}
       </AnimatePresence>
+      </ModalPortal>
 
       {/* View Full Results Modal */}
-      <AnimatePresence>
-        {selectedItem && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-            onClick={() => setSelectedItem(null)}
-          >
+      <ModalPortal isOpen={Boolean(selectedItem)}>
+        <AnimatePresence>
+          {selectedItem && (
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+              onClick={() => setSelectedItem(null)}
             >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="relative z-[9999] bg-white rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
               {/* Header */}
               <div className="flex items-start justify-between mb-4">
                 <div>
@@ -605,6 +609,7 @@ export default function PatientSkinHistory() {
           </motion.div>
         )}
       </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }

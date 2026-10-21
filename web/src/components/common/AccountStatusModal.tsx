@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { ShieldAlert, Mail, LogOut, AlertCircle, User } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
+import { ModalPortal } from "./ModalPortal";
 
 export default function AccountStatusModal() {
   const { accountStatus, user, signOut, role } = useAuth();
@@ -20,9 +21,10 @@ export default function AccountStatusModal() {
   };
 
   return (
-    <AnimatePresence>
-      <div className="fixed inset-0 z-[99999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-        <motion.div
+    <ModalPortal isOpen={true}>
+      <AnimatePresence>
+        <div className="fixed inset-0 z-[99998] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
           initial={{ opacity: 0, scale: 0.97, y: 8 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.97, y: 8 }}
@@ -101,5 +103,6 @@ export default function AccountStatusModal() {
         </motion.div>
       </div>
     </AnimatePresence>
+    </ModalPortal>
   );
 }

@@ -16,6 +16,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { isAppointmentExcludedFromIncomingQueue } from "@/lib/schedulingService";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -808,20 +809,21 @@ export default function DoctorDashboardPage() {
 
 
       {/* ================= CONSULTATION & CLINICAL RESULT MODAL ================= */}
-      <AnimatePresence>
-        {consultingAppt && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-xs"
-            onClick={() => setConsultingAppt(null)}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 8 }}
-              transition={{ duration: 0.2 }}
-              className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col my-auto border border-slate-100"
-              onClick={(e) => e.stopPropagation()}
+      <ModalPortal isOpen={Boolean(consultingAppt)}>
+        <AnimatePresence>
+          {consultingAppt && (
+            <div
+              className="fixed inset-0 z-[9998] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-xs"
+              onClick={() => setConsultingAppt(null)}
             >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                transition={{ duration: 0.2 }}
+                className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col my-auto border border-slate-100 relative z-[9999]"
+                onClick={(e) => e.stopPropagation()}
+              >
               {/* Header */}
               <div className="bg-white border-b border-slate-100 px-4 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2.5 min-w-0">
@@ -999,7 +1001,8 @@ export default function DoctorDashboardPage() {
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+        </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }

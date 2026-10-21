@@ -15,6 +15,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { sendClinicApprovalEmail, sendClinicRejectionEmail } from "@/lib/emailService";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 type ClinicStatus = "pending" | "verified" | "rejected";
 
@@ -699,22 +700,23 @@ export default function AdminClinicManagement() {
       </div>
 
       {/* Review Modal */}
-      <AnimatePresence>
-        {reviewModal && modalClinic && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
-            onClick={() => setReviewModal(null)}
-          >
+      <ModalPortal isOpen={Boolean(reviewModal && modalClinic)}>
+        <AnimatePresence>
+          {reviewModal && modalClinic && (
             <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-2xl max-w-2xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+              onClick={() => setReviewModal(null)}
             >
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 20 }}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-2xl max-w-2xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden relative z-[9999]"
+              >
               <div className="flex items-center justify-between px-8 py-6 border-b border-gray-200 shrink-0">
                 <div className="flex items-center gap-3">
                   <Building2 className="w-6 h-6 text-magenta-600" />
@@ -963,36 +965,39 @@ export default function AdminClinicManagement() {
             </motion.div>
           </motion.div>
         )}
-      </AnimatePresence>
+        </AnimatePresence>
+      </ModalPortal>
 
       {/* Lightbox / Image Preview Modal */}
-      <AnimatePresence>
-        {previewImage && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
-            onClick={() => setPreviewImage(null)}
-          >
-            <div className="relative max-w-3xl max-h-[85vh] bg-transparent rounded-2xl overflow-hidden">
-              <button
-                type="button"
-                onClick={() => setPreviewImage(null)}
-                className="absolute top-4 right-4 p-2 bg-black/60 text-white rounded-full hover:bg-black/80 transition-colors z-10"
-                aria-label="Close preview"
-              >
-                <X className="w-5 h-5" />
-              </button>
-              <img
-                src={previewImage}
-                alt="Document Preview"
-                className="max-w-full max-h-[80vh] rounded-2xl object-contain shadow-2xl border border-white/20"
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <ModalPortal isOpen={Boolean(previewImage)}>
+        <AnimatePresence>
+          {previewImage && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9998] bg-black/85 flex items-center justify-center p-4 backdrop-blur-md"
+              onClick={() => setPreviewImage(null)}
+            >
+              <div className="relative max-w-3xl max-h-[85vh] bg-transparent rounded-2xl overflow-hidden z-[9999]">
+                <button
+                  type="button"
+                  onClick={() => setPreviewImage(null)}
+                  className="absolute top-4 right-4 p-2 bg-black/60 text-white rounded-full hover:bg-black/80 transition-colors z-10"
+                  aria-label="Close preview"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+                <img
+                  src={previewImage}
+                  alt="Document Preview"
+                  className="max-w-full max-h-[80vh] rounded-2xl object-contain shadow-2xl border border-white/20"
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </ModalPortal>
     </div>
   );
 }

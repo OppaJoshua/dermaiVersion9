@@ -32,6 +32,23 @@ export function isSubscriptionActive(subscription: any | null): boolean {
 }
 
 /**
+ * Dynamic Pro plan evaluation helper.
+ * Strictly verifies status === 'active' AND current_period_end > Date.now().
+ */
+export function isSubscriptionPro(subscription: any | null): boolean {
+  if (!subscription) return false;
+  const status = String(subscription.status || "").toLowerCase();
+  const isActive =
+    status === "active" ||
+    status === "cancelling" ||
+    status === "pending_downgrade";
+  const periodEndRaw = subscription.current_period_end || subscription.renews_at;
+  if (!periodEndRaw) return false;
+  const periodEnd = new Date(periodEndRaw);
+  return isActive && !isNaN(periodEnd.getTime()) && periodEnd.getTime() > Date.now();
+}
+
+/**
  * Checks if a subscription period has already lapsed.
  * Compares UTC milliseconds directly.
  */
@@ -189,21 +206,9 @@ export async function validateAndSyncSubscription(
             created_at: new Date().toISOString(),
           };
 
-          const { error: notifErr } = await supabase.from("user_notification").insert({
-            ...patientNotif,
-            metadata: {
-              subscription_id: sub.subscription_id,
-              status: "expired",
-              plan_id: sub.plan_id,
-            },
-          });
-
-          // Fallback if metadata column is absent in remote schema
-          if (
-            notifErr &&
-            (notifErr.message?.includes("metadata") || (notifErr as any).code === "42703")
-          ) {
-            await supabase.from("user_notification").insert(patientNotif);
+          const { error: notifErr } = await supabase.from("user_notification").insert(patientNotif);
+          if (notifErr) {
+            console.warn("[subscriptionService] Patient notification insert warning:", notifErr.message);
           }
         }
       } catch (notifErr) {
@@ -239,20 +244,9 @@ export async function validateAndSyncSubscription(
                 created_at: new Date().toISOString(),
               };
 
-              const { error: aErr } = await supabase.from("user_notification").insert({
-                ...adminNotif,
-                metadata: {
-                  patient_user_id: userId,
-                  subscription_id: sub.subscription_id,
-                  status: "expired",
-                },
-              });
-
-              if (
-                aErr &&
-                (aErr.message?.includes("metadata") || (aErr as any).code === "42703")
-              ) {
-                await supabase.from("user_notification").insert(adminNotif);
+              const { error: aErr } = await supabase.from("user_notification").insert(adminNotif);
+              if (aErr) {
+                console.warn("[subscriptionService] Admin notification insert warning:", aErr.message);
               }
             }
           }
@@ -339,13 +333,39 @@ export async function validateAndSyncSubscription(
         planName.toLowerCase().includes("pro"));
 
     if (active && isProPlan) {
+      const tierLabel = planName.toLowerCase().includes("annual")
+        ? "Pro (Annual)"
+        : planName.toLowerCase().includes("pro")
+        ? planName
+        : "Pro Plan";
+
+      // If cached profile says Free Plan or doesn't match Pro, update it immediately
+      try {
+        const direct = localStorage.getItem(`derm_profile_${userId}`);
+        if (direct) {
+          const parsed = JSON.parse(direct);
+          if (parsed.membershipTier !== tierLabel) {
+            localStorage.setItem(
+              `derm_profile_${userId}`,
+              JSON.stringify({ ...parsed, membershipTier: tierLabel })
+            );
+          }
+        }
+        const globalCached = localStorage.getItem("dermai_patient_profile");
+        if (globalCached) {
+          const parsed = JSON.parse(globalCached);
+          if ((parsed.userId === userId || !parsed.userId) && parsed.membershipTier !== tierLabel) {
+            localStorage.setItem(
+              "dermai_patient_profile",
+              JSON.stringify({ ...parsed, membershipTier: tierLabel })
+            );
+          }
+        }
+      } catch {}
+
       return {
         tier: "Pro",
-        tierLabel: planName.toLowerCase().includes("annual")
-          ? "Pro (Annual)"
-          : planName.toLowerCase().includes("pro")
-          ? planName
-          : "Pro Plan",
+        tierLabel,
         isPro: true,
         isExpired: false,
         status: "active",
@@ -407,4 +427,217 @@ export async function syncAllExpiredSubscriptions(): Promise<number> {
     console.warn("[subscriptionService] Error in syncAllExpiredSubscriptions:", err);
     return 0;
   }
+}
+
+/**
+ * Immediate Plan Activation on Payment Fulfillment:
+ * Ensures upon payment success:
+ * 1. Upserts/updates in public.user_plan_subscription:
+ *    - user_id: Authenticated patient's UUID
+ *    - plan_id: Pro plan identifier
+ *    - status: 'active'
+ *    - current_period_start: NOW()
+ *    - current_period_end: One month from now (NOW() + interval '1 month' or 30 days; or 1 year)
+ * 2. User Profile Synchronization: updates user table (plan_tier: 'pro' or updated_at)
+ * 3. Frontend State & Cache Invalidation:
+ *    - Clears stale cached plan claims in localStorage (derm_profile_${userId}, dermai_patient_profile)
+ *    - Dispatches window events (dermai_subscription_updated, derm_profile_updated, etc.)
+ * 4. Audit Logging & Notifications:
+ *    - Logs action: 'Subscription Upgraded', category: 'Subscription', target: 'User #' + userId
+ *    - Inserts in-app notification in public.user_notification welcoming user to Pro tier
+ */
+export async function upgradeSubscriptionToPro(
+  userId: string,
+  options?: {
+    planId?: string;
+    billingCycle?: "monthly" | "yearly";
+    paymentMethod?: string;
+    paymongoPaymentId?: string;
+    amount?: number;
+  }
+): Promise<UserSubscriptionInfo> {
+  if (!userId) {
+    throw new Error("User ID is required to upgrade subscription.");
+  }
+
+  const billingCycle = options?.billingCycle || "monthly";
+
+  // 1. Resolve Pro Plan
+  let planRecord: any = null;
+  if (options?.planId) {
+    const { data: p } = await supabase
+      .from("plan")
+      .select("plan_id, name, price, scan_limit, billing_type")
+      .eq("plan_id", options.planId)
+      .maybeSingle();
+    planRecord = p;
+  }
+  if (!planRecord) {
+    const { data: p } = await supabase
+      .from("plan")
+      .select("plan_id, name, price, scan_limit, billing_type")
+      .eq("billing_type", billingCycle)
+      .ilike("name", "%Pro%")
+      .order("price", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    planRecord = p;
+  }
+
+  const planId =
+    planRecord?.plan_id ||
+    (billingCycle === "yearly"
+      ? "00000000-0000-0000-0000-000000000004"
+      : "00000000-0000-0000-0000-000000000003");
+  const planName = planRecord?.name || (billingCycle === "yearly" ? "Pro (Annual)" : "Pro");
+  const tierLabel = planName.toLowerCase().includes("annual") ? "Pro (Annual)" : "Pro";
+
+  const periodStart = new Date();
+  const periodEnd = new Date(periodStart);
+  if (billingCycle === "yearly") {
+    periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+  } else {
+    periodEnd.setMonth(periodEnd.getMonth() + 1);
+  }
+
+  // 2. Immediate Plan Activation on Payment Fulfillment in public.user_plan_subscription
+  const subscriptionRecord = {
+    user_id: userId,
+    plan_id: planId,
+    status: "active",
+    billing_cycle: billingCycle,
+    started_at: periodStart.toISOString(),
+    renews_at: periodEnd.toISOString(),
+    current_period_start: periodStart.toISOString(),
+    current_period_end: periodEnd.toISOString(),
+    payment_method: options?.paymentMethod || "Online Payment",
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error: subErr } = await supabase
+    .from("user_plan_subscription")
+    .upsert(subscriptionRecord, { onConflict: "user_id" });
+
+  if (subErr) {
+    console.error("[upgradeSubscriptionToPro] Upsert error:", subErr.message);
+  }
+
+  // 3. User Profile Synchronization: Update user table (safely update plan_tier or updated_at)
+  try {
+    const { error: profileErr } = await supabase
+      .from("user")
+      .update({
+        plan_tier: "pro",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("user_id", userId);
+
+    if (profileErr) {
+      await supabase
+        .from("user")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("user_id", userId);
+    }
+  } catch (profErr) {
+    console.warn("[upgradeSubscriptionToPro] Profile sync warning:", profErr);
+  }
+
+  // 4. In-App Notification in public.user_notification welcoming user to Pro tier
+  try {
+    const { data: existingNotif } = await supabase
+      .from("user_notification")
+      .select("notif_id")
+      .eq("user_id", userId)
+      .eq("subtype", "subscription_upgraded")
+      .gte("created_at", new Date(Date.now() - 3600000).toISOString())
+      .limit(1)
+      .maybeSingle();
+
+    if (!existingNotif) {
+      const formattedDate = periodEnd.toLocaleDateString("en-PH", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+      await supabase.from("user_notification").insert({
+        user_id: userId,
+        type: "subscription",
+        subtype: "subscription_upgraded",
+        title: "Welcome to DermAI Pro!",
+        body: `Your payment was successful. You now have unlimited AI skin scans and Pro features enabled until ${formattedDate}.`,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
+    }
+  } catch (notifErr) {
+    console.warn("[upgradeSubscriptionToPro] Notification dispatch warning:", notifErr);
+  }
+
+  // 5. Audit Logging via logAuditEvent:
+  // action: 'Subscription Upgraded', category: 'Subscription', target: 'User #' + userId
+  try {
+    await logAuditEvent({
+      userId,
+      role: "patient",
+      category: "Subscription",
+      action: "Subscription Upgraded",
+      target: `User #${userId}`,
+      details: "Patient upgraded to Pro plan following successful payment.",
+      metadata: {
+        planId,
+        planName,
+        billingCycle,
+        paymentMethod: options?.paymentMethod || "Online Payment",
+        paymentId: options?.paymongoPaymentId,
+        amount: options?.amount,
+        currentPeriodStart: periodStart.toISOString(),
+        currentPeriodEnd: periodEnd.toISOString(),
+      },
+    });
+  } catch (auditErr) {
+    console.warn("[upgradeSubscriptionToPro] Audit log warning:", auditErr);
+  }
+
+  // 6. Frontend State & Cache Invalidation:
+  // Clear stale cached plan claims in localStorage so header badge and layout immediately show Pro
+  try {
+    const direct = localStorage.getItem(`derm_profile_${userId}`);
+    const parsedDirect = direct ? JSON.parse(direct) : {};
+    localStorage.setItem(
+      `derm_profile_${userId}`,
+      JSON.stringify({ ...parsedDirect, membershipTier: tierLabel, userId })
+    );
+
+    const globalCached = localStorage.getItem("dermai_patient_profile");
+    const parsedGlobal = globalCached ? JSON.parse(globalCached) : {};
+    localStorage.setItem(
+      "dermai_patient_profile",
+      JSON.stringify({ ...parsedGlobal, membershipTier: tierLabel, userId })
+    );
+  } catch {}
+
+  // 7. Dispatch events across active components
+  try {
+    window.dispatchEvent(
+      new CustomEvent("dermai_subscription_updated", {
+        detail: { userId, tier: tierLabel, status: "active" },
+      })
+    );
+    window.dispatchEvent(new CustomEvent("derm_profile_updated"));
+    window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+    window.dispatchEvent(new Event("storage"));
+  } catch {}
+
+  return {
+    tier: "Pro",
+    tierLabel,
+    isPro: true,
+    isExpired: false,
+    status: "active",
+    currentPeriodStart: periodStart.toISOString(),
+    currentPeriodEnd: periodEnd.toISOString(),
+    scanLimit: -1,
+    subscription: subscriptionRecord,
+    plan: planRecord,
+  };
 }

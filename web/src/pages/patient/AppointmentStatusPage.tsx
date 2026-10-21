@@ -18,6 +18,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 interface Appointment {
   id: string;
@@ -1374,9 +1375,10 @@ const AppointmentStatusPage: React.FC = () => {
       </div>
 
       {/* Patient Reschedule Request Modal */}
-      {rescheduleModalAppt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-gray-100 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+      <ModalPortal isOpen={Boolean(rescheduleModalAppt)}>
+        {rescheduleModalAppt && (
+          <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+            <div className="relative z-[9999] bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-gray-100 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-2xl bg-magenta-50 text-magenta-600 flex items-center justify-center">
@@ -1560,11 +1562,13 @@ const AppointmentStatusPage: React.FC = () => {
           </div>
         </div>
       )}
+      </ModalPortal>
 
       {/* Withdraw Reschedule Request Modal */}
-      {withdrawModalAppt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in fade-in zoom-in-95">
+      <ModalPortal isOpen={Boolean(withdrawModalAppt)}>
+        {withdrawModalAppt && (
+          <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+            <div className="relative z-[9999] bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in fade-in zoom-in-95">
             <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 mb-4 mx-auto">
               <RotateCcw className="w-6 h-6" />
             </div>
@@ -1605,11 +1609,13 @@ const AppointmentStatusPage: React.FC = () => {
           </div>
         </div>
       )}
+      </ModalPortal>
 
       {/* Cancellation Confirmation Modal */}
-      {cancellingAppt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in fade-in zoom-in-95">
+      <ModalPortal isOpen={Boolean(cancellingAppt)}>
+        {cancellingAppt && (
+          <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+            <div className="relative z-[9999] bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in fade-in zoom-in-95">
             <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 mb-4 mx-auto">
               <AlertTriangle className="w-6 h-6" />
             </div>
@@ -1650,6 +1656,7 @@ const AppointmentStatusPage: React.FC = () => {
           </div>
         </div>
       )}
+      </ModalPortal>
     </div>
   );
 };

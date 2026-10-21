@@ -25,6 +25,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
+import { ModalPortal } from "@/components/common/ModalPortal";
 import { createPatientNotification } from "@/lib/notificationService";
 import {
   findAvailableDoctorsForSlot,
@@ -92,6 +93,11 @@ type AppointmentRecord = {
   needsPatientReschedule?: boolean;
   appointmentHistory?: AppointmentHistoryEntry[];
   primaryScanId?: string;
+  paymentStatus?: string;
+  isPaid?: boolean;
+  paymentAmount?: number;
+  paymentMethod?: string;
+  paymentReference?: string;
 };
 
 type DoctorAccount = {
@@ -266,6 +272,7 @@ export default function ClinicAppointmentsPage() {
 
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [clinicDoctors, setClinicDoctors] = useState<DoctorAccount[]>([]);
+  const [clinicFee, setClinicFee] = useState<number>(500);
   const [loadingData, setLoadingData] = useState(true);
 
   const loadData = async () => {
@@ -302,6 +309,24 @@ export default function ClinicAppointmentsPage() {
     }
 
     console.log("[ClinicAppointments] resolvedClinicId =", resolvedClinicId);
+
+    // Step 2b: Fetch clinic consultation fee
+    let resolvedFee = 500;
+    if (resolvedClinicId) {
+      try {
+        const { data: cRow } = await supabase
+          .from("clinic")
+          .select("consultation_fee")
+          .eq("clinic_id", resolvedClinicId)
+          .maybeSingle();
+        if (cRow?.consultation_fee) {
+          resolvedFee = Number(cRow.consultation_fee);
+          setClinicFee(resolvedFee);
+        }
+      } catch (fErr) {
+        console.warn("[ClinicAppointments] Failed to fetch clinic consultation fee:", fErr);
+      }
+    }
 
     // 1. Fetch clinic doctors from clinic_doctor table
     let docRows: any[] = [];
@@ -477,6 +502,29 @@ export default function ClinicAppointmentsPage() {
         : (Array.isArray(qAnswers.appointment_history) ? qAnswers.appointment_history : []);
       const primaryScanId = a.primary_scan_id || qAnswers.primary_scan_id || undefined;
 
+      // Extract payment details
+      const rawPayStatus = String(a.payment_status || qAnswers.payment_status || "").toLowerCase().trim();
+      const isPaidBool =
+        a.is_paid === true ||
+        qAnswers.is_paid === true ||
+        rawPayStatus === "paid" ||
+        rawPayStatus === "success" ||
+        rawPayStatus === "completed" ||
+        /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(String(a.clinic_note || "")) ||
+        /paid online|gcash ref|maya ref/i.test(String(a.notes || ""));
+
+      let payMethod = a.payment_method || qAnswers.payment_method || "";
+      if (!payMethod && a.clinic_note) {
+        if (/maya/i.test(a.clinic_note)) payMethod = "Maya";
+        else if (/gcash/i.test(a.clinic_note)) payMethod = "GCash";
+      }
+      let payRef = a.payment_reference || qAnswers.payment_reference || "";
+      if (!payRef && a.clinic_note) {
+        const refMatch = a.clinic_note.match(/(?:Ref|Reference):\s*([A-Za-z0-9_-]+)/i);
+        if (refMatch) payRef = refMatch[1];
+      }
+      const payAmount = a.payment_amount || qAnswers.payment_amount || resolvedFee;
+
       return {
         id: a.appointment_id,
         clinicId: 0,
@@ -520,6 +568,11 @@ export default function ClinicAppointmentsPage() {
         needsPatientReschedule,
         appointmentHistory,
         primaryScanId,
+        paymentStatus: isPaidBool ? "paid" : (rawPayStatus || "pending"),
+        isPaid: isPaidBool,
+        paymentAmount: payAmount,
+        paymentMethod: payMethod || undefined,
+        paymentReference: payRef || undefined,
       };
     });
 
@@ -537,6 +590,28 @@ export default function ClinicAppointmentsPage() {
                 (clinicName && localItem.clinicName && localItem.clinicName.toLowerCase().trim() === clinicName.toLowerCase().trim()) ||
                 (!resolvedClinicId);
               if (isClinicMatch) {
+                const localPayStatus = String(localItem.paymentStatus || localItem.payment_status || "").toLowerCase().trim();
+                const localIsPaid =
+                  localItem.isPaid === true ||
+                  localItem.is_paid === true ||
+                  localPayStatus === "paid" ||
+                  localPayStatus === "success" ||
+                  localPayStatus === "completed" ||
+                  /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(String(localItem.clinicNote || localItem.clinic_note || "")) ||
+                  /paid online|gcash ref|maya ref/i.test(String(localItem.notes || ""));
+
+                let localMethod = localItem.paymentMethod || localItem.payment_method || "";
+                if (!localMethod && (localItem.clinicNote || localItem.clinic_note)) {
+                  const combined = `${localItem.clinicNote || ""} ${localItem.clinic_note || ""}`;
+                  if (/maya/i.test(combined)) localMethod = "Maya";
+                  else if (/gcash/i.test(combined)) localMethod = "GCash";
+                }
+                let localRef = localItem.paymentReference || localItem.payment_reference || "";
+                if (!localRef && (localItem.clinicNote || localItem.clinic_note)) {
+                  const refMatch = `${localItem.clinicNote || ""} ${localItem.clinic_note || ""}`.match(/(?:Ref|Reference):\s*([A-Za-z0-9_-]+)/i);
+                  if (refMatch) localRef = refMatch[1];
+                }
+
                 mapped.push({
                   id: localItem.id,
                   clinicId: 0,
@@ -577,6 +652,11 @@ export default function ClinicAppointmentsPage() {
                   needsPatientReschedule: localItem.needsPatientReschedule,
                   appointmentHistory: localItem.appointmentHistory || [],
                   primaryScanId: localItem.primaryScanId,
+                  paymentStatus: localIsPaid ? "paid" : (localPayStatus || "pending"),
+                  isPaid: localIsPaid,
+                  paymentAmount: localItem.paymentAmount || localItem.payment_amount || resolvedFee,
+                  paymentMethod: localMethod || undefined,
+                  paymentReference: localRef || undefined,
                 });
               }
             }
@@ -779,13 +859,52 @@ export default function ClinicAppointmentsPage() {
     }, {});
   }, [appointments]);
 
-  // Queues categorized by review lifecycle
+  // Verified Upfront Payment Enforcer:
+  // Patient appointment booking workflow requires upfront payment before confirmation.
+  // Only requests where payment has succeeded (payment_status = 'paid', is_paid = true, or verified note) are fetched and shown.
+  const isUpfrontPaid = (a: AppointmentRecord): boolean => {
+    if (a.isPaid === true) return true;
+    const ps = String(a.paymentStatus || "").toLowerCase().trim();
+    if (ps === "paid" || ps === "success" || ps === "completed") return true;
+    const note = String(a.clinicNote || "");
+    if (/paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(note)) return true;
+    const patNotes = String(a.notes || "");
+    if (/paid online|gcash ref|maya ref/i.test(patNotes)) return true;
+    if (a.isWalkIn) return true;
+    return false;
+  };
+
+  const getPaymentBadgeInfo = (appointment: AppointmentRecord) => {
+    const fee = appointment.paymentAmount || clinicFee || 500;
+    const formattedFee = `₱${Number(fee).toLocaleString("en-PH", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+
+    let method = appointment.paymentMethod || "";
+    if (!method) {
+      const combined = `${appointment.clinicNote || ""} ${appointment.notes || ""}`;
+      if (/maya/i.test(combined)) method = "Maya";
+      else if (/gcash/i.test(combined)) method = "GCash";
+    }
+
+    const label = method ? `${formattedFee} • Paid via ${method}` : `${formattedFee} • Paid Online`;
+    return {
+      isPaid: true,
+      label,
+      method,
+      fee: formattedFee,
+    };
+  };
+
+  // Queues categorized by review lifecycle - strictly enforced verified upfront payment
   const incomingQueue = useMemo(() => {
     return appointments
       .filter(
         (a) =>
           !isAppointmentExcludedFromIncomingQueue(a) &&
-          (a.status === "pending" || a.doctorStatus === "pending-review" || a.doctorStatus === "rejected")
+          (a.status === "pending" || a.doctorStatus === "pending-review" || a.doctorStatus === "rejected") &&
+          isUpfrontPaid(a)
       )
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [appointments]);
@@ -808,7 +927,8 @@ export default function ClinicAppointmentsPage() {
           (a.status === "scheduled" ||
             a.status === "confirmed" ||
             a.status === "accepted" ||
-            a.doctorStatus === "approved")
+            a.doctorStatus === "approved") &&
+          isUpfrontPaid(a)
       ),
     [appointments]
   );
@@ -817,7 +937,8 @@ export default function ClinicAppointmentsPage() {
       appointments.filter(
         (a) =>
           Boolean(a.rescheduleRequested) &&
-          !isAppointmentExcludedFromIncomingQueue(a)
+          !isAppointmentExcludedFromIncomingQueue(a) &&
+          isUpfrontPaid(a)
       ),
     [appointments]
   );
@@ -2108,6 +2229,7 @@ export default function ClinicAppointmentsPage() {
                 (appointment.status === "scheduled" && appointment.doctorStatus !== "rejected")
               );
               const isUnassigned = !isDoctorDeclined && !isInReview && !isApproved;
+              const payBadge = getPaymentBadgeInfo(appointment);
 
               return (
                 <div
@@ -2140,18 +2262,32 @@ export default function ClinicAppointmentsPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <p className="text-sm font-bold text-gray-900 truncate">
                               {appointment.patientName || `Patient #${appointment.id.slice(-4)}`}
                             </p>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10.5px] font-bold shrink-0">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              {payBadge.label}
+                            </span>
                           </div>
                           {appointment.patientAge && (
                             <p className="text-[10px] text-gray-400">{appointment.patientAge} years old</p>
                           )}
-                          <p className="text-[11px] font-semibold text-magenta-600 mt-0.5">
-                            {appointment.conditionName || "General Consultation"}
-                          </p>
-                          <p className="text-[10px] text-gray-400">
+                          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                            <p className="text-[11px] font-semibold text-magenta-600">
+                              {appointment.conditionName || "General Consultation"}
+                            </p>
+                            <span className="text-gray-300">·</span>
+                            <span className="text-[10px] font-semibold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
+                              Face-to-Face Consultation
+                            </span>
+                            <span className="text-gray-300">·</span>
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded flex items-center gap-1">
+                              <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Upfront Paid
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-gray-400 mt-0.5">
                             Requested: {new Date(appointment.createdAt).toLocaleString("en-US", {
                               month: "short",
                               day: "2-digit",
@@ -2190,13 +2326,16 @@ export default function ClinicAppointmentsPage() {
                     </div>
                   </div>
 
-                  {/* Patient Requested Schedule Banner with Queue Badge */}
+                  {/* Patient Requested Schedule Banner with Queue Badge & Payment Verified Badge */}
                   <div className="mb-2.5 p-2 rounded-xl bg-magenta-50/70 border border-magenta-100 flex items-center justify-between text-xs flex-wrap gap-1.5">
                     <div className="flex items-center gap-1.5 font-bold text-magenta-950">
                       <Calendar className="w-3.5 h-3.5 text-magenta-600" />
                       <span>{appointment.date || "Date pending"} {appointment.batchTime ? `· ${appointment.batchTime} Batch` : appointment.time ? `· ${appointment.time}` : ""}</span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-100/90 text-emerald-800 text-[10px] font-bold flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" /> {payBadge.label}
+                      </span>
                       {isApproved && (
                         appointment.checkInStatus === "arrived" ? (
                           <span className="px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-800 font-bold text-[9px] flex items-center gap-0.5">
@@ -2312,31 +2451,42 @@ export default function ClinicAppointmentsPage() {
                   <div className="pt-1">
                     {/* Scenario A: Unassigned -> Assign Doctor */}
                     {isUnassigned && (
-                      <div className="flex items-center gap-2 w-full">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedDoctorId("");
-                            setAssignDoctorModal({
-                              appointmentId: appointment.id,
-                              patientName: appointment.patientName,
-                              targetDate: appointment.date,
-                              targetTime: appointment.time,
-                              primaryScanId: appointment.primaryScanId,
-                              userId: appointment.userId,
-                            });
-                          }}
-                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-all shadow-xs cursor-pointer"
-                        >
-                          <Stethoscope className="w-3.5 h-3.5" /> Assign Doctor
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setViewingPatient(appointment)}
-                          className="py-2.5 px-4 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
-                        >
-                          Details
-                        </button>
+                      <div className="space-y-2 w-full">
+                        <div className="px-2.5 py-1.5 rounded-xl bg-emerald-50/90 border border-emerald-200/80 flex items-center justify-between text-[11px] text-emerald-900">
+                          <span className="flex items-center gap-1.5 font-semibold">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            Upfront Fee Verified: {payBadge.label}
+                          </span>
+                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                            Verified
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 w-full">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedDoctorId("");
+                              setAssignDoctorModal({
+                                appointmentId: appointment.id,
+                                patientName: appointment.patientName,
+                                targetDate: appointment.date,
+                                targetTime: appointment.time,
+                                primaryScanId: appointment.primaryScanId,
+                                userId: appointment.userId,
+                              });
+                            }}
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-all shadow-xs cursor-pointer"
+                          >
+                            <Stethoscope className="w-3.5 h-3.5" /> Assign Doctor for Review
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setViewingPatient(appointment)}
+                            className="py-2.5 px-4 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                          >
+                            Details
+                          </button>
+                        </div>
                       </div>
                     )}
 
@@ -2458,7 +2608,8 @@ export default function ClinicAppointmentsPage() {
           </div>
         </div>
       </div>      {/* ── Day Detail Modal ─────────────────────────────────── */}
-      {dayDetailDate && (() => {
+      <ModalPortal isOpen={Boolean(dayDetailDate)}>
+        {dayDetailDate && (() => {
         const dayModalAll = appointmentsByDate[dayDetailDate] || [];
         const dayModalCompletedCount = dayModalAll.filter(
           (a) => a.status === "completed" || a.checkInStatus === "completed"
@@ -2475,13 +2626,13 @@ export default function ClinicAppointmentsPage() {
         );
 
         return (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDayDetailDate(null)}>
+          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDayDetailDate(null)}>
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ duration: 0.2 }}
-              className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
+              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
@@ -2704,17 +2855,19 @@ export default function ClinicAppointmentsPage() {
           </div>
         );
       })()}
+      </ModalPortal>
 
       {/* ── No-Show Confirmation Modal ───────────────────────── */}
-      {noShowConfirmModal && (
-        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
-            onClick={(e) => e.stopPropagation()}
-          >
+      <ModalPortal isOpen={Boolean(noShowConfirmModal)}>
+        {noShowConfirmModal && (
+          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
+              onClick={(e) => e.stopPropagation()}
+            >
             <div className="px-6 pt-6 pb-4 border-b border-gray-100 flex items-start justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
@@ -2830,17 +2983,19 @@ export default function ClinicAppointmentsPage() {
           </motion.div>
         </div>
       )}
+      </ModalPortal>
 
       {/* ── Patient Details Review Modal ─────────────────────── */}
-      {viewingPatient && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 10 }}
-            transition={{ duration: 0.2 }}
-            className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[88vh] text-left"
-          >
+      <ModalPortal isOpen={Boolean(viewingPatient)}>
+        {viewingPatient && (
+          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="relative z-[9999] w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[88vh] text-left"
+            >
             {/* Header */}
             <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -2853,12 +3008,15 @@ export default function ClinicAppointmentsPage() {
                   className="w-11 h-11 rounded-full object-cover border border-gray-200 shrink-0"
                 />
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-base font-bold text-gray-900 leading-tight">
                       {viewingPatient.patientName || "Unknown Patient"}
                     </p>
                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
                       <MapPin className="w-2.5 h-2.5 text-gray-400" /> Face-to-Face
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> {getPaymentBadgeInfo(viewingPatient).label}
                     </span>
                   </div>
                   {viewingPatient.patientAge ? (
@@ -3274,17 +3432,19 @@ export default function ClinicAppointmentsPage() {
           </motion.div>
         </div>
       )}
+      </ModalPortal>
 
       {/* ── Finalize Schedule Modal (After Doctor Approval) ─────────────────────── */}
-      {finalizeScheduleModal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 10 }}
-            transition={{ duration: 0.2 }}
-            className="w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
-          >
+      <ModalPortal isOpen={Boolean(finalizeScheduleModal)}>
+        {finalizeScheduleModal && (
+          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
+            >
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-emerald-600" />
@@ -3363,17 +3523,19 @@ export default function ClinicAppointmentsPage() {
           </motion.div>
         </div>
       )}
+      </ModalPortal>
 
       {/* ── Assign Doctor for Review Modal (also used for Re-assigning) ─────────────────────── */}
-      {assignDoctorModal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 10 }}
-            transition={{ duration: 0.2 }}
-            className="w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
-          >
+      <ModalPortal isOpen={Boolean(assignDoctorModal)}>
+        {assignDoctorModal && (
+          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
+            >
             <div className="flex items-center justify-between mb-1">
               <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
                 <Stethoscope className="w-4 h-4 text-magenta-600" />
@@ -3392,6 +3554,17 @@ export default function ClinicAppointmentsPage() {
                 ? `Reassign to an available doctor in your clinic at the original consultation schedule.`
                 : `Select a doctor to review this patient's case and approve the consultation.`}
             </p>
+
+            {/* Upfront Payment Verification Banner */}
+            <div className="mb-3 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center justify-between">
+              <div className="flex items-center gap-1.5 font-semibold">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Upfront Consultation Fee Verified (₱{clinicFee.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
+              </div>
+              <span className="text-[10px] text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-full font-bold">
+                Paid
+              </span>
+            </div>
 
             {/* Original Appointment Slot Reminder */}
             {assignDoctorModal.targetDate && (
@@ -3549,17 +3722,19 @@ export default function ClinicAppointmentsPage() {
           </motion.div>
         </div>
       )}
+      </ModalPortal>
 
       {/* ── Request Patient to Reschedule Modal (Clinic permissions: cannot change date/time unilaterally) ── */}
-      {requestPatientRescheduleModal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 10 }}
-            transition={{ duration: 0.2 }}
-            className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
-          >
+      <ModalPortal isOpen={Boolean(requestPatientRescheduleModal)}>
+        {requestPatientRescheduleModal && (
+          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
+            >
             <div className="flex items-center justify-between mb-3">
               <div>
                 <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
@@ -3667,17 +3842,19 @@ export default function ClinicAppointmentsPage() {
           </motion.div>
         </div>
       )}
+      </ModalPortal>
 
       {/* ── Decline Patient Reschedule Request Modal (Retains original schedule) ── */}
-      {declinePatientRescheduleModal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 10 }}
-            transition={{ duration: 0.2 }}
-            className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
-          >
+      <ModalPortal isOpen={Boolean(declinePatientRescheduleModal)}>
+        {declinePatientRescheduleModal && (
+          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
+            >
             <div className="flex items-center justify-between mb-3">
               <div>
                 <h3 className="font-bold text-gray-900 text-base">Decline Reschedule Request</h3>
@@ -3753,17 +3930,19 @@ export default function ClinicAppointmentsPage() {
           </motion.div>
         </div>
       )}
+      </ModalPortal>
 
       {/* ── Reject Request with Reason Modal ─────────────────────── */}
-      {rejectModal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 10 }}
-            transition={{ duration: 0.2 }}
-            className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
-          >
+      <ModalPortal isOpen={Boolean(rejectModal)}>
+        {rejectModal && (
+          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
+            >
             <div className="flex items-center justify-between mb-3">
               <div>
                 <h3 className="font-bold text-gray-900 text-base">Decline Appointment</h3>
@@ -3867,6 +4046,7 @@ export default function ClinicAppointmentsPage() {
           </motion.div>
         </div>
       )}
+      </ModalPortal>
 
     </div>
   );

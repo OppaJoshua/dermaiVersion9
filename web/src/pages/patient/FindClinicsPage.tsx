@@ -31,6 +31,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useAuth } from "@/context/AuthContext";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
+import { ModalPortal } from "@/components/common/ModalPortal";
 
 // Calculate geographical distance in kilometers using Haversine formula
 function calculateDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -952,24 +953,25 @@ export default function FindClinicsPage() {
     return (
         <div className="relative w-full h-[calc(100vh-4rem)] min-h-[600px] overflow-hidden bg-slate-50 flex">
             {/* ── Ultra-Minimal Clinic Details Modal ────────────────────── */}
-            <AnimatePresence>
-                {selectedClinic && (
-                    <motion.div
-                        key="clinic-detail-modal"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-[9999] flex items-center justify-center p-4 sm:p-6 bg-black/40 backdrop-blur-sm"
-                        onClick={handleCloseClinicModal}
-                    >
+            <ModalPortal isOpen={Boolean(selectedClinic)}>
+                <AnimatePresence>
+                    {selectedClinic && (
                         <motion.div
-                            initial={{ opacity: 0, scale: 0.96, y: 12 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.96, y: 12 }}
-                            transition={{ duration: 0.2, ease: "easeOut" }}
-                            className="bg-white rounded-2xl border border-gray-200 w-full max-w-lg max-h-[88vh] flex flex-col overflow-hidden text-left"
-                            onClick={(e) => e.stopPropagation()}
+                            key="clinic-detail-modal"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="fixed inset-0 z-[9998] flex items-center justify-center p-4 sm:p-6 bg-black/40 backdrop-blur-sm"
+                            onClick={handleCloseClinicModal}
                         >
+                            <motion.div
+                                initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.96, y: 12 }}
+                                transition={{ duration: 0.2, ease: "easeOut" }}
+                                className="relative z-[9999] bg-white rounded-2xl border border-gray-200 w-full max-w-lg max-h-[88vh] flex flex-col overflow-hidden text-left"
+                                onClick={(e) => e.stopPropagation()}
+                            >
                             {/* Sticky Modal Header */}
                             <div className="px-6 py-4 border-b border-gray-100 flex items-start justify-between bg-white">
                                 <div className="flex items-center gap-3.5 min-w-0">
@@ -1221,26 +1223,28 @@ export default function FindClinicsPage() {
                     </motion.div>
                 )}
             </AnimatePresence>
+            </ModalPortal>
 
             {/* ── Fullscreen Photo Lightbox Modal ──────────────────────── */}
-            <AnimatePresence>
-                {lightboxPhoto && (
-                    <motion.div
-                        key="gallery-lightbox"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6 bg-black/85 backdrop-blur-md"
-                        onClick={() => setLightboxPhoto(null)}
-                    >
+            <ModalPortal isOpen={Boolean(lightboxPhoto)}>
+                <AnimatePresence>
+                    {lightboxPhoto && (
                         <motion.div
-                            initial={{ scale: 0.94, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.94, opacity: 0 }}
-                            transition={{ duration: 0.18 }}
-                            className="relative max-w-3xl max-h-[90vh] w-full flex flex-col items-center"
-                            onClick={(e) => e.stopPropagation()}
+                            key="gallery-lightbox"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="fixed inset-0 z-[9998] flex items-center justify-center p-4 sm:p-6 bg-black/85 backdrop-blur-md"
+                            onClick={() => setLightboxPhoto(null)}
                         >
+                            <motion.div
+                                initial={{ scale: 0.94, opacity: 0 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                exit={{ scale: 0.94, opacity: 0 }}
+                                transition={{ duration: 0.18 }}
+                                className="relative z-[9999] max-w-3xl max-h-[90vh] w-full flex flex-col items-center"
+                                onClick={(e) => e.stopPropagation()}
+                            >
                             <div className="relative w-full flex justify-center">
                                 <img
                                     src={lightboxPhoto}
@@ -1260,6 +1264,7 @@ export default function FindClinicsPage() {
                     </motion.div>
                 )}
             </AnimatePresence>
+            </ModalPortal>
 
             {/* ── 1. Full Interactive Background Map ─────────────────── */}
             <div ref={mapRef} className="absolute inset-0 w-full h-full z-0">
