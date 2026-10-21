@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
+import { resolveAvatarUrl } from "@/utils/storage";
 import { createPatientNotification } from "@/lib/notificationService";
 import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 
@@ -404,11 +405,8 @@ export function useDoctorAppointments() {
                   }
                 } catch {}
               }
-              if (resolvedAvatar && !resolvedAvatar.startsWith("http") && !resolvedAvatar.startsWith("data:")) {
-                const { data: pubData } = supabase.storage.from("avatars").getPublicUrl(resolvedAvatar);
-                if (pubData?.publicUrl) {
-                  resolvedAvatar = pubData.publicUrl;
-                }
+              if (resolvedAvatar) {
+                resolvedAvatar = resolveAvatarUrl(resolvedAvatar) || resolvedAvatar;
               }
 
               const apptId = String(row.appointment_id);

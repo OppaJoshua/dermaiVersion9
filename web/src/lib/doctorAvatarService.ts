@@ -59,12 +59,14 @@ try {
   }
 } catch {}
 
+import { resolveAvatarUrl } from "./avatarUrlResolver";
+
 /**
  * Synchronously retrieves doctor avatar URL from in-memory cache or doctor object with cache-busting.
  */
 export function getDoctorAvatarUrl(
   doctorIdOrUserId?: string,
-  doctor?: { photo?: string; photo_url?: string; avatar_url?: string } | null
+  doctor?: { photo?: string | null; photo_url?: string | null; avatar_url?: string | null } | null
 ): string {
   if (doctorIdOrUserId) {
     const cached = avatarCache.get(doctorIdOrUserId);
@@ -73,7 +75,8 @@ export function getDoctorAvatarUrl(
     }
   }
   const raw = doctor?.photo_url || doctor?.photo || doctor?.avatar_url;
-  return raw ? withCacheBuster(raw) : "";
+  const resolved = resolveAvatarUrl(raw);
+  return resolved ? withCacheBuster(resolved) : "";
 }
 
 /**
@@ -102,7 +105,22 @@ export async function fetchDoctorAvatar(
       .maybeSingle();
 
     if (doc) {
-      const url = doc.photo_url ? withCacheBuster(doc.photo_url) : null;
+      let resolved = resolveAvatarUrl(doc.photo_url);
+      // Fallback to linked user profile avatar if clinic_doctor photo is not set
+      if (!resolved && doc.user_id) {
+        try {
+          const { data: userRow } = await supabase
+            .from("user")
+            .select("avatar_url")
+            .eq("user_id", doc.user_id)
+            .maybeSingle();
+          if (userRow?.avatar_url) {
+            resolved = resolveAvatarUrl(userRow.avatar_url);
+          }
+        } catch {}
+      }
+
+      const url = resolved ? withCacheBuster(resolved) : null;
       if (doc.doctor_id) avatarCache.set(doc.doctor_id, { photoUrl: url, timestamp: Date.now() });
       if (doc.user_id) avatarCache.set(doc.user_id, { photoUrl: url, timestamp: Date.now() });
       return url;
@@ -116,7 +134,8 @@ export async function fetchDoctorAvatar(
       .maybeSingle();
 
     if (userRow) {
-      const url = userRow.avatar_url ? withCacheBuster(userRow.avatar_url) : null;
+      const resolved = resolveAvatarUrl(userRow.avatar_url);
+      const url = resolved ? withCacheBuster(resolved) : null;
       avatarCache.set(userRow.user_id, { photoUrl: url, timestamp: Date.now() });
       return url;
     }
@@ -325,19 +344,21 @@ export async function removeDoctorAvatar(
 }
 
 export interface UseDoctorAvatarOptions {
-  doctorId?: string;
-  userId?: string;
+  doctorId?: string | null;
+  userId?: string | null;
   doctor?: {
-    id?: string;
-    doctor_id?: string;
-    user_id?: string;
-    photo?: string;
-    photo_url?: string;
-    avatar_url?: string;
-    name?: string;
-    doctor_name?: string;
+    id?: string | null;
+    doctor_id?: string | null;
+    user_id?: string | null;
+    photo?: string | null;
+    photo_url?: string | null;
+    avatar_url?: string | null;
+    name?: string | null;
+    doctor_name?: string | null;
+    fullName?: string | null;
+    [key: string]: any;
   } | null;
-  initialUrl?: string;
+  initialUrl?: string | null;
 }
 
 /**
@@ -442,7 +463,7 @@ export function useDoctorAvatar(options: UseDoctorAvatarOptions = {}) {
   const getInitial = (): string | null => {
     if (docId && avatarCache.has(docId)) return avatarCache.get(docId)!.photoUrl;
     if (uId && avatarCache.has(uId)) return avatarCache.get(uId)!.photoUrl;
-    const provided = doctor?.photo_url || doctor?.photo || doctor?.avatar_url || initialUrl;
+    const provided = resolveAvatarUrl(doctor?.photo_url || doctor?.photo || doctor?.avatar_url || initialUrl);
     if (provided) return provided;
     try {
       const stored = localStorage.getItem("dermai_doctor_profile");

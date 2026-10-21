@@ -4,7 +4,6 @@ import { CheckCircle2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
-import { withVat } from "@/lib/vat";
 
 import { validateAndSyncSubscription } from "@/lib/subscriptionService";
 
@@ -35,13 +34,7 @@ interface SubscriptionInfo {
   scansUsed: number;
 }
 
-interface BillingTransaction {
-  id: string;
-  date: string;
-  description: string;
-  amount: string;
-  status: "paid" | "pending" | "failed";
-}
+
 
 const DEFAULT_MAX_FREE_SCANS = 3;
 
@@ -49,8 +42,7 @@ export default function SubscriptionStatusPage() {
   const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
-  const [billingHistory, setBillingHistory] =
-    useState<BillingTransaction[]>([]);
+
 
   useEffect(() => {
     let isMounted = true;
@@ -101,12 +93,12 @@ export default function SubscriptionStatusPage() {
             remainingDays: null,
             cancelAtPeriodEnd: false,
           });
-          setBillingHistory([]);
+
           return;
         }
 
         // Dynamically validate, expire and synchronize the patient's subscription
-        const [subInfo, freePlanRes, payRes] = await Promise.all([
+        const [subInfo, freePlanRes] = await Promise.all([
           validateAndSyncSubscription(user.id),
           supabase
             .from("plan")
@@ -123,14 +115,7 @@ export default function SubscriptionStatusPage() {
             .or("price.eq.0,name.ilike.Free")
             .limit(1)
             .maybeSingle(),
-          supabase
-            .from("user_payment")
-            .select(
-              "payment_id, payment_date, amount, status, plan:plan_id ( name, price )"
-            )
-            .eq("user_id", user.id)
-            .order("payment_date", { ascending: false })
-            .limit(10),
+
         ]);
 
         if (!isMounted) return;
@@ -167,43 +152,7 @@ export default function SubscriptionStatusPage() {
 
         if (!isMounted) return;
 
-        // Map billing transactions
-        const formattedPayments: BillingTransaction[] = (
-          payRes.data || []
-        ).map((p: any) => {
-          const planObj = Array.isArray(p.plan) ? p.plan[0] : p.plan;
-          const rawAmount = Number(p.total_amount ?? p.amount_paid ?? p.amount ?? 0);
 
-          let resolvedTotal = rawAmount;
-          if (p.total_amount != null && Number(p.total_amount) > 0) {
-            resolvedTotal = Number(p.total_amount);
-          } else if (p.amount_paid != null && Number(p.amount_paid) > 0) {
-            resolvedTotal = Number(p.amount_paid);
-          } else if (planObj?.price != null && Number(planObj.price) > 0) {
-            resolvedTotal = withVat(Number(planObj.price));
-          } else if (rawAmount === 177.68) {
-            resolvedTotal = 199.00;
-          }
-
-          return {
-            id: p.payment_id,
-            date: new Date(p.payment_date).toLocaleDateString("en-PH", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            }),
-            description: planObj?.name ?? "Plan Payment",
-            amount: `₱${resolvedTotal.toLocaleString("en-PH", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}`,
-            status: (p.status === "success"
-              ? "paid"
-              : p.status === "failed"
-              ? "failed"
-              : "pending") as BillingTransaction["status"],
-          };
-        });
 
         // Atomically set the resolved subscription state
         if (isPro && plan) {
@@ -271,7 +220,6 @@ export default function SubscriptionStatusPage() {
           });
         }
 
-        setBillingHistory(formattedPayments);
       } catch (err) {
         console.error("Failed to load subscription status:", err);
       } finally {
@@ -368,20 +316,6 @@ export default function SubscriptionStatusPage() {
                   <div className="h-2 w-full bg-gray-100 rounded-full" />
                 </div>
 
-                <div className="pt-4 border-t border-gray-100">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="h-4 w-28 bg-gray-200 rounded" />
-                    <div className="h-3 w-16 bg-gray-100 rounded" />
-                  </div>
-                  <div className="space-y-2">
-                    {[1, 2, 3].map((i) => (
-                      <div
-                        key={i}
-                        className="h-14 rounded-2xl bg-gray-50 border border-gray-100"
-                      />
-                    ))}
-                  </div>
-                </div>
               </div>
             </div>
           </div>
@@ -495,61 +429,7 @@ export default function SubscriptionStatusPage() {
                   </div>
                 )}
 
-                <div className="pt-4 border-t border-gray-100">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
-                      Billing History
-                    </h3>
 
-                    {billingHistory.length > 0 && (
-                      <span className="text-[11px] text-gray-400 font-medium">
-                        {billingHistory.length} transaction
-                        {billingHistory.length !== 1 ? "s" : ""}
-                      </span>
-                    )}
-                  </div>
-
-                  {billingHistory.length > 0 ? (
-                    <div className="space-y-2">
-                      {billingHistory.map((item) => (
-                        <div
-                          key={item.id}
-                          className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs"
-                        >
-                          <div>
-                            <p className="font-semibold text-gray-900">
-                              {item.description}
-                            </p>
-
-                            <p className="text-gray-400 text-[11px]">
-                              {item.date}
-                            </p>
-                          </div>
-
-                          <div className="text-right">
-                            <p className="font-bold text-gray-900">
-                              {item.amount}
-                            </p>
-
-                            <span
-                              className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                                item.status === "paid"
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                  : "bg-gray-100 text-gray-600 border border-gray-200"
-                              }`}
-                            >
-                              {item.status.toUpperCase()}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-gray-400 italic">
-                      No recent transactions found.
-                    </p>
-                  )}
-                </div>
               </div>
             </motion.div>
           </div>

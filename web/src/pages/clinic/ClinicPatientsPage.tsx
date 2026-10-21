@@ -27,6 +27,8 @@ import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 import { isAppointmentPastScheduled } from "@/lib/schedulingService";
 import { ModalPortal } from "@/components/common/ModalPortal";
+import { resolveAvatarUrl } from "@/utils/storage";
+import { PatientAvatar } from "@/components/common/PatientAvatar";
 
 /* ── Types ────────────────────────────────────────────────────────── */
 
@@ -85,72 +87,6 @@ export type RegisteredDoctor = {
 };
 
 /* ── Helper Functions ─────────────────────────────────────────────── */
-
-function resolveAvatarUrl(raw?: string | null): string | undefined {
-  if (!raw || typeof raw !== "string") return undefined;
-  const trimmed = raw.trim();
-  if (!trimmed || trimmed.includes("scan-uploads")) return undefined;
-
-  if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://") ||
-    trimmed.startsWith("data:") ||
-    trimmed.startsWith("blob:")
-  ) {
-    return trimmed;
-  }
-
-  try {
-    const cleanPath = trimmed.replace(/^avatars\//, "");
-    const { data } = supabase.storage.from("avatars").getPublicUrl(cleanPath);
-    if (data?.publicUrl) return data.publicUrl;
-  } catch {
-    // fallback
-  }
-  return trimmed;
-}
-
-function PatientAvatar({
-  name,
-  photoUrl,
-  sizeClass = "w-9 h-9 text-sm",
-  borderClass = "",
-}: {
-  name: string;
-  photoUrl?: string;
-  sizeClass?: string;
-  borderClass?: string;
-}) {
-  const [imgError, setImgError] = useState(false);
-  const initial = (name || "P").trim().charAt(0).toUpperCase() || "P";
-
-  useEffect(() => {
-    setImgError(false);
-  }, [photoUrl]);
-
-  if (photoUrl && !imgError) {
-    return (
-      <img
-        src={photoUrl}
-        alt={name}
-        onError={() => setImgError(true)}
-        className={cn(sizeClass, "rounded-full object-cover shrink-0", borderClass)}
-      />
-    );
-  }
-
-  return (
-    <div
-      className={cn(
-        sizeClass,
-        "rounded-full bg-pink-100 text-[#c0166a] flex items-center justify-center font-bold shrink-0",
-        borderClass
-      )}
-    >
-      {initial}
-    </div>
-  );
-}
 
 function calculateAge(birthdateStr?: string): number | undefined {
   if (!birthdateStr) return undefined;

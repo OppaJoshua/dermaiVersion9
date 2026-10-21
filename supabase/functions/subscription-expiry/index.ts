@@ -88,7 +88,7 @@ async function fetchAllPages<T>(
 // ---------------------------------------------------------------------------
 function renderExpiryEmailHtml(opts: {
   periodLabel: string;
-  upgradeUrl: string;
+  upgradeUrl?: string;
 }): string {
   const pink = "#A21D5C";
   const pinkDark = "#7E1448";
@@ -96,7 +96,6 @@ function renderExpiryEmailHtml(opts: {
   const pinkBorder = "#F4C9DC";
 
   const periodLabel = escapeHtml(opts.periodLabel);
-  const upgradeUrl = escapeHtml(opts.upgradeUrl);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -146,7 +145,7 @@ function renderExpiryEmailHtml(opts: {
 
           <!-- Highlight box -->
           <tr>
-            <td style="padding:8px 40px 20px;">
+            <td style="padding:8px 40px 28px;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${pinkSoft};border-left:4px solid ${pink};border-radius:8px;">
                 <tr>
                   <td style="padding:16px 20px;font-size:14px;line-height:1.6;color:#4a3640;">
@@ -154,26 +153,6 @@ function renderExpiryEmailHtml(opts: {
                   </td>
                 </tr>
               </table>
-            </td>
-          </tr>
-
-          <!-- Call to action -->
-          <tr>
-            <td align="center" style="padding:10px 40px 28px;">
-              <table role="presentation" cellpadding="0" cellspacing="0">
-                <tr>
-                  <td align="center" style="background:${pink};border-radius:8px;">
-                    <a href="${upgradeUrl}" target="_blank"
-                       style="display:inline-block;padding:14px 34px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:8px;">
-                      Upgrade to Pro
-                    </a>
-                  </td>
-                </tr>
-              </table>
-              <p style="margin:16px 0 0;font-size:12px;line-height:1.6;color:#8a6b79;">
-                If the button above does not work, copy this link into your browser:<br />
-                <a href="${upgradeUrl}" target="_blank" style="color:${pink};word-break:break-all;">${upgradeUrl}</a>
-              </p>
             </td>
           </tr>
 
@@ -204,7 +183,7 @@ function renderExpiryEmailHtml(opts: {
 
 function renderExpiryEmailText(opts: {
   periodLabel: string;
-  upgradeUrl: string;
+  upgradeUrl?: string;
 }): string {
   return [
     "Hello,",
@@ -212,9 +191,6 @@ function renderExpiryEmailText(opts: {
     `Your DermAI Pro subscription expired on ${opts.periodLabel}, and your account is now using the Free Plan.`,
     "",
     "You can continue using DermAI with standard free scans and basic features. Your scan records remain saved in your account.",
-    "",
-    "To upgrade to Pro and restore your unlimited scans, visit:",
-    opts.upgradeUrl,
     "",
     "Thank you for using DermAI.",
     "",

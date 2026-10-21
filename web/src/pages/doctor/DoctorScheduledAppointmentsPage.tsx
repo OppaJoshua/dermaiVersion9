@@ -16,6 +16,7 @@ import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/use
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
+import { PatientAvatar } from "@/components/common/PatientAvatar";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -629,12 +630,6 @@ export default function DoctorScheduledAppointmentsPage() {
             ) : (
               <div className="divide-y divide-slate-100 mt-2">
                 {selectedDateAppointments.map((appt) => {
-                  const avatarUrl =
-                    appt.patientAvatar ||
-                    `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                      appt.patientName || ""
-                    )}&background=fbcfe8&color=9d174d`;
-
                   return (
                     <div
                       key={appt.id}
@@ -642,10 +637,12 @@ export default function DoctorScheduledAppointmentsPage() {
                     >
                       {/* Left: Avatar + Name + Gender/Age + Diagnosis */}
                       <div className="flex items-center gap-3.5 min-w-0 xl:w-[35%]">
-                        <img
-                          src={avatarUrl}
-                          alt={appt.patientName || "Not provided"}
-                          className="w-12 h-12 rounded-full object-cover shrink-0 border border-slate-100 shadow-2xs"
+                        <PatientAvatar
+                          avatarUrl={appt.patientAvatar}
+                          fullName={appt.patientName}
+                          sizeClass="w-12 h-12"
+                          borderClass="border border-slate-100"
+                          className="shrink-0 shadow-2xs"
                         />
                         <div className="min-w-0">
                           <h3 className="font-bold text-slate-900 text-sm md:text-base leading-snug truncate">
@@ -758,15 +755,12 @@ export default function DoctorScheduledAppointmentsPage() {
               <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 {/* Patient Header */}
                 <div className="flex items-center gap-3">
-                  <img
-                    src={
-                      viewingAppt.patientAvatar ||
-                      `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                        viewingAppt.patientName || ""
-                      )}&background=EFF6FF&color=2563EB`
-                    }
-                    alt={viewingAppt.patientName}
-                    className="w-12 h-12 rounded-full object-cover border border-slate-200 shrink-0"
+                  <PatientAvatar
+                    avatarUrl={viewingAppt.patientAvatar}
+                    fullName={viewingAppt.patientName}
+                    sizeClass="w-12 h-12"
+                    borderClass="border border-slate-200"
+                    className="shrink-0"
                   />
                   <div>
                     <p className="text-lg font-bold text-slate-900">

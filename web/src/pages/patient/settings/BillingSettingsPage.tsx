@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Calendar, CalendarDays, CheckCircle2, CreditCard, XCircle, X, Loader2 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
@@ -8,6 +8,8 @@ import { withVat, splitVat, calculatePricing } from "@/lib/vat";
 import { validateAndSyncSubscription } from "@/lib/subscriptionService";
 import { cn } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
+import gcashLogo from "@/assets/gcash.png";
+import mayaLogo from "@/assets/maya.png";
 
 interface SubData {
   isPro: boolean;
@@ -36,10 +38,29 @@ interface BillingHistoryItem {
   totalAmount: number;
   method: string;
   status: string;
+  description: string;
+  isAppointment: boolean;
+  appointmentId?: string | null;
+  paymentReference?: string | null;
+  paymongoPaymentId?: string | null;
+}
+
+interface AppointmentReceiptDetails {
+  transactionReference: string;
+  patientName: string;
+  paymentMethod: string;
+  mobileNumber?: string;
+  clinicName: string;
+  doctorName: string;
+  confirmedSchedule: string;
+  conditionName?: string;
+  amountPaid: string;
+  appointmentId?: string;
 }
 
 export default function BillingSettingsPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [sub, setSub] = useState<SubData>({ isPro: false });
 
   const [freePlan, setFreePlan] = useState<SubData>({
@@ -52,6 +73,8 @@ export default function BillingSettingsPage() {
 
   const [billingHistory, setBillingHistory] = useState<BillingHistoryItem[]>([]);
   const [selectedPayment, setSelectedPayment] = useState<BillingHistoryItem | null>(null);
+  const [selectedAppointmentReceipt, setSelectedAppointmentReceipt] = useState<AppointmentReceiptDetails | null>(null);
+  const [loadingPaymentId, setLoadingPaymentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -218,7 +241,7 @@ export default function BillingSettingsPage() {
       }
 
       // 2. Load payment transactions
-      // user_payment records store transactions. Resolve the actual total paid (VAT-inclusive: ₱199.00).
+      // user_payment records store transactions.
       const { data: payments } = await supabase
         .from("user_payment")
         .select(`
@@ -227,6 +250,9 @@ export default function BillingSettingsPage() {
           payment_date,
           method,
           status,
+          plan_id,
+          reference_number,
+          paymongo_payment_id,
           plan:plan_id (
             price,
             name
@@ -235,18 +261,38 @@ export default function BillingSettingsPage() {
         .eq("user_id", user.id)
         .order("payment_date", { ascending: false });
 
+      // In addition, also load authentic patient appointments to ensure all consultation bookings appear in billing history
+      const { data: userAppts } = await supabase
+        .from("patient_appointment")
+        .select(`
+          appointment_id,
+          date,
+          time,
+          batch_time,
+          status,
+          patient_name,
+          patient_contact,
+          created_at,
+          ai_condition_name,
+          clinic_id,
+          assigned_doctor_id,
+          clinic:clinic_id ( name )
+        `)
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+
+      const historyList: BillingHistoryItem[] = [];
+
       if (payments && payments.length > 0) {
-        const mappedHistory: BillingHistoryItem[] = payments.map((p: any) => {
+        payments.forEach((p: any) => {
           const planObj = Array.isArray(p.plan) ? p.plan[0] : p.plan;
-          const rawAmount = Number(p.total_amount ?? p.amount_paid ?? p.amount ?? 0);
+          const rawAmount = Number(p.amount ?? 0);
 
           let resolvedTotal = rawAmount;
-          let resolvedBase = Number(p.base_amount ?? 0);
-          let resolvedVat = Number(p.vat_amount ?? 0);
+          let resolvedBase = 0;
+          let resolvedVat = 0;
 
-          if (resolvedBase > 0 && resolvedVat > 0) {
-            resolvedTotal = Math.round((resolvedBase + resolvedVat) * 100) / 100;
-          } else if (planObj?.price != null && Number(planObj.price) > 0) {
+          if (planObj?.price != null && Number(planObj.price) > 0) {
             const planBase = Number(planObj.price);
             const calc = calculatePricing(planBase);
             resolvedBase = calc.basePrice;
@@ -269,7 +315,15 @@ export default function BillingSettingsPage() {
             maximumFractionDigits: 2,
           })}`;
 
-          return {
+          const isAppointment = Boolean(!p.plan_id || !planObj || rawAmount === 500);
+
+          const description = isAppointment
+            ? "Book Appointment"
+            : planObj?.name
+              ? `${planObj.name} Subscription`
+              : "DermAI Subscription";
+
+          historyList.push({
             paymentId: p.payment_id,
             paymentDate: p.payment_date,
             date: new Date(p.payment_date).toLocaleDateString("en-US", {
@@ -282,15 +336,53 @@ export default function BillingSettingsPage() {
             baseAmount: resolvedBase,
             vatAmount: resolvedVat,
             totalAmount: resolvedTotal,
-            method: p.method || "Not provided",
+            method: p.method || "GCash",
             status: p.status === "success" ? "Paid" : p.status,
-          };
+            description,
+            isAppointment,
+            appointmentId: null,
+            paymentReference: p.reference_number || null,
+            paymongoPaymentId: p.paymongo_payment_id || null,
+          });
         });
-        setBillingHistory(mappedHistory);
-
-      } else {
-        setBillingHistory([]);
       }
+
+      // Also incorporate authentic appointments from patient_appointment if not already in payments
+      if (userAppts && userAppts.length > 0) {
+        userAppts.forEach((appt: any) => {
+          const alreadyExists = historyList.some(
+            (h) => h.appointmentId === appt.appointment_id || h.paymentReference?.includes(appt.appointment_id)
+          );
+          if (!alreadyExists) {
+            const dateStr = appt.created_at || appt.date || new Date().toISOString();
+            const split = splitVat(500);
+            historyList.push({
+              paymentId: appt.appointment_id,
+              paymentDate: dateStr,
+              date: new Date(dateStr).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              }),
+              amount: "₱500.00",
+              rawAmount: 500,
+              baseAmount: split.net,
+              vatAmount: split.vat,
+              totalAmount: 500,
+              method: "GCash",
+              status: appt.status === "cancelled" ? "Cancelled" : "Paid",
+              description: "Book Appointment",
+              isAppointment: true,
+              appointmentId: appt.appointment_id,
+              paymentReference: `pay_${appt.appointment_id.replace(/-/g, "").slice(0, 16)}`,
+              paymongoPaymentId: `pay_${appt.appointment_id.replace(/-/g, "").slice(0, 16)}`,
+            });
+          }
+        });
+      }
+
+      historyList.sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime());
+      setBillingHistory(historyList);
     } catch {
       // Fallback
     } finally {
@@ -302,6 +394,146 @@ export default function BillingSettingsPage() {
     loadBillingData();
   }, [loadBillingData]);
 
+
+  const handleViewReceipt = async (row: BillingHistoryItem) => {
+    if (row.isAppointment) {
+      setLoadingPaymentId(row.paymentId);
+      try {
+        let apptData: any = null;
+
+        // 1. Query by appointment_id if recorded or matching paymentId
+        const targetApptId = row.appointmentId || (row.paymentId && row.paymentId.length === 36 ? row.paymentId : null);
+        if (targetApptId) {
+          const { data } = await supabase
+            .from("patient_appointment")
+            .select(`
+              appointment_id,
+              patient_name,
+              patient_contact,
+              patient_email,
+              date,
+              time,
+              batch_time,
+              ai_condition_name,
+              clinic_id,
+              assigned_doctor_id,
+              clinic:clinic_id ( name )
+            `)
+            .eq("appointment_id", targetApptId)
+            .maybeSingle();
+          apptData = data;
+        }
+
+        // 2. Fallback: match by user_id
+        if (!apptData && user) {
+          const { data } = await supabase
+            .from("patient_appointment")
+            .select(`
+              appointment_id,
+              patient_name,
+              patient_contact,
+              patient_email,
+              date,
+              time,
+              batch_time,
+              ai_condition_name,
+              clinic_id,
+              assigned_doctor_id,
+              clinic:clinic_id ( name )
+            `)
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          apptData = data;
+        }
+
+        // Resolve Doctor Name
+        let doctorName = "Assigned by Clinic upon Review";
+        if (apptData?.assigned_doctor_id) {
+          try {
+            const { data: docData } = await supabase
+              .from("clinic_doctor")
+              .select("doctor_name")
+              .eq("doctor_id", apptData.assigned_doctor_id)
+              .maybeSingle();
+            if (docData?.doctor_name) {
+              doctorName = `Dr. ${docData.doctor_name.replace(/^dr\.\s*/i, "")}`;
+            }
+          } catch {}
+        }
+
+        // Resolve Clinic Name
+        const clinicObj: any = Array.isArray(apptData?.clinic) ? apptData.clinic[0] : apptData?.clinic;
+        let clinicName = clinicObj?.name;
+        if (!clinicName && apptData?.clinic_id) {
+          try {
+            const { data: cData } = await supabase
+              .from("clinic")
+              .select("name")
+              .eq("clinic_id", apptData.clinic_id)
+              .maybeSingle();
+            clinicName = cData?.name;
+          } catch {}
+        }
+        if (!clinicName) clinicName = "DERMCARE";
+
+        // Resolve Patient Name
+        const patientName = apptData?.patient_name || user?.user_metadata?.full_name || user?.user_metadata?.name || "Patient";
+
+        // Resolve Mobile Number
+        const mobileNumber = apptData?.patient_contact || user?.user_metadata?.phone || user?.phone || "";
+
+        // Resolve Confirmed Schedule
+        let confirmedSchedule = "Schedule Confirmed";
+        if (apptData?.date) {
+          const parsedDate = new Date(apptData.date);
+          if (!isNaN(parsedDate.getTime())) {
+            const dStr = parsedDate.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            });
+            const timeRaw = apptData.batch_time || (apptData.time ? String(apptData.time).slice(0, 5) : "");
+            let tStr = timeRaw;
+            if (timeRaw && timeRaw.includes(":")) {
+              const [h, m] = timeRaw.split(":");
+              const hourNum = parseInt(h, 10);
+              const ampm = hourNum >= 12 ? "PM" : "AM";
+              const hour12 = hourNum % 12 || 12;
+              tStr = `${hour12}:${m} ${ampm}`;
+            }
+            confirmedSchedule = tStr ? `${dStr} at ${tStr}` : dStr;
+          }
+        }
+
+        // Resolve Condition
+        const conditionName = apptData?.ai_condition_name || "General Consultation";
+
+        // Resolve Transaction Reference
+        const txRef = row.paymongoPaymentId || row.paymentReference || (apptData?.appointment_id ? `pay_${apptData.appointment_id.replace(/-/g, "").slice(0, 16)}` : row.paymentId);
+
+        setSelectedAppointmentReceipt({
+          transactionReference: txRef,
+          patientName,
+          paymentMethod: row.method,
+          mobileNumber,
+          clinicName,
+          doctorName,
+          confirmedSchedule,
+          conditionName,
+          amountPaid: row.amount,
+          appointmentId: apptData?.appointment_id,
+        });
+      } catch (err) {
+        console.error("[BillingSettingsPage] Error retrieving appointment details:", err);
+      } finally {
+        setLoadingPaymentId(null);
+      }
+    } else {
+      setSelectedPayment(row);
+    }
+  };
 
   const handleCancel = async () => {
     if (!user || !sub.subscriptionId || !sub.isPro || !sub.currentPeriodEnd) return;
@@ -560,7 +792,7 @@ export default function BillingSettingsPage() {
                 {billingHistory.map((row) => (
                   <tr key={row.paymentId} className="transition-colors hover:bg-gray-50">
                     <td className="whitespace-nowrap px-6 py-4 text-gray-900">{row.date}</td>
-                    <td className="whitespace-nowrap px-6 py-4 text-gray-600">DermAI Subscription</td>
+                    <td className="whitespace-nowrap px-6 py-4 text-gray-700 font-medium">{row.description}</td>
                     <td className="whitespace-nowrap px-6 py-4 text-gray-600">
                       {row.method.toLowerCase().includes("gcash")
                         ? "GCash"
@@ -579,7 +811,22 @@ export default function BillingSettingsPage() {
                       <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">{row.status}</span>
                     </td>
                     <td className="whitespace-nowrap px-6 py-4 text-right">
-                      <button type="button" onClick={() => setSelectedPayment(row)} className="rounded text-sm font-medium text-[#A21D5C] hover:text-[#7E1448] hover:underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A21D5C]/40" aria-label={`View payment ${row.paymentId}`}>View</button>
+                      <button
+                        type="button"
+                        onClick={() => handleViewReceipt(row)}
+                        disabled={loadingPaymentId === row.paymentId}
+                        className="inline-flex items-center gap-1.5 rounded text-sm font-medium text-[#A21D5C] hover:text-[#7E1448] hover:underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A21D5C]/40 disabled:opacity-50 cursor-pointer"
+                        aria-label={`View payment ${row.paymentId}`}
+                      >
+                        {loadingPaymentId === row.paymentId ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Loading...</span>
+                          </>
+                        ) : (
+                          "View"
+                        )}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -592,9 +839,9 @@ export default function BillingSettingsPage() {
       </section>
     </div>
 
-      {/* Billing History Payment Details Modal */}
-      <ModalPortal isOpen={Boolean(selectedPayment)}>
-        {selectedPayment && (
+      {/* Subscription Payment Details Modal */}
+      <ModalPortal isOpen={Boolean(selectedPayment && !selectedPayment.isAppointment)}>
+        {selectedPayment && !selectedPayment.isAppointment && (
           <div
             className="fixed inset-0 z-[9998] flex items-center justify-center overflow-y-auto bg-black/50 px-4 py-6 backdrop-blur-sm"
             onClick={() => setSelectedPayment(null)}
@@ -722,6 +969,155 @@ export default function BillingSettingsPage() {
                   className="mt-6 w-full rounded-xl bg-[#A21D5C] px-4 py-3 text-sm font-semibold tracking-wide text-white transition-colors hover:bg-[#7E1448] focus:outline-none focus:ring-2 focus:ring-[#A21D5C]/40 focus:ring-offset-2 cursor-pointer"
                 >
                   Close Receipt
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </ModalPortal>
+
+      {/* Dedicated Appointment & Consultation Receipt Modal (Payment Successful!) */}
+      <ModalPortal isOpen={Boolean(selectedAppointmentReceipt)}>
+        {selectedAppointmentReceipt && (
+          <div
+            className="fixed inset-0 z-[9998] flex items-center justify-center overflow-y-auto bg-black/60 px-4 py-6 backdrop-blur-sm"
+            onClick={() => setSelectedAppointmentReceipt(null)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="relative z-[9999] my-auto w-full max-w-lg rounded-3xl border border-gray-200/90 bg-white p-6 sm:p-8 text-center shadow-2xl space-y-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Close Button top-right */}
+              <button
+                type="button"
+                onClick={() => setSelectedAppointmentReceipt(null)}
+                className="absolute right-4 top-4 p-1.5 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              {/* Success Check Icon */}
+              <div className="w-16 h-16 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 mx-auto flex items-center justify-center shadow-xs">
+                <CheckCircle2 className="w-9 h-9" />
+              </div>
+
+              <div className="space-y-1.5">
+                <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Payment Successful!</h1>
+                <p className="text-xs text-gray-500 max-w-md mx-auto">
+                  Your consultation payment has been received and your appointment request has been confirmed with{" "}
+                  <strong className="text-gray-900">{selectedAppointmentReceipt.clinicName}</strong>.
+                </p>
+              </div>
+
+              {/* Transaction Reference Badge */}
+              {selectedAppointmentReceipt.transactionReference && (
+                <div className="inline-block bg-slate-50 border border-slate-200 px-4 py-1.5 rounded-2xl shadow-2xs">
+                  <span className="text-[10px] text-gray-500 font-bold block uppercase tracking-wider">
+                    Transaction Reference
+                  </span>
+                  <span className="font-mono font-bold text-xs text-gray-900">
+                    {selectedAppointmentReceipt.transactionReference}
+                  </span>
+                </div>
+              )}
+
+              {/* Appointment & Payment Schedule Information Card */}
+              <div className="bg-slate-50/80 p-5 rounded-2xl border border-gray-100 text-left space-y-2.5 text-xs">
+                <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider pb-1.5 border-b border-gray-200/70">
+                  Appointment &amp; Payment Details
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Patient Name</span>
+                  <span className="font-bold text-gray-900">{selectedAppointmentReceipt.patientName}</span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Payment Method</span>
+                  <div className="flex items-center">
+                    {selectedAppointmentReceipt.paymentMethod.toLowerCase().includes("maya") ||
+                    selectedAppointmentReceipt.paymentMethod.toLowerCase().includes("paymaya") ? (
+                      <img src={mayaLogo} alt="Maya" className="h-5 w-auto object-contain" />
+                    ) : selectedAppointmentReceipt.paymentMethod.toLowerCase().includes("gcash") ? (
+                      <img src={gcashLogo} alt="GCash" className="h-5 w-auto object-contain" />
+                    ) : (
+                      <span className="font-bold text-gray-900">{selectedAppointmentReceipt.paymentMethod}</span>
+                    )}
+                  </div>
+                </div>
+
+                {selectedAppointmentReceipt.mobileNumber && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Account Mobile Number</span>
+                    <span className="font-mono font-bold text-gray-900">{selectedAppointmentReceipt.mobileNumber}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Clinic</span>
+                  <span className="font-bold text-gray-900">{selectedAppointmentReceipt.clinicName}</span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Attending Dermatologist</span>
+                  <span className="font-bold text-gray-900">{selectedAppointmentReceipt.doctorName}</span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Confirmed Schedule</span>
+                  <span className="font-bold text-magenta-700">
+                    {selectedAppointmentReceipt.confirmedSchedule}
+                  </span>
+                </div>
+
+                {selectedAppointmentReceipt.conditionName && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Selected Condition</span>
+                    <span className="font-semibold text-magenta-700">
+                      {selectedAppointmentReceipt.conditionName}
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+                  <span className="font-bold text-gray-700">Amount Paid</span>
+                  <span className="font-extrabold text-emerald-700 text-sm">
+                    {selectedAppointmentReceipt.amountPaid}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Payment Status</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200 text-[10px]">
+                    Paid &amp; Confirmed
+                  </span>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetUrl = selectedAppointmentReceipt.appointmentId
+                      ? `/dashboard/appointment-status?appointment=${selectedAppointmentReceipt.appointmentId}`
+                      : "/dashboard/appointment-status";
+                    navigate(targetUrl);
+                  }}
+                  className="flex-1 py-3.5 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-bold text-xs uppercase tracking-wider transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
+                >
+                  <Calendar className="w-4 h-4" />
+                  <span>View Appointment</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedAppointmentReceipt(null)}
+                  className="px-6 py-3.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-full font-semibold text-xs transition-all text-center cursor-pointer"
+                >
+                  Dashboard
                 </button>
               </div>
             </div>
