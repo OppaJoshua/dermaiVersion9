@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Old local builds and binaries
+*.apk
+*.aab
+
+# Git
+.git/
+
+# Temporary / OS
+.DS_Store
+Thumbs.db
