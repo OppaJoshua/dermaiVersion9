@@ -90,8 +90,9 @@ async def predict_skin_condition(
             detail={
                 "success": False,
                 "error": (
-                    "This image does not appear to be a suitable human-skin photo. "
-                    "Please upload a clear close-up of the affected human skin area."
+                    "Invalid Image Uploaded. Please upload a clear, close-up photo of the "
+                    "specific skin area you are concerned about. Documents, full-body shots, "
+                    "or non-skin images cannot be processed."
                 ),
                 "error_type": "not_human_skin",
                 "skin_score": round(skin_score, 4),
