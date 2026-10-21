@@ -1213,7 +1213,7 @@ export async function getAppNotifications(userId: string): Promise<AppNotificati
     // 1. Direct user_notification records for this patient
     const { data: dbNotifs } = await supabase
       .from('user_notification')
-      .select('notif_id, type, subtype, title, body, is_read, created_at, metadata')
+      .select('notif_id, type, subtype, title, body, is_read, created_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(40);
