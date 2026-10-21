@@ -30,6 +30,9 @@ import {
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
+// Carto Voyager Basemap API Key
+const CARTO_API_KEY = 'cb1_4rf0_1_52a456f79acb06df41f3abb6';
+
 // Default map center: Cebu City Capitol / Fuente area
 const DEFAULT_CENTER = { lat: 10.3157, lng: 123.8854 };
 
@@ -268,7 +271,7 @@ export default function ClinicsScreen() {
           key: `${zoom}_${tx}_${ty}`,
           left: dx * 256 - offsetXInTile + SCREEN_WIDTH / 2 + panOffset.x,
           top: dy * 256 - offsetYInTile + SCREEN_HEIGHT / 2 + panOffset.y,
-          url: `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/${zoom}/${ty}/${tx}`,
+          url: `https://basemaps.cartocdn.com/rastertiles/voyager/${zoom}/${tx}/${ty}.png?key=${CARTO_API_KEY}`,
         });
       }
     }
