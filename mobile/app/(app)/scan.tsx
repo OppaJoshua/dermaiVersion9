@@ -281,11 +281,17 @@ export default function ScanScreen() {
     let aiResult: PredictionResult;
     try {
       setAnalysisError(null);
-      const minAnimDelay = new Promise((resolve) => setTimeout(resolve, 3600));
-      const [prediction] = await Promise.all([
-        predictSkinCondition(imageUri, referenceImageUri),
-        minAnimDelay,
-      ]);
+      const animStartTime = Date.now();
+      let prediction: PredictionResult;
+      try {
+        prediction = await predictSkinCondition(imageUri, referenceImageUri);
+      } finally {
+        // Ensure the full scanning animation (3600ms) runs completely before revealing result or error
+        const elapsed = Date.now() - animStartTime;
+        if (elapsed < 3600) {
+          await new Promise((resolve) => setTimeout(resolve, 3600 - elapsed));
+        }
+      }
       aiResult = prediction;
     } catch (err: any) {
       let userMessage = err instanceof AIPredictionError
@@ -304,9 +310,7 @@ export default function ScanScreen() {
 
       setAnalysisError(userMessage);
       setStep('upload');
-      if (Platform.OS === 'web') {
-        try { (window as any)?.alert?.(userMessage); } catch {}
-      } else {
+      if (Platform.OS !== 'web') {
         Alert.alert('Analysis Notice', userMessage);
       }
       return;
