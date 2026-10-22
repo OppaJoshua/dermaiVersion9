@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect, useCallback } from "react";
 import {
   AlertCircle,
   AlertTriangle,
+  Ban,
   Calendar,
   CheckCircle2,
   ChevronLeft,
@@ -39,15 +40,6 @@ import {
   type AppointmentHistoryEntry,
 } from "@/lib/schedulingService";
 
-function isMorningTime(timeStr?: string): boolean {
-  if (!timeStr) return true;
-  if (/am/i.test(timeStr)) {
-    const hour = parseInt(timeStr, 10);
-    return hour < 10 || hour === 12;
-  }
-  const hour = parseInt(timeStr, 10);
-  return !isNaN(hour) && hour < 10;
-}
 
 type AppointmentRecord = {
   id: string;
@@ -136,7 +128,7 @@ function formatDoctorDisplay(name?: string): string {
 
 function formatAppointmentTime(timeStr?: string): string {
   if (!timeStr) return "TBD";
-  const trimmed = timeStr.trim();
+  const trimmed = timeStr.replace(/\s*batch\s*/gi, " ").trim();
   if (/am|pm/i.test(trimmed)) {
     return trimmed;
   }
@@ -2101,7 +2093,6 @@ export default function ClinicAppointmentsPage() {
               ) : (
                 <div className="divide-y divide-gray-100">
                   {selectedDayAppointments.map((appointment) => {
-                    const isEarly = isMorningTime(appointment.time);
                     const isPast = isAppointmentPastDue(appointment);
                     const isNoShow = appointment.checkInStatus === "no-show";
                     const isCompleted = appointment.status === "completed" || appointment.checkInStatus === "completed";
@@ -2119,123 +2110,70 @@ export default function ClinicAppointmentsPage() {
                           isNoShow && "bg-gray-50/40 opacity-80"
                         )}
                       >
-                        {/* Left: Avatar with Initials & Details */}
-                        <div className="flex items-center gap-3.5 min-w-0">
-                          <PatientAvatar
-                            fullName={appointment.patientName}
-                            name={appointment.patientName}
-                            avatarUrl={appointment.patientAvatar}
-                            photoUrl={appointment.patientAvatar}
-                            userId={appointment.userId}
-                            className={cn(
-                              "w-10 h-10 sm:w-11 sm:h-11 rounded-full shrink-0 border transition-all",
-                              isNoShow
-                                ? "border-rose-200"
-                                : isPast && !isCompleted
-                                ? "border-rose-200/90"
-                                : "border-pink-100/80"
-                            )}
-                            fallbackClassName={cn(
-                              isNoShow
-                                ? "bg-rose-100 text-rose-700"
-                                : isPast && !isCompleted
-                                ? "bg-rose-100/70 text-rose-700"
-                                : "bg-pink-50 text-[#c0166a]"
-                            )}
-                          />
-
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-xs sm:text-sm font-bold text-gray-900 truncate group-hover:text-[#c0166a] transition-colors">
-                                {appointment.patientName || "Patient"}
-                              </p>
-
-                              {/* Status Badges */}
-                              {isNoShow ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
-                                  <AlertTriangle className="w-3 h-3 text-rose-600" />
-                                  Absent / No-Show
-                                </span>
-                              ) : isCompleted ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                  Completed
-                                </span>
-                              ) : isArrived ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-sky-500 inline-block animate-pulse" />
-                                  In Lobby
-                                </span>
-                              ) : isPast ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200">
-                                  <Clock className="w-3 h-3 text-rose-600" />
-                                  Time Passed · Needs Action
-                                </span>
-                              ) : null}
-                            </div>
-
-                            <p className="text-[11px] text-gray-400 mt-0.5">
-                              {appointment.patientAge ? `${appointment.patientAge} years old` : "Age not specified"}
+                        {/* Left: Details */}
+                        <div className="min-w-0 sm:flex-1">
+                          <div className="flex items-center gap-2.5 flex-wrap">
+                            <p className="text-xs sm:text-sm font-bold text-gray-900 truncate group-hover:text-[#c0166a] transition-colors">
+                              {appointment.patientName || "Patient"}
                             </p>
-                            <p className="text-[11px] text-[#c0166a] font-medium mt-0.5 truncate">
-                              {appointment.conditionName || appointment.aiConditionName || "Skin Concern"}
-                            </p>
-                            <div className="flex items-center gap-1.5 text-[11px] text-gray-500 mt-0.5 truncate">
-                              <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                              <span className="truncate">
-                                {appointment.assignedDoctorName
-                                  ? formatDoctorDisplay(appointment.assignedDoctorName)
-                                  : "Doctor unassigned"}
-                              </span>
-                            </div>
+                          </div>
+
+                          <p className="text-[11px] text-gray-400 mt-0.5">
+                            {appointment.patientAge ? `${appointment.patientAge} years old` : "Age not specified"}
+                          </p>
+                          <p className="text-[11px] text-[#c0166a] font-medium mt-0.5 truncate">
+                            {appointment.conditionName || appointment.aiConditionName || "Skin Concern"}
+                          </p>
+                          <div className="flex items-center gap-1.5 text-[11px] text-gray-500 mt-0.5 truncate">
+                            <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                            <span className="truncate">
+                              {appointment.assignedDoctorName
+                                ? formatDoctorDisplay(appointment.assignedDoctorName)
+                                : "Doctor unassigned"}
+                            </span>
                           </div>
                         </div>
 
-                        {/* Right: Actions, Time badge + Chevron */}
-                        <div className="flex items-center gap-2 shrink-0 justify-between sm:justify-end pt-1 sm:pt-0">
-                          {isPast && !isNoShow && !isCompleted && (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setNoShowConfirmModal(appointment);
-                                  setNoShowError("");
-                                  setNoShowSuccess("");
-                                }}
-                                className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-                                title="Mark patient as absent / no-show"
-                              >
-                                <AlertTriangle className="w-3.5 h-3.5" />
-                                <span>Mark as No-Show</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleMarkArrived(appointment.id);
-                                }}
-                                className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 font-semibold text-xs border border-emerald-200 transition-colors cursor-pointer"
-                                title="Patient arrived"
-                              >
-                                Arrived
-                              </button>
-                            </div>
-                          )}
+                        {/* Center: Status Badge (Absent / No-Show, Completed, Time Passed · Needs Action, In Lobby) */}
+                        {(isNoShow || isCompleted || isPast || isArrived) && (
+                          <div className="flex items-center justify-start sm:justify-center shrink-0 sm:flex-1 sm:px-2">
+                            {isNoShow ? (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                Absent / No-Show
+                              </span>
+                            ) : isCompleted ? (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                Completed
+                              </span>
+                            ) : isPast ? (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                Time Passed · Needs Action
+                              </span>
+                            ) : isArrived ? (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                <span className="w-1.5 h-1.5 rounded-full bg-sky-500 inline-block animate-pulse shrink-0" />
+                                In Lobby
+                              </span>
+                            ) : null}
+                          </div>
+                        )}
 
-                          <span
-                            className={cn(
-                              "px-2.5 sm:px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap",
-                              isPast && !isCompleted && !isNoShow
-                                ? "bg-rose-50 text-rose-700 border-rose-200"
-                                : isEarly
-                                ? "bg-emerald-50 text-emerald-700 border-emerald-200/80"
-                                : "bg-blue-50 text-blue-700 border-blue-200/80"
-                            )}
-                          >
-                            {formatAppointmentTime(appointment.time)}
-                          </span>
-                          <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors" />
+                        {/* Right: Time badge + Chevron */}
+                        <div
+                          className={cn(
+                            "flex items-center gap-2 sm:gap-2.5 shrink-0 justify-between sm:justify-end sm:self-center pt-1 sm:pt-0",
+                            (isNoShow || isCompleted || isPast || isArrived) && "sm:flex-1"
+                          )}
+                        >
+                          <div className="px-3 py-1.5 rounded-full bg-[#edf2f7] border border-slate-200/60 text-slate-700 font-bold text-xs flex items-center gap-1.5 whitespace-nowrap shrink-0">
+                            <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                            <span>{formatAppointmentTime(appointment.time)}</span>
+                          </div>
+
+                          <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
                         </div>
                       </motion.div>
                     );
@@ -2369,6 +2307,10 @@ export default function ClinicAppointmentsPage() {
                             <span className="text-gray-300">·</span>
                             <span className="text-[10px] font-semibold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
                               Face-to-Face Consultation
+                            </span>
+                            <span className="text-gray-300">•</span>
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded flex items-center gap-1">
+                              <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Upfront Paid
                             </span>
                           </div>
                           <p className="text-[10px] text-gray-400 mt-0.5">
@@ -2556,7 +2498,7 @@ export default function ClinicAppointmentsPage() {
                         <div className="px-2.5 py-1.5 rounded-xl bg-emerald-50/90 border border-emerald-200/80 flex items-center justify-between text-[11px] text-emerald-900">
                           <span className="flex items-center gap-1.5 font-semibold">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                            Upfront Fee Verified
+                            Upfront Fee Verified: {payBadge.label}
                           </span>
                           <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
                             Verified
@@ -3232,7 +3174,7 @@ export default function ClinicAppointmentsPage() {
                       <div>
                         <p className="font-bold">Consultation Date &amp; Time Has Passed</p>
                         <p className="text-[11px] text-rose-700 mt-0.5">
-                          Patient did not attend during the scheduled time window. You can mark this appointment as No-Show to notify the patient and update records.
+                          Patient did not attend during the scheduled time window. You can mark this appointment as Arrived or No-Show to update records.
                         </p>
                       </div>
                     </div>
@@ -3412,6 +3354,44 @@ export default function ClinicAppointmentsPage() {
                 >
                   Close
                 </button>
+              ) : isAppointmentPastDue(viewingPatient) && viewingPatient.checkInStatus !== "completed" && viewingPatient.status !== "completed" && viewingPatient.checkInStatus !== "arrived" ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await handleMarkArrived(viewingPatient.id);
+                      setViewingPatient(null);
+                    }}
+                    className="py-3 rounded-full bg-[#dcfce7] hover:bg-[#bbf7d0] text-[#059669] text-xs sm:text-sm font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5 border border-[#bbf7d0] active:scale-[0.98]"
+                    title="Patient arrived"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-[#059669]" />
+                    <span>Arrived</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = viewingPatient;
+                      setViewingPatient(null);
+                      setNoShowConfirmModal(target);
+                      setNoShowError("");
+                      setNoShowSuccess("");
+                    }}
+                    className="py-3 rounded-full bg-[#e1004a] hover:bg-[#c0003e] text-white text-xs sm:text-sm font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                    title="Mark patient as absent / no-show"
+                  >
+                    <Ban className="w-4 h-4 text-white stroke-[2.2]" />
+                    <span>Mark as No-Show</span>
+                  </button>
+                </div>
+              ) : viewingPatient.checkInStatus === "arrived" || viewingPatient.status === "completed" || viewingPatient.checkInStatus === "completed" ? (
+                <button
+                  type="button"
+                  onClick={() => setViewingPatient(null)}
+                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
               ) : viewingPatient.status === "scheduled" ? (
                 <div className="flex flex-col sm:flex-row gap-2.5">
                   <button
@@ -3421,22 +3401,6 @@ export default function ClinicAppointmentsPage() {
                   >
                     Close
                   </button>
-                  {isAppointmentPastDue(viewingPatient) && viewingPatient.checkInStatus !== "completed" && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const target = viewingPatient;
-                        setViewingPatient(null);
-                        setNoShowConfirmModal(target);
-                        setNoShowError("");
-                        setNoShowSuccess("");
-                      }}
-                      className="flex-1 py-3 rounded-full bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      <AlertTriangle className="w-3.5 h-3.5" />
-                      <span>Mark as No-Show</span>
-                    </button>
-                  )}
                   {viewingPatient.rescheduleRequested && (
                     <button
                       type="button"

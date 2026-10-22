@@ -1839,7 +1839,7 @@ export default function FindClinicsPage() {
                                     </div>
                                 )}
 
-                                {/* Service Fee & Schedule */}
+                                {/* Consultation Fee & Schedule */}
                                 <div className="flex items-center justify-between text-[11px] bg-gray-50 rounded-lg px-2.5 py-1.5 mb-3 border border-gray-100">
                                     <div className="flex items-center gap-1.5">
                                         <span className="text-gray-500 font-medium">Fee:</span>
