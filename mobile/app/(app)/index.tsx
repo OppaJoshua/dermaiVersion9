@@ -154,11 +154,11 @@ export default function HomeScreen() {
   const firstName = user?.fullName?.split(' ')[0] ?? 'there';
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <ScrollView
         style={styles.container}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 80 }}
+        contentContainerStyle={{ paddingBottom: 16 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
       >
 
@@ -502,7 +502,7 @@ export default function HomeScreen() {
           </Text>
         </View>
 
-        <View style={{ height: 24 }} />
+
       </ScrollView>
     </SafeAreaView>
   );

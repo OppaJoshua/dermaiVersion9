@@ -302,7 +302,7 @@ export default function ClinicsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {viewMode === 'map' ? (
         /* ══════════════════════════════════════════════════════════
            MAP VIEW (Full background map with floating card)
@@ -539,7 +539,7 @@ export default function ClinicsScreen() {
           <ScrollView
             style={styles.listScrollView}
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 110 }}
+            contentContainerStyle={{ paddingBottom: 20 }}
           >
             {/* Search Input */}
             <View style={styles.listSearchSection}>

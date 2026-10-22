@@ -402,7 +402,7 @@ export default function ScanScreen() {
     const scansLeft = Math.max(0, MAX_FREE_SCANS - scansUsed);
     const limitReached = !isPremium && scansLeft === 0;
     return (
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <ScrollView style={styles.container} contentContainerStyle={styles.welcomeContainer} showsVerticalScrollIndicator={false}>
 
           {/* Header */}
@@ -516,7 +516,7 @@ export default function ScanScreen() {
     // ── REVIEW SCREEN (When isReviewing === true) ──
     if (isReviewing) {
       return (
-        <SafeAreaView style={styles.safe}>
+        <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
           <View style={styles.container}>
             <StepIndicator currentStep={1} />
             <ScrollView contentContainerStyle={styles.pageContainer} showsVerticalScrollIndicator={false}>
@@ -660,7 +660,7 @@ export default function ScanScreen() {
     const progressPct = ((qIndex + 1) / QUESTIONNAIRE_QUESTIONS.length) * 100;
 
     return (
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <View style={styles.container}>
           <StepIndicator currentStep={1} />
           <ScrollView contentContainerStyle={styles.pageContainer} showsVerticalScrollIndicator={false}>
@@ -824,7 +824,7 @@ export default function ScanScreen() {
   // --- Upload -----------------------------------------------------------------
   if (step === 'upload') {
     return (
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <View style={styles.container}>
           <StepIndicator currentStep={2} />
           <ScrollView contentContainerStyle={styles.pageContainer} showsVerticalScrollIndicator={false}>
@@ -1047,7 +1047,7 @@ export default function ScanScreen() {
   // --- Analyzing --------------------------------------------------------------
   if (step === 'analyzing') {
     return (
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <View style={styles.container}>
           <StepIndicator currentStep={2} />
           <AIScanningAnimationView imageUri={imageUri} referenceImageUri={referenceImageUri} />
@@ -1090,7 +1090,7 @@ function ResultScreen({
   const isCombined = result.isCombined;
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <View style={styles.container}>
         <StepIndicator currentStep={3} />
         <ScrollView contentContainerStyle={styles.pageContainer} showsVerticalScrollIndicator={false}>
@@ -1400,7 +1400,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
     borderWidth: 1, borderColor: '#f1f5f9',
   },
-  pageContainer: { paddingBottom: 120 },
+  pageContainer: { paddingBottom: 20 },
   pageTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, marginBottom: 4 },
   backRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
   backTxt: { fontSize: 13, color: COLORS.textSecondary, fontWeight: '600' },

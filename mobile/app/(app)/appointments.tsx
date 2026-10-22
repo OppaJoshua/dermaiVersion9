@@ -168,7 +168,7 @@ export default function AppointmentsScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* ── Header ── */}
       <View style={styles.header}>
         <View style={styles.headerAvatarCircle}>
@@ -214,7 +214,7 @@ export default function AppointmentsScreen() {
       <ScrollView
         style={styles.container}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 80 }}
+        contentContainerStyle={{ paddingBottom: 16 }}
       >
         <View style={styles.list}>
           {loading && appointments.length === 0 ? (
