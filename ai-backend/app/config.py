@@ -116,7 +116,7 @@ SKIN_VALIDATOR_PATH = BASE_DIR / "models" / "skin_validator_final.h5"
 # 0.5 is the natural midpoint of the sigmoid output.
 SKIN_VALIDATOR_THRESHOLD = float(os.getenv("SKIN_VALIDATOR_THRESHOLD", "0.5"))
 
-# Fallback classifier confidence threshold (safety net for random noise < 25%, allowing valid predictions >= 25% to proceed to result screen)
+# Fallback classifier confidence threshold (secondary check, kept as safety net)
 CLASSIFIER_CONFIDENCE_FALLBACK = float(
-    os.getenv("CLASSIFIER_CONFIDENCE_FALLBACK", "25.0")
+    os.getenv("CLASSIFIER_CONFIDENCE_FALLBACK", "65.0")
 )

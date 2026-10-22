@@ -310,9 +310,13 @@ export default function ScanScreen() {
 
       setAnalysisError(userMessage);
       setStep('upload');
-      if (Platform.OS !== 'web') {
-        Alert.alert('Analysis Notice', userMessage);
-      }
+      setTimeout(() => {
+        if (Platform.OS === 'web') {
+          try { (window as any)?.alert?.(userMessage); } catch {}
+        } else {
+          Alert.alert('Analysis Notice', userMessage);
+        }
+      }, 100);
       return;
     }
 
