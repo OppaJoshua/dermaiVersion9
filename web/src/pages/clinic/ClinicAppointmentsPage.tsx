@@ -132,6 +132,17 @@ function formatAppointmentTime(timeStr?: string): string {
   if (/am|pm/i.test(trimmed)) {
     return trimmed;
   }
+  if (trimmed.includes("T")) {
+    const afterT = trimmed.split("T")[1];
+    const matchT = afterT.match(/^(\d{1,2}):(\d{2})/);
+    if (matchT) {
+      let hour = parseInt(matchT[1], 10);
+      const minute = matchT[2];
+      const ampm = hour >= 12 ? "PM" : "AM";
+      hour = hour % 12 || 12;
+      return `${hour}:${minute} ${ampm}`;
+    }
+  }
   const match = trimmed.match(/^(\d{1,2}):(\d{2})/);
   if (match) {
     let hour = parseInt(match[1], 10);
@@ -2308,10 +2319,6 @@ export default function ClinicAppointmentsPage() {
                             <span className="text-[10px] font-semibold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
                               Face-to-Face Consultation
                             </span>
-                            <span className="text-gray-300">•</span>
-                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded flex items-center gap-1">
-                              <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Upfront Paid
-                            </span>
                           </div>
                           <p className="text-[10px] text-gray-400 mt-0.5">
                             Requested: {new Date(appointment.createdAt).toLocaleString("en-US", {
@@ -2356,7 +2363,12 @@ export default function ClinicAppointmentsPage() {
                   <div className="mb-2.5 p-2 rounded-xl bg-magenta-50/70 border border-magenta-100 flex items-center justify-between text-xs flex-wrap gap-1.5">
                     <div className="flex items-center gap-1.5 font-bold text-magenta-950">
                       <Calendar className="w-3.5 h-3.5 text-magenta-600" />
-                      <span>{appointment.date || "Date pending"} {appointment.batchTime ? `· ${appointment.batchTime} Batch` : appointment.time ? `· ${appointment.time}` : ""}</span>
+                      <span>
+                        {appointment.date || "Date pending"}
+                        {(appointment.batchTime || appointment.time)
+                          ? ` · ${formatAppointmentTime(appointment.batchTime || appointment.time)}`
+                          : ""}
+                      </span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {isApproved && (
