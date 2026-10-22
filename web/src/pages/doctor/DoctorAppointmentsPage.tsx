@@ -16,6 +16,7 @@ import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/use
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
+import { PatientAvatar } from "@/components/common/PatientAvatar";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -448,15 +449,12 @@ export default function DoctorAppointmentsPage() {
                   <td className="py-4 px-4 sm:px-5">
                     <div className="flex items-center gap-3 min-w-[190px]">
 
-                      <img
-                        src={
-                          appt.patientAvatar ||
-                          `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                            appt.patientName || "P"
-                          )}&background=EFF6FF&color=2563EB`
-                        }
-                        alt={appt.patientName || "Patient"}
-                        className="w-10 h-10 rounded-full object-cover border border-slate-200 shrink-0 shadow-2xs"
+                      <PatientAvatar
+                        avatarUrl={appt.patientAvatar}
+                        fullName={appt.patientName}
+                        sizeClass="w-10 h-10"
+                        borderClass="border border-slate-200"
+                        className="shrink-0 shadow-2xs"
                       />
 
                       <div className="min-w-0">
@@ -599,15 +597,12 @@ export default function DoctorAppointmentsPage() {
                 >
                 {/* Modal Header */}
                 <div className="bg-white border-b border-gray-100 px-4 sm:px-6 py-3.5 sm:py-4 flex items-center gap-3 sm:gap-4 shrink-0">
-                  <img
-                    src={
-                      reviewModal.appointment.patientAvatar ||
-                      `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                        reviewModal.appointment.patientName || "P"
-                      )}&background=fce7f3&color=c0166a`
-                    }
-                    alt={reviewModal.appointment.patientName}
-                    className="w-11 h-11 sm:w-12 sm:h-12 rounded-full object-cover border border-gray-200 shrink-0"
+                  <PatientAvatar
+                    avatarUrl={reviewModal.appointment.patientAvatar}
+                    fullName={reviewModal.appointment.patientName}
+                    sizeClass="w-11 h-11 sm:w-12 sm:h-12"
+                    borderClass="border border-gray-200"
+                    className="shrink-0"
                   />
                   <div className="flex-1 min-w-0">
                     <p className="text-gray-900 font-bold text-base leading-tight truncate">

@@ -1,6 +1,8 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import {
+  AlertCircle,
   AlertTriangle,
+  Ban,
   Calendar,
   CheckCircle2,
   ChevronLeft,
@@ -25,6 +27,8 @@ import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
+import { PatientAvatar } from "@/components/common/PatientAvatar";
+import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { createPatientNotification } from "@/lib/notificationService";
 import {
@@ -36,15 +40,6 @@ import {
   type AppointmentHistoryEntry,
 } from "@/lib/schedulingService";
 
-function isMorningTime(timeStr?: string): boolean {
-  if (!timeStr) return true;
-  if (/am/i.test(timeStr)) {
-    const hour = parseInt(timeStr, 10);
-    return hour < 10 || hour === 12;
-  }
-  const hour = parseInt(timeStr, 10);
-  return !isNaN(hour) && hour < 10;
-}
 
 type AppointmentRecord = {
   id: string;
@@ -98,6 +93,7 @@ type AppointmentRecord = {
   paymentAmount?: number;
   paymentMethod?: string;
   paymentReference?: string;
+  questionnaireAnswers?: any;
 };
 
 type DoctorAccount = {
@@ -129,31 +125,23 @@ function formatDoctorDisplay(name?: string): string {
   return `Dr. ${cleaned}`;
 }
 
-function getPatientInitials(name?: string): string {
-  if (!name) return "PT";
-  const trimmed = name.trim();
-  if (trimmed.includes(",")) {
-    const parts = trimmed.split(",").map((p) => p.trim()).filter(Boolean);
-    if (parts.length >= 2) {
-      const lastInitial = parts[0].charAt(0).toUpperCase();
-      const firstInitial = parts[1].charAt(0).toUpperCase();
-      return `${lastInitial}${firstInitial}`;
-    }
-  }
-  const parts = trimmed.split(/\s+/).filter(Boolean);
-  if (parts.length === 1) {
-    return parts[0].slice(0, 2).toUpperCase();
-  }
-  const firstInitial = parts[0].charAt(0).toUpperCase();
-  const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
-  return `${firstInitial}${lastInitial}`;
-}
 
 function formatAppointmentTime(timeStr?: string): string {
   if (!timeStr) return "TBD";
-  const trimmed = timeStr.trim();
+  const trimmed = timeStr.replace(/\s*batch\s*/gi, " ").trim();
   if (/am|pm/i.test(trimmed)) {
     return trimmed;
+  }
+  if (trimmed.includes("T")) {
+    const afterT = trimmed.split("T")[1];
+    const matchT = afterT.match(/^(\d{1,2}):(\d{2})/);
+    if (matchT) {
+      let hour = parseInt(matchT[1], 10);
+      const minute = matchT[2];
+      const ampm = hour >= 12 ? "PM" : "AM";
+      hour = hour % 12 || 12;
+      return `${hour}:${minute} ${ampm}`;
+    }
   }
   const match = trimmed.match(/^(\d{1,2}):(\d{2})/);
   if (match) {
@@ -308,8 +296,6 @@ export default function ClinicAppointmentsPage() {
       } catch { }
     }
 
-    console.log("[ClinicAppointments] resolvedClinicId =", resolvedClinicId);
-
     // Step 2b: Fetch clinic consultation fee
     let resolvedFee = 500;
     if (resolvedClinicId) {
@@ -328,27 +314,43 @@ export default function ClinicAppointmentsPage() {
       }
     }
 
-    // 1. Fetch clinic doctors from clinic_doctor table
+    // 1. Fetch clinic doctors from clinic_doctor table (joining user profile avatar)
     let docRows: any[] = [];
     if (resolvedClinicId) {
       const { data, error: docErr } = await supabase
         .from("clinic_doctor")
-        .select("doctor_id, doctor_name, email, photo_url, status, duty_schedule, clinic_id")
+        .select(`
+          doctor_id,
+          doctor_name,
+          email,
+          photo_url,
+          user_id,
+          status,
+          duty_schedule,
+          clinic_id,
+          user:user_id ( avatar_url )
+        `)
         .eq("clinic_id", resolvedClinicId);
-      console.log("[ClinicAppointments] clinic_doctor rows:", data?.length ?? 0, docErr?.message);
+      if (docErr) {
+        console.warn("[ClinicAppointmentsPage] Failed to fetch clinic_doctor:", docErr.message);
+      }
       if (data && data.length > 0) {
         docRows = data.filter((d: any) => (d.status || "").toLowerCase() !== "inactive");
-        setClinicDoctors(docRows.map((d: any) => ({
-          id: d.doctor_id,
-          name: d.doctor_name,
-          email: d.email || "",
-          photo: d.photo_url || undefined,
-          specialization: "Dermatology",
-          clinicName: clinicName || "Clinic",
-          clinicId: resolvedClinicId || undefined,
-          dutySchedule: d.duty_schedule || undefined,
-          status: d.status || "Active",
-        })));
+        setClinicDoctors(docRows.map((d: any) => {
+          const userObj = Array.isArray(d.user) ? d.user[0] : d.user;
+          const rawPhoto = d.photo_url || userObj?.avatar_url;
+          return {
+            id: d.doctor_id,
+            name: d.doctor_name,
+            email: d.email || "",
+            photo: resolveAvatarUrl(rawPhoto),
+            specialization: "Dermatology",
+            clinicName: clinicName || "Clinic",
+            clinicId: resolvedClinicId || undefined,
+            dutySchedule: d.duty_schedule || undefined,
+            status: d.status || "Active",
+          };
+        }));
       }
     }
 
@@ -362,7 +364,7 @@ export default function ClinicAppointmentsPage() {
               id: d.id,
               name: d.name,
               email: d.email || "",
-              photo: d.photo || d.photo_url || undefined,
+              photo: resolveAvatarUrl(d.photo || d.photo_url),
               specialization: d.specialization || "Dermatology",
               clinicName: clinicName || d.clinicName || "Clinic",
               clinicId: resolvedClinicId || d.clinicId || undefined,
@@ -374,17 +376,18 @@ export default function ClinicAppointmentsPage() {
       } catch { }
     }
 
-    // 2. Fetch appointments from patient_appointment table
+    // 2. Fetch appointments from patient_appointment table (joining user profile for real avatar)
     let dbAppts: any[] = [];
     if (resolvedClinicId) {
       // Try exact match first
       const { data: apptRows, error: apptErr } = await supabase
         .from("patient_appointment")
-        .select("*")
+        .select(`
+          *,
+          user:user_id ( full_name, email, avatar_url )
+        `)
         .eq("clinic_id", resolvedClinicId)
         .order("created_at", { ascending: false });
-
-      console.log("[ClinicAppointments] patient_appointment rows (filtered):", apptRows?.length ?? 0, apptErr?.message);
 
       if (apptErr) {
         console.warn("[ClinicAppointmentsPage] Failed to fetch patient_appointment from Supabase:", apptErr.message);
@@ -392,13 +395,14 @@ export default function ClinicAppointmentsPage() {
         dbAppts = apptRows;
       } else {
         // Fallback: fetch all and filter client-side (handles type mismatch e.g. int vs string)
-        const { data: allAppts, error: allErr } = await supabase
+        const { data: allAppts } = await supabase
           .from("patient_appointment")
-          .select("*")
+          .select(`
+            *,
+            user:user_id ( full_name, email, avatar_url )
+          `)
           .order("created_at", { ascending: false })
           .limit(200);
-
-        console.log("[ClinicAppointments] all patient_appointment rows:", allAppts?.length ?? 0, allErr?.message);
 
         if (allAppts && allAppts.length > 0) {
           dbAppts = allAppts.filter((r: any) =>
@@ -406,8 +410,37 @@ export default function ClinicAppointmentsPage() {
             r.clinic_id !== undefined &&
             String(r.clinic_id) === String(resolvedClinicId)
           );
-          console.log("[ClinicAppointments] client-side filtered rows:", dbAppts.length);
         }
+      }
+    }
+
+    // 3. Batch resolve patient profile pictures from user table to ensure 100% real avatar coverage
+    const userProfileMap = new Map<string, string>();
+    const userIds = Array.from(new Set(dbAppts.map((a: any) => a.user_id).filter(Boolean)));
+    const patientEmails = Array.from(new Set(dbAppts.map((a: any) => a.patient_email?.toLowerCase().trim()).filter(Boolean)));
+
+    if (userIds.length > 0 || patientEmails.length > 0) {
+      try {
+        let orFilters: string[] = [];
+        if (userIds.length > 0) orFilters.push(`user_id.in.(${userIds.join(",")})`);
+        if (patientEmails.length > 0) orFilters.push(`email.in.(${patientEmails.map((e) => `"${e}"`).join(",")})`);
+
+        const { data: userProfiles } = await supabase
+          .from("user")
+          .select("user_id, email, avatar_url")
+          .or(orFilters.join(","));
+
+        if (userProfiles) {
+          userProfiles.forEach((u: any) => {
+            const resolved = resolveAvatarUrl(u.avatar_url);
+            if (resolved) {
+              if (u.user_id) userProfileMap.set(u.user_id, resolved);
+              if (u.email) userProfileMap.set(u.email.toLowerCase().trim(), resolved);
+            }
+          });
+        }
+      } catch (uErr) {
+        console.warn("[ClinicAppointmentsPage] User avatar batch lookup warning:", uErr);
       }
     }
 
@@ -525,14 +558,25 @@ export default function ClinicAppointmentsPage() {
       }
       const payAmount = a.payment_amount || qAnswers.payment_amount || resolvedFee;
 
+      // Resolve real patient profile avatar from user join or userProfileMap
+      const userObj = Array.isArray(a.user) ? a.user[0] : a.user;
+      const rawPatientAvatar =
+        userObj?.avatar_url ||
+        (a.user_id ? userProfileMap.get(a.user_id) : undefined) ||
+        (a.patient_email ? userProfileMap.get(a.patient_email.toLowerCase().trim()) : undefined) ||
+        a.patient_avatar ||
+        qAnswers.patient_avatar;
+      const resolvedPatientAvatar = resolveAvatarUrl(rawPatientAvatar);
+
       return {
         id: a.appointment_id,
         clinicId: 0,
         clinicName: clinicName || "Clinic",
-        patientName: a.patient_name || "Patient",
+        patientName: a.patient_name || userObj?.full_name || "Patient",
         patientAge: calculatedAge,
         patientGender: a.patient_gender || undefined,
         patientBirthdate: a.patient_birthdate || undefined,
+        patientAvatar: resolvedPatientAvatar,
         patientEmail: a.patient_email || undefined,
         patientAddress: a.patient_address || undefined,
         patientContact: a.patient_contact || undefined,
@@ -612,11 +656,18 @@ export default function ClinicAppointmentsPage() {
                   if (refMatch) localRef = refMatch[1];
                 }
 
+                const localUserAvatar = resolveAvatarUrl(
+                  localItem.patientAvatar ||
+                  (localItem.userId ? userProfileMap.get(localItem.userId) : undefined) ||
+                  (localItem.patientEmail ? userProfileMap.get(localItem.patientEmail.toLowerCase().trim()) : undefined)
+                );
+
                 mapped.push({
                   id: localItem.id,
                   clinicId: 0,
                   clinicName: localItem.clinicName || clinicName || "Clinic",
                   patientName: localItem.patientName || "Patient",
+                  patientAvatar: localUserAvatar,
                   patientEmail: localItem.patientEmail || undefined,
                   patientAddress: localItem.patientAddress || undefined,
                   patientContact: localItem.patientContact || undefined,
@@ -665,7 +716,6 @@ export default function ClinicAppointmentsPage() {
       }
     } catch { }
 
-    console.log("[ClinicAppointments] final mapped appointments:", mapped.length);
     setAppointments(mapped);
     try {
       localStorage.setItem("dermai_clinic_appointments", JSON.stringify(mapped));
@@ -1172,6 +1222,38 @@ export default function ClinicAppointmentsPage() {
     setRejectError("");
   };
 
+  // Check if patient's 24-hour doctor self-selection privilege window is active
+  const getPatientPrivilegeStatus = useCallback((appt?: AppointmentRecord | null) => {
+    if (!appt) return { isLocked: false, hoursRemaining: 0, minutesRemaining: 0, isWaived: false };
+    const qa = appt.questionnaireAnswers;
+    const isWaived = Boolean(qa?.patient_requested_clinic_reassign || qa?.patient_privilege_waived);
+    if (isWaived) {
+      return { isLocked: false, hoursRemaining: 0, minutesRemaining: 0, isWaived: true };
+    }
+
+    const declinedAtStr =
+      appt.doctorReviewedAt ||
+      qa?.declined_at ||
+      qa?.appointment_history?.findLast?.((h: any) =>
+        String(h.action || "").includes("decline") || String(h.action || "").includes("reject")
+      )?.timestamp ||
+      appt.createdAt ||
+      new Date().toISOString();
+
+    const declinedTime = new Date(declinedAtStr).getTime();
+    const validDeclinedTime = isNaN(declinedTime) ? Date.now() : declinedTime;
+    const expiresAt = validDeclinedTime + 24 * 3600 * 1000;
+    const remainingMs = expiresAt - Date.now();
+
+    if (remainingMs <= 0) {
+      return { isLocked: false, hoursRemaining: 0, minutesRemaining: 0, isWaived: false };
+    }
+
+    const hrs = Math.floor(remainingMs / (1000 * 60 * 60));
+    const mins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+    return { isLocked: true, hoursRemaining: hrs, minutesRemaining: mins, isWaived: false };
+  }, []);
+
   // Compute real-time availability for doctor reassignment modal
   const reassignAvailability = useMemo(() => {
     if (!assignDoctorModal || !assignDoctorModal.isReassign) {
@@ -1206,6 +1288,15 @@ export default function ClinicAppointmentsPage() {
     }
 
     const targetAppt = appointments.find((a) => a.id === assignDoctorModal.appointmentId);
+
+    // Rule: Enforce 24-hour patient privilege window
+    if (assignDoctorModal.isReassign) {
+      const privilege = getPatientPrivilegeStatus(targetAppt);
+      if (privilege.isLocked) {
+        setAssignError(`Cannot reassign doctor: Patient has an active 24-hour privilege window (${privilege.hoursRemaining}h ${privilege.minutesRemaining}m remaining) to select their own doctor.`);
+        return;
+      }
+    }
 
     // Rule 6: Validate doctor-clinic association, shift schedule, slot conflict, shift capacity
     if (assignDoctorModal.isReassign) {
@@ -2013,8 +2104,6 @@ export default function ClinicAppointmentsPage() {
               ) : (
                 <div className="divide-y divide-gray-100">
                   {selectedDayAppointments.map((appointment) => {
-                    const initials = getPatientInitials(appointment.patientName);
-                    const isEarly = isMorningTime(appointment.time);
                     const isPast = isAppointmentPastDue(appointment);
                     const isNoShow = appointment.checkInStatus === "no-show";
                     const isCompleted = appointment.status === "completed" || appointment.checkInStatus === "completed";
@@ -2032,113 +2121,70 @@ export default function ClinicAppointmentsPage() {
                           isNoShow && "bg-gray-50/40 opacity-80"
                         )}
                       >
-                        {/* Left: Avatar with Initials & Details */}
-                        <div className="flex items-center gap-3.5 min-w-0">
-                          <div
-                            className={cn(
-                              "w-10 h-10 sm:w-11 sm:h-11 rounded-full font-bold text-xs sm:text-sm flex items-center justify-center shrink-0 border transition-all",
-                              isNoShow
-                                ? "bg-rose-100 text-rose-700 border-rose-200"
-                                : isPast && !isCompleted
-                                ? "bg-rose-100/70 text-rose-700 border-rose-200/90"
-                                : "bg-pink-50 text-[#c0166a] border-pink-100/80"
-                            )}
-                          >
-                            {initials}
+                        {/* Left: Details */}
+                        <div className="min-w-0 sm:flex-1">
+                          <div className="flex items-center gap-2.5 flex-wrap">
+                            <p className="text-xs sm:text-sm font-bold text-gray-900 truncate group-hover:text-[#c0166a] transition-colors">
+                              {appointment.patientName || "Patient"}
+                            </p>
                           </div>
 
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-xs sm:text-sm font-bold text-gray-900 truncate group-hover:text-[#c0166a] transition-colors">
-                                {appointment.patientName || "Patient"}
-                              </p>
-
-                              {/* Status Badges */}
-                              {isNoShow ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
-                                  <AlertTriangle className="w-3 h-3 text-rose-600" />
-                                  Absent / No-Show
-                                </span>
-                              ) : isCompleted ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                  Completed
-                                </span>
-                              ) : isArrived ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-sky-500 inline-block animate-pulse" />
-                                  In Lobby
-                                </span>
-                              ) : isPast ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200">
-                                  <Clock className="w-3 h-3 text-rose-600" />
-                                  Time Passed · Needs Action
-                                </span>
-                              ) : null}
-                            </div>
-
-                            <p className="text-[11px] text-gray-400 mt-0.5">
-                              {appointment.patientAge ? `${appointment.patientAge} years old` : "Age not specified"}
-                            </p>
-                            <p className="text-[11px] text-[#c0166a] font-medium mt-0.5 truncate">
-                              {appointment.conditionName || appointment.aiConditionName || "Skin Concern"}
-                            </p>
-                            <div className="flex items-center gap-1.5 text-[11px] text-gray-500 mt-0.5 truncate">
-                              <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                              <span className="truncate">
-                                {appointment.assignedDoctorName
-                                  ? formatDoctorDisplay(appointment.assignedDoctorName)
-                                  : "Doctor unassigned"}
-                              </span>
-                            </div>
+                          <p className="text-[11px] text-gray-400 mt-0.5">
+                            {appointment.patientAge ? `${appointment.patientAge} years old` : "Age not specified"}
+                          </p>
+                          <p className="text-[11px] text-[#c0166a] font-medium mt-0.5 truncate">
+                            {appointment.conditionName || appointment.aiConditionName || "Skin Concern"}
+                          </p>
+                          <div className="flex items-center gap-1.5 text-[11px] text-gray-500 mt-0.5 truncate">
+                            <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                            <span className="truncate">
+                              {appointment.assignedDoctorName
+                                ? formatDoctorDisplay(appointment.assignedDoctorName)
+                                : "Doctor unassigned"}
+                            </span>
                           </div>
                         </div>
 
-                        {/* Right: Actions, Time badge + Chevron */}
-                        <div className="flex items-center gap-2 shrink-0 justify-between sm:justify-end pt-1 sm:pt-0">
-                          {isPast && !isNoShow && !isCompleted && (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setNoShowConfirmModal(appointment);
-                                  setNoShowError("");
-                                  setNoShowSuccess("");
-                                }}
-                                className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-                                title="Mark patient as absent / no-show"
-                              >
-                                <AlertTriangle className="w-3.5 h-3.5" />
-                                <span>Mark as No-Show</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleMarkArrived(appointment.id);
-                                }}
-                                className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 font-semibold text-xs border border-emerald-200 transition-colors cursor-pointer"
-                                title="Patient arrived"
-                              >
-                                Arrived
-                              </button>
-                            </div>
-                          )}
+                        {/* Center: Status Badge (Absent / No-Show, Completed, Time Passed · Needs Action, In Lobby) */}
+                        {(isNoShow || isCompleted || isPast || isArrived) && (
+                          <div className="flex items-center justify-start sm:justify-center shrink-0 sm:flex-1 sm:px-2">
+                            {isNoShow ? (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                Absent / No-Show
+                              </span>
+                            ) : isCompleted ? (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                Completed
+                              </span>
+                            ) : isPast ? (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                Time Passed · Needs Action
+                              </span>
+                            ) : isArrived ? (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                <span className="w-1.5 h-1.5 rounded-full bg-sky-500 inline-block animate-pulse shrink-0" />
+                                In Lobby
+                              </span>
+                            ) : null}
+                          </div>
+                        )}
 
-                          <span
-                            className={cn(
-                              "px-2.5 sm:px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap",
-                              isPast && !isCompleted && !isNoShow
-                                ? "bg-rose-50 text-rose-700 border-rose-200"
-                                : isEarly
-                                ? "bg-emerald-50 text-emerald-700 border-emerald-200/80"
-                                : "bg-blue-50 text-blue-700 border-blue-200/80"
-                            )}
-                          >
-                            {formatAppointmentTime(appointment.time)}
-                          </span>
-                          <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors" />
+                        {/* Right: Time badge + Chevron */}
+                        <div
+                          className={cn(
+                            "flex items-center gap-2 sm:gap-2.5 shrink-0 justify-between sm:justify-end sm:self-center pt-1 sm:pt-0",
+                            (isNoShow || isCompleted || isPast || isArrived) && "sm:flex-1"
+                          )}
+                        >
+                          <div className="px-3 py-1.5 rounded-full bg-[#edf2f7] border border-slate-200/60 text-slate-700 font-bold text-xs flex items-center gap-1.5 whitespace-nowrap shrink-0">
+                            <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                            <span>{formatAppointmentTime(appointment.time)}</span>
+                          </div>
+
+                          <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
                         </div>
                       </motion.div>
                     );
@@ -2202,7 +2248,7 @@ export default function ClinicAppointmentsPage() {
             ))}
           </div>
 
-          <div className="space-y-3 max-h-[660px] overflow-y-auto pr-1">
+          <div className="space-y-3 max-h-[660px] overflow-y-auto pr-1 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             {displayedQueue.length === 0 && (
               <div className="border border-dashed border-gray-200 rounded-2xl p-8 text-center bg-gray-50/50">
                 <Clock className="w-8 h-8 text-gray-300 mx-auto mb-2" />
@@ -2244,20 +2290,11 @@ export default function ClinicAppointmentsPage() {
                     }`}
                 >
                   <div className="flex items-start gap-3 mb-2.5">
-                    <img
-                      src={
-                        appointment.patientAvatar ||
-                        `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                          appointment.patientName || "Patient"
-                        )}&background=fce7f3&color=c0166a`
-                      }
-                      alt={appointment.patientName || "Patient"}
-                      className="w-12 h-12 rounded-full object-cover border border-gray-200 shrink-0"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                          appointment.patientName || "Patient"
-                        )}&background=fce7f3&color=c0166a`;
-                      }}
+                    <PatientAvatar
+                      name={appointment.patientName}
+                      photoUrl={appointment.patientAvatar}
+                      userId={appointment.userId}
+                      className="w-12 h-12"
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">
@@ -2281,10 +2318,6 @@ export default function ClinicAppointmentsPage() {
                             <span className="text-gray-300">·</span>
                             <span className="text-[10px] font-semibold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
                               Face-to-Face Consultation
-                            </span>
-                            <span className="text-gray-300">·</span>
-                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded flex items-center gap-1">
-                              <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Upfront Paid
                             </span>
                           </div>
                           <p className="text-[10px] text-gray-400 mt-0.5">
@@ -2330,12 +2363,14 @@ export default function ClinicAppointmentsPage() {
                   <div className="mb-2.5 p-2 rounded-xl bg-magenta-50/70 border border-magenta-100 flex items-center justify-between text-xs flex-wrap gap-1.5">
                     <div className="flex items-center gap-1.5 font-bold text-magenta-950">
                       <Calendar className="w-3.5 h-3.5 text-magenta-600" />
-                      <span>{appointment.date || "Date pending"} {appointment.batchTime ? `· ${appointment.batchTime} Batch` : appointment.time ? `· ${appointment.time}` : ""}</span>
+                      <span>
+                        {appointment.date || "Date pending"}
+                        {(appointment.batchTime || appointment.time)
+                          ? ` · ${formatAppointmentTime(appointment.batchTime || appointment.time)}`
+                          : ""}
+                      </span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-100/90 text-emerald-800 text-[10px] font-bold flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" /> {payBadge.label}
-                      </span>
                       {isApproved && (
                         appointment.checkInStatus === "arrived" ? (
                           <span className="px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-800 font-bold text-[9px] flex items-center gap-0.5">
@@ -2355,20 +2390,40 @@ export default function ClinicAppointmentsPage() {
                   </div>
 
                   {/* Stage Workflow Banners */}
-                  {isDoctorDeclined ? (
-                    <div className="mb-2.5 p-2.5 rounded-xl bg-red-100/70 border border-red-200 text-xs text-red-900 flex items-start gap-2">
-                      <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                      <div className="min-w-0">
-                        <p className="font-bold">Declined by {formatDoctorDisplay(appointment.assignedDoctorName) || "Doctor"}:</p>
-                        <p className="text-[11px] text-red-700 italic mt-0.5">
-                          "{appointment.doctorNote || "Doctor unavailable for consultation"}"
-                        </p>
-                        <p className="text-[10px] text-red-600 mt-1 font-semibold">
-                          &rarr; Re-assign to another doctor (original schedule kept) or notify patient if none available.
-                        </p>
+                  {isDoctorDeclined ? (() => {
+                    const privilege = getPatientPrivilegeStatus(appointment);
+                    return (
+                      <div className="mb-2.5 p-2.5 rounded-xl bg-red-100/70 border border-red-200 text-xs text-red-900 flex items-start gap-2">
+                        <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold">Declined by {formatDoctorDisplay(appointment.assignedDoctorName) || "Doctor"}:</p>
+                          <p className="text-[11px] text-red-700 italic mt-0.5">
+                            "{appointment.doctorNote || "Doctor unavailable for consultation"}"
+                          </p>
+                          {privilege.isLocked ? (
+                            <div className="mt-2 px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px] flex items-center justify-between">
+                              <span className="flex items-center gap-1 font-semibold">
+                                <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                Patient Selection Window Active
+                              </span>
+                              <span className="font-bold tabular-nums text-amber-800">
+                                {privilege.hoursRemaining}h {privilege.minutesRemaining}m left
+                              </span>
+                            </div>
+                          ) : privilege.isWaived ? (
+                            <div className="mt-2 px-2.5 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-[11px] flex items-center gap-1.5 font-semibold">
+                              <AlertCircle className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                              Patient requested clinic to manually assign an alternate doctor
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-red-600 mt-1 font-semibold">
+                              &rarr; 24h patient window expired. Clinic reassignment is available.
+                            </p>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ) : isApproved ? (
+                    );
+                  })() : isApproved ? (
                     <div className="mb-2.5 p-2.5 rounded-xl bg-emerald-100/70 border border-emerald-200 text-xs text-emerald-900 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2547,55 +2602,79 @@ export default function ClinicAppointmentsPage() {
                     )}
 
                     {/* Scenario D: Doctor Declined -> RE-ASSIGN DOCTOR OR DECLINE REQUEST */}
-                    {isDoctorDeclined && (
-                      <div className="flex items-center gap-2 w-full">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedDoctorId("");
-                            setAssignDoctorModal({
-                              appointmentId: appointment.id,
-                              patientName: appointment.patientName,
-                              isReassign: true,
-                              currentDoctorId: appointment.assignedDoctorId,
-                              currentDoctorName: appointment.assignedDoctorName,
-                              doctorNote: appointment.doctorNote,
-                              targetDate: appointment.date,
-                              targetTime: appointment.time,
-                              primaryScanId: appointment.primaryScanId,
-                              userId: appointment.userId,
-                            });
-                          }}
-                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-xs cursor-pointer"
-                        >
-                          <Stethoscope className="w-3.5 h-3.5" /> Re-assign Doctor
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRejectModal({
-                              appointmentId: appointment.id,
-                              patientName: appointment.patientName || "Patient",
-                              clinicName: appointment.clinicName || clinicName,
-                              patientEmail: appointment.patientEmail,
-                            });
-                            setRejectReason(appointment.doctorNote ? `Declined by doctor: ${appointment.doctorNote}` : "Doctor unavailable.");
-                            setSelectedPresetReason("");
-                            setRejectError("");
-                          }}
-                          className="py-2.5 px-3 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
-                        >
-                          Decline Request
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setViewingPatient(appointment)}
-                          className="py-2.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
-                        >
-                          Details
-                        </button>
-                      </div>
-                    )}
+                    {isDoctorDeclined && (() => {
+                      const privilege = getPatientPrivilegeStatus(appointment);
+                      return (
+                        <div className="flex items-center gap-2 w-full">
+                          <button
+                            type="button"
+                            disabled={privilege.isLocked}
+                            onClick={() => {
+                              if (privilege.isLocked) return;
+                              setSelectedDoctorId("");
+                              setAssignDoctorModal({
+                                appointmentId: appointment.id,
+                                patientName: appointment.patientName,
+                                isReassign: true,
+                                currentDoctorId: appointment.assignedDoctorId,
+                                currentDoctorName: appointment.assignedDoctorName,
+                                doctorNote: appointment.doctorNote,
+                                targetDate: appointment.date,
+                                targetTime: appointment.time,
+                                primaryScanId: appointment.primaryScanId,
+                                userId: appointment.userId,
+                              });
+                            }}
+                            title={
+                              privilege.isLocked
+                                ? `Patient has an exclusive 24-hour privilege window to select an alternate doctor (${privilege.hoursRemaining}h ${privilege.minutesRemaining}m remaining). Clinic cannot reassign until this window expires or the patient requests clinic assistance.`
+                                : undefined
+                            }
+                            className={`flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl text-xs font-semibold transition-all shadow-xs ${
+                              privilege.isLocked
+                                ? "bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed"
+                                : "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+                            }`}
+                          >
+                            {privilege.isLocked ? (
+                              <>
+                                <Lock className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                                <span className="truncate">Locked ({privilege.hoursRemaining}h {privilege.minutesRemaining}m left)</span>
+                              </>
+                            ) : (
+                              <>
+                                <Stethoscope className="w-3.5 h-3.5" />
+                                <span>Re-assign Doctor</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRejectModal({
+                                appointmentId: appointment.id,
+                                patientName: appointment.patientName || "Patient",
+                                clinicName: appointment.clinicName || clinicName,
+                                patientEmail: appointment.patientEmail,
+                              });
+                              setRejectReason(appointment.doctorNote ? `Declined by doctor: ${appointment.doctorNote}` : "Doctor unavailable.");
+                              setSelectedPresetReason("");
+                              setRejectError("");
+                            }}
+                            className="py-2.5 px-3 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                          >
+                            Decline Request
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setViewingPatient(appointment)}
+                            className="py-2.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                          >
+                            Details
+                          </button>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               );
@@ -2658,7 +2737,7 @@ export default function ClinicAppointmentsPage() {
               </div>
 
               {/* Body */}
-              <div className="p-6 max-h-[62vh] overflow-y-auto space-y-3.5">
+              <div className="p-6 max-h-[62vh] overflow-y-auto space-y-3.5 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 {dayModalActionable.length === 0 ? (
                   <div className="border border-dashed border-gray-200 rounded-2xl p-7 text-center bg-gray-50/50">
                     {dayModalCompletedCount > 0 ? (
@@ -2693,17 +2772,12 @@ export default function ClinicAppointmentsPage() {
                       >
                         {/* Patient Info Row */}
                         <div className="flex items-center gap-3">
-                          {appt.patientAvatar ? (
-                            <img
-                              src={appt.patientAvatar}
-                              alt={appt.patientName || "Patient"}
-                              className="w-11 h-11 rounded-full object-cover border border-gray-200 shrink-0"
-                            />
-                          ) : (
-                            <div className="w-11 h-11 rounded-full bg-[#fce7f3] text-[#a81c5a] font-bold text-sm flex items-center justify-center shrink-0 tracking-tight">
-                              {getPatientInitials(appt.patientName)}
-                            </div>
-                          )}
+                          <PatientAvatar
+                            name={appt.patientName}
+                            photoUrl={appt.patientAvatar}
+                            userId={appt.userId}
+                            className="w-11 h-11"
+                          />
 
                           <div className="flex-1 min-w-0">
                             <h4 className="text-sm font-bold text-gray-900 truncate">
@@ -2999,13 +3073,11 @@ export default function ClinicAppointmentsPage() {
             {/* Header */}
             <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <img
-                  src={
-                    viewingPatient.patientAvatar ||
-                    `https://ui-avatars.com/api/?name=${encodeURIComponent(viewingPatient.patientName || "P")}&background=fce7f3&color=c0166a`
-                  }
-                  alt={viewingPatient.patientName}
-                  className="w-11 h-11 rounded-full object-cover border border-gray-200 shrink-0"
+                <PatientAvatar
+                  name={viewingPatient.patientName}
+                  photoUrl={viewingPatient.patientAvatar}
+                  userId={viewingPatient.userId}
+                  className="w-11 h-11"
                 />
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -3037,7 +3109,7 @@ export default function ClinicAppointmentsPage() {
             </div>
 
             {/* Body */}
-            <div className="p-6 space-y-4 overflow-y-auto">
+            <div className="p-6 space-y-4 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
               {/* Doctor Review Status Summary */}
               {viewingPatient.assignedDoctorName && (
                 <div className={`p-3 rounded-2xl border ${viewingPatient.doctorStatus === "approved"
@@ -3114,7 +3186,7 @@ export default function ClinicAppointmentsPage() {
                       <div>
                         <p className="font-bold">Consultation Date &amp; Time Has Passed</p>
                         <p className="text-[11px] text-rose-700 mt-0.5">
-                          Patient did not attend during the scheduled time window. You can mark this appointment as No-Show to notify the patient and update records.
+                          Patient did not attend during the scheduled time window. You can mark this appointment as Arrived or No-Show to update records.
                         </p>
                       </div>
                     </div>
@@ -3235,7 +3307,7 @@ export default function ClinicAppointmentsPage() {
                     <History className="w-4 h-4 text-magenta-600" />
                     <span>Appointment History &amp; Audit Trail</span>
                   </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                     {viewingPatient.appointmentHistory.map((item, idx) => (
                       <div key={idx} className="p-2.5 rounded-xl bg-white border border-gray-100 text-xs shadow-2xs">
                         <div className="flex items-center justify-between gap-2">
@@ -3294,6 +3366,44 @@ export default function ClinicAppointmentsPage() {
                 >
                   Close
                 </button>
+              ) : isAppointmentPastDue(viewingPatient) && viewingPatient.checkInStatus !== "completed" && viewingPatient.status !== "completed" && viewingPatient.checkInStatus !== "arrived" ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await handleMarkArrived(viewingPatient.id);
+                      setViewingPatient(null);
+                    }}
+                    className="py-3 rounded-full bg-[#dcfce7] hover:bg-[#bbf7d0] text-[#059669] text-xs sm:text-sm font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5 border border-[#bbf7d0] active:scale-[0.98]"
+                    title="Patient arrived"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-[#059669]" />
+                    <span>Arrived</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = viewingPatient;
+                      setViewingPatient(null);
+                      setNoShowConfirmModal(target);
+                      setNoShowError("");
+                      setNoShowSuccess("");
+                    }}
+                    className="py-3 rounded-full bg-[#e1004a] hover:bg-[#c0003e] text-white text-xs sm:text-sm font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                    title="Mark patient as absent / no-show"
+                  >
+                    <Ban className="w-4 h-4 text-white stroke-[2.2]" />
+                    <span>Mark as No-Show</span>
+                  </button>
+                </div>
+              ) : viewingPatient.checkInStatus === "arrived" || viewingPatient.status === "completed" || viewingPatient.checkInStatus === "completed" ? (
+                <button
+                  type="button"
+                  onClick={() => setViewingPatient(null)}
+                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
               ) : viewingPatient.status === "scheduled" ? (
                 <div className="flex flex-col sm:flex-row gap-2.5">
                   <button
@@ -3303,22 +3413,6 @@ export default function ClinicAppointmentsPage() {
                   >
                     Close
                   </button>
-                  {isAppointmentPastDue(viewingPatient) && viewingPatient.checkInStatus !== "completed" && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const target = viewingPatient;
-                        setViewingPatient(null);
-                        setNoShowConfirmModal(target);
-                        setNoShowError("");
-                        setNoShowSuccess("");
-                      }}
-                      className="flex-1 py-3 rounded-full bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      <AlertTriangle className="w-3.5 h-3.5" />
-                      <span>Mark as No-Show</span>
-                    </button>
-                  )}
                   {viewingPatient.rescheduleRequested && (
                     <button
                       type="button"
@@ -3360,73 +3454,61 @@ export default function ClinicAppointmentsPage() {
                   >
                     Confirm Decline
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const apptToReassign = viewingPatient;
-                      setViewingPatient(null);
-                      setSelectedDoctorId("");
-                      setAssignDoctorModal({
-                        appointmentId: apptToReassign.id,
-                        patientName: apptToReassign.patientName,
-                        isReassign: true,
-                        currentDoctorId: apptToReassign.assignedDoctorId,
-                        currentDoctorName: apptToReassign.assignedDoctorName,
-                        doctorNote: apptToReassign.doctorNote,
-                        targetDate: apptToReassign.date,
-                        targetTime: apptToReassign.time,
-                        primaryScanId: apptToReassign.primaryScanId,
-                        userId: apptToReassign.userId,
-                      });
-                    }}
-                    className="py-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
-                  >
-                    Re-assign Doctor
-                  </button>
+                  {(() => {
+                    const privilege = viewingPatient ? getPatientPrivilegeStatus(viewingPatient) : null;
+                    const isLocked = Boolean(privilege?.isLocked);
+                    return (
+                      <button
+                        type="button"
+                        disabled={isLocked}
+                        onClick={() => {
+                          const apptToReassign = viewingPatient;
+                          setViewingPatient(null);
+                          setSelectedDoctorId("");
+                          setAssignDoctorModal({
+                            appointmentId: apptToReassign.id,
+                            patientName: apptToReassign.patientName,
+                            isReassign: true,
+                            currentDoctorId: apptToReassign.assignedDoctorId,
+                            currentDoctorName: apptToReassign.assignedDoctorName,
+                            doctorNote: apptToReassign.doctorNote,
+                            targetDate: apptToReassign.date,
+                            targetTime: apptToReassign.time,
+                            primaryScanId: apptToReassign.primaryScanId,
+                            userId: apptToReassign.userId,
+                          });
+                        }}
+                        title={
+                          isLocked && privilege
+                            ? `Patient has an exclusive 24-hour privilege window (${privilege.hoursRemaining}h ${privilege.minutesRemaining}m remaining).`
+                            : undefined
+                        }
+                        className={`py-3 rounded-full text-xs font-semibold transition-colors shadow-sm flex items-center justify-center gap-1.5 ${
+                          isLocked
+                            ? "bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed"
+                            : "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+                        }`}
+                      >
+                        {isLocked ? (
+                          <>
+                            <Lock className="w-3.5 h-3.5 text-gray-400" />
+                            <span>Re-assign (Patient Privilege Active)</span>
+                          </>
+                        ) : (
+                          <span>Re-assign Doctor</span>
+                        )}
+                      </button>
+                    );
+                  })()}
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRejectModal({
-                        appointmentId: viewingPatient.id,
-                        patientName: viewingPatient.patientName || "Patient",
-                        clinicName: viewingPatient.clinicName || clinicName,
-                        patientEmail: viewingPatient.patientEmail,
-                      });
-                      setRejectReason("");
-                      setSelectedPresetReason("");
-                      setRejectError("");
-                      setViewingPatient(null);
-                    }}
-                    className="py-3 rounded-full border border-red-200 bg-red-50 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors cursor-pointer"
-                  >
-                    Decline Request
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const apptToAssign = viewingPatient;
-                      setViewingPatient(null);
-                      setSelectedDoctorId("");
-                      setAssignDoctorModal({
-                        appointmentId: apptToAssign.id,
-                        patientName: apptToAssign.patientName,
-                        isReassign: !!apptToAssign.assignedDoctorId,
-                        currentDoctorId: apptToAssign.assignedDoctorId,
-                        currentDoctorName: apptToAssign.assignedDoctorName,
-                        targetDate: apptToAssign.date,
-                        targetTime: apptToAssign.time,
-                        primaryScanId: apptToAssign.primaryScanId,
-                        userId: apptToAssign.userId,
-                      });
-                    }}
-                    className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
-                  >
-                    {viewingPatient.assignedDoctorId ? "Change Doctor" : "Assign Doctor for Review"}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewingPatient(null)}
+                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
               )}
             </div>
           </motion.div>
@@ -3609,7 +3691,7 @@ export default function ClinicAppointmentsPage() {
                 </button>
               </div>
             ) : (
-              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 {clinicDoctors.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-4 text-center">
                     <p className="text-xs text-gray-500">No doctors registered yet.</p>

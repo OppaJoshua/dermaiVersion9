@@ -49,20 +49,28 @@ const LEGACY_SERVICE_MAP: Record<string, string> = {
 
 /** Parse servicesOffered: handles JSON array string or legacy comma string */
 function parseServices(raw: string): string[] {
-  if (!raw) return [];
+  if (!raw || !raw.trim()) return [];
+  const trimmedRaw = raw.trim();
+  if (trimmedRaw === "[]" || trimmedRaw === '[""]' || trimmedRaw === '["[]"]') return [];
+
   let list: string[] = [];
   try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) list = parsed as string[];
+    const parsed = JSON.parse(trimmedRaw);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((s) => (typeof s === "string" ? s.trim() : String(s).trim()))
+        .filter((s) => Boolean(s) && s !== "[]" && s !== '[""]')
+        .map((s) => (s in LEGACY_SERVICE_MAP ? LEGACY_SERVICE_MAP[s] : s))
+        .filter((s) => Boolean(s) && s !== "[]");
+    }
   } catch {
     /* ignore invalid JSON */
   }
-  if (!list.length) {
-    list = raw.split(",").map((s) => s.trim()).filter(Boolean);
-  }
+
+  list = trimmedRaw.split(",").map((s) => s.trim()).filter((s) => Boolean(s) && s !== "[]");
   return list
     .map((s) => (s in LEGACY_SERVICE_MAP ? LEGACY_SERVICE_MAP[s] : s))
-    .filter(Boolean);
+    .filter((s) => Boolean(s) && s !== "[]");
 }
 
 export type ClinicDoctorSummary = {
@@ -129,6 +137,18 @@ function formatTime12h(timeStr?: string): string {
   const hour = h % 12 || 12;
   const minute = isNaN(m) ? "00" : String(m).padStart(2, "0");
   return `${hour}:${minute} ${ampm}`;
+}
+
+function formatConflictTimeRange(start: string, end: string): string {
+  const formattedStart = formatTime12h(start);
+  const formattedEnd = formatTime12h(end);
+  if (!formattedStart || !formattedEnd) return "";
+  const [sTime, sPeriod] = formattedStart.split(" ");
+  const [, ePeriod] = formattedEnd.split(" ");
+  if (sPeriod && ePeriod && sPeriod === ePeriod) {
+    return `${sTime} – ${formattedEnd}`;
+  }
+  return `${formattedStart} – ${formattedEnd}`;
 }
 
 function getInitialSettings(): ClinicSettings {
@@ -210,7 +230,7 @@ export default function ClinicSettingsPage() {
   const [selectedServices, setSelectedServices] = useState<string[]>(() => {
     const initial = getInitialSettings();
     if (initial.servicesOffered) {
-      const svcs = parseServices(initial.servicesOffered);
+      const svcs = parseServices(initial.servicesOffered).filter((s) => Boolean(s) && s.trim() !== "[]");
       if (svcs.length > 0) return svcs;
     }
     try {
@@ -218,13 +238,33 @@ export default function ClinicSettingsPage() {
       if (appsRaw) {
         const apps = JSON.parse(appsRaw);
         if (Array.isArray(apps) && apps[0]?.servicesOffered) {
-          const svcs = parseServices(apps[0].servicesOffered);
+          const svcs = parseServices(apps[0].servicesOffered).filter((s) => Boolean(s) && s.trim() !== "[]");
           if (svcs.length > 0) return svcs;
         }
       }
     } catch {}
-    return parseServices(DEFAULT_SETTINGS.servicesOffered);
+    return parseServices(DEFAULT_SETTINGS.servicesOffered).filter((s) => Boolean(s) && s.trim() !== "[]");
   });
+
+  // Scrub any legacy empty bracket "[]" artifacts from services state and storage
+  useEffect(() => {
+    setSelectedServices((prev) => {
+      const cleaned = prev.filter((s) => Boolean(s) && s.trim() !== "[]");
+      return cleaned.length !== prev.length ? cleaned : prev;
+    });
+
+    try {
+      const savedSett = localStorage.getItem("dermai_clinic_settings");
+      if (savedSett) {
+        const parsed = JSON.parse(savedSett);
+        if (parsed.servicesOffered) {
+          const cleanedSvcs = parseServices(parsed.servicesOffered).filter((s) => Boolean(s) && s.trim() !== "[]");
+          parsed.servicesOffered = JSON.stringify(cleanedSvcs);
+          localStorage.setItem("dermai_clinic_settings", JSON.stringify(parsed));
+        }
+      }
+    } catch {}
+  }, []);
   const [customServiceInput, setCustomServiceInput] = useState("");
 
   // Helpdesk state
@@ -242,6 +282,7 @@ export default function ClinicSettingsPage() {
   const isSavingRef = useRef(false);
 
   const [scheduleSaveError, setScheduleSaveError] = useState<string | null>(null);
+  const [showAllConflicts, setShowAllConflicts] = useState(false);
   const [clinicDoctors, setClinicDoctors] = useState<any[]>(() => {
     try {
       const cached = localStorage.getItem("dermai_clinic_doctors");
@@ -276,6 +317,8 @@ export default function ClinicSettingsPage() {
   }, [settings.openTime, settings.closeTime]);
 
   const isCloseTimeInvalid = !operatingHoursValidation.isValid;
+  const hasScheduleConflicts = scheduleConflicts.length > 0;
+  const isSaveDisabled = isPending || isCloseTimeInvalid || hasScheduleConflicts;
 
   // Live-sync with clinic verification profile hook
   useEffect(() => {
@@ -618,7 +661,18 @@ export default function ClinicSettingsPage() {
       return;
     }
 
+    if (scheduleConflicts.length > 0) {
+      setScheduleSaveError(
+        `Cannot save schedule changes: ${scheduleConflicts.length} doctor shift${
+          scheduleConflicts.length > 1 ? "s are" : " is"
+        } outside clinic operating hours. Please resolve them in Doctor Shifts first.`
+      );
+      return;
+    }
+
     isSavingRef.current = true;
+
+    const cleanServicesToSave = selectedServices.filter((s) => Boolean(s) && s.trim() !== "[]");
 
     // 1. Prepare settings and update local state and localStorage for instant 0ms synchronization
     const settingsToSave: ClinicSettings = {
@@ -626,7 +680,7 @@ export default function ClinicSettingsPage() {
       status: isCurrentlyVerified ? "verified" : settings.status,
       id: targetClinicId || settings.id || undefined,
       consultationFee: settings.consultationFee || "",
-      servicesOffered: JSON.stringify(selectedServices),
+      servicesOffered: JSON.stringify(cleanServicesToSave),
       hours: `${settings.operatingDays || "Monday - Saturday"}: ${formatTime12h(settings.openTime || "08:00")} – ${formatTime12h(settings.closeTime || "17:00")}`,
       slotIntervalMinutes: settings.slotIntervalMinutes || 30,
       conflictingDoctorIds: Array.from(new Set(scheduleConflicts.map((c) => c.doctorId))),
@@ -742,9 +796,9 @@ export default function ClinicSettingsPage() {
           // Update services
           try {
             await supabase.from("clinic_service_offered").delete().eq("clinic_id", effectiveClinicId);
-            if (selectedServices.length > 0) {
+            if (cleanServicesToSave.length > 0) {
               await supabase.from("clinic_service_offered").insert(
-                selectedServices.map((s) => ({
+                cleanServicesToSave.map((s) => ({
                   clinic_id: effectiveClinicId,
                   service_name: s,
                 }))
@@ -786,15 +840,17 @@ export default function ClinicSettingsPage() {
   };
 
   const toggleService = (svc: string) => {
-    setSelectedServices((prev) =>
-      prev.includes(svc) ? prev.filter((s) => s !== svc) : [...prev, svc]
-    );
+    if (!svc || svc.trim() === "[]") return;
+    setSelectedServices((prev) => {
+      const cleaned = prev.filter((s) => Boolean(s) && s.trim() !== "[]");
+      return cleaned.includes(svc) ? cleaned.filter((s) => s !== svc) : [...cleaned, svc];
+    });
   };
 
   const addCustomService = () => {
     const trimmed = customServiceInput.trim();
-    if (trimmed && !selectedServices.includes(trimmed)) {
-      setSelectedServices((prev) => [...prev, trimmed]);
+    if (trimmed && trimmed !== "[]" && !selectedServices.includes(trimmed)) {
+      setSelectedServices((prev) => [...prev.filter((s) => Boolean(s) && s.trim() !== "[]"), trimmed]);
     }
     setCustomServiceInput("");
   };
@@ -1039,7 +1095,7 @@ export default function ClinicSettingsPage() {
         </div>
       </div>
 
-      {/* ── Row 2: Services & Conditions (Left) and Service Fee (Right) ── */}
+      {/* ── Row 2: Services & Conditions (Left) and Consultation Fee (Right) ── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
         {/* Left: Services & Conditions */}
         <div className="lg:col-span-7 bg-white border border-gray-200/80 rounded-2xl p-6 shadow-xs flex flex-col justify-between space-y-5">
@@ -1074,7 +1130,7 @@ export default function ClinicSettingsPage() {
 
               {/* Any custom selected services not in predefined list */}
               {selectedServices
-                .filter((s) => !SERVICES_OPTIONS.includes(s))
+                .filter((s) => Boolean(s) && s.trim() !== "[]" && !SERVICES_OPTIONS.includes(s))
                 .map((svc) => (
                   <span
                     key={svc}
@@ -1120,11 +1176,11 @@ export default function ClinicSettingsPage() {
           </div>
         </div>
 
-        {/* Right: Service Fee */}
+        {/* Right: Consultation Fee */}
         <div className="lg:col-span-5 bg-white border border-gray-200/80 rounded-2xl p-6 shadow-xs flex flex-col justify-between space-y-5">
           <div className="space-y-4">
             <div>
-              <h2 className="text-[17px] font-bold text-gray-900">Service fee</h2>
+              <h2 className="text-[17px] font-bold text-gray-900">Consultation fee</h2>
               <p className="text-[13px] text-gray-400 mt-0.5">
                 Shown to patients on the Find Clinics page.
               </p>
@@ -1150,7 +1206,7 @@ export default function ClinicSettingsPage() {
           </div>
 
           <p className="text-[13px] text-gray-500 pt-2">
-            Patients will see: <span className="font-bold text-gray-800">Service Fee: Starts at ₱{settings.consultationFee || "600"}</span>
+            Patients will see: <span className="font-bold text-gray-800">Consultation Fee: Starts at ₱{settings.consultationFee || "600"}</span>
           </p>
         </div>
       </div>
@@ -1291,102 +1347,108 @@ export default function ClinicSettingsPage() {
           )}
 
           {scheduleConflicts.length > 0 && (
-            <div className="mt-4 p-4 sm:p-5 rounded-2xl bg-amber-50/95 border border-amber-300/80 text-amber-900 shadow-xs space-y-3">
-              <div className="flex items-start gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-amber-100 flex items-center justify-center shrink-0 border border-amber-200 mt-0.5">
-                  <AlertCircle className="w-4 h-4 text-amber-700" />
+            <div className="mt-4 p-5 rounded-2xl bg-[#fdfaf3] border border-[#f5dfb8] shadow-xs space-y-3.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-[#fceabb] text-[#935b02] flex items-center justify-center font-bold text-sm shrink-0 mt-0.5">
+                    !
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-sm font-bold text-gray-900">
+                        {scheduleConflicts.length} doctor shift{scheduleConflicts.length > 1 ? "s are" : " is"} outside clinic hours
+                      </h3>
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[10px] border border-rose-200 shrink-0">
+                        <XCircle className="w-3 h-3 text-rose-600 shrink-0" />
+                        Saving locked until resolved
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-1">
+                      Clinic hours are now {formatTime12h(settings.openTime)} – {formatTime12h(settings.closeTime)}. You cannot save schedule changes until all conflicting doctor shifts are resolved in Doctor Shifts.
+                    </p>
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-bold text-amber-950">
-                    Schedule Conflict Warning ({scheduleConflicts.length} assigned shift{scheduleConflicts.length > 1 ? "s" : ""} affected)
-                  </h3>
-                  <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
-                    The updated clinic schedule ({formatTime12h(settings.openTime)} – {formatTime12h(settings.closeTime)}, {settings.operatingDays || "Operating days"}) conflicts with assigned doctor shifts. Conflicting shifts are excluded from patient booking availability until resolved in Doctor Shifts:
-                  </p>
-                </div>
+
+                <Link
+                  to="/clinic/doctors"
+                  className="inline-flex items-center justify-center px-4 py-2 rounded-xl bg-white hover:bg-amber-50/60 text-[#801336] border border-[#e8d09b] text-xs font-semibold shadow-2xs transition-colors shrink-0"
+                >
+                  Resolve in Doctor shifts
+                </Link>
               </div>
 
-              <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1.5 overscroll-contain">
-                {scheduleConflicts.map((c, i) => (
-                  <div
-                    key={`${c.doctorId}-${c.day}-${c.shiftId || i}`}
-                    className="text-xs bg-white rounded-xl p-3 sm:p-3.5 border border-amber-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2.5"
-                  >
-                    <div className="flex-1 min-w-0 space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-gray-900 text-xs sm:text-[13px]">
+              <div className="bg-white rounded-2xl border border-[#f5dfb8] divide-y divide-gray-100 overflow-hidden shadow-2xs">
+                {(showAllConflicts ? scheduleConflicts : scheduleConflicts.slice(0, 3)).map((c, i) => {
+                  const cleanLabel = c.shiftLabel
+                    ? c.shiftLabel.replace(/\s*Shift$/i, "").trim() || c.shiftLabel
+                    : "";
+
+                  return (
+                    <div
+                      key={`${c.doctorId}-${c.day}-${c.shiftId || i}`}
+                      className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap"
+                    >
+                      {/* Left: Doctor Name and Day Badge (No profile or photo, only name as requested) */}
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="font-bold text-xs sm:text-[13px] text-gray-900 truncate">
                           {c.doctorName.startsWith("Dr.") ? c.doctorName : `Dr. ${c.doctorName}`}
                         </span>
-                        <span className="text-gray-400">•</span>
-                        <span className="text-amber-900 font-semibold text-xs bg-amber-100/70 px-2 py-0.5 rounded-md">
+                        <span className="px-2.5 py-0.5 rounded-full bg-[#fef3c7] text-[#92400e] text-[11px] font-semibold shrink-0">
                           {c.day}
                         </span>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 text-xs pt-0.5">
-                        <p className="text-gray-700">
-                          <span className="text-gray-500 font-medium">Assigned Shift: </span>
-                          <strong className="text-amber-950 font-semibold">
-                            {formatTime12h(c.shiftStart)} – {formatTime12h(c.shiftEnd)}
-                          </strong>
-                          {c.shiftLabel && (
-                            <span className="text-gray-500 font-normal"> ({c.shiftLabel})</span>
-                          )}
-                        </p>
-                        <p className="text-gray-700">
-                          <span className="text-gray-500 font-medium">Clinic Hours: </span>
-                          <strong className="text-gray-900 font-semibold">
-                            {formatTime12h(settings.openTime)} – {formatTime12h(settings.closeTime)}
-                          </strong>
-                          <span className="text-gray-500"> ({settings.operatingDays || "Operating days"})</span>
-                        </p>
+                      {/* Right: Time Range & Shift Label */}
+                      <div className="shrink-0 text-right">
+                        <span className="text-xs text-gray-500 font-medium">
+                          {formatConflictTimeRange(c.shiftStart, c.shiftEnd)}
+                          {cleanLabel ? ` · ${cleanLabel}` : ""}
+                        </span>
                       </div>
-
-                      {c.message && (
-                        <p className="text-[11px] text-amber-800 font-medium pt-0.5 leading-relaxed">
-                          {c.message}
-                        </p>
-                      )}
                     </div>
-
-                    <div className="sm:self-start shrink-0">
-                      <span
-                        className={`inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border ${
-                          c.reason === "closed_day"
-                            ? "bg-rose-50 text-rose-700 border-rose-200"
-                            : c.reason === "outside_hours"
-                            ? "bg-amber-100 text-amber-800 border-amber-300"
-                            : "bg-orange-50 text-orange-800 border-orange-200"
-                        }`}
-                      >
-                        {c.reason === "closed_day"
-                          ? "Closed Day"
-                          : c.reason === "outside_hours"
-                          ? "Outside Hours"
-                          : "Invalid Shift"}
-                      </span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
+
+              {scheduleConflicts.length > 3 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllConflicts((prev) => !prev)}
+                  className="text-xs font-bold text-gray-700 hover:text-gray-900 hover:underline cursor-pointer pt-0.5 px-1 block"
+                >
+                  {showAllConflicts ? "Show less" : `Show ${scheduleConflicts.length - 3} more`}
+                </button>
+              )}
             </div>
           )}
         </div>
       </div>
 
       {/* ── Card 4: Save Settings Action Bar ── */}
-      <div className="bg-white border border-gray-200/80 rounded-2xl p-4 shadow-xs flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
+      <div className="bg-white border border-gray-200/80 rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-2 flex-wrap">
           <p className="text-[13px] text-gray-500">Saves your profile, services, fee and schedule.</p>
           {saved && <span className="text-[13px] text-emerald-600 font-semibold ml-2">✓ Settings saved successfully</span>}
+          {hasScheduleConflicts && (
+            <span className="text-xs text-rose-800 font-semibold flex items-center gap-1.5 bg-rose-50 border border-rose-200 px-3 py-1 rounded-xl">
+              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+              Resolve {scheduleConflicts.length} doctor shift conflict{scheduleConflicts.length > 1 ? "s" : ""} in Doctor Shifts before saving
+            </span>
+          )}
         </div>
 
         <button
           onClick={onSave}
-          disabled={isPending || isCloseTimeInvalid}
-          title={isCloseTimeInvalid ? "Please select a valid closing time before saving" : "Save settings"}
+          disabled={isSaveDisabled}
+          title={
+            hasScheduleConflicts
+              ? `Cannot save: ${scheduleConflicts.length} doctor shift conflict${scheduleConflicts.length > 1 ? "s" : ""} must be resolved in Doctor Shifts first`
+              : isCloseTimeInvalid
+              ? "Please select a valid closing time before saving"
+              : "Save settings"
+          }
           className={`px-6 py-2.5 rounded-xl text-white text-xs font-bold transition-all shadow-xs ${
-            isPending || isCloseTimeInvalid
+            isSaveDisabled
               ? "bg-gray-400 cursor-not-allowed opacity-60"
               : "bg-[#881337] hover:bg-[#70102d] cursor-pointer"
           }`}

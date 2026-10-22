@@ -201,7 +201,13 @@ export async function sendReceiptEmail(
     currency: "PHP",
   }).format(params.amount);
 
-  const planLabel = `${params.planName} (${formatBillingCycle(params.billingCycle)})`;
+  const isAppointment =
+    params.planName?.toLowerCase().includes("appointment") ||
+    params.planName?.toLowerCase().includes("consultation") ||
+    !params.billingCycle;
+
+  const cycleFormatted = params.billingCycle ? formatBillingCycle(params.billingCycle) : "";
+  const planLabel = cycleFormatted ? `${params.planName} (${cycleFormatted})` : params.planName;
   const plan = escapeHtml(planLabel);
   const method = escapeHtml(params.paymentMethod);
   const txId = escapeHtml(params.paymongoPaymentId);
@@ -211,9 +217,11 @@ export async function sendReceiptEmail(
     "DermAI Payment Receipt",
     "======================",
     "",
-    "Thank you for your payment! Your subscription is now active.",
+    isAppointment
+      ? "Thank you for your payment! Your consultation booking is now confirmed."
+      : "Thank you for your payment! Your subscription is now active.",
     "",
-    `Plan: ${planLabel}`,
+    `${isAppointment ? "Service" : "Plan"}: ${planLabel}`,
     `Total Paid: ${formattedTotal} (VAT inclusive)`,
     `Payment Method: ${params.paymentMethod}`,
     `Date: ${formattedDate}`,
@@ -249,13 +257,13 @@ export async function sendReceiptEmail(
             <td style="background:linear-gradient(135deg, #A21D5C 0%, #7E1448 100%);padding:36px 30px;text-align:center;">
               <p style="margin:0 0 6px 0;font-size:12px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#FCE7F3;">DermAI</p>
               <h1 style="margin:0;font-size:24px;font-weight:700;color:#ffffff;">Payment Confirmed</h1>
-              <p style="margin:8px 0 0 0;font-size:14px;color:#FCE7F3;">Official Subscription Receipt</p>
+              <p style="margin:8px 0 0 0;font-size:14px;color:#FCE7F3;">${isAppointment ? "Official Appointment Receipt" : "Official Subscription Receipt"}</p>
             </td>
           </tr>
           <tr>
             <td style="padding:32px 30px;">
               <p style="margin:0 0 24px 0;font-size:15px;color:#4B5563;">
-                We have successfully received your payment. Your <strong>${plan}</strong> subscription is now active.
+                We have successfully received your payment. ${isAppointment ? `Your <strong>${plan}</strong> booking is confirmed.` : `Your <strong>${plan}</strong> subscription is now active.`}
               </p>
               <div style="background-color:#FDF2F7;border:1px solid #F4C9DC;border-radius:12px;padding:20px;text-align:center;margin-bottom:28px;">
                 <p style="margin:0 0 4px 0;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#7E1448;">Total Amount Paid</p>
@@ -263,7 +271,7 @@ export async function sendReceiptEmail(
                 <p style="margin:4px 0 0 0;font-size:12px;color:#6B7280;">VAT Inclusive</p>
               </div>
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:28px;font-size:14px;border-collapse:collapse;">
-                ${row("Plan", plan)}
+                ${row(isAppointment ? "Booking / Service" : "Plan", plan)}
                 ${row("Payment Method", method)}
                 ${row("Date &amp; Time", escapeHtml(formattedDate))}
                 ${row("Transaction ID", txId, true)}

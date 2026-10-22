@@ -262,23 +262,45 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                   <p className="text-sm text-gray-600 leading-relaxed mt-0.5 break-words">{item.message}</p>
 
                   {/* Dynamic 24-Hour Re-selection Banner for Rejections */}
-                  {isRejected && (
-                    <div className="mt-3 p-3.5 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-800 space-y-3">
-                      <div className="flex items-start gap-2.5 leading-relaxed">
-                        <AlertCircle className="w-4 h-4 text-magenta-600 shrink-0 mt-0.5" />
-                        <span>
-                          <strong>24-hour window:</strong> You can select another available doctor within 24 hours. If no selection is made within 24 hours, the clinic will automatically assign an available doctor to your booking.
-                        </span>
+                  {isRejected && (() => {
+                    const notifApptId =
+                      item.metadata?.appointment_id ||
+                      (item.id.startsWith("appt-rejected-") ? item.id.replace("appt-rejected-", "") : "");
+                    const declinedTimestamp = item.metadata?.declined_at
+                      ? new Date(item.metadata.declined_at).getTime()
+                      : item.timestamp
+                      ? new Date(item.timestamp).getTime()
+                      : Date.now();
+                    const isWindowExpired =
+                      !isNaN(declinedTimestamp) && Date.now() - declinedTimestamp > 24 * 3600 * 1000;
+
+                    return isWindowExpired ? (
+                      <div className="mt-3 p-3.5 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-900 space-y-2">
+                        <div className="flex items-start gap-2.5 leading-relaxed">
+                          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <span>
+                            The 24-hour re-selection window has expired. The clinic will automatically assign an available doctor.
+                          </span>
+                        </div>
                       </div>
-                      <Link
-                        to="/dashboard/appointment-status"
-                        onClick={onClose}
-                        className="inline-flex items-center px-3.5 py-1.5 rounded-lg bg-magenta-600 text-white text-sm font-medium hover:bg-magenta-700 transition-colors"
-                      >
-                        Select alternate doctor
-                      </Link>
-                    </div>
-                  )}
+                    ) : (
+                      <div className="mt-3 p-3.5 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-800 space-y-3">
+                        <div className="flex items-start gap-2.5 leading-relaxed">
+                          <AlertCircle className="w-4 h-4 text-magenta-600 shrink-0 mt-0.5" />
+                          <span>
+                            <strong>24-hour window:</strong> You can select another available doctor within 24 hours. If no selection is made within 24 hours, the clinic will automatically assign an available doctor to your booking.
+                          </span>
+                        </div>
+                        <Link
+                          to={notifApptId ? `/patient/appointment-status?appointment_id=${notifApptId}&action=reassign` : "/patient/appointment-status"}
+                          onClick={onClose}
+                          className="inline-flex items-center px-3.5 py-1.5 rounded-lg bg-magenta-600 text-white text-sm font-medium hover:bg-magenta-700 transition-colors shadow-xs"
+                        >
+                          Select alternate doctor
+                        </Link>
+                      </div>
+                    );
+                  })()}
 
                   {/* Action Link for general notifications */}
                   {item.link && !isRejected && (
