@@ -44,14 +44,21 @@ const expoHost =
 
 // Candidate base URLs dynamically resolved
 const CANDIDATE_URLS = [
+  // Web browser development
   Platform.OS === 'web' ? 'http://localhost:8000' : null,
   Platform.OS === 'web' ? 'http://127.0.0.1:8000' : null,
+
+  // Environment variable override (e.g. from mobile/.env -> http://192.168.100.42:8000)
   process.env.EXPO_PUBLIC_AI_API_URL,
+
+  // Dynamic Expo host IP (resolves to developer PC on Wi-Fi)
   expoHost ? `http://${expoHost}:8000` : null,
+
+  // Direct PC LAN IP
   'http://192.168.100.42:8000',
+
+  // Android emulator loopback alias (10.0.2.2 maps to host PC)
   Platform.OS === 'android' ? 'http://10.0.2.2:8000' : null,
-  'http://127.0.0.1:8000',
-  'http://localhost:8000',
 ].filter(Boolean) as string[];
 
 // Remove duplicates while preserving priority order
@@ -167,7 +174,10 @@ export async function predictSkinCondition(
     }
   }
 
-  throw new Error(lastError?.message || 'AI service unavailable. Please check your network connection.');
+  const attempted = UNIQUE_CANDIDATE_URLS.join(', ');
+  throw new Error(
+    `Cannot connect to the AI Backend service (${attempted}). Please make sure the Python server is running on your computer at port 8000 and your phone is on the same Wi-Fi network.`
+  );
 }
 
 // ============================================

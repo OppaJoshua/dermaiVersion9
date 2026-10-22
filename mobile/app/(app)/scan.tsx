@@ -288,9 +288,20 @@ export default function ScanScreen() {
       ]);
       aiResult = prediction;
     } catch (err: any) {
-      const userMessage = err instanceof AIPredictionError
+      let userMessage = err instanceof AIPredictionError
         ? err.message
         : (err?.message || "We couldn't connect to the AI skin analysis service. Please check your network and try again.");
+
+      if (
+        userMessage.includes('CLEARTEXT') ||
+        userMessage.includes('UnknownServiceException') ||
+        userMessage.includes('Network request failed') ||
+        userMessage.includes('failed to connect') ||
+        userMessage.includes('Connection refused')
+      ) {
+        userMessage = "Cannot connect to the AI Backend. Please ensure the Python server is running on port 8000 and your phone is on the same Wi-Fi network (192.168.100.42).";
+      }
+
       setAnalysisError(userMessage);
       setStep('upload');
       if (Platform.OS === 'web') {
