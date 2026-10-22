@@ -633,9 +633,10 @@ export default function ScanScreen() {
                   <TouchableOpacity
                     style={styles.reviewBackBtn}
                     onPress={goPrevQuestion}
+                    activeOpacity={0.7}
                   >
                     <Ionicons name="arrow-back" size={16} color={COLORS.text} />
-                    <Text style={styles.reviewBackBtnTxt}>Back to Q15</Text>
+                    <Text style={styles.reviewBackBtnTxt}>Back</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -644,8 +645,9 @@ export default function ScanScreen() {
                       setIsReviewing(false);
                       setStep('upload');
                     }}
+                    activeOpacity={0.85}
                   >
-                    <Text style={styles.reviewProceedBtnTxt}>Proceed to Photos</Text>
+                    <Text style={styles.reviewProceedBtnTxt} numberOfLines={1}>Proceed to Photos</Text>
                     <Ionicons name="arrow-forward" size={16} color="#fff" />
                   </TouchableOpacity>
                 </View>
@@ -805,7 +807,7 @@ export default function ScanScreen() {
                   disabled={!hasAnsweredCurrent}
                   onPress={goNextQuestion}
                 >
-                  <Text style={styles.qNavNextTxt}>
+                  <Text style={styles.qNavNextTxt} numberOfLines={1}>
                     {qIndex < QUESTIONNAIRE_QUESTIONS.length - 1
                       ? 'Next Question'
                       : 'Review All 15 Answers'}
@@ -860,14 +862,19 @@ export default function ScanScreen() {
               {/* Photo 1: Close-up */}
               <View style={styles.uploadSlotContainer}>
                 <View style={styles.slotHeaderRow}>
-                  <Text style={styles.uploadSlotTitle}>1. Close-up View (Malapitang Kuha)</Text>
+                  <View style={styles.slotTitleCol}>
+                    <Text style={styles.uploadSlotTitle}>1. Close-up View</Text>
+                    <Text style={styles.uploadSlotSubtitle}>Malapitang Kuha · Skin Lesion</Text>
+                  </View>
                   {imageUri ? (
                     <View style={styles.slotReadyBadge}>
-                      <Ionicons name="checkmark-circle" size={12} color="#059669" />
+                      <Ionicons name="checkmark-circle" size={13} color="#059669" />
                       <Text style={styles.slotReadyBadgeTxt}>Ready</Text>
                     </View>
                   ) : (
-                    <Text style={styles.slotRequiredTxt}>Required</Text>
+                    <View style={styles.slotRequiredBadge}>
+                      <Text style={styles.slotRequiredTxt}>Required</Text>
+                    </View>
                   )}
                 </View>
 
@@ -920,14 +927,19 @@ export default function ScanScreen() {
               {/* Photo 2: Wide-view */}
               <View style={styles.uploadSlotContainer}>
                 <View style={styles.slotHeaderRow}>
-                  <Text style={styles.uploadSlotTitle}>2. Wide-view / Context (Malawakang Kuha)</Text>
+                  <View style={styles.slotTitleCol}>
+                    <Text style={styles.uploadSlotTitle}>2. Wide-view / Context</Text>
+                    <Text style={styles.uploadSlotSubtitle}>Malawakang Kuha · Surrounding Area</Text>
+                  </View>
                   {referenceImageUri ? (
                     <View style={styles.slotReadyBadge}>
-                      <Ionicons name="checkmark-circle" size={12} color="#059669" />
+                      <Ionicons name="checkmark-circle" size={13} color="#059669" />
                       <Text style={styles.slotReadyBadgeTxt}>Ready</Text>
                     </View>
                   ) : (
-                    <Text style={styles.slotRequiredTxt}>Required</Text>
+                    <View style={styles.slotRequiredBadge}>
+                      <Text style={styles.slotRequiredTxt}>Required</Text>
+                    </View>
                   )}
                 </View>
 
@@ -1607,7 +1619,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 6,
+    paddingHorizontal: 12,
     paddingVertical: 14,
     borderRadius: 16,
     backgroundColor: COLORS.primary,
@@ -1616,6 +1629,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 8,
     elevation: 3,
+    minWidth: 0,
   },
   qNavNextBtnDisabled: {
     backgroundColor: '#cbd5e1',
@@ -1623,9 +1637,10 @@ const styles = StyleSheet.create({
     elevation: 0,
   },
   qNavNextTxt: {
-    fontSize: 14,
+    fontSize: 13.5,
     fontWeight: '700',
     color: '#fff',
+    flexShrink: 1,
   },
 
   // ── Review Screen Styles ──
@@ -1777,20 +1792,23 @@ const styles = StyleSheet.create({
 
   reviewBtnRow: {
     flexDirection: 'row',
-    gap: 10,
+    alignItems: 'center',
+    gap: 8,
     marginTop: 6,
+    width: '100%',
   },
   reviewBackBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 16,
+    gap: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderRadius: 14,
     borderWidth: 1.5,
     borderColor: '#e2e8f0',
     backgroundColor: '#fff',
+    flexShrink: 0,
   },
   reviewBackBtnTxt: {
     fontSize: 13,
@@ -1802,20 +1820,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: 16,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 13,
+    borderRadius: 14,
     backgroundColor: COLORS.primary,
     shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.22,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
     elevation: 3,
+    minWidth: 0,
   },
   reviewProceedBtnTxt: {
-    fontSize: 14,
+    fontSize: 13.5,
     fontWeight: '700',
     color: '#fff',
+    flexShrink: 1,
   },
 
   // ── Upload & Photo Selection ──
@@ -1828,17 +1849,29 @@ const styles = StyleSheet.create({
   uploadSlotContainer: {
     marginBottom: 14,
   },
-  uploadSlotTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 8,
-  },
   slotHeaderRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     marginBottom: 8,
+    gap: 8,
+  },
+  slotTitleCol: {
+    flex: 1,
+    paddingRight: 6,
+  },
+  uploadSlotTitle: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: COLORS.text,
+    lineHeight: 18,
+  },
+  uploadSlotSubtitle: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '500',
+    marginTop: 2,
+    lineHeight: 15,
   },
   slotReadyBadge: {
     flexDirection: 'row',
@@ -1846,15 +1879,27 @@ const styles = StyleSheet.create({
     gap: 4,
     backgroundColor: '#ecfdf5',
     paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingVertical: 3,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#a7f3d0',
+    flexShrink: 0,
+    marginTop: 1,
   },
   slotReadyBadgeTxt: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
     color: '#059669',
+  },
+  slotRequiredBadge: {
+    backgroundColor: '#fdf2f8',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fce7f3',
+    flexShrink: 0,
+    marginTop: 1,
   },
   slotRequiredTxt: {
     fontSize: 11,

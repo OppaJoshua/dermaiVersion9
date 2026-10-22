@@ -1156,7 +1156,9 @@ export function BookingModal({
                   onPress={handleContinueToStep2}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.continueBtnTxt}>Continue to Step 2: Choose Schedule &amp; Doctor</Text>
+                  <Text style={styles.continueBtnTxt} numberOfLines={1}>
+                    Continue to Schedule &amp; Doctor
+                  </Text>
                   <Ionicons name="arrow-forward" size={16} color="#fff" />
                 </TouchableOpacity>
               </View>
@@ -1954,13 +1956,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 8,
     backgroundColor: COLORS.primary,
     paddingVertical: 14,
-    borderRadius: 12,
-    marginTop: 8,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    marginTop: 12,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.22,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  continueBtnTxt: { fontSize: 13, fontWeight: '800', color: '#fff' },
+  continueBtnTxt: { fontSize: 13.5, fontWeight: '800', color: '#fff', letterSpacing: 0.1 },
 
   doctorChipGrid: { gap: 8, marginBottom: 12 },
   doctorChip: {
