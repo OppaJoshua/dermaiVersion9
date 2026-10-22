@@ -231,20 +231,41 @@ export default function ClinicsScreen() {
 
   function selectClinicOnMap(clinic: ClinicRecord) {
     setSelectedMapClinicId(clinic.id);
+    if (clinic.lat && clinic.lng) {
+      setMapCenter({ lat: clinic.lat, lng: clinic.lng });
+      currentPanRef.current = { x: 0, y: 0 };
+      setPanOffset({ x: 0, y: 0 });
+    }
   }
 
   function nextMapClinic() {
     if (clinics.length <= 1) return;
     const currentIndex = clinics.findIndex((c) => c.id === activeMapClinic?.id);
     const nextIndex = (currentIndex + 1) % clinics.length;
-    setSelectedMapClinicId(clinics[nextIndex].id);
+    const target = clinics[nextIndex];
+    if (target) {
+      setSelectedMapClinicId(target.id);
+      if (target.lat && target.lng) {
+        setMapCenter({ lat: target.lat, lng: target.lng });
+        currentPanRef.current = { x: 0, y: 0 };
+        setPanOffset({ x: 0, y: 0 });
+      }
+    }
   }
 
   function prevMapClinic() {
     if (clinics.length <= 1) return;
     const currentIndex = clinics.findIndex((c) => c.id === activeMapClinic?.id);
     const prevIndex = (currentIndex - 1 + clinics.length) % clinics.length;
-    setSelectedMapClinicId(clinics[prevIndex].id);
+    const target = clinics[prevIndex];
+    if (target) {
+      setSelectedMapClinicId(target.id);
+      if (target.lat && target.lng) {
+        setMapCenter({ lat: target.lat, lng: target.lng });
+        currentPanRef.current = { x: 0, y: 0 };
+        setPanOffset({ x: 0, y: 0 });
+      }
+    }
   }
 
   // Calculate Map Tiles
