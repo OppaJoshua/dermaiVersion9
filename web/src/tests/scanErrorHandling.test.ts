@@ -91,11 +91,11 @@ assert(safeLowConf === lowConfMsg, "Safe low confidence message should pass thro
 const safeSkin = sanitizeError(400, {
   detail: {
     success: false,
-    error: "This image does not appear to be a suitable human-skin photo. Please upload a clear close-up of the affected human skin area.",
+    error: "Invalid Image Uploaded. Please upload a clear, close-up photo of the specific skin area you are concerned about. Documents, full-body shots, or non-skin images cannot be processed.",
     error_type: "not_human_skin",
   },
 });
-assert(safeSkin.includes("suitable human-skin photo"), "Safe skin message should pass through");
+assert(safeSkin.includes("Invalid Image Uploaded"), "Safe skin message should pass through");
 
 // 4c: Safe blur check
 const safeBlur = sanitizeError(400, {

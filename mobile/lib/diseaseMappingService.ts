@@ -535,16 +535,16 @@ export function evaluateSafetyWarnings(ans: Record<string, string[]>): SafetyAle
   if (q14.includes("q14_emergency_breathing")) {
     return {
       level: "emergency",
-      title: "Immediate Emergency Medical Attention Required",
+      title: "Seek Emergency Medical Care Immediately",
       message:
-        "Facial or lip swelling accompanied by difficulty breathing may indicate an acute, life-threatening allergic reaction (anaphylaxis) or severe angioedema.",
+        "Facial or lip swelling accompanied by difficulty breathing may indicate a severe allergic reaction (anaphylaxis).",
       actionRequired:
-        "Call local emergency services (911 / emergency hotline) or proceed immediately to the nearest hospital emergency department.",
+        "Call your local emergency hotline (e.g., 911) or proceed immediately to the nearest hospital emergency department.",
     };
   }
 
   const urgentFlags: string[] = [];
-  if (q14.includes("q14_rapid_worsening")) urgentFlags.push("rapidly worsening redness/swelling/warmth/pain");
+  if (q14.includes("q14_rapid_worsening")) urgentFlags.push("rapidly worsening redness, swelling, warmth, or pain");
   if (q14.includes("q14_pus_infection")) urgentFlags.push("pus or signs of secondary infection");
   if (q14.includes("q14_rapid_change")) urgentFlags.push("rapidly changing skin patch or lesion");
   if (q14.includes("q14_eye_vision")) urgentFlags.push("eye redness or vision changes");
@@ -552,10 +552,10 @@ export function evaluateSafetyWarnings(ans: Record<string, string[]>): SafetyAle
   if (urgentFlags.length > 0) {
     return {
       level: "urgent",
-      title: "Prompt Medical Evaluation Recommended",
-      message: `You reported warning signs that warrant professional clinical evaluation: ${urgentFlags.join(", ")}.`,
+      title: "Healthcare Provider Consultation Advised",
+      message: `Your responses indicate symptoms that may require a professional clinical evaluation (such as ${urgentFlags.join(", ")}).`,
       actionRequired:
-        "Schedule an urgent in-person consultation with a dermatologist or general practitioner within 24–48 hours.",
+        "We recommend scheduling an in-person consultation with a healthcare provider within 24–48 hours.",
     };
   }
 
