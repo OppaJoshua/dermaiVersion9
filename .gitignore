@@ -5,6 +5,8 @@ node_modules/
 *.local
 .env
 .env.*
+!.env.example
+!ai-backend/.env.example
 
 # Build files
 dist/
@@ -31,3 +33,8 @@ ai-backend/models/
 
 # Scratch and debug files
 scratch/
+
+# Offline calibration binary data & experiment caches
+ai-backend/calibration/*.npy
+ai-backend/experiments/
+

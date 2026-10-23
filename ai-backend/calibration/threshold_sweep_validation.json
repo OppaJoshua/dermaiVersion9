@@ -1,0 +1,350 @@
+{
+  "calibration_set": "validation",
+  "n": 260,
+  "temperature": 1.492,
+  "constraint": "maximize selective_acc subject to coverage >= 0.80",
+  "calibrated": [
+    {
+      "threshold": 0.5,
+      "coverage": 0.95,
+      "accepted": 247,
+      "rejected": 13,
+      "selective_acc": 0.8583,
+      "incorrect_accepted": 35,
+      "false_accept_rate": 0.1417,
+      "false_reject_rate": 0.032,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.077,
+        "Atopic_Dermatitis": 0.096,
+        "Contact_Dermatitis": 0.058,
+        "Melasma": 0.019,
+        "Vitiligo": 0.0
+      }
+    },
+    {
+      "threshold": 0.55,
+      "coverage": 0.9038,
+      "accepted": 235,
+      "rejected": 25,
+      "selective_acc": 0.8681,
+      "incorrect_accepted": 31,
+      "false_accept_rate": 0.1319,
+      "false_reject_rate": 0.0685,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.096,
+        "Atopic_Dermatitis": 0.154,
+        "Contact_Dermatitis": 0.115,
+        "Melasma": 0.096,
+        "Vitiligo": 0.019
+      }
+    },
+    {
+      "threshold": 0.6,
+      "coverage": 0.8808,
+      "accepted": 229,
+      "rejected": 31,
+      "selective_acc": 0.8821,
+      "incorrect_accepted": 27,
+      "false_accept_rate": 0.1179,
+      "false_reject_rate": 0.0776,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.096,
+        "Atopic_Dermatitis": 0.212,
+        "Contact_Dermatitis": 0.173,
+        "Melasma": 0.096,
+        "Vitiligo": 0.019
+      }
+    },
+    {
+      "threshold": 0.65,
+      "coverage": 0.8462,
+      "accepted": 220,
+      "rejected": 40,
+      "selective_acc": 0.8864,
+      "incorrect_accepted": 25,
+      "false_accept_rate": 0.1136,
+      "false_reject_rate": 0.1096,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.115,
+        "Atopic_Dermatitis": 0.288,
+        "Contact_Dermatitis": 0.231,
+        "Melasma": 0.115,
+        "Vitiligo": 0.019
+      }
+    },
+    {
+      "threshold": 0.7,
+      "coverage": 0.7923,
+      "accepted": 206,
+      "rejected": 54,
+      "selective_acc": 0.8932,
+      "incorrect_accepted": 22,
+      "false_accept_rate": 0.1068,
+      "false_reject_rate": 0.1598,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.135,
+        "Atopic_Dermatitis": 0.327,
+        "Contact_Dermatitis": 0.404,
+        "Melasma": 0.115,
+        "Vitiligo": 0.058
+      }
+    },
+    {
+      "threshold": 0.75,
+      "coverage": 0.7269,
+      "accepted": 189,
+      "rejected": 71,
+      "selective_acc": 0.9101,
+      "incorrect_accepted": 17,
+      "false_accept_rate": 0.0899,
+      "false_reject_rate": 0.2146,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.173,
+        "Atopic_Dermatitis": 0.481,
+        "Contact_Dermatitis": 0.462,
+        "Melasma": 0.173,
+        "Vitiligo": 0.077
+      }
+    },
+    {
+      "threshold": 0.8,
+      "coverage": 0.6846,
+      "accepted": 178,
+      "rejected": 82,
+      "selective_acc": 0.9326,
+      "incorrect_accepted": 12,
+      "false_accept_rate": 0.0674,
+      "false_reject_rate": 0.242,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.173,
+        "Atopic_Dermatitis": 0.538,
+        "Contact_Dermatitis": 0.596,
+        "Melasma": 0.173,
+        "Vitiligo": 0.096
+      }
+    },
+    {
+      "threshold": 0.85,
+      "coverage": 0.6231,
+      "accepted": 162,
+      "rejected": 98,
+      "selective_acc": 0.9444,
+      "incorrect_accepted": 9,
+      "false_accept_rate": 0.0556,
+      "false_reject_rate": 0.3014,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.25,
+        "Atopic_Dermatitis": 0.654,
+        "Contact_Dermatitis": 0.654,
+        "Melasma": 0.173,
+        "Vitiligo": 0.154
+      }
+    },
+    {
+      "threshold": 0.9,
+      "coverage": 0.5615,
+      "accepted": 146,
+      "rejected": 114,
+      "selective_acc": 0.9452,
+      "incorrect_accepted": 8,
+      "false_accept_rate": 0.0548,
+      "false_reject_rate": 0.3699,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.25,
+        "Atopic_Dermatitis": 0.712,
+        "Contact_Dermatitis": 0.731,
+        "Melasma": 0.288,
+        "Vitiligo": 0.212
+      }
+    },
+    {
+      "threshold": 0.95,
+      "coverage": 0.4462,
+      "accepted": 116,
+      "rejected": 144,
+      "selective_acc": 0.9569,
+      "incorrect_accepted": 5,
+      "false_accept_rate": 0.0431,
+      "false_reject_rate": 0.4932,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.385,
+        "Atopic_Dermatitis": 0.808,
+        "Contact_Dermatitis": 0.885,
+        "Melasma": 0.404,
+        "Vitiligo": 0.288
+      }
+    }
+  ],
+  "raw": [
+    {
+      "threshold": 0.5,
+      "coverage": 0.9692,
+      "accepted": 252,
+      "rejected": 8,
+      "selective_acc": 0.8532,
+      "incorrect_accepted": 37,
+      "false_accept_rate": 0.1468,
+      "false_reject_rate": 0.0183,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.038,
+        "Atopic_Dermatitis": 0.038,
+        "Contact_Dermatitis": 0.058,
+        "Melasma": 0.019,
+        "Vitiligo": 0.0
+      }
+    },
+    {
+      "threshold": 0.55,
+      "coverage": 0.9538,
+      "accepted": 248,
+      "rejected": 12,
+      "selective_acc": 0.8548,
+      "incorrect_accepted": 36,
+      "false_accept_rate": 0.1452,
+      "false_reject_rate": 0.032,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.058,
+        "Atopic_Dermatitis": 0.077,
+        "Contact_Dermatitis": 0.058,
+        "Melasma": 0.038,
+        "Vitiligo": 0.0
+      }
+    },
+    {
+      "threshold": 0.6,
+      "coverage": 0.9269,
+      "accepted": 241,
+      "rejected": 19,
+      "selective_acc": 0.8631,
+      "incorrect_accepted": 33,
+      "false_accept_rate": 0.1369,
+      "false_reject_rate": 0.0502,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.077,
+        "Atopic_Dermatitis": 0.135,
+        "Contact_Dermatitis": 0.115,
+        "Melasma": 0.038,
+        "Vitiligo": 0.0
+      }
+    },
+    {
+      "threshold": 0.65,
+      "coverage": 0.9231,
+      "accepted": 240,
+      "rejected": 20,
+      "selective_acc": 0.8625,
+      "incorrect_accepted": 33,
+      "false_accept_rate": 0.1375,
+      "false_reject_rate": 0.0548,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.077,
+        "Atopic_Dermatitis": 0.135,
+        "Contact_Dermatitis": 0.115,
+        "Melasma": 0.038,
+        "Vitiligo": 0.019
+      }
+    },
+    {
+      "threshold": 0.7,
+      "coverage": 0.8808,
+      "accepted": 229,
+      "rejected": 31,
+      "selective_acc": 0.8734,
+      "incorrect_accepted": 29,
+      "false_accept_rate": 0.1266,
+      "false_reject_rate": 0.0868,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.096,
+        "Atopic_Dermatitis": 0.192,
+        "Contact_Dermatitis": 0.212,
+        "Melasma": 0.077,
+        "Vitiligo": 0.019
+      }
+    },
+    {
+      "threshold": 0.75,
+      "coverage": 0.8538,
+      "accepted": 222,
+      "rejected": 38,
+      "selective_acc": 0.8829,
+      "incorrect_accepted": 26,
+      "false_accept_rate": 0.1171,
+      "false_reject_rate": 0.105,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.115,
+        "Atopic_Dermatitis": 0.231,
+        "Contact_Dermatitis": 0.25,
+        "Melasma": 0.115,
+        "Vitiligo": 0.019
+      }
+    },
+    {
+      "threshold": 0.8,
+      "coverage": 0.8269,
+      "accepted": 215,
+      "rejected": 45,
+      "selective_acc": 0.8977,
+      "incorrect_accepted": 22,
+      "false_accept_rate": 0.1023,
+      "false_reject_rate": 0.1187,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.115,
+        "Atopic_Dermatitis": 0.288,
+        "Contact_Dermatitis": 0.308,
+        "Melasma": 0.115,
+        "Vitiligo": 0.038
+      }
+    },
+    {
+      "threshold": 0.85,
+      "coverage": 0.7577,
+      "accepted": 197,
+      "rejected": 63,
+      "selective_acc": 0.9086,
+      "incorrect_accepted": 18,
+      "false_accept_rate": 0.0914,
+      "false_reject_rate": 0.1826,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.135,
+        "Atopic_Dermatitis": 0.423,
+        "Contact_Dermatitis": 0.442,
+        "Melasma": 0.154,
+        "Vitiligo": 0.058
+      }
+    },
+    {
+      "threshold": 0.9,
+      "coverage": 0.7038,
+      "accepted": 183,
+      "rejected": 77,
+      "selective_acc": 0.929,
+      "incorrect_accepted": 13,
+      "false_accept_rate": 0.071,
+      "false_reject_rate": 0.2237,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.154,
+        "Atopic_Dermatitis": 0.519,
+        "Contact_Dermatitis": 0.538,
+        "Melasma": 0.173,
+        "Vitiligo": 0.096
+      }
+    },
+    {
+      "threshold": 0.95,
+      "coverage": 0.6231,
+      "accepted": 162,
+      "rejected": 98,
+      "selective_acc": 0.9444,
+      "incorrect_accepted": 9,
+      "false_accept_rate": 0.0556,
+      "false_reject_rate": 0.3014,
+      "per_class_rejection": {
+        "Acne_Vulgaris": 0.212,
+        "Atopic_Dermatitis": 0.692,
+        "Contact_Dermatitis": 0.654,
+        "Melasma": 0.192,
+        "Vitiligo": 0.135
+      }
+    }
+  ]
+}

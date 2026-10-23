@@ -485,8 +485,8 @@ export default function ScanSkinPage() {
             action: "AI Skin Scan Completed",
 target: `${conditionLabel} (${effectiveConfidence}%)`,
             details: `Patient completed AI skin analysis: identified ${conditionLabel} with ${effectiveConfidence}% confidence (Close-up: ${aiResult.confidence}%${aiResult.is_combined
-                ? `, Combined 70/30: ${effectiveConfidence}%`
-                : ""
+              ? `, Combined 70/30: ${effectiveConfidence}%`
+              : ""
               }).`,
             performerName:
               user.user_metadata?.full_name ||
@@ -1387,7 +1387,7 @@ target: `${conditionLabel} (${effectiveConfidence}%)`,
                           {scanResult.comparison.agreementStatus === "aligned"
                             ? "Your photos and answers match."
                             : scanResult.comparison.agreementStatus === "differing"
-                              ? "Assessment Discrepancy Noted"
+                              ? "We noticed a mismatch in your results"
                               : "Assessment Context"}
                         </p>
                         <p>{scanResult.comparison.summary}</p>

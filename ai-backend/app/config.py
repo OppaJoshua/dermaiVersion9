@@ -116,7 +116,29 @@ SKIN_VALIDATOR_PATH = BASE_DIR / "models" / "skin_validator_final.h5"
 # 0.5 is the natural midpoint of the sigmoid output.
 SKIN_VALIDATOR_THRESHOLD = float(os.getenv("SKIN_VALIDATOR_THRESHOLD", "0.5"))
 
-# Fallback classifier confidence threshold (secondary check, kept as safety net)
-CLASSIFIER_CONFIDENCE_FALLBACK = float(
-    os.getenv("CLASSIFIER_CONFIDENCE_FALLBACK", "65.0")
-)
+# ============================================
+# CALIBRATION & CONFIDENCE FALLBACK
+# ============================================
+
+# Post-hoc temperature scaling configuration (Platt scaling / Guo et al., 2017)
+# Fitted strictly on validation data NLL (T=1.492)
+CALIBRATION_ENABLED: bool = (
+    os.getenv("CALIBRATION_ENABLED", "true").lower() == "true"
+)
+
+try:
+    CALIBRATION_TEMPERATURE: float = float(
+        os.getenv("CALIBRATION_TEMPERATURE", "1.492")
+    )
+    if CALIBRATION_TEMPERATURE <= 0:
+        raise ValueError("CALIBRATION_TEMPERATURE must be strictly positive (> 0)")
+except (ValueError, TypeError) as e:
+    # Safe fallback if environment contains invalid or non-positive temperature
+    CALIBRATION_TEMPERATURE = 1.492
+
+# Fallback classifier confidence threshold (calibrated confidence gate)
+# Evaluated on primary close-up image. Predictions < 60.0% are rejected.
+CLASSIFIER_CONFIDENCE_FALLBACK: float = float(
+    os.getenv("CLASSIFIER_CONFIDENCE_FALLBACK", "60.0")
+)
+
