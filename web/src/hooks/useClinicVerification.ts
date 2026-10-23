@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { useAuth } from "@/context/AuthContext";
 
 export type ClinicVerificationStatus = "pending" | "verified" | "rejected";
 
@@ -128,6 +129,9 @@ function saveCachedProfile(profile: Omit<ClinicProfile, "loading">) {
 }
 
 export function useClinicVerification(): ClinicProfile {
+  const { user } = useAuth();
+  const activeUserRef = useRef(user?.id);
+  activeUserRef.current = user?.id;
   const [profile, setProfile] = useState<ClinicProfile>(() => {
     const cached = getCachedProfile();
     if (cached) {
@@ -137,204 +141,204 @@ export function useClinicVerification(): ClinicProfile {
     return inMemoryProfile;
   });
 
-  const loadInProgressRef = useRef(false);
+  const loadVersionRef = useRef(0);
 
   const load = useCallback(async () => {
-    if (loadInProgressRef.current) return;
-    loadInProgressRef.current = true;
+    const version = ++loadVersionRef.current;
 
-    try {
-      // 1. Resolve session with auto-refresh fallback
-      let session = (await supabase.auth.getSession()).data.session;
-      if (!session) {
-        // Attempt getUser which triggers a token refresh if token expired
-        const { data: userData } = await supabase.auth.getUser();
-        if (userData?.user) {
-          session = (await supabase.auth.getSession()).data.session;
-        }
+    // 1. Resolve session with auto-refresh fallback
+    let session = (await supabase.auth.getSession()).data.session;
+    if (!session) {
+      // Attempt getUser which triggers a token refresh if token expired
+      const { data: userData } = await supabase.auth.getUser();
+      if (userData?.user) {
+        session = (await supabase.auth.getSession()).data.session;
       }
-
-      const userId = session?.user?.id;
-      const userEmail = session?.user?.email?.toLowerCase().trim();
-
-      // If session is temporarily null or loading:
-      if (!userId) {
-        // Anti-downgrade safeguard: DO NOT remove CACHE_KEY on transient session delay!
-        const cached = getCachedProfile();
-        if (cached && cached.status === "verified") {
-          notifyListeners({ ...cached, loading: false });
-        } else {
-          notifyListeners({
-            status: "pending",
-            clinicName: "Clinic Portal",
-            clinicLogo: "",
-            clinicId: null,
-            loading: false,
-          });
-        }
-        return;
-      }
-
-      const cached = getCachedProfile();
-      const knownClinicId = cached?.clinicId || inMemoryProfile.clinicId;
-
-      let clinicData: any = null;
-
-      // Strategy A: By clinic_id directly if known
-      if (knownClinicId) {
-        try {
-          const { data: byId, error: errId } = await supabase
-            .from("clinic")
-            .select("clinic_id, name, status, verified, logo_url, owner_user_id, email")
-            .eq("clinic_id", knownClinicId)
-            .maybeSingle();
-
-          if (byId && !errId) {
-            clinicData = byId;
-          }
-        } catch {
-          /* ignore */
-        }
-      }
-
-      // Strategy B: By owner_user_id
-      if (!clinicData) {
-        try {
-          const { data: byOwner, error: errOwner } = await supabase
-            .from("clinic")
-            .select("clinic_id, name, status, verified, logo_url, owner_user_id, email")
-            .eq("owner_user_id", userId)
-            .maybeSingle();
-
-          if (byOwner && !errOwner) {
-            clinicData = byOwner;
-          }
-        } catch {
-          /* ignore */
-        }
-      }
-
-      // Strategy C: By clinic email
-      if (!clinicData && userEmail) {
-        try {
-          const { data: byEmail, error: errEmail } = await supabase
-            .from("clinic")
-            .select("clinic_id, name, status, verified, logo_url, owner_user_id, email")
-            .ilike("email", userEmail)
-            .maybeSingle();
-
-          if (byEmail && !errEmail) {
-            clinicData = byEmail;
-          }
-        } catch {
-          /* ignore */
-        }
-      }
-
-      // Handle successful DB retrieval
-      if (clinicData) {
-        // Auto-link owner_user_id if missing
-        if (!clinicData.owner_user_id && userId) {
-          try {
-            await supabase
-              .from("clinic")
-              .update({ owner_user_id: userId, verified: true })
-              .eq("clinic_id", clinicData.clinic_id);
-          } catch {}
-        }
-
-        // Auto-ensure verified = true in DB if status is approved
-        if ((clinicData.status === "approved" || clinicData.status === "verified") && !clinicData.verified) {
-          try {
-            await supabase
-              .from("clinic")
-              .update({ verified: true })
-              .eq("clinic_id", clinicData.clinic_id);
-          } catch {}
-        }
-
-        const isVerified =
-          clinicData.verified === true ||
-          clinicData.status === "approved" ||
-          clinicData.status === "verified";
-
-        const mappedStatus: ClinicVerificationStatus = isVerified
-          ? "verified"
-          : clinicData.status === "rejected" || clinicData.status === "suspended"
-          ? "rejected"
-          : "pending";
-
-        let logoUrl = clinicData.logo_url || "";
-        if (!logoUrl) {
-          try {
-            const { data: photos } = await supabase
-              .from("clinic_photo")
-              .select("photo_url")
-              .eq("clinic_id", clinicData.clinic_id)
-              .order("sort_order")
-              .limit(1);
-            if (photos?.[0]?.photo_url) {
-              logoUrl = photos[0].photo_url;
-            }
-          } catch {}
-        }
-
-        const nextProfile = {
-          status: mappedStatus,
-          clinicName: clinicData.name || "Clinic Portal",
-          clinicLogo: logoUrl,
-          clinicId: clinicData.clinic_id,
-        };
-
-        saveCachedProfile(nextProfile);
-        return;
-      }
-
-      // CRITICAL ANTI-DOWNGRADE PROTECTION:
-      // If DB query had an error or was inconclusive, but we were already verified:
-      // NEVER downgrade to pending! Preserve the verified state.
-      if (cached?.status === "verified" || inMemoryProfile.status === "verified") {
-        console.warn("[useClinicVerification] Query inconclusive, preserving existing verified status.");
-        const preserved = {
-          status: "verified" as ClinicVerificationStatus,
-          clinicName: cached?.clinicName || inMemoryProfile.clinicName || "Clinic Portal",
-          clinicLogo: cached?.clinicLogo || inMemoryProfile.clinicLogo || "",
-          clinicId: cached?.clinicId || inMemoryProfile.clinicId || null,
-        };
-        saveCachedProfile(preserved);
-        return;
-      }
-
-      // Check local storage application snapshot if genuinely never verified
-      try {
-        const stored = localStorage.getItem("dermai_clinic_applications");
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          const matchedLocal = parsed.find((a: any) => a.email?.toLowerCase().trim() === userEmail);
-          if (matchedLocal) {
-            const nextProfile = {
-              status: (matchedLocal.status === "verified" ? "verified" : "pending") as ClinicVerificationStatus,
-              clinicName: matchedLocal.name || "My Clinic",
-              clinicLogo: matchedLocal.logo || "",
-              clinicId: matchedLocal.id || null,
-            };
-            saveCachedProfile(nextProfile);
-            return;
-          }
-        }
-      } catch {}
-
-      notifyListeners({
-        status: "pending",
-        clinicName: "Clinic Portal",
-        clinicLogo: "",
-        clinicId: null,
-        loading: false,
-      });
-    } finally {
-      loadInProgressRef.current = false;
     }
-  }, []);
+
+    const userId = session?.user?.id;
+    const userEmail = session?.user?.email?.toLowerCase().trim();
+    if (version !== loadVersionRef.current || userId !== activeUserRef.current) return;
+
+    // If session is temporarily null or loading:
+    if (!userId) {
+      // Anti-downgrade safeguard: DO NOT remove CACHE_KEY on transient session delay!
+      const cached = getCachedProfile();
+      if (cached && cached.status === "verified") {
+        notifyListeners({ ...cached, loading: false });
+      } else {
+        notifyListeners({
+          status: "pending",
+          clinicName: "Clinic Portal",
+          clinicLogo: "",
+          clinicId: null,
+          loading: false,
+        });
+      }
+      return;
+    }
+
+    const cached = getCachedProfile();
+    const knownClinicId = cached?.clinicId || inMemoryProfile.clinicId;
+
+    let clinicData: any = null;
+
+    // Strategy A: By clinic_id directly if known
+    if (knownClinicId) {
+      try {
+        const { data: byId, error: errId } = await supabase
+          .from("clinic")
+          .select("clinic_id, name, status, verified, logo_url, owner_user_id, email")
+          .eq("clinic_id", knownClinicId)
+          .eq("owner_user_id", userId)
+          .maybeSingle();
+
+        if (byId && !errId) {
+          clinicData = byId;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // Strategy B: By owner_user_id
+    if (!clinicData) {
+      try {
+        const { data: byOwner, error: errOwner } = await supabase
+          .from("clinic")
+          .select("clinic_id, name, status, verified, logo_url, owner_user_id, email")
+          .eq("owner_user_id", userId)
+          .maybeSingle();
+
+        if (byOwner && !errOwner) {
+          clinicData = byOwner;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // Strategy C: By clinic email
+    if (!clinicData && userEmail) {
+      try {
+        const { data: byEmail, error: errEmail } = await supabase
+          .from("clinic")
+          .select("clinic_id, name, status, verified, logo_url, owner_user_id, email")
+          .ilike("email", userEmail)
+          .is("owner_user_id", null)
+          .maybeSingle();
+
+        if (byEmail && !errEmail) {
+          clinicData = byEmail;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (version !== loadVersionRef.current || userId !== activeUserRef.current) return;
+    // Handle successful DB retrieval
+    if (clinicData) {
+      // Auto-link owner_user_id if missing
+      if (!clinicData.owner_user_id && userId) {
+        try {
+          await supabase
+            .from("clinic")
+            .update({ owner_user_id: userId, verified: true })
+            .eq("clinic_id", clinicData.clinic_id);
+        } catch {}
+      }
+
+      // Auto-ensure verified = true in DB if status is approved
+      if ((clinicData.status === "approved" || clinicData.status === "verified") && !clinicData.verified) {
+        try {
+          await supabase
+            .from("clinic")
+            .update({ verified: true })
+            .eq("clinic_id", clinicData.clinic_id);
+        } catch {}
+      }
+
+      const isVerified =
+        clinicData.verified === true ||
+        clinicData.status === "approved" ||
+        clinicData.status === "verified";
+
+      const mappedStatus: ClinicVerificationStatus = isVerified
+        ? "verified"
+        : clinicData.status === "rejected" || clinicData.status === "suspended"
+        ? "rejected"
+        : "pending";
+
+      let logoUrl = clinicData.logo_url || "";
+      if (!logoUrl) {
+        try {
+          const { data: photos } = await supabase
+            .from("clinic_photo")
+            .select("photo_url")
+            .eq("clinic_id", clinicData.clinic_id)
+            .order("sort_order")
+            .limit(1);
+          if (photos?.[0]?.photo_url) {
+            logoUrl = photos[0].photo_url;
+          }
+        } catch {}
+      }
+
+      const nextProfile = {
+        status: mappedStatus,
+        clinicName: clinicData.name || "Clinic Portal",
+        clinicLogo: logoUrl,
+        clinicId: clinicData.clinic_id,
+      };
+
+      if (version !== loadVersionRef.current || userId !== activeUserRef.current) return;
+      saveCachedProfile(nextProfile);
+      return;
+    }
+
+    // CRITICAL ANTI-DOWNGRADE PROTECTION:
+    // If DB query had an error or was inconclusive, but we were already verified:
+    // NEVER downgrade to pending! Preserve the verified state.
+    if (cached?.status === "verified" || inMemoryProfile.status === "verified") {
+      console.warn("[useClinicVerification] Query inconclusive, preserving existing verified status.");
+      const preserved = {
+        status: "verified" as ClinicVerificationStatus,
+        clinicName: cached?.clinicName || inMemoryProfile.clinicName || "Clinic Portal",
+        clinicLogo: cached?.clinicLogo || inMemoryProfile.clinicLogo || "",
+        clinicId: cached?.clinicId || inMemoryProfile.clinicId || null,
+      };
+      saveCachedProfile(preserved);
+      return;
+    }
+
+    // Check local storage application snapshot if genuinely never verified
+    try {
+      const stored = localStorage.getItem("dermai_clinic_applications");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        const matchedLocal = parsed.find((a: any) => a.email?.toLowerCase().trim() === userEmail);
+        if (matchedLocal) {
+          const nextProfile = {
+            status: (matchedLocal.status === "verified" ? "verified" : "pending") as ClinicVerificationStatus,
+            clinicName: matchedLocal.name || "My Clinic",
+            clinicLogo: matchedLocal.logo || "",
+            clinicId: matchedLocal.id || null,
+          };
+          saveCachedProfile(nextProfile);
+          return;
+        }
+      }
+    } catch {}
+
+    notifyListeners({
+      status: "pending",
+      clinicName: "Clinic Portal",
+      clinicLogo: "",
+      clinicId: null,
+      loading: false,
+    });
+  }, [user?.id]);
 
   useEffect(() => {
     let active = true;

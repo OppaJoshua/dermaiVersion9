@@ -3,6 +3,21 @@
 // Standardized scheduling logic for Clinic Settings, Doctor Shifts, and Patient Booking
 // ============================================================================
 
+export function validDutyTimeMinutes(value: unknown): number | null {
+  if (typeof value !== "string" || !/^\d{1,2}:\d{2}(:\d{2})?$/.test(value)) return null;
+  const [hours, minutes, seconds = 0] = value.split(":").map(Number);
+  if (hours > 23 || minutes > 59 || seconds > 59) return null;
+  return hours * 60 + minutes + seconds / 60;
+}
+
+export function dutyTimesOverlap(existingStart: unknown, existingEnd: unknown, newStart: unknown, newEnd: unknown): boolean {
+  const a = validDutyTimeMinutes(existingStart);
+  const b = validDutyTimeMinutes(existingEnd);
+  const c = validDutyTimeMinutes(newStart);
+  const d = validDutyTimeMinutes(newEnd);
+  return a !== null && b !== null && c !== null && d !== null && a < b && c < d && a < d && b > c;
+}
+
 export interface DoctorShift {
   id?: string;                  // Unique shift ID within doctor (e.g. "shift-mon-1")
   shiftId?: string;             // Alternate property name for shift ID
@@ -455,7 +470,7 @@ export function parseDoctorSchedule(
         const dayVal = scheduleObj[day];
         if (dayVal) {
           if (Array.isArray(dayVal)) {
-            weeklyShifts[day] = dayVal.map((s: any, idx: number) => ({
+            weeklyShifts[day] = dayVal.filter((s: any) => s && typeof s === "object").map((s: any, idx: number) => ({
               id: s.id || `shift-${day.toLowerCase()}-${idx + 1}`,
               label: s.label || (idx === 0 ? "Morning Shift" : idx === 1 ? "Afternoon Shift" : `Shift ${idx + 1}`),
               startTime: s.startTime || fallbackStart,
@@ -590,6 +605,7 @@ export function validateDoctorShifts(
   clinicOperatingDays?: string
 ): ShiftValidationError[] {
   const errors: ShiftValidationError[] = [];
+  if (!shifts.length) return errors;
   const rawOpenM = timeToMinutes(clinicOpenTime);
   const rawCloseM = timeToMinutes(clinicCloseTime);
 
@@ -604,8 +620,12 @@ export function validateDoctorShifts(
   }
 
   shifts.forEach((shift, idx) => {
-    const startM = timeToMinutes(shift.startTime);
-    const endM = timeToMinutes(shift.endTime);
+    const startM = validDutyTimeMinutes(shift.startTime);
+    const endM = validDutyTimeMinutes(shift.endTime);
+    if (startM === null || endM === null) {
+      errors.push({ day, shiftIndex: idx, message: `On ${day}, enter valid start and end times for ${shift.label || `Shift ${idx + 1}`}.` });
+      return;
+    }
 
     if (endM <= startM) {
       errors.push({
@@ -628,16 +648,15 @@ export function validateDoctorShifts(
   // Check pairwise overlapping shifts on the same day
   for (let i = 0; i < shifts.length; i++) {
     const s1 = shifts[i];
-    const s1Start = timeToMinutes(s1.startTime);
-    const s1End = timeToMinutes(s1.endTime);
 
     for (let j = i + 1; j < shifts.length; j++) {
       const s2 = shifts[j];
-      const s2Start = timeToMinutes(s2.startTime);
-      const s2End = timeToMinutes(s2.endTime);
+      const s1Id = s1.id || s1.shiftId;
+      const s2Id = s2.id || s2.shiftId;
+      if (s1Id && s1Id === s2Id) continue;
 
       // Overlap condition: start < otherEnd && end > otherStart
-      if (s1Start < s2End && s1End > s2Start) {
+      if (dutyTimesOverlap(s1.startTime, s1.endTime, s2.startTime, s2.endTime)) {
         errors.push({
           day,
           shiftIndex: j,
@@ -654,6 +673,47 @@ export function validateDoctorShifts(
  * Revalidates existing doctor schedules against new or existing clinic operating hours and days.
  * Identifies affected doctors, days, assigned shifts, and clinic hours.
  */
+type DutyRow = {
+  duty_schedule?: unknown;
+  duty_days?: unknown;
+  duty_start_time?: string | null;
+  duty_end_time?: string | null;
+};
+
+export function parseAssignedDoctorSchedule(row: DutyRow | null, includeInvalidRanges = false): DoctorWeeklySchedule | null {
+  if (!row) return null;
+  let raw = row.duty_schedule;
+  if (typeof raw === "string") {
+    try { raw = JSON.parse(raw); } catch { return null; }
+  }
+  // The clinic's schedule editor saves duty_schedule when hours are assigned.
+  // Registration/default day and time columns alone are not an assignment.
+  if (!raw || typeof raw !== "object") return null;
+  // An explicitly cleared day list must not resurrect old weekly shifts.
+  let assignedDays: string[] | undefined;
+  if (Array.isArray(row.duty_days)) assignedDays = row.duty_days.map(value => normalizeDayName(String(value))).filter(Boolean);
+  else if (typeof row.duty_days === "string" && row.duty_days.trim()) {
+    let days: unknown;
+    try { days = JSON.parse(row.duty_days); } catch { days = row.duty_days.replace(/[{}"']/g, "").split(","); }
+    if (Array.isArray(days)) assignedDays = days.map(value => normalizeDayName(String(value))).filter(Boolean);
+  }
+  if (assignedDays?.length === 0) return null;
+  const schedule = parseDoctorSchedule(
+    raw,
+    undefined,
+    "",
+    "",
+  );
+  for (const day of Object.keys(schedule.weeklyShifts)) {
+    schedule.weeklyShifts[day] = assignedDays && !assignedDays.includes(day) ? [] : schedule.weeklyShifts[day].filter(shift => {
+      const start = validDutyTimeMinutes(shift.startTime);
+      const end = validDutyTimeMinutes(shift.endTime);
+      return start !== null && end !== null && (includeInvalidRanges || start < end);
+    });
+  }
+  return Object.values(schedule.weeklyShifts).some(shifts => shifts.length) ? schedule : null;
+}
+
 export function findConflictingDoctorSchedules(
   optionsOrDoctors:
     | {
@@ -699,17 +759,16 @@ export function findConflictingDoctorSchedules(
     const docId = String(doc.id || doc.doctor_id || "");
     const docName = String(doc.name || doc.doctor_name || "Doctor");
 
-    const schedule: DoctorWeeklySchedule =
-      doc.weeklySchedule ||
-      parseDoctorSchedule(
-        doc.dutySchedule || doc.duty_schedule,
-        doc.dutyDays || doc.duty_days,
-        doc.dutyStartTime || doc.duty_start_time || clinicOpenTime,
-        doc.dutyEndTime || doc.duty_end_time || clinicCloseTime
-      );
+    const schedule: DoctorWeeklySchedule | null = doc.weeklySchedule || parseAssignedDoctorSchedule({
+      duty_schedule: doc.dutySchedule ?? doc.duty_schedule,
+      duty_days: doc.dutyDays ?? doc.duty_days,
+    }, true);
+    if (!schedule) return;
 
     ALL_DAYS_OF_WEEK.forEach((day) => {
-      const shifts = schedule.weeklyShifts[day] || [];
+      const shifts = (schedule.weeklyShifts[day] || []).filter((shift: DoctorShift) =>
+        validDutyTimeMinutes(shift.startTime) !== null && validDutyTimeMinutes(shift.endTime) !== null
+      );
       if (shifts.length === 0) return;
 
       // 1. Is clinic closed on this day?

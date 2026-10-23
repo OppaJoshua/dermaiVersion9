@@ -1,13 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { resolveAvatarUrl } from "@/utils/storage";
 import { createPatientNotification } from "@/lib/notificationService";
 import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
+import { compareDoctorAppointments, scopeDoctorAppointments } from "@/lib/doctorAppointmentScope";
+import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
 
 export type DoctorAppointmentRecord = {
   id: string;
+  clinicId?: string;
   clinicName: string;
   patientName: string;
   patientAge?: number;
@@ -76,6 +79,7 @@ function calculateAgeFromBirthdate(birthdateStr?: string | null): number | undef
 export function useDoctorAppointments() {
   const { user } = useAuth();
   const [appointments, setAppointments] = useState<DoctorAppointmentRecord[]>([]);
+  const [loadedScope, setLoadedScope] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [doctorName, setDoctorName] = useState<string>(() => {
     try {
@@ -87,20 +91,22 @@ export function useDoctorAppointments() {
     } catch {}
     return user?.user_metadata?.full_name || user?.email?.split("@")[0] || "";
   });
-  const [doctorClinic, setDoctorClinic] = useState<string>(() => {
-    try {
-      const p = localStorage.getItem("dermai_doctor_profile");
-      if (p) return JSON.parse(p).clinicName || "";
-    } catch {}
-    return "";
-  });
   const [doctorEmail, setDoctorEmail] = useState<string>(user?.email || "");
   const [doctorIds, setDoctorIds] = useState<string[]>([]);
   const clinicDoctorIdRef = useRef<string | null>(null);
   const clinicDoctorsMapRef = useRef<Map<string, string>>(new Map());
 
+  // Keep a ref to the active clinic so fetchAppointments (a useCallback) can
+  // read the latest value without being re-created on every context change.
+  const { activeClinicId: activeClinicContextId } = useDoctorClinicContext();
+  const activeClinicIdRef = useRef<string>(activeClinicContextId);
+  activeClinicIdRef.current = activeClinicContextId;
+  const currentUserIdRef = useRef(user?.id);
+  currentUserIdRef.current = user?.id;
+
   const isFetchingRef = useRef(false);
   const queuedRefetchRef = useRef(false);
+  const latestFetchRef = useRef<() => Promise<void>>(async () => {});
 
   const fetchAppointments = useCallback(async () => {
     if (isFetchingRef.current) {
@@ -108,156 +114,89 @@ export function useDoctorAppointments() {
       return;
     }
     isFetchingRef.current = true;
+    setLoading(true);
+    const requestUserId = user?.id;
+    const currentActiveClinicId = activeClinicIdRef.current;
 
     try {
-      // 1. Identify doctor accounts linked to current user or local doctor profile
+      if (!user?.id || !currentActiveClinicId) {
+        setAppointments([]);
+        setDoctorIds([]);
+        return;
+      }
+      // 1. Identify doctor accounts linked to current user
       const userEmail = (user?.email || "").trim().toLowerCase();
       setDoctorEmail(userEmail);
 
       const foundDoctorIds: string[] = user?.id ? [String(user.id)] : [];
-      let foundClinicId: string | null = null;
-
       let docDisplayName = user?.user_metadata?.full_name || user?.user_metadata?.name || "";
-      let docClinicName = "";
-
-      // Check localStorage doctor profile
-      try {
-        const storedProfile = localStorage.getItem("dermai_doctor_profile");
-        if (storedProfile) {
-          const p = JSON.parse(storedProfile);
-          if (p.id) foundDoctorIds.push(String(p.id));
-          if (p.doctor_id) foundDoctorIds.push(String(p.doctor_id));
-          if (p.clinicId) foundClinicId = String(p.clinicId);
-          if (p.fullName && !docDisplayName) docDisplayName = p.fullName;
-          if (p.clinicName && !docClinicName) docClinicName = p.clinicName;
-        }
-      } catch { }
-
-      // Check clinic_doctor table (primary doctor roster)
+      const clinicNameMap = new Map<string, string>();
+      const authorizedClinicIds = new Set<string>();
       const clinicDoctorsMap = new Map<string, string>();
+
+      // Retrieve all affiliations associated with the logged-in doctor
       try {
-        const { data: clinicDocData, error: clinicDocErr } = await supabase
+        const { data: cdRows, error: cdErr } = await supabase
           .from("clinic_doctor")
-          .select("doctor_id, clinic_id, user_id, doctor_name, email, photo_url, status, duty_schedule");
-
-        if (!clinicDocErr && clinicDocData && clinicDocData.length > 0) {
-          for (const cd of clinicDocData as any[]) {
-            if (cd.doctor_id && cd.doctor_name) {
-              clinicDoctorsMap.set(String(cd.doctor_id), cd.doctor_name);
+          .select("doctor_id, clinic_id, doctor_name, clinic:clinic_id(clinic_id, name)")
+          .eq("user_id", user.id)
+          .eq("clinic_id", currentActiveClinicId)
+          .ilike("status", "active");
+        if (cdErr) throw cdErr;
+        if (cdRows && cdRows.length > 0) {
+          for (const cd of cdRows as any[]) {
+            if (cd.clinic_id) authorizedClinicIds.add(String(cd.clinic_id));
+            if (cd.doctor_id) {
+              foundDoctorIds.push(String(cd.doctor_id));
+              clinicDoctorIdRef.current = String(cd.doctor_id);
+              if (cd.doctor_name) {
+                clinicDoctorsMap.set(String(cd.doctor_id), cd.doctor_name);
+              }
             }
-            const cdEmail = (cd.email || "").trim().toLowerCase();
-            const cdNameClean = (cd.doctor_name || "").replace(/^Dr\.?\s*/i, "").trim().toLowerCase();
-            const currentDocClean = (docDisplayName || user?.user_metadata?.full_name || user?.user_metadata?.name || "").replace(/^Dr\.?\s*/i, "").trim().toLowerCase();
-            const isNameMatch = Boolean(
-              cdNameClean && currentDocClean && (cdNameClean === currentDocClean || currentDocClean.includes(cdNameClean) || cdNameClean.includes(currentDocClean))
-            );
-
-            const isSelfMatch = Boolean(
-              (user?.id && cd.user_id === user.id) ||
-              (cdEmail && userEmail && cdEmail === userEmail) ||
-              isNameMatch
-            );
-
-            if (isSelfMatch) {
-              if (cd.doctor_id) {
-                foundDoctorIds.push(String(cd.doctor_id));
-                clinicDoctorIdRef.current = String(cd.doctor_id);
-              }
-              if (cd.clinic_id) foundClinicId = String(cd.clinic_id);
-              if (cd.doctor_name && !docDisplayName) {
-                docDisplayName = cd.doctor_name;
-              }
+            if (cd.doctor_name && !docDisplayName) {
+              docDisplayName = cd.doctor_name;
+            }
+            const cObj = Array.isArray(cd.clinic) ? cd.clinic[0] : cd.clinic;
+            if (cd.clinic_id && cObj?.name) {
+              clinicNameMap.set(String(cd.clinic_id), cObj.name);
             }
           }
-          clinicDoctorsMapRef.current = clinicDoctorsMap;
-
         }
       } catch (e) {
-        console.warn("[useDoctorAppointments] clinic_doctor lookup:", e);
+        throw e;
       }
 
-      // Check localStorage clinic doctors as well
-      try {
-        const storedClinicDocs = localStorage.getItem("dermai_clinic_doctors");
-        if (storedClinicDocs) {
-          const parsed = JSON.parse(storedClinicDocs);
-          if (Array.isArray(parsed)) {
-            for (const cd of parsed) {
-              const cdId = cd.id || cd.doctor_id;
-              const cdName = cd.name || cd.doctor_name;
-              if (cdId && cdName) clinicDoctorsMap.set(String(cdId), cdName);
-              const cdEmail = (cd.email || "").trim().toLowerCase();
-              const isSelfMatch =
-                (user?.id && cd.user_id === user.id) ||
-                (cdEmail && userEmail && cdEmail === userEmail) ||
-                (cdId && foundDoctorIds.includes(String(cdId)));
+      clinicDoctorsMapRef.current = clinicDoctorsMap;
 
-              if (isSelfMatch) {
-                if (cdId) foundDoctorIds.push(String(cdId));
-                if (cd.clinicId || cd.clinic_id) foundClinicId = String(cd.clinicId || cd.clinic_id);
-                if (cdName && !docDisplayName) docDisplayName = cdName;
-              }
-            }
-          }
-        }
-      } catch { }
-
-      // Check doctors table (secondary table) for THIS doctor only
-      try {
-        const { data: docData } = await supabase
-          .from("doctors")
-          .select("id, name, clinic_name, clinic_doctor_id, email, user_id");
-
-        if (docData && docData.length > 0) {
-          docData.forEach((d: any) => {
-            const dEmail = (d.email || "").trim().toLowerCase();
-            const isSelf =
-              (user?.id && d.user_id === user.id) ||
-              (dEmail && userEmail && dEmail === userEmail);
-            if (isSelf) {
-              if (d.id) foundDoctorIds.push(String(d.id));
-              if (d.clinic_doctor_id) foundDoctorIds.push(String(d.clinic_doctor_id));
-              if (d.name && !docDisplayName) docDisplayName = d.name;
-              if (d.clinic_name && !docClinicName) docClinicName = d.clinic_name;
-            }
-          });
-        }
-      } catch {
-        /* ignore */
-      }
-
-      // Resolve clinic name if clinic ID is known
-      if (foundClinicId) {
-        try {
-          const { data: clinicRows } = await supabase
-            .from("clinic")
-            .select("clinic_id, name")
-            .eq("clinic_id", foundClinicId)
-            .maybeSingle();
-          if (clinicRows?.name) {
-            docClinicName = clinicRows.name;
-          }
-        } catch {}
-      }
-
-      setDoctorName(docDisplayName);
-      setDoctorClinic(docClinicName);
       const uniqueDoctorIds = Array.from(new Set(foundDoctorIds.filter(Boolean)));
       setDoctorIds(uniqueDoctorIds);
+      setDoctorName(docDisplayName);
 
+      const affiliatedClinicIds = Array.from(authorizedClinicIds);
 
-      // 2. Fetch appointments from Supabase
+      // 2. Fetch appointments only for the selected, verified clinic
       const apptMap = new Map<string, DoctorAppointmentRecord>();
 
       try {
-        const { data: primaryData, error: primaryErr } = await supabase
-          .from("patient_appointment")
-          .select("*")
-          .order("created_at", { ascending: false });
+        const primaryData: any[] = [];
+        const pageSize = 500;
+        for (let offset = 0; ; offset += pageSize) {
+          const apptQuery = supabase.from("patient_appointment").select("*, clinic:clinic_id(clinic_id, name)");
+          const hasScope = scopeDoctorAppointments(
+            apptQuery,
+            currentActiveClinicId, affiliatedClinicIds, uniqueDoctorIds,
+          );
+          if (!hasScope) break;
+          const { data, error } = await apptQuery
+            .order("date", { ascending: true, nullsFirst: false })
+            .order("appointment_id", { ascending: true })
+            .range(offset, offset + pageSize - 1);
+          if (error) throw error;
+          primaryData.push(...(data || []));
+          if (!data || data.length < pageSize) break;
+        }
 
-        if (primaryErr) {
-          console.warn("[useDoctorAppointments] Supabase select error:", primaryErr.message);
-        } else if (primaryData && primaryData.length > 0) {
+        if (primaryData.length > 0) {
           // Collect user_ids to enrich missing patient profile info
           const userIdsToFetch = Array.from(
             new Set((primaryData as any[]).map((r) => r.user_id).filter(Boolean))
@@ -285,15 +224,7 @@ export function useDoctorAppointments() {
             );
 
             const isClinicMatch = Boolean(
-              foundClinicId && rowClinicId && rowClinicId.toLowerCase().trim() === String(foundClinicId).toLowerCase().trim()
-            );
-
-            // Also check if clinic note mentions this doctor explicitly
-            const isNoteDoctorMatch = Boolean(
-              !rawAssignedDoc &&
-              row.clinic_note &&
-              docDisplayName &&
-              row.clinic_note.toLowerCase().includes(docDisplayName.replace(/^Dr\.?\s*/i, "").trim().toLowerCase())
+              rowClinicId && affiliatedClinicIds.includes(rowClinicId)
             );
 
             // Exclude temporary unpaid holds or expired/failed payment holds from doctor views
@@ -306,7 +237,7 @@ export function useDoctorAppointments() {
             if (rawAssignedDoc && !isDirectDocMatch) {
               continue;
             }
-            if (!rawAssignedDoc && !isClinicMatch && !isNoteDoctorMatch) {
+            if (!isClinicMatch) {
               continue;
             }
 
@@ -350,6 +281,8 @@ export function useDoctorAppointments() {
                   }
                 }
               }
+
+              if (row.time) timeStr = String(row.time);
 
               // Extract doctor diagnosis and note if formatted
               let docDiagnosis = "";
@@ -409,10 +342,17 @@ export function useDoctorAppointments() {
                 resolvedAvatar = resolveAvatarUrl(resolvedAvatar) || resolvedAvatar;
               }
 
+              const clinicObj = Array.isArray(row.clinic) ? row.clinic[0] : row.clinic;
+              const dynamicClinicName =
+                clinicObj?.name ||
+                (rowClinicId ? clinicNameMap.get(rowClinicId) : undefined) ||
+                "Clinic Branch";
+
               const apptId = String(row.appointment_id);
               apptMap.set(apptId, {
                 id: apptId,
-                clinicName: docClinicName,
+                clinicId: rowClinicId || undefined,
+                clinicName: dynamicClinicName,
                 patientName: resolvedName,
                 patientAvatar: resolvedAvatar,
                 patientEmail: resolvedEmail,
@@ -480,139 +420,31 @@ export function useDoctorAppointments() {
           }
         }
       } catch (err) {
-        console.warn("[useDoctorAppointments] Supabase fetch error:", err);
+        throw err;
       }
 
-      // 3. Sync real local appointments created during tests or offline
-      try {
-        const storedClinicAppts = localStorage.getItem("dermai_clinic_appointments");
-        if (storedClinicAppts) {
-          const parsed = JSON.parse(storedClinicAppts);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const realLocalAppts = parsed.filter((a: any) => a && a.id && !String(a.id).startsWith("doc-seed-"));
-
-            for (const appt of realLocalAppts) {
-              const rawLocalAssigned = appt.assignedDoctorId ? String(appt.assignedDoctorId) : "";
-              const rawLocalClinic = appt.clinicId ? String(appt.clinicId) : "";
-              const isAssignedToThisDoctor =
-                Boolean(rawLocalAssigned && uniqueDoctorIds.includes(rawLocalAssigned));
-
-              const isLocalClinicMatch = Boolean(
-                foundClinicId && rawLocalClinic && rawLocalClinic === String(foundClinicId)
-              );
-
-              // Skip if assigned to another doctor
-              if (rawLocalAssigned && !isAssignedToThisDoctor) {
-                continue;
-              }
-              if (!rawLocalAssigned && !isLocalClinicMatch) {
-                continue;
-              }
-
-              const apptId = String(appt.id);
-              
-              // Match local and Supabase records only by the authoritative appointment ID.
-              const matchingKey: string | null = apptMap.has(apptId) ? apptId : null;
-
-              if (matchingKey) {
-                // Enrich existing item if local review data is newer
-                const existing = apptMap.get(matchingKey)!;
-                if (!existing.doctorDiagnosis && appt.doctorDiagnosis) existing.doctorDiagnosis = appt.doctorDiagnosis;
-                if (!existing.doctorNote && appt.doctorNote) existing.doctorNote = appt.doctorNote;
-                if (appt.doctorStatus && existing.doctorStatus === "pending-review") existing.doctorStatus = appt.doctorStatus;
-                if (appt.status === "completed") {
-                  existing.status = "completed";
-                  existing.doctorDone = true;
-                }
-                if (appt.status === "confirmed" || appt.status === "scheduled") {
-                  existing.status = "scheduled";
-                  existing.scheduleSentToDoctor = true;
-                }
-              } else {
-                // Add local appointment to map
-                const bdate = appt.patientBirthdate || appt.birthdate;
-                const assignedLocalDocName = appt.assignedDoctorName || (isAssignedToThisDoctor ? docDisplayName : (rawLocalAssigned ? clinicDoctorsMap.get(rawLocalAssigned) : undefined));
-
-                apptMap.set(apptId, {
-                  id: apptId,
-                  clinicName: appt.clinicName || docClinicName,
-                  patientName: appt.patientName || "",
-                  patientEmail: appt.patientEmail || "",
-                  patientContact: appt.patientContact || "",
-                  patientAddress: appt.patientAddress || "",
-                  patientGender: appt.patientGender || appt.gender,
-                  patientBirthdate: bdate,
-                  patientAge: appt.patientAge || calculateAgeFromBirthdate(bdate),
-                  emergencyContactName: appt.emergencyContactName || appt.emergency_contact_name || undefined,
-                  emergencyContactPhone: appt.emergencyContactPhone || appt.emergency_contact_phone || undefined,
-                  emergencyRelationship: appt.emergencyRelationship || appt.emergency_relationship || undefined,
-                  questionnaireAnswers: appt.questionnaireAnswers || appt.questionnaire,
-                  date: appt.date || "",
-                  time: appt.time || "",
-                  notes: appt.notes || "",
-                  clinicNote: appt.clinicNote || "",
-                  status: appt.status === "completed"
-                    ? "completed"
-                    : appt.status === "confirmed" || appt.status === "accepted"
-                      ? "scheduled"
-                      : appt.status || "pending",
-                  assignedDoctorId: appt.assignedDoctorId || undefined,
-                  assignedDoctorName: assignedLocalDocName,
-                  isAssignedToMe: Boolean(isAssignedToThisDoctor),
-                  doctorStatus: appt.doctorStatus || (
-                    appt.status === "confirmed" || appt.status === "accepted" || appt.status === "scheduled" || appt.status === "completed"
-                      ? "approved"
-                      : appt.status === "rejected"
-                        ? "rejected"
-                        : "pending-review"
-                  ),
-                  doctorDiagnosis: appt.doctorDiagnosis || "",
-                  doctorNote: appt.doctorNote || "",
-                  doctorReviewedAt: appt.doctorReviewedAt || undefined,
-                  scheduleSentToDoctor: Boolean(
-                    (appt.status !== "cancelled" && appt.status !== "rejected") &&
-                    (appt.scheduleSentToDoctor || appt.date || appt.status === "scheduled" || appt.status === "confirmed" || appt.status === "accepted")
-                  ),
-                  doctorDone: appt.status === "completed" || Boolean(appt.doctorDone),
-                  createdAt: appt.createdAt || "",
-                  skinPhotoUrl: appt.skinPhotoUrl,
-                  conditionImage: appt.conditionImage || appt.skinPhotoUrl,
-                  conditionName: appt.aiConditionName || appt.conditionName || undefined,
-                  aiConditionName: (appt.aiConditionName && !appt.aiConditionName.toLowerCase().includes("consultation"))
-                    ? appt.aiConditionName
-                    : (appt.conditionName && !appt.conditionName.toLowerCase().includes("consultation") ? appt.conditionName : undefined),
-                  aiConfidence: appt.aiConfidence != null ? Number(appt.aiConfidence) : undefined,
-                });
-              }
-            }
-
-            // Save cleaned list back without mock seeds
-            if (realLocalAppts.length !== parsed.length) {
-              localStorage.setItem("dermai_clinic_appointments", JSON.stringify(realLocalAppts));
-            }
-          }
-        }
-      } catch (err) {
-        console.warn("[useDoctorAppointments] LocalStorage sync error:", err);
-      }
-
+      // Only render rows returned by Supabase under the authenticated session's RLS.
+      // Browser caches must not introduce records omitted by database access rules.
+      if (currentUserIdRef.current !== requestUserId || activeClinicIdRef.current !== currentActiveClinicId) return;
       const finalAppointments = Array.from(apptMap.values());
-      // Sort by created date descending
-      finalAppointments.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      finalAppointments.sort(compareDoctorAppointments);
       setAppointments(finalAppointments);
+      setLoadedScope(`${requestUserId}:${currentActiveClinicId}`);
     } catch (err) {
+      if (currentUserIdRef.current === requestUserId && activeClinicIdRef.current === currentActiveClinicId) setAppointments([]);
       console.error("[useDoctorAppointments] fetchAppointments error:", err);
     } finally {
       setLoading(false);
       isFetchingRef.current = false;
       if (queuedRefetchRef.current) {
         queuedRefetchRef.current = false;
-        fetchAppointments();
+        void latestFetchRef.current();
       }
     }
   }, [user]);
 
   useEffect(() => {
+    latestFetchRef.current = fetchAppointments;
     fetchAppointments();
 
     // 1. Supabase Realtime channel for instant live updates when clinic assigns or patient books
@@ -644,7 +476,7 @@ export function useDoctorAppointments() {
     window.addEventListener("focus", handleFocus);
     window.addEventListener("storage", handleStorage);
 
-    // 3. Periodic polling fallback (relaxed to 60s; Supabase Realtime + focus + storage handle live updates)
+    // 4. Periodic polling fallback (relaxed to 60s; Supabase Realtime + focus + storage handle live updates)
     const pollInterval = setInterval(() => {
       fetchAppointments();
     }, 60000);
@@ -656,7 +488,7 @@ export function useDoctorAppointments() {
       window.removeEventListener("storage", handleStorage);
       clearInterval(pollInterval);
     };
-  }, [fetchAppointments, user?.id]);
+  }, [fetchAppointments, user?.id, activeClinicContextId]);
 
   // Doctor review action: accept (finalizes schedule) or reject (returns to clinic for reassignment)
   const submitDoctorReview = async (
@@ -984,13 +816,19 @@ export function useDoctorAppointments() {
     }
   }, [user?.id, doctorName]);
 
+  // Hide old results immediately when the active clinic changes.
+  const filteredAppointments = useMemo(() => {
+    if (loadedScope !== `${user?.id}:${activeClinicContextId}`) return [];
+    if (!activeClinicContextId) return [];
+    return appointments.filter((a) => a.clinicId === activeClinicContextId);
+  }, [appointments, activeClinicContextId, loadedScope, user?.id]);
+
   return {
     loading,
     doctorName,
-    doctorClinic,
     doctorEmail,
     doctorIds,
-    appointments,
+    appointments: filteredAppointments,
     refresh: fetchAppointments,
     submitDoctorReview,
     markAppointmentDone,

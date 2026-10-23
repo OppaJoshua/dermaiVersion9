@@ -2,8 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Mail,
   Phone,
-  CalendarDays,
-  Clock,
   LifeBuoy,
   ChevronDown,
   ChevronUp,
@@ -18,6 +16,8 @@ import { logAuditEvent } from "@/utils/auditLogger";
 import { createHelpdeskTicketAsync } from "@/lib/store";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
 import { updateDoctorAvatar, removeDoctorAvatar } from "@/lib/doctorAvatarService";
+import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
+import { DoctorDutyScheduleCard } from "@/components/common/DoctorDutyScheduleCard";
 
 function CaduceusIcon({ className = "w-7 h-7 text-[#5B6B82]" }: { className?: string }) {
   return (
@@ -60,25 +60,6 @@ function IdCardIcon({ className = "w-6 h-6 text-blue-600" }: { className?: strin
   );
 }
 
-function CalendarCardIcon({ className = "w-5 h-5 text-blue-600" }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="4" width="18" height="18" rx="2.5" />
-      <line x1="16" y1="2" x2="16" y2="6" strokeWidth="2" />
-      <line x1="8" y1="2" x2="8" y2="6" strokeWidth="2" />
-      <line x1="3" y1="10" x2="21" y2="10" strokeWidth="1.8" />
-    </svg>
-  );
-}
-
 interface DoctorProfile {
   id?: string;
   fullName: string;
@@ -86,8 +67,6 @@ interface DoctorProfile {
   prcLicense: string;
   specializations: string[];
   phone: string;
-  dutyDays: string[];
-  dutySchedule: Record<string, { startTime: string; endTime: string }>;
   clinicName: string;
   photo?: string;
 }
@@ -98,8 +77,6 @@ const INITIAL_PROFILE: DoctorProfile = {
   prcLicense: "",
   specializations: [],
   phone: "",
-  dutyDays: [],
-  dutySchedule: {},
   clinicName: "",
   photo: "",
 };
@@ -128,6 +105,8 @@ const FAQS = [
 ];
 
 export default function DoctorSettingsPage() {
+  const { activeClinicId, activeAffiliation } = useDoctorClinicContext();
+  const selectedClinicName = activeAffiliation?.clinic?.name || "No clinic assignments found";
   const [profile, setProfile] = useState<DoctorProfile>(() => {
     try {
       const stored = localStorage.getItem("dermai_doctor_profile");
@@ -152,6 +131,7 @@ export default function DoctorSettingsPage() {
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [photoSaved, setPhotoSaved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const profileRequestRef = useRef(0);
 
   const uploadDoctorPhoto = async (file: File): Promise<string> => {
     const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -253,13 +233,49 @@ export default function DoctorSettingsPage() {
   };
 
   const loadData = useCallback(async () => {
+    const requestId = ++profileRequestRef.current;
+    if (!activeClinicId) return;
     try {
       let docFound: any = null;
+      const storedDocId = activeAffiliation?.doctor_id || "";
+
       try {
         const { data: sessionData } = await supabase.auth.getSession();
         const sessionUserId = sessionData?.session?.user?.id;
+        if (!sessionUserId) return;
 
-        if (sessionUserId) {
+        // Resolve only the authenticated user's active branch affiliation.
+        if (storedDocId) {
+          const { data: docById } = await supabase
+            .from("clinic_doctor")
+            .select(`
+              doctor_id,
+              doctor_name,
+              email,
+              prc_license,
+              contact_number,
+              photo_url,
+              clinic:clinic_id ( name ),
+              doctor_specializations (
+                specialization_id,
+                specializations (
+                  id,
+                  name
+                )
+              )
+            `)
+            .eq("doctor_id", storedDocId)
+            .eq("user_id", sessionUserId)
+            .eq("clinic_id", activeClinicId)
+            .maybeSingle();
+
+          if (docById) {
+            docFound = docById;
+          }
+        }
+
+        // 2. Fallback to session user id, prioritizing most recent
+        if (!docFound && sessionUserId) {
           const { data: docs } = await supabase
             .from("clinic_doctor")
             .select(`
@@ -268,10 +284,6 @@ export default function DoctorSettingsPage() {
               email,
               prc_license,
               contact_number,
-              duty_days,
-              duty_schedule,
-              duty_start_time,
-              duty_end_time,
               photo_url,
               clinic:clinic_id ( name ),
               doctor_specializations (
@@ -283,98 +295,18 @@ export default function DoctorSettingsPage() {
               )
             `)
             .eq("user_id", sessionUserId)
-            .limit(1);
+            .eq("clinic_id", activeClinicId)
+            .order("created_at", { ascending: false });
 
           if (docs && docs.length > 0) {
             docFound = docs[0];
           }
         }
-      } catch {
-        /* ignore */
+      } catch (err) {
+        console.warn("Could not query doctor profile from Supabase:", err);
       }
-
 
       const clinicObj: any = Array.isArray(docFound?.clinic) ? docFound.clinic[0] : docFound?.clinic;
-
-      let parsedDutyDays: string[] = [];
-
-      if (Array.isArray(docFound?.duty_days)) {
-        parsedDutyDays = docFound.duty_days
-          .map((d: any) => String(d).replace(/["'{}]/g, "").trim())
-          .filter(Boolean);
-      } else if (typeof docFound?.duty_days === "string" && docFound.duty_days.trim()) {
-        const rawDays = docFound.duty_days.trim();
-
-        if (rawDays.startsWith("[") && rawDays.endsWith("]")) {
-          try {
-            const parsed = JSON.parse(rawDays);
-            if (Array.isArray(parsed)) {
-              parsedDutyDays = parsed
-                .map((d: any) => String(d).replace(/["'{}]/g, "").trim())
-                .filter(Boolean);
-            }
-          } catch {}
-        } else {
-          parsedDutyDays = rawDays
-            .replace(/^\{|\}$/g, "")
-            .split(",")
-            .map((d: string) => d.replace(/["'\\]/g, "").trim())
-            .filter(Boolean);
-        }
-      }
-
-      const parsedDutySchedule: Record<string, { startTime: string; endTime: string }> = {};
-
-      if (docFound?.duty_schedule) {
-        let rawSchedule: any = docFound.duty_schedule;
-
-        if (typeof rawSchedule === "string") {
-          try {
-            rawSchedule = JSON.parse(rawSchedule);
-          } catch {
-            rawSchedule = null;
-          }
-        }
-
-        if (rawSchedule && typeof rawSchedule === "object" && !Array.isArray(rawSchedule)) {
-          Object.entries(rawSchedule).forEach(([day, shift]: [string, any]) => {
-            if (!shift || typeof shift !== "object") return;
-
-            const startTime = shift.startTime || shift.start_time || shift.start;
-            const endTime = shift.endTime || shift.end_time || shift.end;
-
-            if (startTime && endTime) {
-              parsedDutySchedule[day] = {
-                startTime: String(startTime),
-                endTime: String(endTime),
-              };
-            }
-          });
-        } else if (Array.isArray(rawSchedule)) {
-          rawSchedule.forEach((item: any) => {
-            if (!item?.day) return;
-
-            const startTime = item.startTime || item.start_time || item.start;
-            const endTime = item.endTime || item.end_time || item.end;
-
-            if (startTime && endTime) {
-              parsedDutySchedule[String(item.day)] = {
-                startTime: String(startTime),
-                endTime: String(endTime),
-              };
-            }
-          });
-        }
-      }
-
-      if (Object.keys(parsedDutySchedule).length === 0 && docFound?.duty_start_time && docFound?.duty_end_time) {
-        parsedDutyDays.forEach((day) => {
-          parsedDutySchedule[day] = {
-            startTime: String(docFound.duty_start_time),
-            endTime: String(docFound.duty_end_time),
-          };
-        });
-      }
 
       const parsedSpecializations = (docFound?.doctor_specializations || [])
         .map((item: any) => item?.specializations)
@@ -383,17 +315,16 @@ export default function DoctorSettingsPage() {
         .filter(Boolean);
 
       const updatedProfile: DoctorProfile = {
-        id: docFound?.doctor_id || "",
+        id: docFound?.doctor_id || storedDocId || "",
         fullName: docFound?.doctor_name || "",
         email: docFound?.email || "",
         prcLicense: docFound?.prc_license || "",
         specializations: parsedSpecializations,
         phone: docFound?.contact_number || "",
-        dutyDays: parsedDutyDays,
-        dutySchedule: parsedDutySchedule,
         clinicName: clinicObj?.name || "",
         photo: docFound?.photo_url || "",
       };
+      if (requestId !== profileRequestRef.current) return;
       setProfile(updatedProfile);
       try {
         localStorage.setItem(
@@ -409,7 +340,7 @@ export default function DoctorSettingsPage() {
     } catch (err) {
       console.error("Error loading doctor profile:", err);
     }
-  }, []);
+  }, [activeClinicId, activeAffiliation?.doctor_id]);
 
   useEffect(() => {
     loadData();
@@ -431,6 +362,7 @@ export default function DoctorSettingsPage() {
     window.addEventListener("dermai_doctor_profile_updated", loadData);
 
     return () => {
+      ++profileRequestRef.current;
       supabase.removeChannel(channel);
       window.removeEventListener("focus", loadData);
       window.removeEventListener("dermai_doctor_avatar_updated", loadData);
@@ -546,7 +478,7 @@ export default function DoctorSettingsPage() {
 
               <p className="text-sm font-medium text-[#64748B] flex items-center justify-center sm:justify-start gap-2 mt-2">
                 <Stethoscope className="w-4 h-4 text-[#64748B] shrink-0" />
-                <span>{profile.clinicName || "Clinic not assigned"}</span>
+                <span>{selectedClinicName}</span>
               </p>
 
               {profile.photo && (
@@ -640,59 +572,11 @@ export default function DoctorSettingsPage() {
         </div>
       </div>
 
-      {/* Row 3: Duty Schedule Card (Full width, generous spacing) */}
-      <div className="w-full min-w-0">
-        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-6 md:p-7 shadow-xs flex flex-col justify-between min-w-0">
-          {/* Header */}
-          <div className="flex items-center justify-between pb-4 border-b border-slate-50">
-            <div className="flex items-center gap-2.5">
-              <CalendarCardIcon className="w-5 h-5 text-[#1D4ED8] shrink-0" />
-              <span className="text-[14px] font-bold uppercase tracking-wider text-[#475569]">
-                DUTY SCHEDULE
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5 text-xs font-medium text-[#475569] sm:text-[#5B6B82]">
-              <Clock className="w-4 h-4 text-[#1D4ED8]" />
-              <span>Clinic Hours</span>
-            </div>
-          </div>
-
-          {/* Duty Days & Shifts - Wide layout with equal column distribution */}
-          <div className="py-4 w-full min-w-0">
-            {profile.dutyDays && profile.dutyDays.length > 0 ? (
-              <div className="flex items-stretch divide-x divide-slate-100 w-full overflow-x-auto pb-1">
-                {profile.dutyDays.map((day) => {
-                  const sched = profile.dutySchedule[day];
-                  const timeRange = sched
-                    ? `${sched.startTime} – ${sched.endTime}`
-                    : "Time not set";
-                  return (
-                    <div
-                      key={day}
-                      className="flex-1 min-w-[110px] sm:min-w-[120px] flex flex-col px-3.5 sm:px-6 md:px-8 first:pl-0 last:pr-0 shrink-0"
-                    >
-                      <span className="text-base font-medium text-slate-500 mb-1">{day}</span>
-                      <span className="text-sm font-bold text-slate-900 tracking-tight whitespace-nowrap">
-                        {timeRange}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="text-xs text-slate-400 italic py-2">
-                No scheduled duty days assigned by clinic roster.
-              </div>
-            )}
-          </div>
-
-          {/* Bottom Note inside Duty Card */}
-          <div className="flex items-center gap-2 pt-3 border-t border-slate-50 text-xs text-[#94A3B8]">
-            <CalendarDays className="w-3.5 h-3.5 text-[#94A3B8]" />
-            <span>Assigned clinic roster</span>
-          </div>
-        </div>
-      </div>
+      <DoctorDutyScheduleCard
+        doctorId={activeAffiliation?.doctor_id ?? null}
+        clinicId={activeClinicId || null}
+        clinicName={activeAffiliation?.clinic?.name || "No clinic selected"}
+      />
 
       {/* Row 4: Disclaimer Footer */}
       <div className="pt-4 border-t border-slate-200/60">

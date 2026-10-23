@@ -116,7 +116,7 @@ export default function AdminDoctorAiReviewPage() {
             if (!isReviewed) continue;
 
             const parsed = parseDoctorNote(row.doctor_note);
-            const docName = (row.assigned_doctor_id && docNameMap.get(row.assigned_doctor_id)) || "Dr. Audrey Saludaga";
+            const docName = (row.assigned_doctor_id && docNameMap.get(row.assigned_doctor_id)) || "Unassigned doctor";
 
             const direct = isDirectConsult(row.ai_condition_name, row.ai_confidence);
             const aiPred = direct ? "Direct Consultation (No AI)" : (row.ai_condition_name || "Skin condition");
@@ -178,7 +178,7 @@ export default function AdminDoctorAiReviewPage() {
                 patient: item.patientName || "Patient",
                 aiPrediction: aiPred,
                 confidence: conf,
-                doctor: item.assignedDoctorName || "Dr. Audrey Saludaga",
+                doctor: item.assignedDoctorName || "Unassigned doctor",
                 finalDiagnosis: finalDiag,
                 reviewedAt: item.doctorReviewedAt || item.createdAt || new Date().toISOString(),
                 status: item.doctorStatus || "approved",

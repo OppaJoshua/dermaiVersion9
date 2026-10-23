@@ -2058,11 +2058,11 @@ export default function ClinicAppointmentsPage() {
                   key={cell.key}
                   onClick={() => setSelectedDate(cell.key)}
                   className={cn(
-                    "min-h-[54px] sm:min-h-[58px] rounded-xl p-1.5 sm:p-2 text-left transition-all cursor-pointer flex flex-col justify-between border",
+                    "min-h-13.5 sm:min-h-14.5 rounded-xl p-1.5 sm:p-2 text-left transition-all cursor-pointer flex flex-col justify-between border",
                     !cell.inCurrentMonth
                       ? "bg-gray-50/50 border-gray-200/60 text-gray-300"
                       : isSelected
-                      ? "bg-gradient-to-b from-rose-50/90 to-pink-50/50 border-rose-300 shadow-2xs"
+                      ? "bg-linear-to-b from-rose-50/90 to-pink-50/50 border-rose-300 shadow-2xs"
                       : "bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/50"
                   )}
                 >
@@ -2080,7 +2080,7 @@ export default function ClinicAppointmentsPage() {
                   </p>
 
                   {/* Status Indicator Line */}
-                  <div className="flex items-center justify-center min-h-[10px] mt-1">
+                  <div className="flex items-center justify-center min-h-2.5 mt-1">
                     {hasAppointment ? (
                       <span className="w-5 sm:w-6 h-1 rounded-full bg-[#c0166a]" />
                     ) : null}
@@ -2248,7 +2248,7 @@ export default function ClinicAppointmentsPage() {
             ))}
           </div>
 
-          <div className="space-y-3 max-h-[660px] overflow-y-auto pr-1 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+          <div className="space-y-3 max-h-165 overflow-y-auto pr-1 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             {displayedQueue.length === 0 && (
               <div className="border border-dashed border-gray-200 rounded-2xl p-8 text-center bg-gray-50/50">
                 <Clock className="w-8 h-8 text-gray-300 mx-auto mb-2" />
@@ -2705,13 +2705,13 @@ export default function ClinicAppointmentsPage() {
         );
 
         return (
-          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDayDetailDate(null)}>
+          <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDayDetailDate(null)}>
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ duration: 0.2 }}
-              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
+              className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
@@ -2737,7 +2737,7 @@ export default function ClinicAppointmentsPage() {
               </div>
 
               {/* Body */}
-              <div className="p-6 max-h-[62vh] overflow-y-auto space-y-3.5 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+              <div className="p-6 max-h-[62vh] overflow-y-auto space-y-3.5 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 {dayModalActionable.length === 0 ? (
                   <div className="border border-dashed border-gray-200 rounded-2xl p-7 text-center bg-gray-50/50">
                     {dayModalCompletedCount > 0 ? (
@@ -2934,12 +2934,12 @@ export default function ClinicAppointmentsPage() {
       {/* ── No-Show Confirmation Modal ───────────────────────── */}
       <ModalPortal isOpen={Boolean(noShowConfirmModal)}>
         {noShowConfirmModal && (
-          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
+              className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
               onClick={(e) => e.stopPropagation()}
             >
             <div className="px-6 pt-6 pb-4 border-b border-gray-100 flex items-start justify-between">
@@ -3062,13 +3062,13 @@ export default function ClinicAppointmentsPage() {
       {/* ── Patient Details Review Modal ─────────────────────── */}
       <ModalPortal isOpen={Boolean(viewingPatient)}>
         {viewingPatient && (
-          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ duration: 0.2 }}
-              className="relative z-[9999] w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[88vh] text-left"
+              className="relative z-9999 w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[88vh] text-left"
             >
             {/* Header */}
             <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
@@ -3109,7 +3109,7 @@ export default function ClinicAppointmentsPage() {
             </div>
 
             {/* Body */}
-            <div className="p-6 space-y-4 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            <div className="p-6 space-y-4 overflow-y-auto no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
               {/* Doctor Review Status Summary */}
               {viewingPatient.assignedDoctorName && (
                 <div className={`p-3 rounded-2xl border ${viewingPatient.doctorStatus === "approved"
@@ -3307,7 +3307,7 @@ export default function ClinicAppointmentsPage() {
                     <History className="w-4 h-4 text-magenta-600" />
                     <span>Appointment History &amp; Audit Trail</span>
                   </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                     {viewingPatient.appointmentHistory.map((item, idx) => (
                       <div key={idx} className="p-2.5 rounded-xl bg-white border border-gray-100 text-xs shadow-2xs">
                         <div className="flex items-center justify-between gap-2">
@@ -3519,13 +3519,13 @@ export default function ClinicAppointmentsPage() {
       {/* ── Finalize Schedule Modal (After Doctor Approval) ─────────────────────── */}
       <ModalPortal isOpen={Boolean(finalizeScheduleModal)}>
         {finalizeScheduleModal && (
-          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ duration: 0.2 }}
-              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
+              className="relative z-9999 w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
             >
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
@@ -3610,13 +3610,13 @@ export default function ClinicAppointmentsPage() {
       {/* ── Assign Doctor for Review Modal (also used for Re-assigning) ─────────────────────── */}
       <ModalPortal isOpen={Boolean(assignDoctorModal)}>
         {assignDoctorModal && (
-          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ duration: 0.2 }}
-              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
+              className="relative z-9999 w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
             >
             <div className="flex items-center justify-between mb-1">
               <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
@@ -3691,7 +3691,7 @@ export default function ClinicAppointmentsPage() {
                 </button>
               </div>
             ) : (
-              <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 {clinicDoctors.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-4 text-center">
                     <p className="text-xs text-gray-500">No doctors registered yet.</p>
@@ -3748,7 +3748,7 @@ export default function ClinicAppointmentsPage() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-1">
                             <p className="font-semibold text-gray-700 truncate">{doctor.name}</p>
-                            <span className="text-[9px] px-1.5 py-0.5 rounded-md font-semibold bg-gray-200 text-gray-600 shrink-0 truncate max-w-[150px]">
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-md font-semibold bg-gray-200 text-gray-600 shrink-0 truncate max-w-37.5">
                               {reason}
                             </span>
                           </div>
@@ -3809,13 +3809,13 @@ export default function ClinicAppointmentsPage() {
       {/* ── Request Patient to Reschedule Modal (Clinic permissions: cannot change date/time unilaterally) ── */}
       <ModalPortal isOpen={Boolean(requestPatientRescheduleModal)}>
         {requestPatientRescheduleModal && (
-          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ duration: 0.2 }}
-              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
+              className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
             >
             <div className="flex items-center justify-between mb-3">
               <div>
@@ -3929,13 +3929,13 @@ export default function ClinicAppointmentsPage() {
       {/* ── Decline Patient Reschedule Request Modal (Retains original schedule) ── */}
       <ModalPortal isOpen={Boolean(declinePatientRescheduleModal)}>
         {declinePatientRescheduleModal && (
-          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ duration: 0.2 }}
-              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
+              className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
             >
             <div className="flex items-center justify-between mb-3">
               <div>
@@ -4017,13 +4017,13 @@ export default function ClinicAppointmentsPage() {
       {/* ── Reject Request with Reason Modal ─────────────────────── */}
       <ModalPortal isOpen={Boolean(rejectModal)}>
         {rejectModal && (
-          <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ duration: 0.2 }}
-              className="relative z-[9999] w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
+              className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
             >
             <div className="flex items-center justify-between mb-3">
               <div>

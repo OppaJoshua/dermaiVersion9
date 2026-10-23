@@ -6,6 +6,12 @@ import { logAuditEvent } from "../lib/auditLog";
 export type UserRole = "patient" | "doctor" | "clinic" | "admin";
 export type AccountStatus = "active" | "suspended" | "inactive";
 
+export interface DoctorAffiliation {
+  doctor_id: string;
+  clinic_id: string;
+  user_id: string;
+}
+
 export function isPatientProfileComplete(profile: {
   fullName?: string | null;
   phone?: string | null;
@@ -41,6 +47,7 @@ type AuthContextType = {
   accountStatus: AccountStatus;
   loading: boolean;
   isProfileComplete: boolean;
+  affiliations: DoctorAffiliation[];
   setIsProfileComplete: (complete: boolean) => void;
   signInWithMagicLink: (email: string) => Promise<{ error: string | null }>;
   signInWithGoogle: () => Promise<{ error: string | null }>;
@@ -56,6 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [accountStatus, setAccountStatus] = useState<AccountStatus>("active");
   const [roleLoading, setRoleLoading] = useState(true);
   const [isProfileComplete, setIsProfileComplete] = useState<boolean>(true);
+  const [affiliations, setAffiliations] = useState<DoctorAffiliation[]>([]);
 
   useEffect(() => {
     // Check for an existing session on first load
@@ -263,61 +271,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // 4. Check Doctor Affiliation (try user_id first, then email fallback)
         let doctorFound = false;
-        if (knownRole === "doctor") {
-          doctorFound = true;
-        } else if (!clinicFound && knownRole !== "admin") {
-          // 4a. First try by user_id = authenticated Supabase user ID
+        let doctorAffiliations: DoctorAffiliation[] = [];
+
+        // Always query affiliations if user is authenticated
+        if (session?.user?.id) {
           const { data: dById } = await supabase
             .from("clinic_doctor")
             .select("doctor_id, clinic_id, user_id")
-            .eq("user_id", session!.user.id)
-            .maybeSingle();
+            .eq("user_id", session.user.id);
 
-          if (dById) {
+          if (dById && dById.length > 0) {
             doctorFound = true;
-          } else if (currentEmail) {
-            // 4b. Fallback to email lookup if user_id was not linked yet
-            const { data: dByEmail } = await supabase
-              .from("clinic_doctor")
-              .select("doctor_id, clinic_id, user_id")
-              .ilike("email", currentEmail)
-              .maybeSingle();
+            doctorAffiliations = dById as DoctorAffiliation[];
+          }
+        }
 
-            if (dByEmail) {
-              doctorFound = true;
-              if (!dByEmail.user_id) {
-                try {
-                  await supabase
-                    .from("clinic_doctor")
-                    .update({ user_id: session!.user.id })
-                    .eq("doctor_id", dByEmail.doctor_id);
-                } catch {
-                  // Non-blocking affiliation link
+        if (!doctorFound && currentEmail && !clinicFound && knownRole !== "admin") {
+          // 4b. Fallback to email lookup if user_id was not linked yet
+          const { data: dByEmail } = await supabase
+            .from("clinic_doctor")
+            .select("doctor_id, clinic_id, user_id")
+            .ilike("email", currentEmail);
+
+          if (dByEmail && dByEmail.length > 0) {
+            doctorFound = true;
+            doctorAffiliations = dByEmail as DoctorAffiliation[];
+            if (session?.user?.id) {
+              for (const doc of dByEmail) {
+                if (!doc.user_id) {
+                  try {
+                    await supabase
+                      .from("clinic_doctor")
+                      .update({ user_id: session.user.id })
+                      .eq("doctor_id", doc.doctor_id);
+                  } catch {
+                    // Non-blocking affiliation link
+                  }
                 }
               }
             }
           }
+        }
 
-          // 4c. Secondary fallback to local doctor profile / clinic doctors cache
-          if (!doctorFound) {
-            try {
-              const storedDocProfile = localStorage.getItem("dermai_doctor_profile");
-              const storedClinicDocs = localStorage.getItem("dermai_clinic_doctors");
-              if (storedDocProfile) {
-                const parsed = JSON.parse(storedDocProfile);
-                if (parsed.email?.toLowerCase().trim() === currentEmail || parsed.id === session!.user.id) {
-                  doctorFound = true;
-                }
+        // 4c. Secondary fallback to local doctor profile / clinic doctors cache
+        if (!doctorFound) {
+          try {
+            const storedDocProfile = localStorage.getItem("dermai_doctor_profile");
+            const storedClinicDocs = localStorage.getItem("dermai_clinic_doctors");
+            if (storedDocProfile) {
+              const parsed = JSON.parse(storedDocProfile);
+              if (parsed.email?.toLowerCase().trim() === currentEmail || parsed.id === session!.user.id) {
+                doctorFound = true;
               }
-              if (!doctorFound && storedClinicDocs) {
-                const parsedDocs = JSON.parse(storedClinicDocs);
-                if (Array.isArray(parsedDocs) && parsedDocs.some((d: any) => d.email?.toLowerCase().trim() === currentEmail || d.userId === session!.user.id)) {
-                  doctorFound = true;
-                }
-              }
-            } catch {
-              /* ignore */
             }
+            if (!doctorFound && storedClinicDocs) {
+              const parsedDocs = JSON.parse(storedClinicDocs);
+              if (Array.isArray(parsedDocs) && parsedDocs.some((d: any) => d.email?.toLowerCase().trim() === currentEmail || d.userId === session!.user.id)) {
+                doctorFound = true;
+              }
+            }
+          } catch {
+            /* ignore */
           }
         }
 
@@ -380,6 +394,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (cancelled) return;
 
+        setAffiliations(doctorAffiliations);
         setAccountStatus(currentStatus);
         setRole(roleToPersist);
         setIsProfileComplete(profileComplete);
@@ -526,6 +541,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         accountStatus,
         loading,
         isProfileComplete,
+        affiliations,
         setIsProfileComplete,
         signInWithMagicLink,
         signInWithGoogle,

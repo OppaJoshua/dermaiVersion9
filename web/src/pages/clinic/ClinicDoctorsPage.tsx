@@ -1,3 +1,8 @@
+import { useAuth } from "@/context/AuthContext";
+import { DoctorDutyScheduleView } from "@/components/common/DoctorDutyScheduleCard";
+import { parseAssignedDutySchedule } from "@/lib/doctorDutySchedule";
+import { findCrossClinicDutyConflicts, type ScheduleConflict } from "@/lib/doctorScheduleConflicts";
+import { fetchClinicDoctorRows } from "@/lib/clinicDoctorRoster";
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   UserPlus,
@@ -55,6 +60,8 @@ export type DayShift = {
   startTime: string;
   endTime: string;
 };
+
+export type { ScheduleConflict } from "@/lib/doctorScheduleConflicts";
 
 export type DoctorAccount = {
   id: string;
@@ -144,27 +151,6 @@ function getShiftDurationHours(startStr: string, endStr: string): number {
   return Math.round(((endMin - startMin) / 60) * 10) / 10;
 }
 
-function getDoctorShiftForDay(
-  doc: { dutyStartTime?: string; dutyEndTime?: string; dutySchedule?: Record<string, any> },
-  day: string
-): { startTime: string; endTime: string } {
-  if (doc.dutySchedule) {
-    if (doc.dutySchedule.weeklyShifts && doc.dutySchedule.weeklyShifts[day] && doc.dutySchedule.weeklyShifts[day].length > 0) {
-      const shifts = doc.dutySchedule.weeklyShifts[day];
-      return {
-        startTime: shifts[0].startTime,
-        endTime: shifts[shifts.length - 1].endTime,
-      };
-    }
-    if (doc.dutySchedule[day] && doc.dutySchedule[day].startTime && doc.dutySchedule[day].endTime) {
-      return doc.dutySchedule[day];
-    }
-  }
-  return {
-    startTime: doc.dutyStartTime || "08:00",
-    endTime: doc.dutyEndTime || "17:00",
-  };
-}
 
 /* ── Shift Progress Calculation Helper ────────────────────────────── */
 const calculateShiftProgress = (
@@ -361,7 +347,7 @@ function ModernTimeSelect({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12 }}
-            className="absolute left-0 min-w-[130px] w-full top-full mt-1 max-h-52 overflow-y-auto rounded-xl border border-gray-100 bg-white shadow-xl z-50 p-1 divide-y divide-gray-50/80"
+            className="absolute left-0 min-w-32.5 w-full top-full mt-1 max-h-52 overflow-y-auto rounded-xl border border-gray-100 bg-white shadow-xl z-50 p-1 divide-y divide-gray-50/80"
           >
             {effectiveOptions.map((opt) => {
               const isSelected = opt.value === value;
@@ -542,7 +528,16 @@ function DoctorSelectDropdown({
 
 /* ── Main Page Component ──────────────────────────────────────────── */
 export default function ClinicDoctorsPage() {
-  const { clinicName: verifiedClinicName, clinicId } = useClinicVerification();
+  const { user } = useAuth();
+  const { clinicId, clinicName } = useClinicVerification();
+  return <ClinicDoctorsContent key={`${user?.id || "signed-out"}:${clinicId || "unresolved"}`} clinicId={clinicId} verifiedClinicName={clinicName} />;
+}
+
+function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: string | null; verifiedClinicName: string }) {
+  const { user } = useAuth();
+  const rosterCacheKey = `dermai_clinic_doctors:${user?.id || ""}:${clinicId || ""}`;
+  const doctorRequestRef = useRef(0);
+  const [doctorsError, setDoctorsError] = useState("");
   const clinicDisplayName = verifiedClinicName || "Clinic Portal";
 
   // Tab State: "register" | "schedule"
@@ -594,7 +589,7 @@ export default function ClinicDoctorsPage() {
     weeklyShifts: Record<string, DoctorShift[]>;
     doctorSlotInterval: number | null; // null = inherit clinic default
   }>({
-    dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+    dutyDays: [],
     weeklyShifts: {},
     doctorSlotInterval: null,
   });
@@ -605,6 +600,11 @@ export default function ClinicDoctorsPage() {
     daysCount: number;
     shiftsCount: number;
   } | null>(null);
+
+  // Cross-clinic schedule collision detection state
+  const [otherClinicShiftResult, setOtherClinicShiftResult] = useState<{ doctorId: string; clinicId: string; rows: any[] } | null>(null);
+
+  const [loadingOtherShifts, setLoadingOtherShifts] = useState(false);
 
   /* ── Modals State ───────────────────────────────────────────────── */
   const [expandedDays, setExpandedDays] = useState<string[]>(["Wednesday"]);
@@ -758,36 +758,71 @@ export default function ClinicDoctorsPage() {
     }
   }, [allDoctors, selectedDoctorId]);
 
-  // Populate schedule form whenever selected doctor changes
+  // Hydrate only assigned shifts. Missing assignments start with an empty form.
   useEffect(() => {
-    if (selectedDoctor) {
-      const parsed = parseDoctorSchedule(
-        selectedDoctor.dutySchedule,
-        selectedDoctor.dutyDays,
-        clinicOpenTime,
-        clinicCloseTime
-      );
+    const parsed = parseAssignedDutySchedule({
+      duty_schedule: selectedDoctor?.dutySchedule,
+      duty_days: selectedDoctor?.dutyDays,
+    });
+    setScheduleForm({
+      dutyDays: ALL_DAYS_OF_WEEK.filter(day => parsed?.weeklyShifts[day]?.length),
+      weeklyShifts: parsed?.weeklyShifts || {},
+      doctorSlotInterval: parsed?.slotIntervalMinutes ?? null,
+    });
+    setScheduleError("");
+    setScheduleSavedFeedback(null);
+  }, [selectedDoctor?.id, clinicId]);
 
-      // Prioritize selectedDoctor.dutyDays if explicitly defined
-      const activeDays = Array.isArray(selectedDoctor.dutyDays) && selectedDoctor.dutyDays.length > 0
-        ? selectedDoctor.dutyDays
-        : ALL_DAYS_OF_WEEK.filter(
-          (day) => parsed.weeklyShifts[day] && parsed.weeklyShifts[day].length > 0
-        );
-
-      const finalDays = activeDays.length > 0
-        ? activeDays
-        : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-
-      setScheduleForm({
-        dutyDays: finalDays,
-        weeklyShifts: parsed.weeklyShifts,
-        doctorSlotInterval: parsed.slotIntervalMinutes ?? null,
-      });
-      setScheduleError("");
-      setScheduleSavedFeedback(null);
+  // Fetch active duty schedules for this doctor across other clinic branches
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchOtherClinicShifts() {
+      setOtherClinicShiftResult(null);
+      if (!selectedDoctor?.id || !clinicId) {
+        setLoadingOtherShifts(false);
+        return;
+      }
+      const setOtherClinicShifts = (rows: any[]) => setOtherClinicShiftResult({ doctorId: selectedDoctor.id, clinicId, rows });
+      setLoadingOtherShifts(true);
+      try {
+        const { data, error } = await supabase.rpc("get_owned_doctor_other_shifts", {
+          target_doctor_id: selectedDoctor.id,
+        });
+        if (!cancelled) {
+          if (!error && data) {
+            setOtherClinicShifts(data);
+          } else {
+            setOtherClinicShifts([]);
+          }
+        }
+      } catch (err) {
+        console.warn("[ClinicDoctorsPage] Failed to fetch doctor cross-clinic shifts:", err);
+        if (!cancelled) setOtherClinicShifts([]);
+      } finally {
+        if (!cancelled) setLoadingOtherShifts(false);
+      }
     }
-  }, [selectedDoctor?.id, clinicOpenTime, clinicCloseTime]);
+
+    fetchOtherClinicShifts();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDoctor?.id, selectedDoctor?.userId, selectedDoctor?.user_id, clinicId]);
+
+  const otherClinicShifts = otherClinicShiftResult?.doctorId === selectedDoctor?.id && otherClinicShiftResult?.clinicId === clinicId
+    ? otherClinicShiftResult?.rows || [] : [];
+  // Intentional cross-clinic protection: the RPC returns only this doctor's
+  // other affiliations. Preview and save use the same assigned-shift validator.
+  const scheduleConflicts = useMemo<ScheduleConflict[]>(() => {
+    if (!selectedDoctor) return [];
+    return findCrossClinicDutyConflicts(otherClinicShifts, {
+      doctorId: selectedDoctor.id,
+      clinicId: clinicId || "",
+      doctorName: selectedDoctor.name,
+      days: scheduleForm.dutyDays,
+      weeklyShifts: scheduleForm.weeklyShifts,
+    });
+  }, [selectedDoctor, clinicId, otherClinicShifts, scheduleForm.dutyDays, scheduleForm.weeklyShifts]);
 
   // Shift summaries and capacity calculation across all doctor shifts
   const shiftSummaries = useMemo(() => {
@@ -1161,11 +1196,11 @@ export default function ClinicDoctorsPage() {
 
   // 2. Fetch doctors for the current clinic
   const fetchDoctors = useCallback(async () => {
+    const requestId = ++doctorRequestRef.current;
     setLoadingDoctors(true);
+    setDoctorsError("");
     try {
-      let query = supabase
-        .from("clinic_doctor")
-        .select(`
+      const data = await fetchClinicDoctorRows(supabase, clinicId, user?.id, `
           doctor_id,
           doctor_name,
           email,
@@ -1187,19 +1222,12 @@ export default function ClinicDoctorsPage() {
               name
             )
           )
-        `)
-        .order("created_at", { ascending: false });
-
-      if (clinicId) {
-        query = query.eq("clinic_id", clinicId);
-      }
-
-      const { data, error } = await query;
-
-      if (!error && data) {
+        `);
+      if (requestId !== doctorRequestRef.current) return;
+      {
         const localPhotoMap = new Map<string, string>();
         try {
-          const cached = localStorage.getItem("dermai_clinic_doctors");
+          const cached = localStorage.getItem(rosterCacheKey);
           if (cached) {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed)) {
@@ -1219,7 +1247,7 @@ export default function ClinicDoctorsPage() {
             .map((ds: any) => ds.specializations)
             .filter(Boolean);
 
-          let parsedDutyDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+          let parsedDutyDays: string[] = [];
           if (Array.isArray(doc.duty_days) && doc.duty_days.length > 0) {
             parsedDutyDays = doc.duty_days;
           } else if (typeof doc.duty_days === "string" && doc.duty_days.trim()) {
@@ -1273,8 +1301,8 @@ export default function ClinicDoctorsPage() {
             userId: doc.user_id,
             user_id: doc.user_id,
             dutyDays: parsedDutyDays,
-            dutyStartTime: doc.duty_start_time || "08:00",
-            dutyEndTime: doc.duty_end_time || "17:00",
+            dutyStartTime: doc.duty_start_time || "",
+            dutyEndTime: doc.duty_end_time || "",
             dutySchedule: parsedDutySchedule,
             maxPatientsPerDay: parsedMaxPatients,
             slotIntervalMinutes: parsedSlotInterval,
@@ -1288,50 +1316,35 @@ export default function ClinicDoctorsPage() {
 
         setAllDoctors(mapped);
         try {
-          localStorage.setItem("dermai_clinic_doctors", JSON.stringify(mapped));
-        } catch { }
-      } else {
-        // Fallback to local storage
-        try {
-          const saved = localStorage.getItem("dermai_clinic_doctors");
-          if (saved) {
-            const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed)) {
-              setAllDoctors(parsed);
-            }
-          }
+          localStorage.setItem(rosterCacheKey, JSON.stringify(mapped));
         } catch { }
       }
     } catch {
-      // Offline fallback
+      if (requestId === doctorRequestRef.current) {
+        setAllDoctors([]);
+        setDoctorsError("Could not load this clinic's doctors. Please try again.");
+      }
     } finally {
-      setLoadingDoctors(false);
+      if (requestId === doctorRequestRef.current) setLoadingDoctors(false);
     }
-  }, [clinicId, clinicDisplayName]);
+  }, [clinicId, clinicDisplayName, user?.id, rosterCacheKey]);
 
   useEffect(() => {
     fetchSpecializations();
-    fetchDoctors();
-
-    const handleStorageUpdate = () => {
-      try {
-        const saved = localStorage.getItem("dermai_clinic_doctors");
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) {
-            setAllDoctors(parsed);
-          }
-        }
-      } catch { }
-    };
-
+    void fetchDoctors();
+    const handleStorageUpdate = () => { void fetchDoctors(); };
+    const channel = clinicId ? supabase.channel(`clinic-doctors-${clinicId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "clinic_doctor", filter: `clinic_id=eq.${clinicId}` }, handleStorageUpdate)
+      .subscribe() : null;
     window.addEventListener("storage", handleStorageUpdate);
     window.addEventListener("dermai_doctors_updated", handleStorageUpdate);
     return () => {
+      ++doctorRequestRef.current;
+      if (channel) void supabase.removeChannel(channel);
       window.removeEventListener("storage", handleStorageUpdate);
       window.removeEventListener("dermai_doctors_updated", handleStorageUpdate);
     };
-  }, [fetchSpecializations, fetchDoctors]);
+  }, [clinicId, fetchSpecializations, fetchDoctors]);
 
   /* ── Tab A Actions: Register Doctor ─────────────────────────────── */
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1510,9 +1523,10 @@ export default function ClinicDoctorsPage() {
             photo_url: uploadedPhotoUrl || null,
             status: "Active",
             user_id: existingUserId,
-            duty_days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
-            duty_start_time: "08:00",
-            duty_end_time: "17:00",
+            duty_days: [],
+            duty_schedule: null,
+            duty_start_time: null,
+            duty_end_time: null,
           })
           .select("doctor_id")
           .single();
@@ -1529,9 +1543,10 @@ export default function ClinicDoctorsPage() {
         const updatePayload: Record<string, unknown> = {
           contact_number: doctorContact,
           photo_url: uploadedPhotoUrl || null,
-          duty_days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
-          duty_start_time: "08:00",
-          duty_end_time: "17:00",
+          duty_days: [],
+            duty_schedule: null,
+          duty_start_time: null,
+          duty_end_time: null,
         };
 
         const updateRes = await supabase
@@ -1579,15 +1594,15 @@ export default function ClinicDoctorsPage() {
         specializations: assignedSpecs,
         clinicName: clinicDisplayName,
         status: "Active",
-        dutyDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
-        dutyStartTime: "08:00",
-        dutyEndTime: "17:00",
+        dutyDays: [],
+        dutyStartTime: "",
+        dutyEndTime: "",
       };
 
       const updatedList = [finalizedDoctor, ...allDoctors];
       setAllDoctors(updatedList);
       setSelectedDoctorId(finalizedDoctor.id);
-      localStorage.setItem("dermai_clinic_doctors", JSON.stringify(updatedList));
+      localStorage.setItem(rosterCacheKey, JSON.stringify(updatedList));
       window.dispatchEvent(new Event("storage"));
       window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
 
@@ -1793,22 +1808,16 @@ export default function ClinicDoctorsPage() {
 
   const resetScheduleForm = () => {
     if (selectedDoctor) {
-      const parsed = parseDoctorSchedule(
-        selectedDoctor.dutySchedule,
-        selectedDoctor.dutyDays,
-        clinicOpenTime,
-        clinicCloseTime
-      );
+      const parsed = parseAssignedDutySchedule({
+        duty_schedule: selectedDoctor.dutySchedule,
+        duty_days: selectedDoctor.dutyDays,
+      }) || { weeklyShifts: {} };
 
-      const activeDays = Array.isArray(selectedDoctor.dutyDays) && selectedDoctor.dutyDays.length > 0
-        ? selectedDoctor.dutyDays
-        : ALL_DAYS_OF_WEEK.filter(
+      const activeDays = ALL_DAYS_OF_WEEK.filter(
           (day) => parsed.weeklyShifts[day] && parsed.weeklyShifts[day].length > 0
         );
 
-      const finalDays = activeDays.length > 0
-        ? activeDays
-        : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+      const finalDays = activeDays;
 
       setScheduleForm({
         dutyDays: finalDays,
@@ -1821,12 +1830,21 @@ export default function ClinicDoctorsPage() {
   };
 
   const handleSaveSchedule = async () => {
-    if (!selectedDoctor) {
-      setScheduleError("Please select a registered doctor first.");
+    if (!selectedDoctor || !clinicId) {
+      setScheduleError("Please select a registered doctor and clinic first.");
       return;
     }
     if (scheduleForm.dutyDays.length === 0) {
       setScheduleError("Please select at least one weekly duty day.");
+      return;
+    }
+
+    // Pre-save conflict validation: Block saving if hours conflict with another clinic
+    if (scheduleConflicts.length > 0) {
+      const first = scheduleConflicts[0];
+      setScheduleError(
+        `Doctor is not available: ${first.doctorName} is already on duty at ${first.otherClinicName} on ${first.day} from ${first.otherStartTime} to ${first.otherEndTime}. Please select non-overlapping hours.`
+      );
       return;
     }
 
@@ -1837,19 +1855,10 @@ export default function ClinicDoctorsPage() {
     });
 
     for (const day of scheduleForm.dutyDays) {
-      let shifts = scheduleForm.weeklyShifts[day] || [];
-      if (shifts.length === 0) {
-        const defaultStart = clinicOpenTime || "08:00";
-        const defaultEnd =
-          timeToMinutes(clinicCloseTime) <= 12 * 60 ? clinicCloseTime : "12:00";
-        shifts = [
-          {
-            id: `shift-${day.toLowerCase()}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            label: "Morning Shift",
-            startTime: defaultStart,
-            endTime: defaultEnd,
-          },
-        ];
+      const shifts = scheduleForm.weeklyShifts[day] || [];
+      if (!shifts.length) {
+        setScheduleError(`Please add a shift for ${day} or turn off that duty day.`);
+        return;
       }
 
       const errors = validateDoctorShifts(shifts, day, clinicOpenTime, clinicCloseTime, clinicOperatingDays);
@@ -1871,6 +1880,21 @@ export default function ClinicDoctorsPage() {
     setScheduleSavedFeedback(null);
 
     try {
+      // Recheck authorized assignments immediately before saving. The RPC
+      // excludes the current affiliation; the validator also excludes it.
+      const { data: freshOtherShifts, error: shiftsError } = await supabase.rpc("get_owned_doctor_other_shifts", {
+        target_doctor_id: selectedDoctor.id,
+      });
+      if (shiftsError) throw new Error("Could not verify cross-clinic duty conflicts. Please try again.");
+      const freshConflicts = findCrossClinicDutyConflicts(freshOtherShifts || [], {
+        doctorId: selectedDoctor.id,
+        clinicId: clinicId || "",
+        doctorName: selectedDoctor.name,
+        days: scheduleForm.dutyDays,
+        weeklyShifts: normalizedWeeklyShifts,
+      });
+      if (freshConflicts.length) throw new Error(freshConflicts[0].message);
+
       const serializedSchedule = serializeDoctorSchedule(
         {
           weeklyShifts: normalizedWeeklyShifts,
@@ -1899,13 +1923,6 @@ export default function ClinicDoctorsPage() {
         slotIntervalMinutes: effectiveInterval,
       };
 
-      const nextList = allDoctors.map((d) => (d.id === selectedDoctor.id ? updatedDoctor : d));
-      setAllDoctors(nextList);
-      try {
-        localStorage.setItem("dermai_clinic_doctors", JSON.stringify(nextList));
-        localStorage.setItem("dermai_selected_doctor_id", selectedDoctor.id);
-      } catch { }
-
       // Persist to Supabase clinic_doctor table
       const updatePayload: Record<string, unknown> = {
         duty_days: updatedDoctor.dutyDays,
@@ -1914,22 +1931,22 @@ export default function ClinicDoctorsPage() {
         duty_schedule: serializedSchedule,
       };
 
-      // Scope directly by doctor_id (UUID primary key)
-      let updateRes = await supabase
+      const updateRes = await supabase
         .from("clinic_doctor")
         .update(updatePayload)
         .eq("doctor_id", selectedDoctor.id)
-        .select("doctor_id");
+        .eq("clinic_id", clinicId!)
+        .select("doctor_id")
+        .single();
+      if (updateRes.error) throw new Error(updateRes.error.message);
+      if (!updateRes.data) throw new Error("The clinic affiliation was not updated. Please reload and try again.");
 
-      // Retry without duty_schedule if schema issue
-      if (updateRes.error && updateRes.error.message?.includes("duty_schedule")) {
-        delete updatePayload.duty_schedule;
-        updateRes = await supabase
-          .from("clinic_doctor")
-          .update(updatePayload)
-          .eq("doctor_id", selectedDoctor.id)
-          .select("doctor_id");
-      }
+      const nextList = allDoctors.map((d) => (d.id === selectedDoctor.id ? updatedDoctor : d));
+      setAllDoctors(nextList);
+      try {
+        localStorage.setItem(rosterCacheKey, JSON.stringify(nextList));
+        localStorage.setItem("dermai_selected_doctor_id", selectedDoctor.id);
+      } catch { }
 
       window.dispatchEvent(new Event("storage"));
       window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
@@ -1943,12 +1960,7 @@ export default function ClinicDoctorsPage() {
       });
       setTimeout(() => setScheduleSavedFeedback(null), 5000);
 
-      if (updateRes.error) {
-        console.warn("Notice: could not save schedule to Supabase directly:", updateRes.error);
-        setSuccessMsg(`Duty schedule for ${updatedDoctor.name} updated successfully.`);
-      } else {
-        setSuccessMsg(`Duty schedule and shifts for ${updatedDoctor.name} updated successfully.`);
-      }
+      setSuccessMsg(`Duty schedule and shifts for ${updatedDoctor.name} updated successfully.`);
       setTimeout(() => setSuccessMsg(""), 4500);
 
       logAuditEvent({
@@ -2140,14 +2152,14 @@ export default function ClinicDoctorsPage() {
       );
 
       try {
-        const currentCached = localStorage.getItem("dermai_clinic_doctors");
+        const currentCached = localStorage.getItem(rosterCacheKey);
         if (currentCached) {
           const parsed = JSON.parse(currentCached);
           if (Array.isArray(parsed)) {
             const updatedCache = parsed.map((d: any) =>
               d.id === editingDoctor.id ? updatedDoctor : d
             );
-            localStorage.setItem("dermai_clinic_doctors", JSON.stringify(updatedCache));
+            localStorage.setItem(rosterCacheKey, JSON.stringify(updatedCache));
             window.dispatchEvent(new Event("storage"));
             window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
           }
@@ -2197,7 +2209,7 @@ export default function ClinicDoctorsPage() {
     try {
       const updated = allDoctors.map((d) => (d.id === doctor.id ? { ...d, status: nextStatus } : d));
       setAllDoctors(updated);
-      localStorage.setItem("dermai_clinic_doctors", JSON.stringify(updated));
+      localStorage.setItem(rosterCacheKey, JSON.stringify(updated));
       window.dispatchEvent(new Event("storage"));
       window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
 
@@ -2241,7 +2253,7 @@ export default function ClinicDoctorsPage() {
     if (!deleteTarget) return;
     const filtered = allDoctors.filter((d) => d.id !== deleteTarget);
     setAllDoctors(filtered);
-    localStorage.setItem("dermai_clinic_doctors", JSON.stringify(filtered));
+    localStorage.setItem(rosterCacheKey, JSON.stringify(filtered));
     window.dispatchEvent(new Event("storage"));
     window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
 
@@ -2393,10 +2405,10 @@ export default function ClinicDoctorsPage() {
                   {onDutyDoctors.map((item) => (
                     <div
                       key={item.doctor.id}
-                      className="relative overflow-hidden rounded-2xl border border-pink-100 bg-gradient-to-bl from-pink-100/60 via-pink-50/30 to-white p-4 flex flex-col justify-between text-left shadow-[0_8px_22px_-12px_rgba(128,19,54,0.22)] hover:border-pink-200 hover:shadow-[0_10px_26px_-12px_rgba(128,19,54,0.30)] transition-all w-full max-w-[330px]"
+                      className="relative overflow-hidden rounded-2xl border border-pink-100 bg-linear-to-bl from-pink-100/60 via-pink-50/30 to-white p-4 flex flex-col justify-between text-left shadow-[0_8px_22px_-12px_rgba(128,19,54,0.22)] hover:border-pink-200 hover:shadow-[0_10px_26px_-12px_rgba(128,19,54,0.30)] transition-all w-full max-w-82.5"
                     >
                       {/* Left accent bar */}
-                      <span className="absolute left-0 top-3.5 bottom-3.5 w-1 rounded-r-full bg-gradient-to-b from-[#b0245f] to-[#801336]" />
+                      <span className="absolute left-0 top-3.5 bottom-3.5 w-1 rounded-r-full bg-linear-to-b from-[#b0245f] to-[#801336]" />
 
                       <div>
                         {/* Top row: avatar + name/specialty + On Duty pill */}
@@ -2462,7 +2474,7 @@ export default function ClinicDoctorsPage() {
                               aria-valuenow={item.shiftProgress || 35}
                             >
                               <div
-                                className="h-full rounded-full bg-gradient-to-r from-[#b0245f] to-[#801336] transition-all"
+                                className="h-full rounded-full bg-linear-to-r from-[#b0245f] to-[#801336] transition-all"
                                 style={{ width: `${item.shiftProgress || 35}%` }}
                               />
                             </div>
@@ -2486,7 +2498,7 @@ export default function ClinicDoctorsPage() {
                             setSelectedDoctorId(item.doctor.id);
                             setActiveTab("schedule");
                           }}
-                          className="h-9 w-full px-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-[#801336] to-[#a3246b] hover:from-[#6c0f2d] hover:to-[#8f1d5c] transition-all cursor-pointer shadow-[0_6px_14px_-6px_rgba(128,19,54,0.5)] inline-flex items-center justify-center gap-1 whitespace-nowrap"
+                          className="h-9 w-full px-2 rounded-xl text-xs font-semibold text-white bg-linear-to-r from-[#801336] to-[#a3246b] hover:from-[#6c0f2d] hover:to-[#8f1d5c] transition-all cursor-pointer shadow-[0_6px_14px_-6px_rgba(128,19,54,0.5)] inline-flex items-center justify-center gap-1 whitespace-nowrap"
                         >
                           <span>Set duty hours</span>
                           <span className="text-white/90 font-bold ml-0.5">›</span>
@@ -2505,12 +2517,17 @@ export default function ClinicDoctorsPage() {
                   <div className="flex items-center gap-2">
                     <h2 className="text-base font-bold text-gray-900">All Registered Doctors</h2>
                     <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-pink-100 text-[#801336]">
-                      {filteredRegisteredDoctors.length}
+                      {allDoctors.length}
                     </span>
                   </div>
                 </div>
               </div>
 
+              {doctorsError && (
+                <div role="alert" className="mt-3 text-sm text-red-600">
+                  {doctorsError} <button type="button" onClick={() => void fetchDoctors()} className="underline">Retry</button>
+                </div>
+              )}
               {/* Search & Filter Controls */}
               <div className="flex items-center gap-3 mt-4">
                 <div className="relative flex-1">
@@ -2713,7 +2730,7 @@ export default function ClinicDoctorsPage() {
                       </span>
                     </button>
                     {idx < arr.length - 1 && (
-                      <div className="h-[1.5px] bg-gray-200 flex-1 min-w-[10px] mx-1.5 sm:mx-2.5" />
+                      <div className="h-[1.5px] bg-gray-200 flex-1 min-w-2.5 mx-1.5 sm:mx-2.5" />
                     )}
                   </React.Fragment>
                 ))}
@@ -2758,6 +2775,40 @@ export default function ClinicDoctorsPage() {
                     disabled={loadingDoctors || savingSchedule}
                   />
                 </div>
+
+                {/* Conflict Warning & Action Block */}
+                {scheduleConflicts.length > 0 && (
+                  <div className="rounded-2xl border-2 border-red-300 bg-red-50/95 p-4 sm:p-5 shadow-sm space-y-3 text-left">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-red-100 border border-red-200 flex items-center justify-center shrink-0 text-red-600 mt-0.5 shadow-2xs">
+                        <AlertTriangle className="w-5 h-5 text-red-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="text-sm font-extrabold text-red-900 tracking-tight">
+                            Doctor is not available
+                          </h4>
+                          <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded-full bg-red-200 text-red-900 border border-red-300">
+                            Multi-Clinic Schedule Conflict
+                          </span>
+                        </div>
+                        <div className="mt-2 space-y-1.5 text-xs text-red-800">
+                          {scheduleConflicts.map((c, idx) => (
+                            <div key={idx} className="flex items-start gap-1.5 leading-relaxed">
+                              <span className="text-red-500 font-bold shrink-0">•</span>
+                              <span>
+                                <strong>{c.doctorName}</strong> is already on duty at <strong className="underline decoration-red-300 underline-offset-2">{c.otherClinicName}</strong> on <strong className="text-red-900">{c.day}</strong> from <strong>{c.otherStartTime}</strong> to <strong>{c.otherEndTime}</strong>.
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="mt-2.5 text-[11px] font-semibold text-red-700 bg-white/70 rounded-lg px-2.5 py-1.5 border border-red-200/60">
+                          ⚠️ Saving is disabled. Please select non-overlapping duty hours or uncheck the conflicting day to proceed.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* 2. Daily Schedule Card */}
                 <div className="bg-white rounded-2xl border border-gray-200/80 p-5 sm:p-6 shadow-xs space-y-4">
@@ -2856,6 +2907,7 @@ export default function ClinicDoctorsPage() {
                       );
 
                       const coWorkingForDay = coWorkingDoctors.filter((c) => c.day === day);
+                      const hasDayConflict = scheduleConflicts.some((c) => c.day === day);
 
                       return (
                         <div
@@ -2888,8 +2940,8 @@ export default function ClinicDoctorsPage() {
                                 }}
                                 className={`relative flex items-center justify-center shrink-0 cursor-pointer rounded-full transition-all duration-200 focus:outline-none ${
                                   isDuty
-                                    ? "w-[22px] h-[22px] bg-[#801336] text-white ring-2 ring-pink-100 shadow-2xs"
-                                    : "w-[22px] h-[22px] bg-white border-[1.5px] border-gray-300 hover:border-gray-400"
+                                    ? "w-5.5 h-5.5 bg-[#801336] text-white ring-2 ring-pink-100 shadow-2xs"
+                                    : "w-5.5 h-5.5 bg-white border-[1.5px] border-gray-300 hover:border-gray-400"
                                 }`}
                                 title={isDuty ? `Disable ${day}` : `Enable ${day}`}
                               >
@@ -2899,7 +2951,7 @@ export default function ClinicDoctorsPage() {
                               </button>
 
                               {/* Day name & shifts count */}
-                              <div className="min-w-[85px]">
+                              <div className="min-w-21.25">
                                 <span className={`text-xs font-bold block ${isDuty ? "text-gray-900" : "text-gray-400"}`}>
                                   {day}
                                 </span>
@@ -2923,6 +2975,12 @@ export default function ClinicDoctorsPage() {
                                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-semibold border border-amber-200 flex items-center gap-1">
                                       <AlertTriangle className="w-3 h-3" />
                                       Conflict
+                                    </span>
+                                  )}
+                                  {hasDayConflict && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-800 font-bold border border-red-300 flex items-center gap-1 shadow-2xs">
+                                      <AlertTriangle className="w-3 h-3 text-red-600" />
+                                      <span>Conflict (Other Clinic)</span>
                                     </span>
                                   )}
                                 </div>
@@ -3042,7 +3100,7 @@ export default function ClinicDoctorsPage() {
                                             </div>
 
                                             {/* Shift name */}
-                                            <div className="flex-1 min-w-[130px] sm:min-w-[170px]">
+                                            <div className="flex-1 min-w-32.5 sm:min-w-42.5">
                                               <label className="text-[11px] font-semibold text-gray-500 block mb-1">
                                                 Shift name
                                               </label>
@@ -3058,7 +3116,7 @@ export default function ClinicDoctorsPage() {
                                             </div>
 
                                             {/* Start time */}
-                                            <div className="w-[115px]">
+                                            <div className="w-28.75">
                                               <label className="text-[11px] font-semibold text-gray-500 block mb-1">
                                                 Start
                                               </label>
@@ -3077,7 +3135,7 @@ export default function ClinicDoctorsPage() {
                                             </div>
 
                                             {/* End time */}
-                                            <div className="w-[115px]">
+                                            <div className="w-28.75">
                                               <label className="text-[11px] font-semibold text-gray-500 block mb-1">
                                                 End
                                               </label>
@@ -3094,7 +3152,7 @@ export default function ClinicDoctorsPage() {
                                             </div>
 
                                             {/* Slot Interval */}
-                                            <div className="w-[135px]">
+                                            <div className="w-33.75">
                                               <label className="text-[11px] font-semibold text-gray-500 block mb-1">
                                                 Slot interval
                                               </label>
@@ -3211,7 +3269,7 @@ export default function ClinicDoctorsPage() {
               {/* ── Right Column: Weekly Summary, Appointment Interval, Slot Preview, Co-Working ── */}
               <div className="lg:col-span-4 space-y-4">
                 {/* 1. Weekly Summary Card (Gradient Card Matching Mockup) */}
-                <div className="rounded-3xl p-5 sm:p-6 bg-gradient-to-br from-[#7a1233] via-[#8d1840] to-[#9c1e4d] text-white shadow-xs space-y-4">
+                <div className="rounded-3xl p-5 sm:p-6 bg-linear-to-br from-[#7a1233] via-[#8d1840] to-[#9c1e4d] text-white shadow-xs space-y-4">
                   <div>
                     <span className="text-[11px] font-medium text-white/80 block">
                       Weekly summary
@@ -3364,7 +3422,7 @@ export default function ClinicDoctorsPage() {
                       Set the doctor's duty hours to preview appointment slots.
                     </div>
                   ) : (
-                    <div className="max-h-[380px] overflow-y-auto pr-1 space-y-2.5">
+                    <div className="max-h-95 overflow-y-auto pr-1 space-y-2.5">
                       {shiftSummaries.map(({ day, shift, effective }, sIdx) => {
                         const duration = getShiftDurationHours(shift.startTime, shift.endTime);
 
@@ -3440,6 +3498,16 @@ export default function ClinicDoctorsPage() {
 
             {/* Bottom Actions: Save & Reset */}
             <div className="bg-white rounded-2xl border border-gray-200/80 p-4 shadow-xs">
+              {/* Conflict Action Block Notice */}
+              {scheduleConflicts.length > 0 && (
+                <div className="mb-3 flex items-start gap-2.5 text-xs font-semibold text-red-800 bg-red-50 border border-red-200 rounded-xl px-4 py-3 shadow-2xs">
+                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-red-900">Doctor is not available:</span> Overlapping duty hours detected with another clinic branch. Please select non-overlapping hours to enable saving.
+                  </div>
+                </div>
+              )}
+
               {/* Inline Schedule Save Success Notification */}
               {scheduleSavedFeedback && (
                 <div className="mb-3 flex items-center gap-2.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-300 rounded-xl px-4 py-3 shadow-xs">
@@ -3468,9 +3536,16 @@ export default function ClinicDoctorsPage() {
                 <button
                   type="button"
                   onClick={handleSaveSchedule}
-                  disabled={savingSchedule || !selectedDoctor}
+                  disabled={savingSchedule || !selectedDoctor || scheduleConflicts.length > 0 || loadingOtherShifts}
+                  title={
+                    scheduleConflicts.length > 0
+                      ? "Cannot save: Doctor has overlapping duty hours at another clinic"
+                      : undefined
+                  }
                   className={`inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-60 shadow-xs cursor-pointer ${
-                    scheduleSavedFeedback
+                    scheduleConflicts.length > 0
+                      ? "bg-gray-400 hover:bg-gray-400 text-white cursor-not-allowed"
+                      : scheduleSavedFeedback
                       ? "bg-emerald-600 hover:bg-emerald-700 text-white"
                       : "bg-[#801336] hover:bg-[#6c0f2d] text-white"
                   }`}
@@ -3479,6 +3554,16 @@ export default function ClinicDoctorsPage() {
                     <>
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       <span>Saving Schedule...</span>
+                    </>
+                  ) : loadingOtherShifts ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Checking Shifts...</span>
+                    </>
+                  ) : scheduleConflicts.length > 0 ? (
+                    <>
+                      <AlertTriangle className="w-3.5 h-3.5 text-white" />
+                      <span>Doctor Unavailable (Conflict)</span>
                     </>
                   ) : scheduleSavedFeedback ? (
                     <>
@@ -3501,12 +3586,12 @@ export default function ClinicDoctorsPage() {
       <ModalPortal isOpen={Boolean(editingDoctor)}>
         <AnimatePresence>
           {editingDoctor && (
-            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 8 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 8 }}
-                className="relative z-[9999] w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[92vh] flex flex-col text-left"
+                className="relative z-9999 w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[92vh] flex flex-col text-left"
               >
                 {/* Modal Header */}
                 <div className="px-6 pt-5 pb-3.5 flex items-center justify-between border-b border-gray-100 bg-gray-50/50 shrink-0">
@@ -3599,7 +3684,7 @@ export default function ClinicDoctorsPage() {
                         type="text"
                         value={editForm.name}
                         onChange={(e) => setEditForm((p) => ({ ...p, name: e.target.value }))}
-                        placeholder="e.g. Dr. Nathan Bayutas"
+                        placeholder="Doctor full name"
                         className="w-full h-10 px-3.5 rounded-xl border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-magenta-500 focus:border-[#c0166a] transition-all bg-white shadow-2xs"
                       />
                     </div>
@@ -3731,12 +3816,12 @@ export default function ClinicDoctorsPage() {
       <ModalPortal isOpen={Boolean(showRegisterDoctorModal)}>
         <AnimatePresence>
           {showRegisterDoctorModal && (
-            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 8 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 8 }}
-                className="relative z-[9999] w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+                className="relative z-9999 w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
               >
                 {/* Modal Header */}
                 <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-gray-100 bg-gray-50/50 shrink-0">
@@ -3821,7 +3906,7 @@ export default function ClinicDoctorsPage() {
                         type="text"
                         value={registerForm.name}
                         onChange={(e) => setRegisterForm((p) => ({ ...p, name: e.target.value }))}
-                        placeholder="e.g. Dr. Maria Santos"
+                        placeholder="Doctor full name"
                         className="w-full h-9 px-3 rounded-lg border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-[#801336] transition-all bg-white"
                       />
                     </div>
@@ -3951,12 +4036,12 @@ export default function ClinicDoctorsPage() {
       <ModalPortal isOpen={Boolean(showRegisterConfirmModal)}>
         <AnimatePresence>
           {showRegisterConfirmModal && (
-            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 8 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 8 }}
-                className="relative z-[9999] w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+                className="relative z-9999 w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
               >
                 <div className="px-6 pt-5 pb-3 flex items-start justify-between border-b border-gray-100 bg-gray-50/50 shrink-0">
                   <div className="flex items-center gap-2.5">
@@ -4044,12 +4129,12 @@ export default function ClinicDoctorsPage() {
       <ModalPortal isOpen={Boolean(selectedDoctorForDetails)}>
         <AnimatePresence>
           {selectedDoctorForDetails && (
-            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 8 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 8 }}
-                className="relative z-[9999] w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 text-left flex flex-col"
+                className="relative z-9999 w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 text-left flex flex-col"
               >
                 <div className="px-6 pt-5 pb-3 flex items-start justify-between border-b border-gray-100">
                   <div>
@@ -4095,43 +4180,13 @@ export default function ClinicDoctorsPage() {
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 text-xs space-y-1.5">
-                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
-                      Duty Hours &amp; Days
-                    </span>
-                    {!selectedDoctorForDetails.dutySchedule ||
-                      Object.keys(selectedDoctorForDetails.dutySchedule).length === 0 ? (
-                      <>
-                        <p className="font-bold text-magenta-700">
-                          {formatTime12h(selectedDoctorForDetails.dutyStartTime || "08:00")} –{" "}
-                          {formatTime12h(selectedDoctorForDetails.dutyEndTime || "17:00")}
-                        </p>
-                        <p className="text-[11px] text-gray-600">
-                          {selectedDoctorForDetails.dutyDays &&
-                            selectedDoctorForDetails.dutyDays.length > 0
-                            ? selectedDoctorForDetails.dutyDays.join(", ")
-                            : "Monday – Friday"}
-                        </p>
-                      </>
-                    ) : (
-                      <div className="space-y-1 mt-1">
-                        {selectedDoctorForDetails.dutyDays.map((d) => {
-                          const shift = getDoctorShiftForDay(selectedDoctorForDetails, d);
-                          return (
-                            <div
-                              key={d}
-                              className="flex items-center justify-between text-xs py-0.5 border-b border-gray-200/50 last:border-b-0"
-                            >
-                              <span className="font-semibold text-gray-800">{d}</span>
-                              <span className="font-bold text-magenta-700">
-                                {formatTime12h(shift.startTime)} – {formatTime12h(shift.endTime)}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                  <DoctorDutyScheduleView
+                    clinicName={selectedDoctorForDetails.clinicName}
+                    schedule={parseAssignedDutySchedule({
+                      duty_schedule: selectedDoctorForDetails.dutySchedule,
+                      duty_days: selectedDoctorForDetails.dutyDays,
+                    })}
+                  />
 
                   <div className="p-3 rounded-xl bg-pink-50/50 border border-pink-100 text-xs space-y-1">
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
@@ -4255,12 +4310,12 @@ export default function ClinicDoctorsPage() {
       <ModalPortal isOpen={Boolean(statusConfirmDoctor)}>
         <AnimatePresence>
           {statusConfirmDoctor && (
-            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 8 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 8 }}
-                className="relative z-[9999] w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 border border-gray-100 text-center"
+                className="relative z-9999 w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 border border-gray-100 text-center"
               >
                 <div
                   className={`w-11 h-11 rounded-xl mx-auto flex items-center justify-center mb-3 ${statusConfirmDoctor.status === "Active"
@@ -4314,12 +4369,12 @@ export default function ClinicDoctorsPage() {
       <ModalPortal isOpen={Boolean(deleteTarget)}>
         <AnimatePresence>
           {deleteTarget && (
-            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 8 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 8 }}
-                className="relative z-[9999] w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 border border-gray-100 text-center"
+                className="relative z-9999 w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 border border-gray-100 text-center"
               >
                 <div className="w-11 h-11 rounded-xl bg-red-50 text-red-600 border border-red-100 mx-auto flex items-center justify-center mb-3">
                   <Trash2 className="w-5 h-5" />
@@ -4359,12 +4414,12 @@ export default function ClinicDoctorsPage() {
       <ModalPortal isOpen={Boolean(showInstructionsModal)}>
         <AnimatePresence>
           {showInstructionsModal && (
-            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 8 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 8 }}
-                className="relative z-[9999] w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+                className="relative z-9999 w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
               >
                 {/* Header */}
                 <div className="px-6 pt-5 pb-3 flex items-start justify-between border-b border-gray-100 bg-pink-50/40 shrink-0">

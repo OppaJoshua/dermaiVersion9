@@ -764,7 +764,7 @@ export default function ClinicPatientsPage() {
 
           {/* Doctor Filter Dropdown */}
           <div className="flex items-center gap-2">
-            <div className="relative min-w-[210px]">
+            <div className="relative min-w-52.5">
               <Stethoscope className="w-4 h-4 text-magenta-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <select
                 value={selectedDoctorId}
@@ -1004,7 +1004,7 @@ export default function ClinicPatientsPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+              className="fixed inset-0 z-9998 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
               onClick={() => setSelectedPatient(null)}
             >
               <motion.div
@@ -1012,7 +1012,7 @@ export default function ClinicPatientsPage() {
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 exit={{ scale: 0.95, opacity: 0, y: 10 }}
                 onClick={(e) => e.stopPropagation()}
-                className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden text-left relative z-[9999]"
+                className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden text-left relative z-9999"
               >
               {/* Modal Header */}
               <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
@@ -1363,10 +1363,10 @@ export default function ClinicPatientsPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[9998] bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
+              className="fixed inset-0 z-9998 bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
               onClick={() => setLightboxPhoto(null)}
             >
-              <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center z-[9999]" onClick={(e) => e.stopPropagation()}>
+              <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center z-9999" onClick={(e) => e.stopPropagation()}>
                 <button
                   type="button"
                   onClick={() => setLightboxPhoto(null)}

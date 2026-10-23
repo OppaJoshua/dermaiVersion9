@@ -283,13 +283,7 @@ export default function ClinicSettingsPage() {
 
   const [scheduleSaveError, setScheduleSaveError] = useState<string | null>(null);
   const [showAllConflicts, setShowAllConflicts] = useState(false);
-  const [clinicDoctors, setClinicDoctors] = useState<any[]>(() => {
-    try {
-      const cached = localStorage.getItem("dermai_clinic_doctors");
-      if (cached) return JSON.parse(cached);
-    } catch {}
-    return [];
-  });
+  const [clinicDoctors, setClinicDoctors] = useState<any[]>([]);
 
   // Revalidate all existing doctor schedules dynamically whenever clinic hours or operating days change
   const scheduleConflicts = useMemo<ScheduleConflict[]>(() => {
@@ -333,6 +327,7 @@ export default function ClinicSettingsPage() {
   // Load latest clinic settings from Supabase in background
   useEffect(() => {
     let cancelled = false;
+    setClinicDoctors([]);
 
     async function loadData() {
       try {
@@ -499,8 +494,9 @@ export default function ClinicSettingsPage() {
               .eq("clinic_id", dbClinic.clinic_id)
               .neq("status", "Inactive");
 
+            if (cancelled) return;
+            setClinicDoctors(docList || []);
             if (docList && docList.length > 0) {
-              setClinicDoctors(docList);
               try {
                 localStorage.setItem("dermai_clinic_doctors", JSON.stringify(docList));
               } catch {}
@@ -621,15 +617,6 @@ export default function ClinicSettingsPage() {
     const handleSync = (e?: any) => {
       if (isSavingRef.current) return;
       if (e?.detail?.source === "ClinicSettingsPage") return;
-      try {
-        const cached = localStorage.getItem("dermai_clinic_doctors");
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setClinicDoctors(parsed);
-          }
-        }
-      } catch {}
       loadData();
     };
     window.addEventListener("dermai_clinic_profile_updated", handleSync);
@@ -922,7 +909,7 @@ export default function ClinicSettingsPage() {
 
       {!loading && verificationStatus === "rejected" && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex gap-3 text-red-700">
-          <XCircle className="w-5 h-5 flex-shrink-0" />
+          <XCircle className="w-5 h-5 shrink-0" />
           <div className="text-sm">
             <p className="font-semibold mb-1">Clinic Registration Rejected</p>
             <p>Your clinic registration was rejected by the admin. You can update your profile information below, but you cannot accept appointments until an admin approves your clinic.</p>
@@ -931,7 +918,7 @@ export default function ClinicSettingsPage() {
       )}
       {!loading && verificationStatus === "pending" && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3 text-amber-700">
-          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <AlertCircle className="w-5 h-5 shrink-0" />
           <div className="text-sm">
             <p className="font-semibold mb-1">Account Pending Verification</p>
             <p>Your clinic application is currently being reviewed by an administrator. You cannot edit your profile or accept appointments until you are verified.</p>

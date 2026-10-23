@@ -1,3 +1,4 @@
+import { compareDoctorAppointments } from "@/lib/doctorAppointmentScope";
 import { useState, useMemo, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -9,6 +10,7 @@ import {
   Calendar,
   Loader2,
   ClipboardList,
+  Building2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
@@ -157,7 +159,7 @@ export default function DoctorAppointmentsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { doctorName: _doctorName, appointments: allAppointments, loading, submitDoctorReview } = useDoctorAppointments();
   const [tab, setTab] = useState<"pending" | "reviewed">("pending");
-  const [sortOrder, setSortOrder] = useState<"newest" | "name">("newest");
+  const [sortOrder, setSortOrder] = useState<"schedule" | "name">("schedule");
   const [reviewModal, setReviewModal] = useState<ReviewModal | null>(null);
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -283,11 +285,7 @@ export default function DoctorAppointmentsPage() {
         (a.patientName || "").localeCompare(b.patientName || "", undefined, { sensitivity: "base" })
       );
     } else {
-      list.sort((a, b) => {
-        const timeA = new Date(a.createdAt || a.date || 0).getTime();
-        const timeB = new Date(b.createdAt || b.date || 0).getTime();
-        return timeB - timeA;
-      });
+      list.sort(compareDoctorAppointments);
     }
     return list;
   }, [tab, pendingReview, reviewed, sortOrder]);
@@ -312,7 +310,7 @@ export default function DoctorAppointmentsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         {(["pending", "reviewed"] as const).map((t) => (
           <button
             key={t}
@@ -351,13 +349,13 @@ export default function DoctorAppointmentsPage() {
               type="button"
               onClick={() =>
                 setSortOrder((prev) =>
-                  prev === "newest" ? "name" : "newest"
+                  prev === "schedule" ? "name" : "schedule"
                 )
               }
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer self-start sm:self-auto"
             >
               <span>
-                Sort: {sortOrder === "newest" ? "Newest" : "A - Z"}
+                Sort: {sortOrder === "schedule" ? "Date & time" : "A - Z"}
               </span>
 
               <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
@@ -365,8 +363,8 @@ export default function DoctorAppointmentsPage() {
           </div>
 
           {/* Responsive Table */}
-          <div className="w-full overflow-x-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-            <table className="w-full min-w-[760px] xl:min-w-full text-left text-sm">
+          <div className="w-full overflow-x-auto no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            <table className="w-full min-w-190 xl:min-w-full text-left text-sm">
 
         {/* Table Header */}
         <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 tracking-wider">
@@ -447,7 +445,7 @@ export default function DoctorAppointmentsPage() {
 
                   {/* Patient Name */}
                   <td className="py-4 px-4 sm:px-5">
-                    <div className="flex items-center gap-3 min-w-[190px]">
+                    <div className="flex items-center gap-3 min-w-47.5">
 
                       <PatientAvatar
                         avatarUrl={appt.patientAvatar}
@@ -465,6 +463,12 @@ export default function DoctorAppointmentsPage() {
                         <p className="text-[11px] text-slate-400 mt-0.5">
                           Patient ID: {formatPatientId(appt)}
                         </p>
+                        {appt.clinicName && (
+                          <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100/80 mt-1 max-w-42.5 truncate">
+                            <Building2 className="w-2.5 h-2.5 text-blue-500 shrink-0" />
+                            <span className="truncate">{appt.clinicName}</span>
+                          </span>
+                        )}
                       </div>
 
                     </div>
@@ -472,7 +476,7 @@ export default function DoctorAppointmentsPage() {
 
                   {/* Age / Gender */}
                   <td className="py-4 px-3 sm:px-4">
-                    <div className="min-w-[95px]">
+                    <div className="min-w-23.75">
                       <p className="text-slate-800 font-medium">
                         {appt.patientAge
                           ? `${appt.patientAge} years old`
@@ -487,7 +491,7 @@ export default function DoctorAppointmentsPage() {
 
                   {/* Reason */}
                   <td className="py-4 px-3 sm:px-4">
-                    <p className="text-slate-700 max-w-[200px] line-clamp-2 leading-relaxed">
+                    <p className="text-slate-700 max-w-50 line-clamp-2 leading-relaxed">
                       {appt.notes ||
                         appt.conditionName ||
                         appt.aiConditionName ||
@@ -588,12 +592,12 @@ export default function DoctorAppointmentsPage() {
               reviewModal.appointment.doctorDone;
 
             return (
-              <div className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="fixed inset-0 z-9998 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
                 <motion.div
                   initial={{ opacity: 0, scale: 0.96 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col relative z-[9999]"
+                  className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col relative z-9999"
                 >
                 {/* Modal Header */}
                 <div className="bg-white border-b border-gray-100 px-4 sm:px-6 py-3.5 sm:py-4 flex items-center gap-3 sm:gap-4 shrink-0">
@@ -641,7 +645,7 @@ export default function DoctorAppointmentsPage() {
                 </div>
 
                 {/* Modal Body */}
-                <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-4 sm:space-y-5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-4 sm:space-y-5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
                   {/* Patient's Selected Schedule Banner */}
                   <div className="rounded-2xl border border-slate-200 bg-white p-4 flex items-center justify-between gap-3">
                     <div className="min-w-0">
@@ -684,7 +688,7 @@ export default function DoctorAppointmentsPage() {
                         <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide self-center">
                           {label}
                         </span>
-                        <span className="text-sm text-gray-800 bg-gray-50 border border-gray-100 rounded-lg px-3 py-1.5 break-words">
+                        <span className="text-sm text-gray-800 bg-gray-50 border border-gray-100 rounded-lg px-3 py-1.5 wrap-break-word">
                           {value || <span className="text-gray-300 italic">—</span>}
                         </span>
                       </div>
@@ -707,7 +711,7 @@ export default function DoctorAppointmentsPage() {
                       )}
                     </div>
 
-                    <div className="p-4 space-y-2.5 max-h-56 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                    <div className="p-4 space-y-2.5 max-h-56 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
                       {reviewModal.appointment.questionnaireAnswers &&
                       reviewModal.appointment.questionnaireAnswers.length > 0 ? (
                         reviewModal.appointment.questionnaireAnswers.map((qa, idx) => (
@@ -1075,12 +1079,12 @@ export default function DoctorAppointmentsPage() {
       <ModalPortal isOpen={Boolean(successInfo)}>
         <AnimatePresence>
           {successInfo && (
-            <div className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-9998 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 sm:p-7 text-center space-y-4 relative z-[9999]"
+                className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 sm:p-7 text-center space-y-4 relative z-9999"
               >
               <div className={`w-14 h-14 rounded-2xl mx-auto flex items-center justify-center shadow-xs ${
                 successInfo.decision === "approved"
@@ -1123,7 +1127,7 @@ export default function DoctorAppointmentsPage() {
                   {successInfo.diagnosis && (
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Assessment</span>
-                      <span className="font-medium text-gray-700 truncate max-w-[200px]">{successInfo.diagnosis}</span>
+                      <span className="font-medium text-gray-700 truncate max-w-50">{successInfo.diagnosis}</span>
                     </div>
                   )}
                   <div className="flex items-center justify-between pt-1 border-t border-slate-200">

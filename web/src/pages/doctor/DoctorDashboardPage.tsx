@@ -1,3 +1,4 @@
+import { compareDoctorAppointments } from "@/lib/doctorAppointmentScope";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -18,6 +19,8 @@ import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/use
 import { isAppointmentExcludedFromIncomingQueue } from "@/lib/schedulingService";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
+import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
+import { DoctorDutyScheduleCard } from "@/components/common/DoctorDutyScheduleCard";
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -29,14 +32,15 @@ const MONTH_NAMES = [
 
 
 export default function DoctorDashboardPage() {
+  const { activeClinicId, affiliations, activeAffiliation } = useDoctorClinicContext();
   const {
     doctorName,
-    doctorClinic,
     appointments: allAppointments,
     loading,
     markAppointmentDone,
   } = useDoctorAppointments();
 
+  // ── Active Clinic Duty Schedule ───────────────────────────────────
   // Consultation & Clinical Result Modal State
   const [consultingAppt, setConsultingAppt] = useState<DoctorAppointmentRecord | null>(null);
   const [clinicalDiagnosis, setClinicalDiagnosis] = useState("");
@@ -141,7 +145,7 @@ export default function DoctorDashboardPage() {
   }, []);
 
   // Table sorting
-  const [sortOrder, setSortOrder] = useState<"newest" | "name">("newest");
+  const [sortOrder, setSortOrder] = useState<"schedule" | "name">("schedule");
 
   const displayPatients = useMemo(() => {
     // Show pending cases only
@@ -150,11 +154,7 @@ export default function DoctorDashboardPage() {
     if (sortOrder === "name") {
       sorted.sort((a, b) => (a.patientName || "").localeCompare(b.patientName || "", undefined, { sensitivity: "base" }));
     } else {
-      sorted.sort((a, b) => {
-        const timeA = new Date(a.createdAt || a.date || 0).getTime();
-        const timeB = new Date(b.createdAt || b.date || 0).getTime();
-        return timeB - timeA;
-      });
+      sorted.sort(compareDoctorAppointments);
     }
     return sorted.slice(0, 5);
   }, [pendingReview, sortOrder]);
@@ -320,12 +320,12 @@ export default function DoctorDashboardPage() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight font-sans">
-            {greeting}, Dr. {doctorName || "Doctor"}!
+            {greeting}, {doctorName || "Doctor"}!
           </h1>
-          {doctorClinic ? (
-            <p className="text-sm text-slate-500 mt-0.5 flex items-center gap-1.5 font-medium">
-              <Building2 className="w-3.5 h-3.5 text-slate-400" />
-              <span>{doctorClinic}</span>
+          {activeClinicId ? (
+            <p className="text-sm text-blue-600 mt-0.5 flex items-center gap-1.5 font-bold">
+              <Building2 className="w-3.5 h-3.5 text-blue-600" />
+              <span>{affiliations.find((a) => a.clinic_id === activeClinicId)?.clinic?.name || "Active Clinic"} (Branch View)</span>
             </p>
           ) : null}
           <p className="text-base text-slate-500 mt-1">
@@ -469,10 +469,10 @@ export default function DoctorDashboardPage() {
               {/* Sort Pill */}
               <button
                 type="button"
-                onClick={() => setSortOrder((prev) => (prev === "newest" ? "name" : "newest"))}
+                onClick={() => setSortOrder((prev) => (prev === "schedule" ? "name" : "schedule"))}
                 className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
               >
-                <span>Sort : {sortOrder === "newest" ? "Newest" : "A - Z"}</span>
+                <span>Sort : {sortOrder === "schedule" ? "Date & time" : "A - Z"}</span>
                 <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
               </button>
 
@@ -499,6 +499,7 @@ export default function DoctorDashboardPage() {
                   <thead>
                     <tr className="bg-[#F8F9FB] border-b border-slate-200/80 text-[12px] font-semibold text-slate-500">
                       <th className="py-3 px-4 font-semibold">Name</th>
+                      <th className="py-3 px-4 font-semibold">Clinic Branch</th>
                       <th className="py-3 px-4 font-semibold">Date</th>
                       <th className="py-3 px-4 font-semibold text-right">Action</th>
                     </tr>
@@ -541,6 +542,14 @@ export default function DoctorDashboardPage() {
                                 </p>
                               </div>
                             </div>
+                          </td>
+
+                          {/* Clinic Branch */}
+                          <td className="py-3.5 px-4">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-100/80">
+                              <Building2 className="w-3 h-3 text-blue-500 shrink-0" />
+                              <span className="truncate max-w-[130px]">{appt.clinicName || "Clinic Branch"}</span>
+                            </span>
                           </td>
 
                           {/* Date */}
@@ -766,7 +775,7 @@ export default function DoctorDashboardPage() {
                           {a.patientName}
                         </p>
                         <p className="text-sm text-slate-500 truncate mt-0.5">
-                          {a.time || "Scheduled"} • {a.conditionName || "Consultation"}
+                          {a.time || "Scheduled"} • {a.clinicName ? `${a.clinicName} • ` : ""}{a.conditionName || "Consultation"}
                         </p>
                       </div>
 
@@ -804,9 +813,12 @@ export default function DoctorDashboardPage() {
         </div>
       </div>
 
+      <DoctorDutyScheduleCard
+        doctorId={activeAffiliation?.doctor_id ?? null}
+        clinicId={activeClinicId || null}
+        clinicName={activeAffiliation?.clinic?.name || "No clinic selected"}
+      />
 
-
-      {/* ================= CONSULTATION & CLINICAL RESULT MODAL ================= */}
       <ModalPortal isOpen={Boolean(consultingAppt)}>
         <AnimatePresence>
           {consultingAppt && (

@@ -1,3 +1,4 @@
+import { compareDoctorAppointments } from "@/lib/doctorAppointmentScope";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
@@ -10,6 +11,7 @@ import {
   ClipboardList,
   FileCheck,
   FileText,
+  Building2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
@@ -196,7 +198,7 @@ export default function DoctorScheduledAppointmentsPage() {
   // Appointments for the selected date
   const selectedDateAppointments = useMemo(() => {
     const list = appointmentsByDate.get(selectedDate) || [];
-    return [...list].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+    return [...list].sort(compareDoctorAppointments);
   }, [appointmentsByDate, selectedDate]);
 
   // Generate calendar days for current month view
@@ -365,7 +367,7 @@ export default function DoctorScheduledAppointmentsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         <button
           type="button"
           onClick={() => setTab("upcoming")}
@@ -412,7 +414,7 @@ export default function DoctorScheduledAppointmentsPage() {
       {/* Responsive Two-Column Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start min-w-0">
         {/* ================= CARD 1 (LEFT): CALENDAR ================= */}
-        <div className="bg-white rounded-2xl p-4 sm:p-6 md:p-7 border border-slate-200/90 shadow-xs flex flex-col justify-between min-h-[560px] min-w-0">
+        <div className="bg-white rounded-2xl p-4 sm:p-6 md:p-7 border border-slate-200/90 shadow-xs flex flex-col justify-between min-h-140 min-w-0">
           <div>
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4">
@@ -549,7 +551,7 @@ export default function DoctorScheduledAppointmentsPage() {
                         setCurrentDate(new Date(target.getFullYear(), target.getMonth(), 1));
                       }
                     }}
-                    className={`min-h-[64px] p-1 flex flex-col items-center justify-start rounded-2xl transition-all cursor-pointer group ${
+                    className={`min-h-16 p-1 flex flex-col items-center justify-start rounded-2xl transition-all cursor-pointer group ${
                       isSelected
                         ? "bg-blue-50/50"
                         : "hover:bg-slate-50/90"
@@ -597,7 +599,7 @@ export default function DoctorScheduledAppointmentsPage() {
         </div>
 
         {/* ================= CARD 2 (RIGHT): SELECTED DATE PATIENT LIST ================= */}
-        <div className="bg-white rounded-2xl p-4 sm:p-6 md:p-7 border border-slate-200/90 shadow-xs flex flex-col justify-between min-h-[560px] min-w-0">
+        <div className="bg-white rounded-2xl p-4 sm:p-6 md:p-7 border border-slate-200/90 shadow-xs flex flex-col justify-between min-h-140 min-w-0">
           <div>
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
@@ -663,6 +665,12 @@ export default function DoctorScheduledAppointmentsPage() {
                               {appt.doctorDiagnosis || appt.conditionName || "Not provided"}
                             </span>
                           </div>
+                          {appt.clinicName && (
+                            <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md mt-1.5 border border-blue-100/80">
+                              <Building2 className="w-3 h-3 text-blue-500 shrink-0" />
+                              <span className="truncate max-w-37.5">{appt.clinicName}</span>
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -717,7 +725,7 @@ export default function DoctorScheduledAppointmentsPage() {
         <AnimatePresence>
           {viewingAppt && (
             <div
-              className="fixed inset-0 z-[9998] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-xs"
+              className="fixed inset-0 z-9998 flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-xs"
               onClick={() => setViewingAppt(null)}
             >
               <motion.div
@@ -725,7 +733,7 @@ export default function DoctorScheduledAppointmentsPage() {
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 8 }}
                 transition={{ duration: 0.2 }}
-                className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col my-auto relative z-[9999]"
+                className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col my-auto relative z-9999"
                 onClick={(e) => e.stopPropagation()}
               >
               {/* Header */}
@@ -752,7 +760,7 @@ export default function DoctorScheduledAppointmentsPage() {
               </div>
 
               {/* Body */}
-              <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
                 {/* Patient Header */}
                 <div className="flex items-center gap-3">
                   <PatientAvatar
@@ -885,7 +893,7 @@ export default function DoctorScheduledAppointmentsPage() {
                           {viewingAppt.questionnaireAnswers.length} questions
                         </span>
                       </div>
-                      <div className="p-3 space-y-2 max-h-36 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                      <div className="p-3 space-y-2 max-h-36 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
                         {viewingAppt.questionnaireAnswers.map((qa, idx) => (
                           <div
                             key={idx}

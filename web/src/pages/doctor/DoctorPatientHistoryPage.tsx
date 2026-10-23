@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   FileCheck,
   Clock,
+  Building2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
@@ -24,7 +25,7 @@ import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
 import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
-
+import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
 
 
 type AppointmentRecord = DoctorAppointmentRecord;
@@ -58,10 +59,17 @@ function formatTime(timeStr?: string): string {
 
 export default function DoctorPatientHistoryPage() {
   const { appointments, loading } = useDoctorAppointments();
+  const { activeClinicId, affiliations } = useDoctorClinicContext();
   const [viewingAppt, setViewingAppt] = useState<AppointmentRecord | null>(null);
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<"all" | "completed" | "approved" | "pending" | "rejected">("all");
+
+  // Derive the currently-active clinic name for contextual messages
+  const activeClinicName = useMemo(() => {
+    if (!activeClinicId) return null;
+    return affiliations.find((a) => a.clinic_id === activeClinicId)?.clinic?.name || "Active Branch";
+  }, [activeClinicId, affiliations]);
 
   // Include all consultation records for the doctor / clinic
   const history = useMemo(() => {
@@ -138,6 +146,13 @@ export default function DoctorPatientHistoryPage() {
           <p className="text-base text-slate-500 mt-1">
             Review past consultations, approved clinical diagnoses, and completed visits.
           </p>
+          {/* Clinic branch isolation badge */}
+          {activeClinicName ? (
+            <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-xs font-semibold text-blue-700">
+              <Building2 className="w-3 h-3 text-blue-500 shrink-0" />
+              <span>Isolated to: {activeClinicName}</span>
+            </div>
+          ) : null}
         </div>
         <div className="relative w-full sm:w-auto">
           <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -292,13 +307,27 @@ export default function DoctorPatientHistoryPage() {
 
       {filtered.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200/90 flex flex-col items-center justify-center py-20 text-center px-6 shadow-xs">
-          <p className="text-base font-semibold text-gray-700">
-            {search ? "No matching records found" : "No consultation history yet"}
-          </p>
-          {search && (
-            <p className="text-sm text-gray-400 max-w-xs mt-1">
-              Try a different search term or filter tab.
-            </p>
+          {activeClinicName && !search ? (
+            <>
+              <Building2 className="w-8 h-8 text-blue-200 mb-3" />
+              <p className="text-base font-semibold text-gray-700">
+                No patient records recorded for {activeClinicName} yet.
+              </p>
+              <p className="text-sm text-gray-400 max-w-sm mt-1">
+                Only records from the selected clinic appear here. Select another clinic in the Branch Switcher to view its records.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-base font-semibold text-gray-700">
+                {search ? "No matching records found" : "No consultation history yet"}
+              </p>
+              {search && (
+                <p className="text-sm text-gray-400 max-w-xs mt-1">
+                  Try a different search term or filter tab.
+                </p>
+              )}
+            </>
           )}
         </div>
       ) : (
