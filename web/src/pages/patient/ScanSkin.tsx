@@ -483,7 +483,7 @@ export default function ScanSkinPage() {
             role: "patient",
             category: "Scan",
             action: "AI Skin Scan Completed",
-            target: `${conditionLabel} (${effectiveConfidence}%)`,
+target: `${conditionLabel} (${effectiveConfidence}%)`,
             details: `Patient completed AI skin analysis: identified ${conditionLabel} with ${effectiveConfidence}% confidence (Close-up: ${aiResult.confidence}%${aiResult.is_combined
                 ? `, Combined 70/30: ${effectiveConfidence}%`
                 : ""

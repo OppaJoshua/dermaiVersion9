@@ -3,10 +3,10 @@ DERMAI - Prediction Router
 POST /predict endpoint.
 
 Full pipeline (matches Manuscript Section 5.4):
-    1. Image quality check  — blur, dark, contrast, resolution
-    2. Skin validation      — human-skin detection
-    3. Classification       — ResNet50 skin condition classifier
-    4. Confidence fallback  — reject ambiguous predictions
+    1. Image quality check   blur, dark, contrast, resolution
+    2. Skin validation       human-skin detection
+    3. Classification        ResNet50 skin condition classifier
+    4. Confidence fallback   reject ambiguous predictions
 """
 
 from typing import Optional
@@ -58,7 +58,7 @@ async def predict_skin_condition(
     try:
         quality = check_image_quality(img)
     except Exception as e:
-        print(f"⚠️  Quality check error: {e} — skipping")
+        print(f"  Quality check error: {e}  skipping")
         quality = {"passed": True, "issues": []}
 
     if not quality["passed"]:
@@ -81,7 +81,7 @@ async def predict_skin_condition(
     try:
         is_skin, skin_score = skin_validator.is_human_skin(img)
     except Exception as e:
-        print(f"⚠️  Skin validator error: {e} — skipping")
+        print(f"  Skin validator error: {e}  skipping")
         is_skin, skin_score = True, 1.0
 
     if not is_skin:
@@ -100,7 +100,7 @@ async def predict_skin_condition(
         )
 
     # ==========================================================
-    # STEP 4: Classification — Primary close-up image (ResNet50)
+    # STEP 4: Classification  Primary close-up image (ResNet50)
     # ==========================================================
     try:
         primary_result = predictor.predict(img)
@@ -123,10 +123,8 @@ async def predict_skin_condition(
             detail={
                 "success": False,
                 "error": (
-                    f"We couldn't confidently assess this photo. The model's confidence was "
-                    f"{primary_result['confidence']:.2f}%, below the required "
-                    f"{CLASSIFIER_CONFIDENCE_FALLBACK:.2f}% threshold. Please retake the close-up "
-                    "photo with good lighting and the affected skin area clearly in focus."
+                    "We couldn't get a clear enough look at your photo to give you an accurate result. "
+                    "Please try uploading a new close-up photo. Make sure the area is well-lit and in sharp focus."
                 ),
                 "error_type": "low_confidence",
             },
@@ -148,7 +146,7 @@ async def predict_skin_condition(
             try:
                 wide_quality = check_image_quality(img_wide)
             except Exception as e:
-                print(f"⚠️ Wide-view quality check error: {e} — skipping check")
+                print(f" Wide-view quality check error: {e}  skipping check")
                 wide_quality = {"passed": True, "issues": []}
 
             if not wide_quality["passed"]:
@@ -162,7 +160,7 @@ async def predict_skin_condition(
                 try:
                     is_skin_wide, wide_skin_score = skin_validator.is_human_skin(img_wide)
                 except Exception as e:
-                    print(f"⚠️ Wide-view skin validator error: {e} — skipping")
+                    print(f" Wide-view skin validator error: {e}  skipping")
                     is_skin_wide, wide_skin_score = True, 1.0
 
                 if not is_skin_wide:
@@ -178,7 +176,7 @@ async def predict_skin_condition(
                         "status": "valid",
                     }
         except Exception as e:
-            print(f"⚠️ Wide-view processing skipped due to error: {e}")
+            print(f" Wide-view processing skipped due to error: {e}")
             supporting_result = {
                 "status": "invalid",
                 "error": f"Processing error: {str(e)}",

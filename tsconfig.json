@@ -1,11 +1,14 @@
 {
   "compilerOptions": {
-    "baseUrl": "./web",
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
     "paths": {
       "@/*": ["./web/src/*"]
-    }
+    },
+    "skipLibCheck": true,
+    "noEmit": true
   },
-  "references": [
-    { "path": "./web/tsconfig.app.json" }
-  ]
+  "files": ["./web/src/vite-env.d.ts"]
 }

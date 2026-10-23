@@ -36,8 +36,24 @@ async def load_image_from_upload(file: UploadFile) -> Image.Image:
         PIL.Image.Image in RGB mode
     """
     # Validate extension
-    filename = file.filename or "unknown"
+    filename = file.filename or "unknown.jpg"
     ext = Path(filename).suffix.lower()
+    
+    # If filename has no extension (e.g. from browser blob upload), deduce from content_type
+    if not ext and file.content_type:
+        ctype = file.content_type.lower()
+        if "jpeg" in ctype or "jpg" in ctype:
+            ext = ".jpg"
+        elif "png" in ctype:
+            ext = ".png"
+        elif "webp" in ctype:
+            ext = ".webp"
+        elif "heic" in ctype:
+            ext = ".heic"
+        elif "bmp" in ctype:
+            ext = ".bmp"
+        elif "tif" in ctype:
+            ext = ".tif"
     
     if ext not in ALLOWED_EXTENSIONS:
         raise ImageValidationError(

@@ -3,7 +3,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
-import { Platform, StatusBar as RNStatusBar, View, ActivityIndicator } from 'react-native';
+import { Platform, View, ActivityIndicator } from 'react-native';
 import {
   useFonts,
   PlusJakartaSans_400Regular,
@@ -163,7 +163,7 @@ export default function RootLayout() {
   }
 
   return (
-    <View style={{ flex: 1, paddingTop: Platform.OS === 'android' ? RNStatusBar.currentHeight ?? 0 : 0 }}>
+    <View style={{ flex: 1 }}>
       <Stack screenOptions={{ headerShown: false, animation: 'fade' }}>
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(app)" options={{ headerShown: false }} />

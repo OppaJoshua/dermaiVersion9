@@ -297,8 +297,8 @@ export default function LocationPickerMap({
           className="z-0"
         >
           <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+            url="https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_4rf0_1_52a456f79acb06df41f3abb6"
           />
           <MapEventsHandler onSelect={handlePositionSelect} />
           <ChangeView center={currentCenter} />

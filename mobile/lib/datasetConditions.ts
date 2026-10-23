@@ -3,6 +3,7 @@ export type DatasetConditionKey =
   | 'atopic_dermatitis'
   | 'contact_dermatitis'
   | 'melasma'
+  | 'vitiligo'
   | 'tinea_pedis';
 
 export interface DatasetConditionMeta {
@@ -106,6 +107,28 @@ export const DATASET_CONDITIONS: Record<DatasetConditionKey, DatasetConditionMet
     ],
     severity: 'mild',
     referralThreshold: 65,
+  },
+  vitiligo: {
+    key: 'vitiligo',
+    name: 'Vitiligo',
+    localName: 'Pagputi ng balat',
+    category: 'Pigmentation Disorder',
+    description:
+      'Vitiligo is an autoimmune condition where the immune system attacks melanocytes (pigment-producing cells), resulting in smooth, well-defined white or depigmented patches of skin.',
+    symptoms: [
+      'Smooth, completely white patches of skin (depigmentation)',
+      'Patches often appear symmetrically on both sides of the body',
+      'Commonly affects the face, hands, wrists, feet, and body openings',
+      'Premature whitening of eyelashes, eyebrows, or scalp hair',
+    ],
+    careTips: [
+      'Apply broad-spectrum sunscreen (SPF 50+) to prevent sun damage on depigmented skin',
+      'Protect depigmented areas with UV-protective clothing or wide-brimmed hats',
+      'Avoid skin trauma or harsh chemical exposure (Koebner phenomenon)',
+      'Consult a licensed dermatologist to explore repigmentation therapies',
+    ],
+    severity: 'mild',
+    referralThreshold: 50,
   },
   tinea_pedis: {
     key: 'tinea_pedis',

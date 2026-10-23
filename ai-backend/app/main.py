@@ -9,6 +9,8 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from app.config import ALLOWED_ORIGINS, DEBUG, MODEL_PATH, CLASS_NAMES, validate_config
 from app.services.model_loader import model_loader
@@ -24,32 +26,32 @@ from app.schemas.prediction import HealthResponse
 async def lifespan(app: FastAPI):
     """Load model at startup, cleanup at shutdown"""
     print("=" * 70)
-    print("🚀 DERMAI - Starting FastAPI AI Backend")
+    print("=== DERMAI - Starting FastAPI AI Backend ===")
     print("=" * 70)
     
     # Validate config
     validate_config()
-    print(f"✅ Config validated")
+    print("  [OK] Config validated")
     print(f"   Model: {MODEL_PATH}")
     print(f"   Classes: {CLASS_NAMES}")
     
     # Load skin validator first (it's the pre-check)
     from app.services.skin_validator import skin_validator
-    print("\n📁 Loading human-skin validator...")
+    print("\n[..] Loading human-skin validator...")
     skin_validator.load()
 
     # Load the skin-condition classifier
-    print("\n📁 Loading skin-condition classifier...")
+    print("\n[..] Loading skin-condition classifier...")
     model_loader.load()
     
     print("=" * 70)
-    print("🚀 API ready to serve requests!")
+    print("=== API ready to serve requests! ===")
     print("=" * 70)
     
     yield  # App runs here
     
     # Cleanup (optional)
-    print("👋 Shutting down DERMAI AI Backend")
+    print("[..] Shutting down DERMAI AI Backend")
 
 
 # ============================================
@@ -63,6 +65,20 @@ app = FastAPI(
     debug=DEBUG,
     lifespan=lifespan,
 )
+
+def _sanitize_error(err):
+    clean = dict(err)
+    if "ctx" in clean:
+        clean["ctx"] = {k: str(v) for k, v in clean["ctx"].items()}
+    return clean
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    print("=== [422 VALIDATION ERROR] ===")
+    print("URL:", request.url)
+    print("Content-Type:", request.headers.get("content-type"))
+    sanitized = [_sanitize_error(e) for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": sanitized})
 
 # CORS — allow frontend to call us
 app.add_middleware(

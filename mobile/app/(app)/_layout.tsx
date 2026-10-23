@@ -34,13 +34,14 @@ export default function AppLayout() {
   const isWeb = Platform.OS === 'web';
   const isIOS = Platform.OS === 'ios';
 
-  const bottomPadding = isWeb ? 8 : (isIOS ? Math.max(insets.bottom, 20) : Math.max(insets.bottom, 8));
-  const tabHeight = isWeb ? 62 : 56 + bottomPadding;
+  const bottomPadding = isWeb ? 8 : (isIOS ? Math.max(insets.bottom, 16) : Math.max(insets.bottom, 10));
+  const tabHeight = isWeb ? 60 : 54 + bottomPadding;
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
+        tabBarShowLabel: false,
         tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: '#64748b',
         tabBarStyle: {
@@ -49,7 +50,7 @@ export default function AppLayout() {
           borderTopWidth: 1,
           height: tabHeight,
           paddingBottom: bottomPadding,
-          paddingTop: 8,
+          paddingTop: 6,
           overflow: 'visible',
           shadowColor: '#000',
           shadowOffset: { width: 0, height: -2 },
@@ -58,14 +59,9 @@ export default function AppLayout() {
           elevation: 4,
         },
         tabBarItemStyle: {
-          paddingVertical: 2,
-        },
-        tabBarLabelStyle: {
-          fontSize: 10.5,
-          fontWeight: '600',
-          fontFamily: FONTS.semiBold,
-          letterSpacing: -0.15,
-          marginTop: 2,
+          alignItems: 'center',
+          justifyContent: 'center',
+          paddingVertical: 4,
         },
       }}
     >
@@ -74,7 +70,7 @@ export default function AppLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'home' : 'home-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'home' : 'home-outline'} size={24} color={color} />
           ),
         }}
       />
@@ -83,7 +79,7 @@ export default function AppLayout() {
         options={{
           title: 'History',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'clipboard' : 'clipboard-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'clipboard' : 'clipboard-outline'} size={24} color={color} />
           ),
         }}
       />
@@ -92,7 +88,6 @@ export default function AppLayout() {
         options={{
           title: 'Scan',
           tabBarIcon: ({ focused }) => <ScanIcon focused={focused} />,
-          tabBarLabel: () => null,
         }}
       />
       <Tabs.Screen
@@ -100,7 +95,7 @@ export default function AppLayout() {
         options={{
           title: 'Appointments',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'calendar' : 'calendar-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'calendar' : 'calendar-outline'} size={24} color={color} />
           ),
         }}
       />
@@ -109,7 +104,7 @@ export default function AppLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'person' : 'person-outline'} size={24} color={color} />
           ),
         }}
       />

@@ -154,11 +154,11 @@ export default function HomeScreen() {
   const firstName = user?.fullName?.split(' ')[0] ?? 'there';
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <ScrollView
         style={styles.container}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 80 }}
+        contentContainerStyle={{ paddingBottom: 16 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
       >
 
@@ -389,7 +389,7 @@ export default function HomeScreen() {
                   />
                 ) : (
                   <View style={styles.apptDoctorAvatarFallback}>
-                    <Ionicons name="medical" size={22} color={COLORS.primary} />
+                    <Ionicons name="medical" size={22} color="#ffffff" />
                   </View>
                 )}
                 {/* Active indicator dot */}
@@ -406,32 +406,8 @@ export default function HomeScreen() {
                           : `Dr. ${nextAppt.doctorName}`)
                       : 'Assigned Specialist'}
                   </Text>
-                  <View
-                    style={[
-                      styles.apptStatusBadge,
-                      {
-                        backgroundColor:
-                          nextAppt.status === 'confirmed' || nextAppt.status === 'scheduled'
-                            ? '#dcfce7'
-                            : nextAppt.status === 'completed'
-                            ? '#dbeafe'
-                            : '#fef3c7',
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.apptStatusText,
-                        {
-                          color:
-                            nextAppt.status === 'confirmed' || nextAppt.status === 'scheduled'
-                              ? '#15803d'
-                              : nextAppt.status === 'completed'
-                              ? '#1d4ed8'
-                              : '#b45309',
-                        },
-                      ]}
-                    >
+                  <View style={styles.apptStatusBadge}>
+                    <Text style={styles.apptStatusText}>
                       {nextAppt.status === 'confirmed' || nextAppt.status === 'scheduled'
                         ? 'Confirmed'
                         : nextAppt.status === 'completed'
@@ -451,7 +427,7 @@ export default function HomeScreen() {
             {/* Clean Schedule Row */}
             <View style={styles.apptScheduleBox}>
               <View style={styles.apptScheduleItem}>
-                <Ionicons name="calendar-outline" size={13} color={COLORS.primary} />
+                <Ionicons name="calendar-outline" size={14} color="#ffffff" />
                 <Text style={styles.apptScheduleText}>
                   {nextAppt.date
                     ? new Date(nextAppt.date).toLocaleDateString('en-US', {
@@ -463,12 +439,12 @@ export default function HomeScreen() {
                 </Text>
               </View>
               <View style={styles.apptScheduleItem}>
-                <Ionicons name="time-outline" size={13} color={COLORS.primary} />
+                <Ionicons name="time-outline" size={14} color="#ffffff" />
                 <Text style={styles.apptScheduleText}>
                   {nextAppt.batchTime || nextAppt.time || 'Time pending'}
                 </Text>
               </View>
-              <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
+              <Ionicons name="chevron-forward" size={16} color="#ffffff" />
             </View>
           </TouchableOpacity>
         ) : (
@@ -526,7 +502,7 @@ export default function HomeScreen() {
           </Text>
         </View>
 
-        <View style={{ height: 24 }} />
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -808,17 +784,17 @@ const styles = StyleSheet.create({
 
   // ── 3. Upcoming Appointment (Redesigned with Synced Doctor Profile) ──
   redesignedApptCard: {
-    backgroundColor: '#fff',
+    backgroundColor: '#be185d',
     marginHorizontal: 20,
     borderRadius: 18,
-    padding: 14,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
+    padding: 15,
+    shadowColor: '#be185d',
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
     borderWidth: 1,
-    borderColor: '#f1f5f9',
+    borderColor: 'rgba(255, 255, 255, 0.15)',
     marginBottom: 20,
   },
   apptDoctorRow: {
@@ -837,19 +813,19 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1.5,
-    borderColor: '#e2e8f0',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.7)',
   },
   apptDoctorAvatarFallback: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#fce7f3',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
-    borderColor: '#fbcfe8',
+    borderColor: 'rgba(255, 255, 255, 0.5)',
   },
   apptDoctorOnlineDot: {
     position: 'absolute',
@@ -860,7 +836,7 @@ const styles = StyleSheet.create({
     borderRadius: 6.5,
     backgroundColor: '#10b981',
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: '#be185d',
   },
   apptDoctorInfo: {
     flex: 1,
@@ -872,45 +848,46 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   apptDoctorName: {
-    fontSize: 14.5,
+    fontSize: 15,
     fontWeight: '700',
-    color: COLORS.text,
+    color: '#ffffff',
     flex: 1,
   },
   apptClinicSubtitle: {
-    fontSize: 11.5,
-    color: COLORS.textSecondary,
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.88)',
     fontWeight: '500',
     marginTop: 2,
   },
   apptStatusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2.5,
-    borderRadius: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.35)',
   },
   apptStatusText: {
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: '700',
+    color: '#ffffff',
+    letterSpacing: 0.3,
   },
   apptScheduleBox: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 12,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: '#edf2f7',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 4,
+    paddingTop: 4,
   },
   apptScheduleItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 6,
   },
   apptScheduleText: {
     fontSize: 12,
-    color: COLORS.text,
+    color: '#ffffff',
     fontWeight: '600',
   },
   emptyApptCard: {

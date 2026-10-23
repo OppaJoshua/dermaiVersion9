@@ -133,7 +133,7 @@ export default function HistoryScreen() {
   }, [history, searchTerm]);
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* ── Header ── */}
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
@@ -549,7 +549,7 @@ const styles = StyleSheet.create({
   scrollList: {
     paddingHorizontal: 20,
     paddingTop: 14,
-    paddingBottom: 90,
+    paddingBottom: 16,
   },
   cardList: {
     gap: 12,

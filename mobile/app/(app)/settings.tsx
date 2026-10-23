@@ -5,7 +5,6 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   Alert,
   TextInput,
   ActivityIndicator,
@@ -14,7 +13,10 @@ import {
   Platform,
   Switch,
   Image,
+  StatusBar,
+  Linking,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, APP_NAME, APP_VERSION } from '@/lib/constants';
@@ -71,7 +73,7 @@ export default function SettingsScreen() {
     ]);
   }
 
-  const isPremium = sub?.plan === 'premium';
+  const isPremium = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -294,6 +296,14 @@ function SettingsRow({
   );
 }
 
+const SUPPORT_TOPICS = [
+  { id: 'scan', label: 'AI Scan Assessment', icon: 'scan-outline' as const, defaultSubject: 'Question regarding skin scan assessment' },
+  { id: 'billing', label: 'Subscription & Billing', icon: 'card-outline' as const, defaultSubject: 'Subscription and billing inquiry' },
+  { id: 'clinic', label: 'Clinic Consultation', icon: 'calendar-outline' as const, defaultSubject: 'Inquiry regarding clinic consultation booking' },
+  { id: 'bug', label: 'Technical / App Bug', icon: 'bug-outline' as const, defaultSubject: 'Reporting a technical bug or crash in mobile app' },
+  { id: 'general', label: 'General Inquiry', icon: 'help-circle-outline' as const, defaultSubject: 'General inquiry about DermaAI services' },
+];
+
 function HelpModal({
   visible,
   user,
@@ -303,14 +313,33 @@ function HelpModal({
   user: PatientAccount | null;
   onClose: () => void;
 }) {
+  const insets = useSafeAreaInsets();
+  const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
+  const [focusedField, setFocusedField] = useState<'subject' | 'message' | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState<string | null>(null);
 
+  // Dynamic top padding to strictly eliminate Android status bar / notch overlap
+  const topPadding = Platform.OS === 'android'
+    ? (StatusBar.currentHeight ?? 24) + 8
+    : Math.max(insets.top, 14);
+
+  function handleSelectTopic(topicId: string, defaultSub: string) {
+    if (selectedTopic === topicId) {
+      setSelectedTopic(null);
+    } else {
+      setSelectedTopic(topicId);
+      if (!subject.trim() || SUPPORT_TOPICS.some((t) => t.defaultSubject === subject)) {
+        setSubject(defaultSub);
+      }
+    }
+  }
+
   async function handleSubmit() {
     if (!subject.trim() || !message.trim()) {
-      Alert.alert('Missing Information', 'Please provide both a subject and a message.');
+      Alert.alert('Missing Information', 'Please provide both a subject and a message description.');
       return;
     }
     if (!user) {
@@ -337,80 +366,227 @@ function HelpModal({
   function handleClose() {
     setSubject('');
     setMessage('');
+    setSelectedTopic(null);
     setSubmitted(null);
     onClose();
   }
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1, backgroundColor: '#FFFFFF' }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <SafeAreaView style={styles.modalSafe}>
+        <SafeAreaView edges={['left', 'right', 'bottom']} style={[styles.modalSafe, { paddingTop: topPadding }]}>
+          {/* ── Modern Uncluttered Header ── */}
           <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={handleClose} style={styles.modalBackBtn}>
-              <Ionicons name="chevron-back" size={18} color={COLORS.text} />
-              <Text style={styles.modalClose}>Cancel</Text>
+            <TouchableOpacity
+              onPress={handleClose}
+              style={styles.modalCloseBtn}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={20} color={COLORS.text} />
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>Contact Support</Text>
-            <View style={{ width: 60 }} />
+
+            <View style={styles.modalHeaderCenter}>
+              <Text style={styles.modalTitle}>Contact Support</Text>
+              <View style={styles.onlineBadgeRow}>
+                <View style={styles.onlineDot} />
+                <Text style={styles.onlineTxt}>Active Support · Avg reply &lt; 2h</Text>
+              </View>
+            </View>
+
+            <View style={{ width: 38 }} />
           </View>
 
           {submitted ? (
             <View style={styles.successBox}>
-              <View style={styles.successIconCircle}>
-                <Ionicons name="checkmark-circle" size={54} color={COLORS.primary} />
+              <View style={styles.successIconOuterRing}>
+                <View style={styles.successIconCircle}>
+                  <Ionicons name="checkmark" size={36} color="#fff" />
+                </View>
               </View>
               <Text style={styles.successTitle}>Ticket Submitted!</Text>
               <View style={styles.ticketIdBadge}>
+                <Ionicons name="receipt-outline" size={14} color={COLORS.primary} style={{ marginRight: 6 }} />
                 <Text style={styles.successId}>Ticket #{submitted}</Text>
               </View>
               <Text style={styles.successMsg}>
-                Our technical and clinical support team has received your ticket and will respond to {user?.email || 'your email'} within 24 hours.
+                Our clinical and technical specialists have received your inquiry. A confirmation has been logged, and we'll reply directly to{' '}
+                <Text style={{ fontWeight: '700', color: COLORS.text }}>{user?.email || 'your email'}</Text> shortly.
               </Text>
-              <TouchableOpacity style={styles.doneBtn} onPress={handleClose}>
-                <Text style={styles.doneBtnTxt}>Done</Text>
+              <TouchableOpacity style={styles.doneBtn} onPress={handleClose} activeOpacity={0.85}>
+                <Text style={styles.doneBtnTxt}>Back to Settings</Text>
               </TouchableOpacity>
             </View>
           ) : (
-            <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-              <Text style={styles.helpIntro}>
-                Have a question about your scan or need technical assistance? Fill out the form below.
-              </Text>
+            <ScrollView
+              contentContainerStyle={styles.modalContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {/* User Account Context Banner */}
+              <View style={styles.userContextCard}>
+                <View style={styles.userContextAvatar}>
+                  <Ionicons name="person" size={16} color={COLORS.primary} />
+                </View>
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={styles.userContextLabel}>SUBMITTING INQUIRY AS</Text>
+                  <Text style={styles.userContextValue} numberOfLines={1}>
+                    {user?.fullName || 'DermaAI Patient'} · {user?.email || 'patient@dermai.ph'}
+                  </Text>
+                </View>
+                <View style={styles.priorityPill}>
+                  <Ionicons name="shield-checkmark" size={11} color="#059669" />
+                  <Text style={styles.priorityPillTxt}>Verified</Text>
+                </View>
+              </View>
+
+              {/* Topic Select Carousel */}
+              <View style={styles.topicsSection}>
+                <Text style={styles.topicsSectionTitle}>Select Topic / Category</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.topicChipsScroll}
+                >
+                  {SUPPORT_TOPICS.map((topic) => {
+                    const isSelected = selectedTopic === topic.id;
+                    return (
+                      <TouchableOpacity
+                        key={topic.id}
+                        style={[styles.topicChip, isSelected && styles.topicChipActive]}
+                        onPress={() => handleSelectTopic(topic.id, topic.defaultSubject)}
+                        activeOpacity={0.75}
+                      >
+                        <Ionicons
+                          name={topic.icon}
+                          size={13}
+                          color={isSelected ? COLORS.primary : '#64748B'}
+                          style={{ marginRight: 5 }}
+                        />
+                        <Text style={[styles.topicChipTxt, isSelected && styles.topicChipTxtActive]}>
+                          {topic.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Subject Input */}
               <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Subject</Text>
+                <View style={styles.labelRow}>
+                  <Ionicons name="pricetag-outline" size={13} color={COLORS.primary} />
+                  <Text style={styles.formLabel}>Subject</Text>
+                </View>
                 <TextInput
-                  style={styles.formInput}
+                  style={[
+                    styles.formInput,
+                    focusedField === 'subject' && styles.formInputFocused,
+                  ]}
                   placeholder="e.g. Issue uploading skin photos"
-                  placeholderTextColor={COLORS.textLight}
+                  placeholderTextColor="#94A3B8"
                   value={subject}
                   onChangeText={setSubject}
+                  onFocus={() => setFocusedField('subject')}
+                  onBlur={() => setFocusedField(null)}
                 />
               </View>
+
+              {/* Message Details Input */}
               <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Message</Text>
+                <View style={styles.labelRow}>
+                  <Ionicons name="chatbox-ellipses-outline" size={13} color={COLORS.primary} />
+                  <Text style={styles.formLabel}>Message Details</Text>
+                  <Text style={styles.charCountTxt}>{message.length} chars</Text>
+                </View>
                 <TextInput
-                  style={[styles.formInput, styles.textArea]}
-                  placeholder="Describe your issue or inquiry in detail..."
-                  placeholderTextColor={COLORS.textLight}
+                  style={[
+                    styles.formInput,
+                    styles.textArea,
+                    focusedField === 'message' && styles.formInputFocused,
+                  ]}
+                  placeholder="Describe your issue, symptoms inquiry, or question in detail..."
+                  placeholderTextColor="#94A3B8"
                   value={message}
                   onChangeText={setMessage}
                   multiline
                   numberOfLines={5}
+                  onFocus={() => setFocusedField('message')}
+                  onBlur={() => setFocusedField(null)}
                 />
               </View>
+
+              {/* Primary Submit Button */}
               <TouchableOpacity
-                style={[styles.submitBtn, submitting && { opacity: 0.6 }]}
+                style={[styles.submitBtn, submitting && { opacity: 0.65 }]}
                 onPress={handleSubmit}
                 disabled={submitting}
+                activeOpacity={0.85}
               >
                 {submitting ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={styles.submitBtnTxt}>Submit Support Ticket</Text>
+                  <View style={styles.submitBtnContent}>
+                    <Ionicons name="paper-plane" size={15} color="#fff" style={{ marginRight: 8 }} />
+                    <Text style={styles.submitBtnTxt}>Submit Support Ticket</Text>
+                  </View>
                 )}
               </TouchableOpacity>
+
+              {/* Direct Channels & Medical Safety Notice */}
+              <View style={styles.directContactWrap}>
+                <View style={styles.dividerRow}>
+                  <View style={styles.dividerLine} />
+                  <Text style={styles.dividerLabel}>DIRECT CHANNELS</Text>
+                  <View style={styles.dividerLine} />
+                </View>
+
+                <View style={styles.directCardsGrid}>
+                  <TouchableOpacity
+                    style={styles.directMiniCard}
+                    onPress={() => Linking.openURL('mailto:support@dermai.ph?subject=DermaAI%20Support%20Inquiry')}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[styles.directMiniIcon, { backgroundColor: '#EEF2FF' }]}>
+                      <Ionicons name="mail" size={16} color="#4F46E5" />
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.directMiniTitle}>Email Directly</Text>
+                      <Text style={styles.directMiniSub}>support@dermai.ph</Text>
+                    </View>
+                    <Ionicons name="open-outline" size={14} color="#94A3B8" />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.directMiniCard}
+                    onPress={() => Linking.openURL('tel:+63322343376')}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[styles.directMiniIcon, { backgroundColor: '#ECFDF5' }]}>
+                      <Ionicons name="call" size={16} color="#059669" />
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.directMiniTitle}>Clinic Support Desk</Text>
+                      <Text style={styles.directMiniSub}>Mon–Sat 8AM–6PM</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Medical Emergency Warning Callout */}
+                <View style={styles.medicalNoticeCallout}>
+                  <Ionicons name="alert-circle-outline" size={16} color="#B91C1C" style={{ marginTop: 1 }} />
+                  <Text style={styles.medicalNoticeTxt}>
+                    For acute clinical emergencies, intense pain, or severe allergic reactions, do not wait for a support ticket response. Visit an emergency medical facility immediately.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={{ height: 28 }} />
             </ScrollView>
           )}
         </SafeAreaView>
@@ -541,80 +717,352 @@ const styles = StyleSheet.create({
   rowValue: { fontSize: 12, color: '#64748b', fontWeight: '600' },
 
   // Help Modal
-  modalSafe: { flex: 1, backgroundColor: '#fff' },
+  modalSafe: { flex: 1, backgroundColor: '#FFFFFF' },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 12,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: '#F1F5F9',
+    backgroundColor: '#FFFFFF',
   },
-  modalBackBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  modalClose: { color: COLORS.textSecondary, fontSize: 14, fontWeight: '600' },
-  modalTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text },
-  modalContent: { padding: 20 },
-  helpIntro: { fontSize: 13, color: '#64748b', lineHeight: 20, marginBottom: 18 },
-  formGroup: { marginBottom: 16 },
-  formLabel: { fontSize: 12, fontWeight: '700', color: '#334155', marginBottom: 6 },
+  modalCloseBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalHeaderCenter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: COLORS.text,
+    letterSpacing: -0.2,
+  },
+  onlineBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 2,
+  },
+  onlineDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10B981',
+  },
+  onlineTxt: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#059669',
+  },
+  modalContent: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 32,
+  },
+
+  // User Context Card
+  userContextCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 18,
+  },
+  userContextAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FDF2F8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  userContextLabel: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.5,
+  },
+  userContextValue: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginTop: 1,
+  },
+  priorityPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    gap: 3,
+  },
+  priorityPillTxt: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#059669',
+  },
+
+  // Topics Section
+  topicsSection: {
+    marginBottom: 18,
+  },
+  topicsSectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 8,
+  },
+  topicChipsScroll: {
+    gap: 8,
+    paddingBottom: 2,
+  },
+  topicChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  topicChipActive: {
+    backgroundColor: '#FDF2F8',
+    borderColor: COLORS.primary,
+  },
+  topicChipTxt: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  topicChipTxtActive: {
+    color: COLORS.primary,
+    fontWeight: '700',
+  },
+
+  // Form Fields
+  formGroup: {
+    marginBottom: 16,
+  },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  formLabel: {
+    flex: 1,
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  charCountTxt: {
+    fontSize: 11,
+    color: '#94A3B8',
+  },
   formInput: {
     backgroundColor: '#F8FAFC',
     borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 14,
-    color: '#0f172a',
+    color: '#0F172A',
   },
-  textArea: { height: 110, textAlignVertical: 'top', paddingTop: 12 },
+  formInputFocused: {
+    borderColor: COLORS.primary,
+    backgroundColor: '#FFFFFF',
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  textArea: {
+    height: 110,
+    textAlignVertical: 'top',
+    paddingTop: 12,
+    lineHeight: 20,
+  },
+
+  // Submit Button
   submitBtn: {
     backgroundColor: COLORS.primary,
     borderRadius: 14,
-    paddingVertical: 15,
+    paddingVertical: 14,
     alignItems: 'center',
-    marginTop: 8,
+    justifyContent: 'center',
+    marginTop: 6,
     shadowColor: COLORS.primary,
     shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.22,
+    shadowOpacity: 0.25,
     shadowRadius: 6,
     elevation: 3,
   },
-  submitBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  submitBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submitBtnTxt: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14.5,
+    letterSpacing: 0.2,
+  },
 
+  // Direct Contact Section
+  directContactWrap: {
+    marginTop: 24,
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E2E8F0',
+  },
+  dividerLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#94A3B8',
+    letterSpacing: 0.8,
+  },
+  directCardsGrid: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 14,
+  },
+  directMiniCard: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  directMiniIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  directMiniTitle: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  directMiniSub: {
+    fontSize: 10,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  medicalNoticeCallout: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  medicalNoticeTxt: {
+    flex: 1,
+    fontSize: 11,
+    color: '#991B1B',
+    lineHeight: 16,
+  },
+
+  // Success Box
   successBox: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
   },
-  successIconCircle: { marginBottom: 14 },
-  successTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text },
+  successIconOuterRing: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#FDF2F8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  successIconCircle: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: COLORS.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  successTitle: {
+    fontSize: 21,
+    fontWeight: '800',
+    color: COLORS.text,
+  },
   ticketIdBadge: {
-    backgroundColor: '#fdf2f8',
-    borderColor: '#fbcfe8',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FDF2F8',
+    borderColor: '#FBCFE8',
     borderWidth: 1,
     borderRadius: 8,
     paddingHorizontal: 12,
-    paddingVertical: 4,
-    marginTop: 8,
-    marginBottom: 8,
+    paddingVertical: 5,
+    marginTop: 10,
+    marginBottom: 12,
   },
-  successId: { fontSize: 13, color: COLORS.primary, fontWeight: '700' },
-  successMsg: { fontSize: 13, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 20, marginTop: 4 },
+  successId: {
+    fontSize: 13,
+    color: COLORS.primary,
+    fontWeight: '700',
+  },
+  successMsg: {
+    fontSize: 13.5,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 21,
+  },
   doneBtn: {
     backgroundColor: COLORS.primary,
     borderRadius: 14,
     paddingHorizontal: 36,
-    paddingVertical: 13,
-    marginTop: 24,
+    paddingVertical: 14,
+    marginTop: 26,
     shadowColor: COLORS.primary,
     shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.22,
     shadowRadius: 6,
-    elevation: 2,
+    elevation: 3,
   },
-  doneBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  doneBtnTxt: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14.5,
+  },
 });

@@ -173,7 +173,7 @@ export default function ProfileScreen() {
     ]);
   }
 
-  const isPremium = sub?.plan === 'premium';
+  const isPremium = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
 
   if (loadingData) {
     return (
@@ -207,7 +207,7 @@ export default function ProfileScreen() {
     : 'Active';
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* ── Top Header ── */}
       <View style={styles.topHeader}>
         <View style={styles.topHeaderAvatarCircle}>
@@ -222,7 +222,7 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 80 }}>
+      <ScrollView style={styles.container} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
         {/* ── Avatar Profile Card ── */}
         <View style={styles.profileCard}>
           <TouchableOpacity onPress={handlePickImage} activeOpacity={0.8} style={styles.avatarWrap}>
