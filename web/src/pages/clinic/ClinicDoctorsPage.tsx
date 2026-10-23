@@ -2780,31 +2780,17 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                 {scheduleConflicts.length > 0 && (
                   <div className="rounded-2xl border-2 border-red-300 bg-red-50/95 p-4 sm:p-5 shadow-sm space-y-3 text-left">
                     <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-red-100 border border-red-200 flex items-center justify-center shrink-0 text-red-600 mt-0.5 shadow-2xs">
-                        <AlertTriangle className="w-5 h-5 text-red-600" />
-                      </div>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h4 className="text-sm font-extrabold text-red-900 tracking-tight">
-                            Doctor is not available
-                          </h4>
-                          <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded-full bg-red-200 text-red-900 border border-red-300">
-                            Multi-Clinic Schedule Conflict
-                          </span>
-                        </div>
                         <div className="mt-2 space-y-1.5 text-xs text-red-800">
                           {scheduleConflicts.map((c, idx) => (
                             <div key={idx} className="flex items-start gap-1.5 leading-relaxed">
                               <span className="text-red-500 font-bold shrink-0">•</span>
                               <span>
-                                <strong>{c.doctorName}</strong> is already on duty at <strong className="underline decoration-red-300 underline-offset-2">{c.otherClinicName}</strong> on <strong className="text-red-900">{c.day}</strong> from <strong>{c.otherStartTime}</strong> to <strong>{c.otherEndTime}</strong>.
+                                <strong>{c.doctorName}</strong> <strong className="underline decoration-red-300 underline-offset-2">Doctor is not available</strong>.
                               </span>
                             </div>
                           ))}
                         </div>
-                        <p className="mt-2.5 text-[11px] font-semibold text-red-700 bg-white/70 rounded-lg px-2.5 py-1.5 border border-red-200/60">
-                          ⚠️ Saving is disabled. Please select non-overlapping duty hours or uncheck the conflicting day to proceed.
-                        </p>
                       </div>
                     </div>
                   </div>
