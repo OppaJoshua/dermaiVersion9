@@ -384,7 +384,7 @@ export default function DoctorPatientHistoryPage() {
               <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-gray-100 shrink-0">
                 <div className="min-w-0">
                   <h2 className="text-base font-bold text-gray-900 truncate">Patient Consultation History</h2>
-                  <p className="text-sm text-gray-400 mt-0.5 truncate">{viewingPatient?.appointments.length} consultations ? Latest first</p>
+                  <p className="text-sm text-gray-400 mt-0.5 truncate">{viewingPatient?.appointments.length} consultations &middot; Latest first</p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0 ml-2">
                   <button
@@ -432,8 +432,8 @@ export default function DoctorPatientHistoryPage() {
                   return (
                     <details key={viewingAppt.id} open={index === 0} className="rounded-xl border border-slate-200 p-4">
                       <summary className="cursor-pointer text-sm font-semibold text-slate-800">
-                        {formatDate(viewingAppt.date, viewingAppt.createdAt)} ? {formatTime(viewingAppt.time)} ? {historyStatusLabel(viewingAppt)}
-                        <span className="block mt-1 text-xs text-slate-500">{viewingAppt.clinicName} ? {viewingAppt.doctorDiagnosis || viewingAppt.conditionName || "No diagnosis recorded"}</span>
+                        {formatDate(viewingAppt.date, viewingAppt.createdAt)} &middot; {formatTime(viewingAppt.time)} &middot; {historyStatusLabel(viewingAppt)}
+                        <span className="block mt-1 text-xs text-slate-500">{viewingAppt.clinicName} &middot; {viewingAppt.doctorDiagnosis || viewingAppt.conditionName || "No diagnosis recorded"}</span>
                       </summary>
                       <div className="space-y-4 mt-4">
                 {/* Doctor Diagnosis Box */}
