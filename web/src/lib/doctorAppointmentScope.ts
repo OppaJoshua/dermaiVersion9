@@ -1,5 +1,6 @@
 interface ScopeQuery {
   eq(column: string, value: string): unknown;
+  in(column: string, values: string[]): unknown;
   or(filters: string): unknown;
 }
 
@@ -7,10 +8,18 @@ interface ScopeQuery {
 // Mutate the PostgREST builder; callers must not execute it if this returns false.
 export function scopeDoctorAppointments(
   query: ScopeQuery, selectedClinicId: string | null | undefined, clinicIds: string[], doctorIds: string[],
+  pendingReviewOnly = false,
 ): boolean {
-  if (!selectedClinicId || !clinicIds.includes(selectedClinicId) || !doctorIds.length) return false;
-  query.eq("clinic_id", selectedClinicId);
-  query.or(`assigned_doctor_id.is.null,assigned_doctor_id.in.(${doctorIds.join(",")})`);
+  if (!selectedClinicId || !clinicIds.length || !doctorIds.length) return false;
+  if (selectedClinicId === "all") query.in("clinic_id", clinicIds);
+  else {
+    if (!clinicIds.includes(selectedClinicId)) return false;
+    query.eq("clinic_id", selectedClinicId);
+  }
+  const assignment = `assigned_doctor_id.is.null,assigned_doctor_id.in.(${doctorIds.join(",")})`;
+  query.or(pendingReviewOnly
+    ? `and(or(${assignment}),or(doctor_status.is.null,doctor_status.eq.pending-review))`
+    : assignment);
   return true;
 }
 

@@ -1,4 +1,4 @@
-import { Routes, Route, useLocation, Navigate } from "react-router-dom";
+import { Routes, Route, useLocation, Navigate, Outlet } from "react-router-dom";
 import Navbar from "./components/layout/Navbar";
 import Footer from "./components/layout/Footer";
 
@@ -149,12 +149,14 @@ function App() {
         <Route path="/clinic/notifications" element={<ClinicLayout><ClinicNotifications /></ClinicLayout>} />
 
         {/* Doctor Routes */}
-        <Route path="/doctor" element={<DoctorLayout><DoctorDashboardPage /></DoctorLayout>} />
-        <Route path="/doctor/appointments" element={<DoctorLayout><DoctorAppointmentsPage /></DoctorLayout>} />
-        <Route path="/doctor/scheduled" element={<DoctorLayout><DoctorScheduledAppointmentsPage /></DoctorLayout>} />
-        <Route path="/doctor/history" element={<DoctorLayout><DoctorPatientHistoryPage /></DoctorLayout>} />
-        <Route path="/doctor/settings" element={<DoctorLayout><DoctorSettingsPage /></DoctorLayout>} />
-        <Route path="/doctor/notifications" element={<DoctorLayout><DoctorNotifications /></DoctorLayout>} />
+        <Route path="/doctor" element={<DoctorLayout><Outlet /></DoctorLayout>}>
+          <Route index element={<DoctorDashboardPage />} />
+          <Route path="appointments" element={<DoctorAppointmentsPage />} />
+          <Route path="scheduled" element={<DoctorScheduledAppointmentsPage />} />
+          <Route path="history" element={<DoctorPatientHistoryPage />} />
+          <Route path="settings" element={<DoctorSettingsPage />} />
+          <Route path="notifications" element={<DoctorNotifications />} />
+        </Route>
 
         {/* Admin Routes */}
         <Route path="/admin" element={<AdminLayout><AdminDashboardPage /></AdminLayout>} />

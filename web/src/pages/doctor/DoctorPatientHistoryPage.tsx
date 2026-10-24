@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { formatAppointmentTime as formatTime } from "@/lib/appointmentTime";
+import { useState, useMemo, useEffect } from "react";
 import {
   Calendar,
   User,
@@ -7,7 +8,6 @@ import {
   Loader2,
   ClipboardList,
   Search,
-  Maximize2,
   Phone,
   Mail,
   MapPin,
@@ -19,22 +19,23 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
-import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
-import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
-import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
+import { useDoctorAppointments } from "@/hooks/useDoctorAppointments";
+import { ZoomableSkinPhoto } from "@/components/common/ZoomableSkinPhoto";
 import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
 
 
-type AppointmentRecord = DoctorAppointmentRecord;
+import { groupPatientHistory, filterPatientHistory, historyStatus, historyStatusLabel } from "@/lib/patientHistory";
 
 function formatDate(dateStr?: string, createdAt?: string): string {
   const target = dateStr || (createdAt ? createdAt.split("T")[0] : "");
   if (!target) return "—";
   try {
-    return new Date(target + "T00:00:00").toLocaleDateString("en-PH", {
+    const date = new Date(target.split("T")[0] + "T00:00:00");
+    if (!Number.isFinite(date.getTime())) return "Not scheduled";
+    return date.toLocaleDateString("en-PH", {
       weekday: "short",
       year: "numeric",
       month: "short",
@@ -45,29 +46,17 @@ function formatDate(dateStr?: string, createdAt?: string): string {
   }
 }
 
-function formatTime(timeStr?: string): string {
-  if (!timeStr) return "—";
-  try {
-    const [h, m] = timeStr.split(":").map(Number);
-    const ampm = h >= 12 ? "PM" : "AM";
-    const hour = h % 12 || 12;
-    return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
-  } catch {
-    return timeStr;
-  }
-}
-
 export default function DoctorPatientHistoryPage() {
   const { appointments, loading } = useDoctorAppointments();
   const { activeClinicId, affiliations } = useDoctorClinicContext();
-  const [viewingAppt, setViewingAppt] = useState<AppointmentRecord | null>(null);
-  const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
+  const [viewingPatientId, setViewingPatientId] = useState<string | null>(null);
+  useEffect(() => { setViewingPatientId(null); }, [activeClinicId]);
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<"all" | "completed" | "approved" | "pending" | "rejected">("all");
 
   // Derive the currently-active clinic name for contextual messages
   const activeClinicName = useMemo(() => {
     if (!activeClinicId) return null;
+    if (activeClinicId === "all") return "All Clinics (Consolidated)";
     return affiliations.find((a) => a.clinic_id === activeClinicId)?.clinic?.name || "Active Branch";
   }, [activeClinicId, affiliations]);
 
@@ -76,57 +65,13 @@ export default function DoctorPatientHistoryPage() {
     return appointments;
   }, [appointments]);
 
-  const completedList = useMemo(
-    () => history.filter((a) => a.status === "completed" || a.doctorDone),
-    [history]
-  );
-  const approvedList = useMemo(
-    () => history.filter((a) => a.doctorStatus === "approved" && a.status !== "completed" && !a.doctorDone),
-    [history]
-  );
-  const pendingList = useMemo(
-    () =>
-      history.filter(
-        (a) =>
-          (a.doctorStatus === "pending-review" || !a.doctorStatus) &&
-          a.status !== "completed" &&
-          a.status !== "rejected" &&
-          a.status !== "cancelled"
-      ),
-    [history]
-  );
-  const rejectedList = useMemo(
-    () => history.filter((a) => a.doctorStatus === "rejected" || a.status === "rejected" || a.status === "cancelled"),
-    [history]
-  );
-
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim();
-    let base = history;
-    if (tab === "completed") base = completedList;
-    else if (tab === "approved") base = approvedList;
-    else if (tab === "pending") base = pendingList;
-    else if (tab === "rejected") base = rejectedList;
-
-    if (!q) return base;
-
-    return base.filter((a) => {
-      return (
-        (a.patientName || "").toLowerCase().includes(q) ||
-        (a.patientEmail || "").toLowerCase().includes(q) ||
-        (a.doctorDiagnosis || "").toLowerCase().includes(q) ||
-        (a.conditionName || "").toLowerCase().includes(q) ||
-        (a.clinicName || "").toLowerCase().includes(q) ||
-        (a.notes || "").toLowerCase().includes(q)
-      );
-    });
-  }, [history, completedList, approvedList, pendingList, rejectedList, tab, search]);
-
-  const viewCond = viewingAppt?.conditionId
-    ? skinConditions.find((c) => c.id === viewingAppt.conditionId)
-    : viewingAppt?.aiConditionName
-    ? skinConditions.find((c) => c.name.toLowerCase() === (viewingAppt.aiConditionName || "").toLowerCase())
-    : null;
+  const patients = useMemo(() => groupPatientHistory(history), [history]);
+  const completedList = history.filter(a => historyStatus(a) === "completed");
+  const approvedList = history.filter(a => historyStatus(a) === "approved");
+  const pendingList = history.filter(a => historyStatus(a) === "pending");
+  const filtered = useMemo(() => filterPatientHistory(patients, "all", search), [patients, search]);
+  const viewingPatient = patients.find(patient => patient.id === viewingPatientId);
+  const viewingAppt = viewingPatient?.latest;
 
   if (loading) {
     return (
@@ -275,36 +220,6 @@ export default function DoctorPatientHistoryPage() {
         </div>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-        {[
-          { key: "all", label: "All History", count: history.length },
-          { key: "completed", label: "Completed Visits", count: completedList.length },
-          { key: "approved", label: "Approved & Diagnosed", count: approvedList.length },
-          { key: "pending", label: "Pending Review", count: pendingList.length },
-          { key: "rejected", label: "Declined", count: rejectedList.length },
-        ].map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key as any)}
-            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-              tab === t.key
-                ? "border-blue-600 text-blue-600"
-                : "border-transparent text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            {t.label}
-            <span
-              className={`ml-2 text-[11px] px-1.5 py-0.5 rounded-full font-bold ${
-                tab === t.key ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
-              }`}
-            >
-              {t.count}
-            </span>
-          </button>
-        ))}
-      </div>
-
       {filtered.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200/90 flex flex-col items-center justify-center py-20 text-center px-6 shadow-xs">
           {activeClinicName && !search ? (
@@ -324,7 +239,7 @@ export default function DoctorPatientHistoryPage() {
               </p>
               {search && (
                 <p className="text-sm text-gray-400 max-w-xs mt-1">
-                  Try a different search term or filter tab.
+                  Try a different search term.
                 </p>
               )}
             </>
@@ -337,29 +252,26 @@ export default function DoctorPatientHistoryPage() {
               <thead className="bg-[#F8F9FA] border-b border-slate-200/80 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
                 <tr>
                   <th className="px-5 py-3">Patient</th>
-                  <th className="px-4 py-3">Doctor Diagnosis / Concern</th>
-                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Latest Diagnosis / Concern</th>
+                  <th className="px-4 py-3">Latest Status</th>
                   <th className="px-4 py-3">Clinic</th>
-                  <th className="px-4 py-3">Schedule Date</th>
-                  <th className="px-4 py-3">Time</th>
+                  <th className="px-4 py-3">Latest Schedule Date</th>
+                  <th className="px-4 py-3">Consultations</th>
                   <th className="px-5 py-3 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map((appt, i) => {
-                  const isCompleted = appt.status === "completed" || appt.doctorDone;
-                  const isApproved = appt.doctorStatus === "approved" && !isCompleted;
-                  const isPending =
-                    (appt.doctorStatus === "pending-review" || !appt.doctorStatus) &&
-                    !isCompleted &&
-                    appt.status !== "rejected" &&
-                    appt.status !== "cancelled";
-                  const isRejected =
-                    appt.doctorStatus === "rejected" || appt.status === "rejected" || appt.status === "cancelled";
+                {filtered.map((patient, i) => {
+                  const appt = patient.latest;
+                  const status = historyStatus(appt);
+                  const isCompleted = status === "completed";
+                  const isApproved = status === "approved";
+                  const isPending = status === "pending";
+                  const isRejected = status === "rejected";
 
                   return (
                     <motion.tr
-                      key={appt.id}
+                      key={patient.id}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ delay: i * 0.03 }}
@@ -382,7 +294,7 @@ export default function DoctorPatientHistoryPage() {
                                   {appt.patientGender}
                                 </span>
                               )}
-                              {appt.patientAge && (
+                              {Number.isFinite(appt.patientAge) && (
                                 <span className="text-sm text-gray-400">{appt.patientAge} yrs old</span>
                               )}
                             </div>
@@ -427,11 +339,11 @@ export default function DoctorPatientHistoryPage() {
                         {formatDate(appt.date, appt.createdAt)}
                       </td>
                       <td className="px-4 py-3.5 text-gray-700 whitespace-nowrap text-xs">
-                        {formatTime(appt.time)}
+                        {patient.appointments.length} {patient.appointments.length === 1 ? "consultation" : "consultations"}
                       </td>
                       <td className="px-5 py-3.5 text-right">
                         <button
-                          onClick={() => setViewingAppt(appt)}
+                          onClick={() => setViewingPatientId(patient.id)}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-100 text-xs font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
                         >
                           <FileText className="w-3.5 h-3.5" /> View
@@ -449,13 +361,13 @@ export default function DoctorPatientHistoryPage() {
       {/* Detail Modal */}
       <ModalPortal isOpen={Boolean(viewingAppt)}>
         <AnimatePresence>
-          {viewingAppt && (
+          {viewingAppt && viewingPatient && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
-              onClick={() => setViewingAppt(null)}
+              onClick={() => setViewingPatientId(null)}
             >
               <motion.div
                 initial={{ opacity: 0, scale: 0.96, y: 12 }}
@@ -463,34 +375,20 @@ export default function DoctorPatientHistoryPage() {
                 exit={{ opacity: 0, scale: 0.96, y: 12 }}
                 transition={{ duration: 0.2 }}
                 className="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh] relative z-[9999]"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Patient consultation history"
                 onClick={(e) => e.stopPropagation()}
               >
               {/* Header */}
               <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-gray-100 shrink-0">
                 <div className="min-w-0">
-                  <h2 className="text-base font-bold text-gray-900 truncate">Consultation History Record</h2>
-                  <p className="text-sm text-gray-400 mt-0.5 truncate">Patient consultation &amp; diagnosis archive</p>
+                  <h2 className="text-base font-bold text-gray-900 truncate">Patient Consultation History</h2>
+                  <p className="text-sm text-gray-400 mt-0.5 truncate">{viewingPatient?.appointments.length} consultations ? Latest first</p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0 ml-2">
-                  {viewingAppt.status === "completed" || viewingAppt.doctorDone ? (
-                    <span className="text-sm font-semibold text-emerald-700">
-                      Completed
-                    </span>
-                  ) : viewingAppt.doctorStatus === "approved" ? (
-                    <span className="text-sm font-semibold text-blue-700">
-                      Approved
-                    </span>
-                  ) : viewingAppt.doctorStatus === "rejected" || viewingAppt.status === "rejected" || viewingAppt.status === "cancelled" ? (
-                    <span className="text-sm font-semibold text-red-700">
-                      Declined
-                    </span>
-                  ) : (
-                    <span className="text-sm font-semibold text-amber-700">
-                      Pending Review
-                    </span>
-                  )}
                   <button
-                    onClick={() => setViewingAppt(null)}
+                    onClick={() => setViewingPatientId(null)}
                     className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors cursor-pointer"
                   >
                     <X className="w-4 h-4 text-gray-500" />
@@ -528,8 +426,18 @@ export default function DoctorPatientHistoryPage() {
                   </div>
                 </div>
 
+                <div className="space-y-4 border-l-2 border-blue-100 pl-3">
+                {viewingPatient.appointments.map((viewingAppt, index) => {
+                  const viewCond = skinConditions.find(c => c.id === viewingAppt.conditionId || c.name.toLowerCase() === viewingAppt.aiConditionName?.toLowerCase());
+                  return (
+                    <details key={viewingAppt.id} open={index === 0} className="rounded-xl border border-slate-200 p-4">
+                      <summary className="cursor-pointer text-sm font-semibold text-slate-800">
+                        {formatDate(viewingAppt.date, viewingAppt.createdAt)} ? {formatTime(viewingAppt.time)} ? {historyStatusLabel(viewingAppt)}
+                        <span className="block mt-1 text-xs text-slate-500">{viewingAppt.clinicName} ? {viewingAppt.doctorDiagnosis || viewingAppt.conditionName || "No diagnosis recorded"}</span>
+                      </summary>
+                      <div className="space-y-4 mt-4">
                 {/* Doctor Diagnosis Box */}
-                {viewingAppt.doctorDiagnosis && (
+                {(viewingAppt.doctorDiagnosis || viewingAppt.doctorNote) && (
                   <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-4 space-y-1.5">
                     <p className="text-[11px] text-blue-600 font-bold uppercase tracking-wide">
                       Doctor's Final Diagnosis
@@ -626,23 +534,10 @@ export default function DoctorPatientHistoryPage() {
                       <p className="text-[11px] text-gray-400 font-semibold uppercase tracking-wide">
                         Uploaded Skin Photo
                       </p>
-                      <button
-                        onClick={async () => {
-                          const url = await getSignedSkinPhotoUrl(viewingAppt.skinPhotoUrl);
-                          if (url) setLightboxPhoto(url);
-                        }}
-                        className="text-[11px] text-blue-600 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
-                      >
-                        <Maximize2 className="w-3 h-3" /> Enlarge
-                      </button>
                     </div>
-                    <LazySkinPhoto
+                    <ZoomableSkinPhoto
                       pathOrUrl={viewingAppt.skinPhotoUrl}
                       alt="Patient Skin"
-                      onClick={async () => {
-                        const url = await getSignedSkinPhotoUrl(viewingAppt.skinPhotoUrl);
-                        if (url) setLightboxPhoto(url);
-                      }}
                       className="w-full max-h-48 object-contain rounded-xl border border-gray-200 bg-gray-50 cursor-pointer hover:opacity-95 transition-opacity"
                     />
                   </div>
@@ -707,11 +602,17 @@ export default function DoctorPatientHistoryPage() {
                     <p className="text-sm text-gray-700 italic">"{viewingAppt.notes}"</p>
                   </div>
                 )}
+                {viewingAppt.clinicNote && <p className="text-sm whitespace-pre-wrap"><strong>Clinic notes:</strong> {viewingAppt.clinicNote}</p>}
+                      </div>
+                    </details>
+                  );
+                })}
+                </div>
               </div>
 
               <div className="px-6 py-4 border-t border-gray-100">
                 <button
-                  onClick={() => setViewingAppt(null)}
+                  onClick={() => setViewingPatientId(null)}
                   className="w-full py-2.5 rounded-xl bg-gray-900 text-white text-sm font-semibold hover:bg-gray-700 transition-colors cursor-pointer"
                 >
                   Close
@@ -723,34 +624,6 @@ export default function DoctorPatientHistoryPage() {
         </AnimatePresence>
       </ModalPortal>
 
-      {/* Lightbox Modal */}
-      <ModalPortal isOpen={Boolean(lightboxPhoto)}>
-        <AnimatePresence>
-          {lightboxPhoto && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[9998] bg-black/85 flex items-center justify-center p-4 backdrop-blur-md"
-              onClick={() => setLightboxPhoto(null)}
-            >
-              <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center z-[9999]">
-                <button
-                  onClick={() => setLightboxPhoto(null)}
-                  className="absolute -top-10 right-0 text-white hover:text-gray-300 p-1 cursor-pointer"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-                <img
-                  src={lightboxPhoto}
-                  alt="Skin Photo Full Size"
-                  className="max-h-[85vh] max-w-full object-contain rounded-xl border border-white/20 shadow-2xl"
-                />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </ModalPortal>
     </div>
   );
 }

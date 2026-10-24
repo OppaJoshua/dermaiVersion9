@@ -335,11 +335,15 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
   const items: NotificationItem[] = [];
 
   try {
-    // 1. Resolve Doctor ID from clinic_doctor table
+    // 1. Resolve Doctor ID & ALL branch clinic_ids from clinic_doctor table
     const docIds: string[] = [userId];
+    const branchClinicIds: string[] = [];
+    const clinicNameMap = new Map<string, string>(); // clinic_id -> name
+    const clinicLogoMap = new Map<string, string>(); // clinic_id -> logo_url
+
     const { data: docRecords } = await supabase
       .from("clinic_doctor")
-      .select("doctor_id, doctor_name, clinic_id, email, user_id, clinic:clinic_id(name)");
+      .select("doctor_id, doctor_name, clinic_id, email, user_id, clinic:clinic_id(name, logo_url)");
 
     let currentClinicName = "Clinic";
     (docRecords || []).forEach((d: any) => {
@@ -347,13 +351,19 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       const matchEmail = userEmail && d.email && d.email.toLowerCase() === userEmail.toLowerCase();
       if (matchUserId || matchEmail) {
         if (d.doctor_id) docIds.push(d.doctor_id);
+        if (d.clinic_id) branchClinicIds.push(d.clinic_id);
         const cObj = Array.isArray(d.clinic) ? d.clinic[0] : d.clinic;
-        if (cObj?.name) currentClinicName = cObj.name;
+        if (cObj?.name) {
+          currentClinicName = cObj.name;
+          if (d.clinic_id) clinicNameMap.set(d.clinic_id, cObj.name);
+        }
+        if (cObj?.logo_url && d.clinic_id) clinicLogoMap.set(d.clinic_id, cObj.logo_url);
       }
     });
 
     const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
     const validDoctorIds = Array.from(new Set(docIds.filter(isUuid)));
+    const validBranchIds = Array.from(new Set(branchClinicIds.filter(isUuid)));
 
     // Fetch platform admin avatar for admin-sent notifications (support tickets, broadcasts)
     let adminAvatar: string | undefined = undefined;
@@ -370,12 +380,38 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       }
     } catch {}
 
-    // 2. Fetch Doctor's Assigned Appointments
+    // Helper: resolve patient avatar
+    const buildNotifItems = async (appointments: any[]) => {
+      const missingUserIds = Array.from(
+        new Set(
+          appointments
+            .filter((a: any) => !(Array.isArray(a.user) ? a.user[0] : a.user)?.avatar_url)
+            .map((a: any) => a.user_id)
+            .filter(Boolean)
+        )
+      );
+      const fallbackAvatarMap = new Map<string, string>();
+      if (missingUserIds.length > 0) {
+        try {
+          const { data: userRows } = await supabase
+            .from("user")
+            .select("user_id, avatar_url")
+            .in("user_id", missingUserIds);
+          (userRows || []).forEach((u: any) => {
+            if (u.avatar_url) fallbackAvatarMap.set(u.user_id, u.avatar_url);
+          });
+        } catch {}
+      }
+      return { fallbackAvatarMap };
+    };
+
+    // 2A. Fetch Doctor's Assigned Appointments (existing behavior)
     if (validDoctorIds.length > 0) {
       const { data: appointments } = await supabase
         .from("patient_appointment")
         .select(`
           appointment_id,
+          clinic_id,
           date,
           time,
           status,
@@ -394,30 +430,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
         .limit(20);
 
       if (appointments) {
-        // Collect missing user_ids for patients without avatar from relational join
-        const missingUserIds = Array.from(
-          new Set(
-            appointments
-              .filter((a: any) => !(Array.isArray(a.user) ? a.user[0] : a.user)?.avatar_url)
-              .map((a: any) => a.user_id)
-              .filter(Boolean)
-          )
-        );
-
-        const fallbackAvatarMap = new Map<string, string>();
-        if (missingUserIds.length > 0) {
-          try {
-            const { data: userRows } = await supabase
-              .from("user")
-              .select("user_id, email, full_name, avatar_url")
-              .in("user_id", missingUserIds);
-            (userRows || []).forEach((u: any) => {
-              if (u.avatar_url) {
-                fallbackAvatarMap.set(u.user_id, u.avatar_url);
-              }
-            });
-          } catch {}
-        }
+        const { fallbackAvatarMap } = await buildNotifItems(appointments);
 
         appointments.forEach((appt: any) => {
           const patient = appt.patient_name || "A patient";
@@ -426,8 +439,8 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
             ? new Date(appt.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
             : "scheduled date";
           const cObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
-          const clinic = cObj?.name || currentClinicName;
-          const clinicLogo = cObj?.logo_url || undefined;
+          const clinic = cObj?.name || clinicNameMap.get(appt.clinic_id) || currentClinicName;
+          const clinicLogo = cObj?.logo_url || clinicLogoMap.get(appt.clinic_id) || undefined;
 
           const uObj = Array.isArray(appt.user) ? appt.user[0] : appt.user;
           const patientAvatar =
@@ -435,13 +448,20 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
             (appt.user_id ? fallbackAvatarMap.get(appt.user_id) : undefined) ||
             undefined;
 
-          // A. Pending review / decision
+          const patientId = appt.user_id || appt.appointment_id;
+          const clinicId = appt.clinic_id;
+          const appointmentId = appt.appointment_id;
+          const targetNav = clinicId && patientId
+            ? `/doctor/clinics/${clinicId}/patients/${patientId}?appointmentId=${appointmentId}`
+            : "/doctor/appointments";
+
+          // A. Pending review / decision (assigned)
           if (appt.doctor_status === "pending" || !appt.doctor_status) {
             const notifId = `doc-req-${appt.appointment_id}`;
             const isDelegated = Boolean(appt.schedule_sent_to_doctor);
             items.push({
               id: notifId,
-              type: isDelegated ? "appointment-delegated" : "appointment-request",
+              type: isDelegated ? "appointment-delegated" : "appointment_request",
               category: "appointment",
               title: isDelegated ? "Assigned by Clinic" : "New Booking Request",
               message: isDelegated
@@ -450,10 +470,20 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
               senderName: isDelegated ? clinic : patient,
               senderType: isDelegated ? "clinic" : "patient",
               senderAvatar: isDelegated ? (clinicLogo || undefined) : (patientAvatar || undefined),
-              link: "/doctor/appointments",
+              link: targetNav,
               timestamp: appt.created_at || new Date().toISOString(),
               isRead: readSet.has(notifId),
-              metadata: { appointment_id: appt.appointment_id },
+              metadata: {
+                appointment_id: appointmentId,
+                appointmentId: appointmentId,
+                clinic_id: clinicId,
+                clinicId: clinicId,
+                patient_id: patientId,
+                patientId: patientId,
+                category: "appointment",
+                type: "appointment_request",
+                link: targetNav,
+              },
             });
           }
 
@@ -472,9 +502,108 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
               link: "/doctor/scheduled",
               timestamp: appt.created_at || new Date().toISOString(),
               isRead: readSet.has(notifId),
-              metadata: { appointment_id: appt.appointment_id },
+              metadata: {
+                appointment_id: appt.appointment_id,
+                appointmentId: appointmentId,
+                clinic_id: clinicId,
+                clinicId: clinicId,
+                patient_id: patientId,
+                patientId: patientId,
+              },
             });
           }
+        });
+      }
+    }
+
+    // 2B. Cross-Branch: Fetch NEW unassigned pending appointment requests
+    //     from ALL clinic branches this doctor belongs to.
+    //     This fires for any branch — even one not currently active in the UI.
+    if (validBranchIds.length > 0) {
+      const alreadyTrackedIds = new Set(items.map((i) => {
+        // extract appointment_id suffix from notifId like "doc-req-<uuid>"
+        return i.metadata?.appointment_id;
+      }).filter(Boolean));
+
+      const { data: branchRequests } = await supabase
+        .from("patient_appointment")
+        .select(`
+          appointment_id,
+          clinic_id,
+          date,
+          status,
+          doctor_status,
+          patient_name,
+          ai_condition_name,
+          assigned_doctor_id,
+          created_at,
+          user_id,
+          user:user_id(avatar_url, full_name),
+          clinic:clinic_id(name, logo_url)
+        `)
+        .in("clinic_id", validBranchIds)
+        .is("assigned_doctor_id", null)       // unassigned requests only
+        .in("status", ["pending", "requested"]) // only new incoming requests
+        .order("created_at", { ascending: false })
+        .limit(30);
+
+      if (branchRequests) {
+        const { fallbackAvatarMap } = await buildNotifItems(branchRequests);
+
+        branchRequests.forEach((appt: any) => {
+          // Skip if we already added a notification for this appointment
+          if (alreadyTrackedIds.has(appt.appointment_id)) return;
+
+          const notifId = `doc-branch-req-${appt.appointment_id}`;
+          const patient = appt.patient_name || "A patient";
+          const condition = appt.ai_condition_name ? ` for ${appt.ai_condition_name}` : "";
+          const dateStr = appt.date
+            ? new Date(appt.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+            : "a scheduled date";
+
+          const cObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
+          const clinic = cObj?.name || clinicNameMap.get(appt.clinic_id) || "Your Branch";
+          const clinicLogo = cObj?.logo_url || clinicLogoMap.get(appt.clinic_id) || undefined;
+
+          const uObj = Array.isArray(appt.user) ? appt.user[0] : appt.user;
+          const patientAvatar =
+            uObj?.avatar_url ||
+            (appt.user_id ? fallbackAvatarMap.get(appt.user_id) : undefined) ||
+            undefined;
+
+          const patientId = appt.user_id || appt.appointment_id;
+          const clinicId = appt.clinic_id;
+          const appointmentId = appt.appointment_id;
+          const targetNav = clinicId && patientId
+            ? `/doctor/clinics/${clinicId}/patients/${patientId}?appointmentId=${appointmentId}`
+            : "/doctor/appointments";
+
+          items.push({
+            id: notifId,
+            type: "appointment_request",
+            category: "appointment",
+            title: "New Appointment Request",
+            message: `${patient} has requested a consultation${condition} at ${clinic} on ${dateStr}. Tap to review.`,
+            senderName: patient,
+            senderType: "patient",
+            senderAvatar: patientAvatar || undefined,
+            link: targetNav,
+            timestamp: appt.created_at || new Date().toISOString(),
+            isRead: readSet.has(notifId),
+            metadata: {
+              appointment_id: appointmentId,
+              appointmentId: appointmentId,
+              clinic_id: clinicId,
+              clinicId: clinicId,
+              patient_id: patientId,
+              patientId: patientId,
+              branch_name: clinic,
+              branch_logo: clinicLogo,
+              category: "appointment",
+              type: "appointment_request",
+              link: targetNav,
+            },
+          });
         });
       }
     }
@@ -541,10 +670,10 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
     // 5. Direct User Notifications for Doctor
     const { data: directNotifs } = await supabase
       .from("user_notification")
-      .select("notif_id, type, subtype, title, body, is_read, created_at")
+      .select("notif_id, type, subtype, title, body, is_read, metadata, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
-      .limit(25);
+      .limit(30);
 
     if (directNotifs) {
       directNotifs.forEach((n) => {
@@ -552,21 +681,37 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
         const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
         const isAdminSystem = isBroadcast || isMaintenance;
 
+        const meta = (n as any).metadata || {};
+        const metaClinicId = meta.clinicId || meta.clinic_id;
+        const metaPatientId = meta.patientId || meta.patient_id || meta.user_id;
+        const metaApptId = meta.appointmentId || meta.appointment_id;
+
+        const resolvedLink =
+          meta.link ||
+          (metaClinicId && metaPatientId
+            ? `/doctor/clinics/${metaClinicId}/patients/${metaPatientId}${metaApptId ? `?appointmentId=${metaApptId}` : ""}`
+            : undefined);
+
+        const category =
+          meta.category ||
+          (isBroadcast ? "broadcast" : n.type === "appointment_request" || n.type === "appointment" ? "appointment" : "system");
+
         items.push({
           id: n.notif_id,
           type: n.type || "system",
-          category: isBroadcast ? "broadcast" : "system",
+          category,
           title: n.title,
           message: n.body || "",
+          link: resolvedLink,
           senderName:
-            (n as any).metadata?.sender_name ||
+            meta.sender_name ||
             (isAdminSystem ? "Platform Administrator" : "DERMAI Admin"),
           senderType: isAdminSystem ? "admin" : (n.subtype as any) || "system",
-          senderAvatar: (n as any).metadata?.avatar_url || (isAdminSystem ? adminAvatar : undefined),
+          senderAvatar: meta.avatar_url || (isAdminSystem ? adminAvatar : undefined),
           timestamp: n.created_at,
           isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
           metadata: {
-            ...(n as any).metadata,
+            ...meta,
             subtype: n.subtype,
           },
         });
@@ -1838,6 +1983,109 @@ export async function createPatientNotification(payload: PatientNotificationPayl
       console.warn("[notificationService] Supabase insert warning:", error.message);
       return false;
     }
+    window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+    return true;
+  } catch (err: any) {
+    console.warn("[notificationService] Notification dispatch error:", err?.message || err);
+    return false;
+  }
+}
+
+export interface DoctorAppointmentNotificationInput {
+  doctorId?: string;
+  clinicId: string;
+  clinicName?: string;
+  patientId: string;
+  patientName: string;
+  appointmentId: string;
+  scheduledDate?: string;
+  scheduledTime?: string;
+  consultationType?: string;
+}
+
+/**
+ * Generate a clinic-scoped appointment request notification for the target doctor
+ */
+export async function createDoctorAppointmentNotification(input: DoctorAppointmentNotificationInput): Promise<boolean> {
+  const {
+    doctorId,
+    clinicId,
+    clinicName,
+    patientId,
+    patientName,
+    appointmentId,
+    scheduledDate,
+    scheduledTime,
+    consultationType,
+  } = input;
+
+  if (!clinicId || !patientId || !appointmentId) return false;
+
+  try {
+    const targetUserIds = new Set<string>();
+
+    // 1. Resolve specific doctor's user_id if doctorId provided
+    if (doctorId) {
+      const { data: docRecords } = await supabase
+        .from("clinic_doctor")
+        .select("user_id, doctor_id")
+        .or(`doctor_id.eq.${doctorId},user_id.eq.${doctorId}`);
+
+      (docRecords || []).forEach((d: any) => {
+        if (d.user_id) targetUserIds.add(d.user_id);
+      });
+
+      // Fallback: if doctorId looks like a UUID (auth.users id), add it directly
+      if (targetUserIds.size === 0 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(doctorId)) {
+        targetUserIds.add(doctorId);
+      }
+    }
+
+    // 2. If no specific doctor found, notify active doctors associated with this clinic
+    if (targetUserIds.size === 0) {
+      const { data: clinicDocs } = await supabase
+        .from("clinic_doctor")
+        .select("user_id")
+        .eq("clinic_id", clinicId)
+        .ilike("status", "active");
+
+      (clinicDocs || []).forEach((d: any) => {
+        if (d.user_id) targetUserIds.add(d.user_id);
+      });
+    }
+
+    if (targetUserIds.size === 0) return false;
+
+    const navLink = `/doctor/clinics/${clinicId}/patients/${patientId}?appointmentId=${appointmentId}`;
+    const scheduleStr = scheduledDate ? ` on ${scheduledDate}${scheduledTime ? ` at ${scheduledTime}` : ""}` : "";
+    const typeLabel = consultationType || "consultation";
+
+    const rows = Array.from(targetUserIds).map((uid) => ({
+      user_id: uid,
+      type: "appointment_request",
+      subtype: "appointment_request",
+      title: "New Appointment Request",
+      body: `${patientName} requested a ${typeLabel}${scheduleStr} at ${clinicName || "Clinic"}.`,
+      is_read: false,
+      metadata: {
+        clinic_id: clinicId,
+        clinicId: clinicId,
+        patient_id: patientId,
+        patientId: patientId,
+        appointment_id: appointmentId,
+        appointmentId: appointmentId,
+        category: "appointment",
+        type: "appointment_request",
+        link: navLink,
+      },
+    }));
+
+    const { error } = await supabase.from("user_notification").insert(rows);
+    if (error) {
+      console.warn("[notificationService] Error generating doctor appointment notification:", error.message);
+      return false;
+    }
+
     window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
     return true;
   } catch (err: any) {

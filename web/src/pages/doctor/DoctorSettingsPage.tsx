@@ -234,7 +234,7 @@ export default function DoctorSettingsPage() {
 
   const loadData = useCallback(async () => {
     const requestId = ++profileRequestRef.current;
-    if (!activeClinicId) return;
+    if (!activeClinicId || activeClinicId === "all") return;
     try {
       let docFound: any = null;
       const storedDocId = activeAffiliation?.doctor_id || "";
@@ -416,6 +416,13 @@ export default function DoctorSettingsPage() {
       setTicketSubmitting(false);
     }
   };
+
+  if (activeClinicId === "all") return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-6">
+      <h1 className="text-xl font-bold text-slate-900">Clinic Profile &amp; Settings</h1>
+      <p className="mt-2 text-sm text-slate-600">Select a clinic in the branch switcher to view its doctor profile, duty schedule, and support settings.</p>
+    </div>
+  );
 
   return (
     <div className="max-w-7xl space-y-6 pb-12">

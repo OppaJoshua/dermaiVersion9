@@ -16,8 +16,10 @@ test('one branch always defaults to its own ID', () => {
 test('multiple branches preserve a valid selection and reject removed branches', () => {
   const branches = [branch('a'), branch('b')];
   assert.equal(resolveDoctorBranch('b', branches), 'b');
-  assert.equal(resolveDoctorBranch('ALL', branches), 'a');
-  assert.equal(resolveDoctorBranch('removed', branches), 'a');
+  assert.equal(resolveDoctorBranch('all', branches), 'all');
+  assert.equal(resolveDoctorBranch('', branches), 'all');
+  assert.equal(resolveDoctorBranch('ALL', branches), 'all');
+  assert.equal(resolveDoctorBranch('removed', branches), 'all');
   assert.equal(resolveDoctorBranch('b', [branch('a')]), 'a');
 });
 test('fetch is authenticated-user scoped, active-only, deduplicated, and joins branch metadata', async () => {

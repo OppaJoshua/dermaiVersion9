@@ -1,4 +1,8 @@
-import { compareDoctorAppointments } from "@/lib/doctorAppointmentScope";
+import { formatAppointmentTime as formatTimeSlot } from "@/lib/appointmentTime";
+import { compareReviewPatients } from "@/lib/reviewPatientSort";
+import { getPendingAppointmentUrgency } from "@/lib/appointmentUrgency";
+import { useAppointmentClock } from "@/hooks/useAppointmentClock";
+import { AppointmentUrgencyBadge } from "@/components/common/AppointmentUrgencyBadge";
 import { useState, useMemo, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -15,10 +19,11 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
-import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
+import { ZoomableSkinPhoto } from "@/components/common/ZoomableSkinPhoto";
 import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
+import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -42,11 +47,7 @@ const DECLINE_REASONS = [
 function formatScheduleDateTime(dateStr?: string, timeStr?: string): string {
   if (!dateStr) return "Schedule pending";
   try {
-    const dt = new Date(
-      dateStr.includes("T")
-        ? dateStr
-        : `${dateStr}T${timeStr && timeStr !== "—" && timeStr !== "\u2014" ? timeStr : "00:00"}:00`
-    );
+    const dt = new Date(`${dateStr.split("T")[0]}T00:00:00`);
     if (isNaN(dt.getTime())) return dateStr;
 
     const dateFormatted = dt.toLocaleDateString("en-PH", {
@@ -60,8 +61,8 @@ function formatScheduleDateTime(dateStr?: string, timeStr?: string): string {
       return dateFormatted;
     }
 
-    const timeFormatted = formatTimeSlot(timeStr);
-    return `${dateFormatted} at ${timeFormatted}`;
+    const timeFormatted = formatTimeSlot(timeStr, "");
+    return timeFormatted ? `${dateFormatted} at ${timeFormatted}` : dateFormatted;
   } catch {
     return dateStr;
   }
@@ -95,8 +96,8 @@ function formatPreferredSchedule(dateStr?: string, timeStr?: string): string {
 
     if (!cleanTime) return dateFormatted;
 
-    const timeFormatted = formatTimeSlot(cleanTime);
-    return `${dateFormatted} at ${timeFormatted}`;
+    const timeFormatted = formatTimeSlot(cleanTime, "");
+    return timeFormatted ? `${dateFormatted} at ${timeFormatted}` : dateFormatted;
   } catch {
     return dateStr || "N/A";
   }
@@ -137,32 +138,38 @@ function formatPatientId(appt: AppointmentRecord): string {
   return `P-${year}-${num}`;
 }
 
-function formatTimeSlot(timeStr: string): string {
-  if (!timeStr) return "";
-  if (timeStr.includes("AM") || timeStr.includes("PM")) return timeStr;
-  try {
-    const [h, m] = timeStr.split(":").map(Number);
-    const ampm = h >= 12 ? "PM" : "AM";
-    const hour = h % 12 || 12;
-    return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
-  } catch {
-    return timeStr;
-  }
-}
-
 function getConditionDetail(conditionId?: string) {
   return skinConditions.find((c) => c.id === conditionId);
 }
 
 export default function DoctorAppointmentsPage() {
+  const now = useAppointmentClock();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { doctorName: _doctorName, appointments: allAppointments, loading, submitDoctorReview } = useDoctorAppointments();
+  const { activeClinicId, setActiveClinicId } = useDoctorClinicContext();
+  const returnToQueue = searchParams.get("returnTo") === "queue";
+  const { appointments: allAppointments, loading, error, refresh, submitDoctorReview } = useDoctorAppointments();
   const [tab, setTab] = useState<"pending" | "reviewed">("pending");
-  const [sortOrder, setSortOrder] = useState<"schedule" | "name">("schedule");
+  const [sortOrder, setSortOrder] = useState<"newest" | "name">("newest");
   const [reviewModal, setReviewModal] = useState<ReviewModal | null>(null);
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const closeReview = () => {
+    if (submitting) return;
+    setReviewModal(null);
+    if (searchParams.has("review") || searchParams.has("returnTo")) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("review");
+      nextParams.delete("returnTo");
+      setSearchParams(nextParams, { replace: true });
+    }
+  };
+  const backToUrgentQueue = () => {
+    if (submitting) return;
+    setReviewModal(null);
+    setActiveClinicId("all");
+    navigate("/doctor", { replace: true });
+  };
   const [successInfo, setSuccessInfo] = useState<{
     patientName: string;
     decision: "approved" | "rejected";
@@ -211,6 +218,8 @@ export default function DoctorAppointmentsPage() {
     str.toLowerCase().includes("general consult");
 
   const openReview = (appt: AppointmentRecord, defaultDecision?: "approved" | "rejected") => {
+    if (!appt.clinicId) return;
+    if (activeClinicId !== appt.clinicId) setActiveClinicId(appt.clinicId);
     const isDirect = isDirectBooking(appt);
     const initialDiagnosis = appt.doctorDiagnosis && !isGenericPlaceholder(appt.doctorDiagnosis)
       ? appt.doctorDiagnosis
@@ -234,7 +243,9 @@ export default function DoctorAppointmentsPage() {
     if (!appointment) return;
 
     openReview(appointment);
-    setSearchParams({}, { replace: true });
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("review");
+    setSearchParams(nextParams, { replace: true });
   }, [searchParams, loading, allAppointments, reviewModal, setSearchParams]);
 
   const submitReview = async () => {
@@ -264,6 +275,11 @@ export default function DoctorAppointmentsPage() {
         reviewModal.note.trim()
       );
       setReviewModal(null);
+      if (returnToQueue) {
+        setActiveClinicId("all");
+        navigate("/doctor", { replace: true });
+        return;
+      }
       setSuccessInfo({
         patientName: appt.patientName || "Not provided",
         decision: dec,
@@ -278,19 +294,22 @@ export default function DoctorAppointmentsPage() {
     }
   };
 
+  useEffect(() => {
+    // A branch switch must not leave another clinic's patient open.
+    if (reviewModal && reviewModal.appointment.clinicId !== activeClinicId) setReviewModal(null);
+  }, [activeClinicId, reviewModal]);
+
   const filteredList = useMemo(() => {
     const list = [...(tab === "pending" ? pendingReview : reviewed)];
-    if (sortOrder === "name") {
-      list.sort((a, b) =>
-        (a.patientName || "").localeCompare(b.patientName || "", undefined, { sensitivity: "base" })
-      );
-    } else {
-      list.sort(compareDoctorAppointments);
-    }
+    list.sort((a, b) => {
+      return (sortOrder === "name"
+        ? (a.patientName || "").localeCompare(b.patientName || "", undefined, { sensitivity: "base" })
+        : 0) || compareReviewPatients(a, b, tab);
+    });
     return list;
   }, [tab, pendingReview, reviewed, sortOrder]);
 
-  if (loading) {
+  if (loading && !allAppointments.length) {
     return (
       <div className="py-24 text-center">
         <Loader2 className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-3" />
@@ -301,6 +320,9 @@ export default function DoctorAppointmentsPage() {
 
   return (
     <div className="space-y-5 sm:space-y-6 min-w-0">
+      {returnToQueue && <button type="button" onClick={backToUrgentQueue} disabled={submitting} className="text-sm font-bold text-blue-700 disabled:opacity-50">← Back to urgent queue</button>}
+      {error && <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-700">{error} <button type="button" className="underline" onClick={() => void refresh()}>Retry</button></p>}
+      {returnToQueue && !loading && !error && searchParams.get("review") && !allAppointments.some(a => a.id === searchParams.get("review")) && <p role="status" className="text-sm text-slate-600">This appointment is no longer available in this clinic. Return to the queue to refresh requests.</p>}
       {/* Page Header */}
       <div>
         <h1 className="text-xl sm:text-2xl font-display font-bold text-gray-900">Pre-Consultation Patient Review</h1>
@@ -349,13 +371,13 @@ export default function DoctorAppointmentsPage() {
               type="button"
               onClick={() =>
                 setSortOrder((prev) =>
-                  prev === "schedule" ? "name" : "schedule"
+                  prev === "newest" ? "name" : "newest"
                 )
               }
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer self-start sm:self-auto"
             >
               <span>
-                Sort: {sortOrder === "schedule" ? "Date & time" : "A - Z"}
+                Sort: {sortOrder === "newest" ? (tab === "pending" ? "Newest requests" : "Recently reviewed") : "A - Z"}
               </span>
 
               <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
@@ -424,6 +446,7 @@ export default function DoctorAppointmentsPage() {
             </tr>
           ) : (
             filteredList.map((appt) => {
+              const urgency = tab === "pending" ? getPendingAppointmentUrgency(appt, now) : null;
 
               const isCompleted =
                 appt.status === "completed" || appt.doctorDone;
@@ -440,7 +463,7 @@ export default function DoctorAppointmentsPage() {
               return (
                 <tr
                   key={appt.id}
-                  className="hover:bg-slate-50/70 transition-colors"
+                  className={urgency !== null ? "bg-amber-50/70 hover:bg-amber-100/60 transition-colors" : "hover:bg-slate-50/70 transition-colors"}
                 >
 
                   {/* Patient Name */}
@@ -459,6 +482,7 @@ export default function DoctorAppointmentsPage() {
                         <p className="font-bold text-slate-900 text-sm truncate">
                           {appt.patientName || "Anonymous Patient"}
                         </p>
+                        {urgency !== null && <div className="mt-1"><AppointmentUrgencyBadge remainingMs={urgency} /></div>}
 
                         <p className="text-[11px] text-slate-400 mt-0.5">
                           Patient ID: {formatPatientId(appt)}
@@ -637,7 +661,7 @@ export default function DoctorAppointmentsPage() {
                     </div>
                   </div>
                   <button
-                    onClick={() => setReviewModal(null)}
+                    onClick={closeReview}
                     className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer shrink-0 ml-1"
                   >
                     <XCircle className="w-5 h-5" />
@@ -743,7 +767,7 @@ export default function DoctorAppointmentsPage() {
                       Uploaded Skin Photo
                     </p>
                     {reviewModal.appointment.skinPhotoUrl ? (
-                      <LazySkinPhoto
+                      <ZoomableSkinPhoto
                         pathOrUrl={reviewModal.appointment.skinPhotoUrl}
                         alt="Patient skin photo"
                         className="w-full max-h-56 object-contain rounded-xl border border-gray-200 bg-gray-50 shadow-inner"
@@ -1030,7 +1054,7 @@ export default function DoctorAppointmentsPage() {
                   {isAlreadyReviewed ? (
                     <button
                       type="button"
-                      onClick={() => setReviewModal(null)}
+                      onClick={closeReview}
                       className="w-full py-3 rounded-xl border border-gray-200 text-gray-700 text-sm font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
                     >
                       Close
@@ -1040,7 +1064,7 @@ export default function DoctorAppointmentsPage() {
                       <button
                         type="button"
                         disabled={submitting}
-                        onClick={() => setReviewModal(null)}
+                        onClick={closeReview}
                         className="py-3 px-5 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer order-2 sm:order-1"
                       >
                         Cancel
@@ -1079,37 +1103,45 @@ export default function DoctorAppointmentsPage() {
       <ModalPortal isOpen={Boolean(successInfo)}>
         <AnimatePresence>
           {successInfo && (
-            <div className="fixed inset-0 z-9998 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 sm:p-7 text-center space-y-4 relative z-9999"
-              >
-              <div className={`w-14 h-14 rounded-2xl mx-auto flex items-center justify-center shadow-xs ${
+          <div className="fixed inset-0 z-9998 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className={`w-full max-w-md bg-white rounded-xl shadow-xl border border-slate-200 border-t-4 p-6 sm:p-7 space-y-5 relative z-9999 ${
                 successInfo.decision === "approved"
-                  ? "bg-emerald-100 text-emerald-600"
-                  : "bg-red-100 text-red-600"
-              }`}>
-                {successInfo.decision === "approved" ? (
-                  <CheckCircle2 className="w-8 h-8" />
+                  ? "border-t-slate-200"
+                  : "border-t-slate-400"
+              }`}
+            >
+              <div className="flex items-start gap-4">
+                <div
+                  className={`w-11 h-11 shrink-0 rounded-full border flex items-center justify-center ${
+                  successInfo.decision === "approved"
+                    ? "bg-blue-50 text-blue-700 border-blue-100"
+                    : "bg-slate-100 text-slate-600 border-slate-200"
+                }`}
+              >
+                 {successInfo.decision === "approved" ? (
+                  <CheckCircle2 className="w-6 h-6" strokeWidth={2} />
                 ) : (
-                  <XCircle className="w-8 h-8" />
+                  <XCircle className="w-6 h-6" strokeWidth={2} />
                 )}
               </div>
 
-              <div>
-                <h3 className="text-xl font-display font-bold text-gray-900">
-                  {successInfo.decision === "approved"
-                    ? "Consultation Accepted & Finalized!"
-                    : "Patient Referral Declined"}
-                </h3>
-                <p className="text-xs text-gray-500 mt-1.5 leading-relaxed">
-                  {successInfo.decision === "approved"
-                    ? `${successInfo.patientName}'s appointment schedule has been locked and confirmed. The patient has been notified.`
-                    : `${successInfo.patientName}'s referral was declined. Your clinic triage team has been alerted to re-assign another doctor.`}
-                </p>
-              </div>
+                 <div className="min-w-0">
+                    <h3 className="text-lg font-display font-bold text-slate-900 leading-snug">
+                      {successInfo.decision === "approved"
+                        ? "Consultation Accepted & Finalized!"
+                        : "Patient Referral Declined"}
+                    </h3>
+                    <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                      {successInfo.decision === "approved"
+                        ? `${successInfo.patientName}'s appointment schedule has been locked and confirmed. The patient has been notified.`
+                        : `${successInfo.patientName}'s referral was declined. Your clinic triage team has been alerted to re-assign another doctor.`}
+                    </p>
+                </div>
+               </div>
 
               {/* Consultation Details Card */}
               {successInfo.decision === "approved" && (

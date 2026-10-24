@@ -90,9 +90,7 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
   const [bellOpen, setBellOpen] = useState(false);
   const [clinicDropdownOpen, setClinicDropdownOpen] = useState(false);
   const selectionKey = `dermai_doctor_active_clinic:${user?.id || ""}`;
-  const [selectedClinicId, setSelectedClinicId] = useState(() => {
-    try { return localStorage.getItem(selectionKey) || ""; } catch { return ""; }
-  });
+  const [selectedClinicId, setSelectedClinicId] = useState("");
   const [affiliations, setAffiliations] = useState<DoctorAffiliatedClinic[]>([]);
   const activeClinicId = resolveDoctorBranch(selectedClinicId, affiliations);
   const [branchesLoading, setBranchesLoading] = useState(true);
@@ -110,7 +108,8 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
   });
 
   const handleClinicChange = (clinicId: string) => {
-    if (!affiliations.some(branch => branch.clinic_id === clinicId)) return;
+    if (clinicId !== "all" && !affiliations.some(branch => branch.clinic_id === clinicId)) return;
+    if (clinicId === "all" && affiliations.length < 2) return;
     setSelectedClinicId(clinicId);
     setClinicDropdownOpen(false);
   };
@@ -207,6 +206,7 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
 
   const selectedClinicName = branchesError ? "Could not load clinics"
     : !affiliations.length ? (branchesLoading ? "Loading clinics..." : "No clinic assignments found")
+    : activeClinicId === "all" ? "All Clinics (Consolidated)"
     : affiliations.find(branch => branch.clinic_id === activeClinicId)?.clinic?.name || "Active Clinic";
 
   return (
@@ -220,7 +220,7 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
 
       <aside
         className={cn(
-          "flex flex-col w-[260px] bg-white border-r border-slate-200/80 min-h-screen fixed left-0 top-0 z-30 transition-transform duration-300 shadow-[1px_0_10px_rgba(0,0,0,0.02)]",
+          "flex flex-col w-65 bg-white border-r border-slate-200/80 min-h-screen fixed left-0 top-0 z-30 transition-transform duration-300 shadow-[1px_0_10px_rgba(0,0,0,0.02)]",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
@@ -311,7 +311,7 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
                   {docProfile.name || "Doctor"}
                 </p>
                 <p className="text-[12px] text-blue-600 truncate font-semibold">
-                  {affiliations.find((a) => a.clinic_id === activeClinicId)?.clinic?.name || "No clinic assignments found"}
+                  {selectedClinicName}
                 </p>
               </div>
             </div>
@@ -327,7 +327,7 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
         </div>
       </aside>
 
-      <main className="flex-1 lg:ml-[260px] min-h-screen flex flex-col min-w-0">
+      <main className="flex-1 lg:ml-65 min-h-screen flex flex-col min-w-0">
         {/* Top Header */}
         <div className="bg-white border-b border-slate-200/80 px-5 sm:px-8 h-18 flex items-center justify-between sticky top-0 z-20 shadow-xs">
           <div className="flex items-center gap-3">
@@ -355,7 +355,7 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
                 aria-expanded={clinicDropdownOpen}
               >
                 <Building2 className="w-4 h-4 text-blue-600 shrink-0" />
-                <span className="truncate max-w-[130px] sm:max-w-[210px] text-slate-800">
+                <span className="truncate max-w-32.5 sm:max-w-52.5 text-slate-800">
                   {selectedClinicName}
                 </span>
                 <ChevronDown
@@ -386,6 +386,13 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
                       <p role="status" className="px-3.5 py-3 text-xs text-slate-500">
                         {branchesLoading ? "Loading clinics..." : "No clinic assignments found"}
                       </p>
+                    )}
+                    {affiliations.length > 1 && (
+                      <button type="button" onClick={() => handleClinicChange("all")}
+                        className={cn("w-full flex items-center justify-between gap-2 px-3.5 py-3 text-xs font-bold text-left border-b border-slate-100 cursor-pointer", activeClinicId === "all" ? "bg-blue-50 text-blue-700" : "text-slate-700 hover:bg-slate-50")}>
+                        <span className="flex items-center gap-2"><Building2 className="w-4 h-4" />All Clinics (Consolidated)</span>
+                        {activeClinicId === "all" && <Check className="w-4 h-4 shrink-0" />}
+                      </button>
                     )}
                     {affiliations.map((aff) => {
                       const clinicName = aff.clinic?.name || "Clinic Branch";
@@ -432,7 +439,7 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
               >
                 <Bell className={cn("w-4 h-4", bellOpen ? "text-blue-600" : "text-slate-500")} />
                 {unreadCount > 0 && (
-                  <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1 flex items-center justify-center bg-blue-600 rounded-full text-white text-[9px] font-bold leading-none shadow-2xs">
+                  <span className="absolute top-1 right-1 min-w-4 h-4 px-1 flex items-center justify-center bg-blue-600 rounded-full text-white text-[9px] font-bold leading-none shadow-2xs">
                     {unreadCount > 9 ? "9+" : unreadCount}
                   </span>
                 )}

@@ -30,7 +30,7 @@ import { logAuditEvent } from "@/utils/auditLogger";
 import { useAuth } from "@/context/AuthContext";
 import { formatConfidencePercent } from "@/lib/utils";
 import { VerifiedBadge } from "@/components/ui/VerifiedBadge";
-import { createPatientNotification } from "@/lib/notificationService";
+import { createPatientNotification, createDoctorAppointmentNotification } from "@/lib/notificationService";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
 import { getDoctorAvatarUrl } from "@/lib/doctorAvatarService";
 import { ModalPortal } from "@/components/common/ModalPortal";
@@ -2218,6 +2218,22 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             body: paymentData
               ? `Your payment of ₱${feeAmount.toLocaleString()} for ${selectedClinic?.name || "the clinic"} on ${formattedPreviewDate} at ${formattedPreviewTime} was successful.`
               : `Your consultation request with ${selectedClinic?.name || "the clinic"} for ${selectedDate} at ${selectedTime} has been submitted.`,
+          });
+        }
+
+        if (targetClinicId && insertedApptId) {
+          createDoctorAppointmentNotification({
+            doctorId: (assignedDocId && isValidUuid(assignedDocId)) ? assignedDocId : activeDutyDoctor?.id,
+            clinicId: targetClinicId,
+            clinicName: selectedClinic?.name || "Clinic",
+            patientId: activeUserId || user?.id || "",
+            patientName: payerName || patientName.trim() || "Patient",
+            appointmentId: insertedApptId,
+            scheduledDate: formattedPreviewDate || selectedDate,
+            scheduledTime: formattedPreviewTime || selectedTime,
+            consultationType: conditionLabel || "Consultation",
+          }).catch((err) => {
+            console.warn("[AppointmentPage] Doctor notification trigger note:", err);
           });
         }
         window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));

@@ -1,4 +1,7 @@
 import { compareDoctorAppointments } from "@/lib/doctorAppointmentScope";
+import { compareAppointmentUrgency, getPendingAppointmentUrgency } from "@/lib/appointmentUrgency";
+import { useAppointmentClock } from "@/hooks/useAppointmentClock";
+import { AppointmentUrgencyBadge } from "@/components/common/AppointmentUrgencyBadge";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -21,6 +24,7 @@ import { ModalPortal } from "@/components/common/ModalPortal";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
 import { DoctorDutyScheduleCard } from "@/components/common/DoctorDutyScheduleCard";
+import { UrgentReviewsQueue } from "@/components/doctor/UrgentReviewsQueue";
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -32,11 +36,14 @@ const MONTH_NAMES = [
 
 
 export default function DoctorDashboardPage() {
+  const now = useAppointmentClock();
   const { activeClinicId, affiliations, activeAffiliation } = useDoctorClinicContext();
   const {
     doctorName,
     appointments: allAppointments,
     loading,
+    error,
+    refresh,
     markAppointmentDone,
   } = useDoctorAppointments();
 
@@ -56,13 +63,15 @@ export default function DoctorDashboardPage() {
   };
 
   const handleCompleteConsultation = async () => {
-    if (!consultingAppt) return;
+    if (!consultingAppt || savingConsultation) return;
     if (!clinicalDiagnosis.trim()) {
       setSaveError("Please enter your final clinical diagnosis before completing.");
       return;
     }
 
     const finalDiag = clinicalDiagnosis.trim();
+    setSavingConsultation(true);
+    setSaveError("");
     try {
       await markAppointmentDone(
         consultingAppt.id,
@@ -156,8 +165,9 @@ export default function DoctorDashboardPage() {
     } else {
       sorted.sort(compareDoctorAppointments);
     }
+    sorted.sort((a, b) => compareAppointmentUrgency(a, b, now));
     return sorted.slice(0, 5);
-  }, [pendingReview, sortOrder]);
+  }, [pendingReview, sortOrder, now]);
 
   // Calendar State
   const [calendarDate, setCalendarDate] = useState(() => new Date());
@@ -305,7 +315,7 @@ export default function DoctorDashboardPage() {
     return appointmentsByDate.get(selectedCalendarDate) || [];
   }, [appointmentsByDate, selectedCalendarDate]);
 
-  if (loading) {
+  if (loading && !allAppointments.length) {
     return (
       <div className="py-24 text-center">
         <Loader2 className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-3" />
@@ -320,12 +330,12 @@ export default function DoctorDashboardPage() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight font-sans">
-            {greeting}, {doctorName || "Doctor"}!
+            {greeting}, Dr. {doctorName || "Doctor"}!
           </h1>
           {activeClinicId ? (
             <p className="text-sm text-blue-600 mt-0.5 flex items-center gap-1.5 font-bold">
               <Building2 className="w-3.5 h-3.5 text-blue-600" />
-              <span>{affiliations.find((a) => a.clinic_id === activeClinicId)?.clinic?.name || "Active Clinic"} (Branch View)</span>
+              <span>{activeClinicId === "all" ? "All Clinics (Consolidated)" : `${affiliations.find((a) => a.clinic_id === activeClinicId)?.clinic?.name || "Active Clinic"} (Branch View)`}</span>
             </p>
           ) : null}
           <p className="text-base text-slate-500 mt-1">
@@ -335,6 +345,9 @@ export default function DoctorDashboardPage() {
           </p>
         </div>
       </div>
+
+      {error && <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-700">{error} <button type="button" className="underline" onClick={() => void refresh()}>Retry</button></p>}
+      {activeClinicId === "all" && <UrgentReviewsQueue />}
 
       {/* Top 4 Stat Cards - Framed container matching Mediczen styling with the 4 doctor cards */}
       <div className="rounded-2xl sm:rounded-3xl border border-slate-200/80 bg-[#F8F8FA] p-3.5 sm:p-5 lg:p-6 shadow-xs">
@@ -494,8 +507,8 @@ export default function DoctorDashboardPage() {
             </div>
           ) : (
             <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white">
-              <div className="overflow-x-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                <table className="w-full min-w-[480px] text-left text-sm">
+              <div className="overflow-x-auto no-scrollbar">
+                <table className="w-full min-w-120 text-left text-sm">
                   <thead>
                     <tr className="bg-[#F8F9FB] border-b border-slate-200/80 text-[12px] font-semibold text-slate-500">
                       <th className="py-3 px-4 font-semibold">Name</th>
@@ -506,6 +519,7 @@ export default function DoctorDashboardPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {displayPatients.map((appt) => {
+                      const urgency = getPendingAppointmentUrgency(appt, now);
                       const formattedDate = appt.date
                         ? new Date(appt.date).toLocaleDateString("en-US", {
                             month: "short",
@@ -522,7 +536,7 @@ export default function DoctorDashboardPage() {
                       const genderText = appt.patientGender || "Patient";
 
                       return (
-                        <tr key={appt.id} className="group hover:bg-slate-50/70 transition-colors">
+                        <tr key={appt.id} className={urgency !== null ? "group bg-amber-50/70 hover:bg-amber-100/60 transition-colors" : "group hover:bg-slate-50/70 transition-colors"}>
                           {/* Name + Demographic subline */}
                           <td className="py-3.5 px-4">
                             <div className="flex items-center gap-3">
@@ -537,6 +551,7 @@ export default function DoctorDashboardPage() {
                                 <p className="font-bold text-slate-900 text-xs truncate">
                                   {appt.patientName || "Anonymous Patient"}
                                 </p>
+                                {urgency !== null && <div className="mt-1"><AppointmentUrgencyBadge remainingMs={urgency} /></div>}
                                 <p className="text-[12px] text-slate-400 truncate mt-0.5 font-medium">
                                   {genderText}, {ageText}
                                 </p>
@@ -548,7 +563,7 @@ export default function DoctorDashboardPage() {
                           <td className="py-3.5 px-4">
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-100/80">
                               <Building2 className="w-3 h-3 text-blue-500 shrink-0" />
-                              <span className="truncate max-w-[130px]">{appt.clinicName || "Clinic Branch"}</span>
+                              <span className="truncate max-w-32.5">{appt.clinicName || "Clinic Branch"}</span>
                             </span>
                           </td>
 
@@ -761,7 +776,7 @@ export default function DoctorDashboardPage() {
             {selectedDayAppointments.length === 0 ? (
               <p className="text-sm text-slate-400 mt-1">No confirmed sessions scheduled on this date.</p>
             ) : (
-              <div className="space-y-2 mt-2.5 max-h-48 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              <div className="space-y-2 mt-2.5 max-h-48 overflow-y-auto pr-1 no-scrollbar">
                 {selectedDayAppointments.map((a) => {
                   const isDone = a.status === "completed" || a.doctorDone;
                   return (
@@ -813,17 +828,17 @@ export default function DoctorDashboardPage() {
         </div>
       </div>
 
-      <DoctorDutyScheduleCard
+      {activeClinicId !== "all" && <DoctorDutyScheduleCard
         doctorId={activeAffiliation?.doctor_id ?? null}
         clinicId={activeClinicId || null}
         clinicName={activeAffiliation?.clinic?.name || "No clinic selected"}
-      />
+      />}
 
       <ModalPortal isOpen={Boolean(consultingAppt)}>
         <AnimatePresence>
           {consultingAppt && (
             <div
-              className="fixed inset-0 z-[9998] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-xs"
+              className="fixed inset-0 z-9998 flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-xs"
               onClick={() => setConsultingAppt(null)}
             >
               <motion.div
@@ -831,7 +846,7 @@ export default function DoctorDashboardPage() {
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 8 }}
                 transition={{ duration: 0.2 }}
-                className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col my-auto border border-slate-100 relative z-[9999]"
+                className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col my-auto border border-slate-100 relative z-9999"
                 onClick={(e) => e.stopPropagation()}
               >
               {/* Header */}
@@ -859,8 +874,8 @@ export default function DoctorDashboardPage() {
               </div>
 
               {/* Body */}
-              <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-                {/* Patient Header */}
+              <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-4 no-scrollbar">
+                 {/* Patient Header */}
                 <div className="flex items-center gap-3.5 p-3 rounded-xl bg-slate-50/80 border border-slate-100">
                   <PatientAvatar
                     avatarUrl={consultingAppt.patientAvatar}
@@ -868,7 +883,7 @@ export default function DoctorDashboardPage() {
                     sizeClass="w-12 h-12"
                     borderClass="border border-slate-200"
                     className="shrink-0"
-                  />
+                  />s
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-base font-bold text-slate-900 truncate">

@@ -18,7 +18,7 @@ function clientWithRequests() {
   return { client, requests };
 }
 
-for (const selection of ['ALL', 'all', '', null, undefined]) {
+for (const selection of ['ALL', '', null, undefined]) {
   test(`invalid or missing clinic (${selection}) never issues a request`, () => {
     const { client, requests } = clientWithRequests();
     const query = client.from('patient_appointment').select('*');
@@ -36,9 +36,18 @@ test('single branch has an exact database filter', async () => {
   assert.match(requests[0].searchParams.get('or'), /assigned_doctor_id\.is\.null/);
 });
 
+test('consolidated view is constrained to authenticated affiliations and pending doctor reviews', async () => {
+  const { client, requests } = clientWithRequests();
+  const query = client.from('patient_appointment').select('*');
+  assert.equal(scopeDoctorAppointments(query, 'all', clinics, doctors, true), true);
+  await query;
+  assert.equal(requests[0].searchParams.get('clinic_id'), `in.(${clinics.join(',')})`);
+  assert.equal(requests[0].searchParams.get('or'), `(and(or(assigned_doctor_id.is.null,assigned_doctor_id.in.(${doctors.join(',')})),or(doctor_status.is.null,doctor_status.eq.pending-review)))`);
+});
+
 test('missing affiliations, missing doctor IDs and unauthorized branches fail closed', () => {
   const { client, requests } = clientWithRequests();
-  for (const [selection, clinicIds, doctorIds] of [['ALL', [], doctors], ['ALL', clinics, []], ['unauthorized', clinics, doctors]]) {
+  for (const [selection, clinicIds, doctorIds] of [['all', [], doctors], ['all', clinics, []], ['unauthorized', clinics, doctors]]) {
     assert.equal(scopeDoctorAppointments(client.from('patient_appointment').select('*'), selection, clinicIds, doctorIds), false);
   }
   assert.equal(requests.length, 0);

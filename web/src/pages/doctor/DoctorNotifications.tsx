@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Bell,
   ArrowRight,
@@ -19,6 +19,7 @@ interface DoctorNotificationsProps {
 
 export default function DoctorNotifications({ onClose, isDropdown = false }: DoctorNotificationsProps) {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const { notifications, loading, unreadCount, markRead, markAllRead } = useRoleNotifications("doctor", {
     userId: user?.id,
     userEmail: user?.email,
@@ -144,10 +145,50 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
               item.type === "broadcast" ||
               item.metadata?.subtype === "admin_announcement";
 
+            const isAppointmentRequest =
+              item.category === "appointment" ||
+              item.type === "appointment_request" ||
+              item.type === "appointment-request" ||
+              item.type.includes("delegated") ||
+              item.type.includes("appointment");
+
+            const clinicId = item.metadata?.clinicId || item.metadata?.clinic_id;
+            const patientId = item.metadata?.patientId || item.metadata?.patient_id || item.metadata?.user_id;
+            const appointmentId = item.metadata?.appointmentId || item.metadata?.appointment_id;
+
+            const targetLink = item.link || (
+              item.metadata?.clinicId && item.metadata?.patientId
+                ? `/doctor/clinics/${item.metadata.clinicId}/patients/${item.metadata.patientId}${
+                    item.metadata?.appointmentId ? `?appointmentId=${item.metadata.appointmentId}` : ""
+                  }`
+                : clinicId && patientId
+                ? `/doctor/clinics/${clinicId}/patients/${patientId}${
+                    appointmentId ? `?appointmentId=${appointmentId}` : ""
+                  }`
+                : null
+            );
+
+            const handleItemClick = () => {
+              if (!item.isRead) {
+                markRead(item.id);
+              }
+              onClose?.();
+              if (targetLink) {
+                navigate(targetLink);
+              }
+            };
+
+            let actionLabel = "View Consultation";
+            if (isMaintenance) {
+              actionLabel = "View System Status";
+            } else if (isAppointmentRequest) {
+              actionLabel = item.metadata?.branch_name ? "Review Patient Request" : "View Patient Details";
+            }
+
             return (
               <div
                 key={item.id}
-                onClick={() => !item.isRead && markRead(item.id)}
+                onClick={handleItemClick}
                 className={cn(
                   "relative flex items-start gap-3 px-5 py-4 transition-colors cursor-pointer",
                   !item.isRead
@@ -237,26 +278,33 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
                   <p className="text-sm font-semibold text-gray-900 mt-0.5">{item.title}</p>
                   <p className="text-sm text-gray-600 leading-relaxed mt-0.5 break-words">{item.message}</p>
 
-                  {item.link && (
-                    <Link
-                      to={item.link}
-                      onClick={onClose}
+                  {/* Branch badge for cross-branch notifications */}
+                  {item.metadata?.branch_name && isAppointmentRequest && (
+                    <span className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                      </svg>
+                      {item.metadata.branch_name}
+                    </span>
+                  )}
+
+                  {targetLink && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleItemClick();
+                      }}
                       className={cn(
-                        "mt-2 inline-flex items-center gap-1 text-sm font-medium transition-colors",
+                        "mt-2 inline-flex items-center gap-1 text-sm font-medium transition-colors cursor-pointer",
                         isMaintenance
                           ? "text-amber-800 hover:text-amber-900"
                           : "text-magenta-700 hover:text-magenta-800"
                       )}
                     >
-                      <span>
-                        {isMaintenance
-                          ? "View System Status"
-                          : item.type.includes("delegated")
-                          ? "Review Booking Table"
-                          : "View Consultation"}
-                      </span>
+                      <span>{actionLabel}</span>
                       <ArrowRight className="w-3.5 h-3.5" />
-                    </Link>
+                    </button>
                   )}
                 </div>
               </div>

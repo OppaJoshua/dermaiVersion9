@@ -1228,7 +1228,7 @@ export default function ClinicDashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-1 grid grid-cols-2 gap-4">
             {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="rounded-2xl p-4 bg-white border border-magenta-100 shadow-sm min-h-[110px] space-y-3">
+              <div key={i} className="rounded-2xl p-4 bg-white border border-magenta-100 shadow-sm min-h-27.5 space-y-3">
                 <div className="flex items-start justify-between">
                   <div className="h-3 w-16 bg-gray-200 rounded"></div>
                   <div className="w-8 h-8 rounded-full border border-gray-200 bg-gray-50 shrink-0"></div>
@@ -1238,13 +1238,13 @@ export default function ClinicDashboardPage() {
               </div>
             ))}
           </div>
-          <div className="lg:col-span-2 bg-white border border-magenta-100 shadow-sm rounded-2xl p-5 min-h-[220px]">
+          <div className="lg:col-span-2 bg-white border border-magenta-100 shadow-sm rounded-2xl p-5 min-h-55">
             <div className="h-4 w-28 bg-gray-200 rounded mb-4"></div>
             <div className="h-36 bg-gray-100 rounded-xl"></div>
           </div>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 bg-white border border-magenta-100 shadow-sm rounded-2xl p-5 min-h-[200px]">
+          <div className="lg:col-span-2 bg-white border border-magenta-100 shadow-sm rounded-2xl p-5 min-h-50">
             <div className="h-4 w-32 bg-gray-200 rounded mb-4"></div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {[1, 2, 3].map((i) => (
@@ -1252,7 +1252,7 @@ export default function ClinicDashboardPage() {
               ))}
             </div>
           </div>
-          <div className="bg-white border border-magenta-100 shadow-sm rounded-2xl p-5 min-h-[200px]">
+          <div className="bg-white border border-magenta-100 shadow-sm rounded-2xl p-5 min-h-50">
             <div className="h-4 w-24 bg-gray-200 rounded mb-4"></div>
             <div className="h-36 bg-gray-100 rounded-xl"></div>
           </div>
@@ -1325,9 +1325,9 @@ export default function ClinicDashboardPage() {
                     <Link
                       to={card.link}
                       className={cn(
-                        "rounded-2xl p-4 flex flex-col justify-between min-h-[118px] h-full relative overflow-hidden group transition-all duration-200 block",
+                        "rounded-2xl p-4 flex flex-col justify-between min-h-29.5 h-full relative overflow-hidden group transition-all duration-200",
                         card.highlight
-                          ? "bg-gradient-to-br from-[#4a0b30] via-[#801336] to-[#b83a74] text-white shadow-lg shadow-[#801336]/25 hover:shadow-xl hover:shadow-[#801336]/35 hover:-translate-y-0.5"
+                          ? "bg-linear-to-br from-[#4a0b30] via-[#801336] to-[#b83a74] text-white shadow-lg shadow-[#801336]/25 hover:shadow-xl hover:shadow-[#801336]/35 hover:-translate-y-0.5"
                           : "bg-white border border-gray-100 shadow-2xs text-gray-900 hover:border-gray-200 hover:shadow-xs hover:-translate-y-0.5"
                       )}
                     >
@@ -1471,7 +1471,7 @@ export default function ClinicDashboardPage() {
                   </AreaChart>
                 </ResponsiveContainer>
               ) : conditionData.length === 0 ? (
-                <div className="h-[210px] flex flex-col items-center justify-center text-xs text-gray-400">
+                <div className="h-52.5 flex flex-col items-center justify-center text-xs text-gray-400">
                   <p className="font-semibold text-gray-600">No condition consultation data available yet</p>
                   <p className="text-[10px] text-gray-400 mt-0.5">Condition metrics will populate automatically from consultations.</p>
                 </div>
@@ -1543,11 +1543,11 @@ export default function ClinicDashboardPage() {
                 {onDutyDoctors.map((doc) => (
                   <div
                     key={doc.id}
-                    className="rounded-2xl border border-pink-100/80 bg-gradient-to-br from-pink-50/70 via-white to-white p-3.5 flex items-center gap-3.5 hover:shadow-md hover:-translate-y-0.5 transition-all text-left"
+                    className="rounded-2xl border border-pink-100/80 bg-linear-to-br from-pink-50/70 via-white to-white p-3.5 flex items-center gap-3.5 hover:shadow-md hover:-translate-y-0.5 transition-all text-left"
                   >
                     {/* Avatar: gradient ring + live status dot */}
                     <div className="relative shrink-0">
-                      <div className="rounded-full p-[3px] bg-gradient-to-tr from-[#801336] via-pink-300 to-[#801336]">
+                      <div className="rounded-full p-0.75 bg-linear-to-tr from-[#801336] via-pink-300 to-[#801336]">
                         <div className="rounded-full bg-white p-0.5">
                           <DashboardDoctorAvatar name={doc.name} photo={doc.photo} />
                         </div>
@@ -1574,7 +1574,7 @@ export default function ClinicDashboardPage() {
                         aria-valuenow={doc.progress}
                       >
                         <div
-                          className="h-full rounded-full bg-gradient-to-r from-[#c2417a] to-[#801336] transition-all duration-500"
+                          className="h-full rounded-full bg-linear-to-r from-[#c2417a] to-[#801336] transition-all duration-500"
                           style={{ width: `${doc.progress}%` }}
                         />
                       </div>

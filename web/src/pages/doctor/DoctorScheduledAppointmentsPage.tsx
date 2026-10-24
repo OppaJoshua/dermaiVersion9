@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
-import { LazySkinPhoto } from "@/components/common/LazySkinPhoto";
+import { ZoomableSkinPhoto } from "@/components/common/ZoomableSkinPhoto";
 import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
@@ -839,7 +839,7 @@ export default function DoctorScheduledAppointmentsPage() {
                       Uploaded Skin Photo
                     </p>
                     {viewingAppt.skinPhotoUrl ? (
-                      <LazySkinPhoto
+                      <ZoomableSkinPhoto
                         pathOrUrl={viewingAppt.skinPhotoUrl}
                         alt="Skin photo"
                         className="w-full max-h-40 object-contain rounded-xl border border-slate-200 bg-slate-50"

@@ -1,4 +1,7 @@
 import { useMemo, useState, useEffect, useCallback } from "react";
+import { compareAppointmentUrgency, getPendingAppointmentUrgency } from "@/lib/appointmentUrgency";
+import { useAppointmentClock } from "@/hooks/useAppointmentClock";
+import { AppointmentUrgencyBadge } from "@/components/common/AppointmentUrgencyBadge";
 import {
   AlertCircle,
   AlertTriangle,
@@ -244,6 +247,7 @@ function isAppointmentPastDue(appt: {
 }
 
 export default function ClinicAppointmentsPage() {
+  const urgencyNow = useAppointmentClock();
   const { status: verificationStatus, clinicName: verifiedClinicName, clinicId, loading } = useClinicVerification();
   let clinicName = verifiedClinicName || "";
   if (!clinicName) {
@@ -956,8 +960,9 @@ export default function ClinicAppointmentsPage() {
           (a.status === "pending" || a.doctorStatus === "pending-review" || a.doctorStatus === "rejected") &&
           isUpfrontPaid(a)
       )
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-  }, [appointments]);
+      .sort((a, b) => compareAppointmentUrgency(a, b, urgencyNow)
+        || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [appointments, urgencyNow]);
 
   const needsDoctorQueue = useMemo(
     () => incomingQueue.filter((a) => !a.assignedDoctorId && a.doctorStatus !== "rejected"),
@@ -997,9 +1002,9 @@ export default function ClinicAppointmentsPage() {
     if (queueFilter === "needs_doctor") return needsDoctorQueue;
     if (queueFilter === "in_review") return inReviewQueue;
     if (queueFilter === "approved") return approvedQueue;
-    if (queueFilter === "reschedule_requests") return rescheduleRequestsQueue;
+    if (queueFilter === "reschedule_requests") return [...rescheduleRequestsQueue].sort((a, b) => compareAppointmentUrgency(a, b, urgencyNow));
     return incomingQueue;
-  }, [queueFilter, incomingQueue, needsDoctorQueue, inReviewQueue, approvedQueue, rescheduleRequestsQueue]);
+  }, [queueFilter, incomingQueue, needsDoctorQueue, inReviewQueue, approvedQueue, rescheduleRequestsQueue, urgencyNow]);
 
   const handleGoToToday = () => {
     const now = new Date();
@@ -2266,6 +2271,7 @@ export default function ClinicAppointmentsPage() {
             )}
 
             {displayedQueue.map((appointment) => {
+              const urgency = getPendingAppointmentUrgency(appointment, urgencyNow);
               const isDoctorDeclined = appointment.doctorStatus === "rejected";
               const isInReview = !isDoctorDeclined && Boolean(appointment.assignedDoctorId) && appointment.doctorStatus === "pending-review";
               const isApproved = !isDoctorDeclined && !isInReview && (
@@ -2280,7 +2286,9 @@ export default function ClinicAppointmentsPage() {
               return (
                 <div
                   key={appointment.id}
-                  className={`rounded-2xl border p-4 transition-all ${isDoctorDeclined
+                  className={`rounded-2xl border p-4 transition-all ${urgency !== null
+                      ? "border-amber-300 bg-amber-50/70"
+                      : isDoctorDeclined
                       ? "border-red-200 bg-red-50/30"
                       : isApproved
                         ? "border-emerald-200 bg-emerald-50/30"
@@ -2332,6 +2340,7 @@ export default function ClinicAppointmentsPage() {
 
                         {/* Status Badge */}
                         <div className="shrink-0 flex flex-col items-end gap-1">
+                          <AppointmentUrgencyBadge remainingMs={urgency} />
                           {isDoctorDeclined ? (
                             <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-red-100 text-red-800 border border-red-200 flex items-center gap-1">
                               <XCircle className="w-3 h-3 text-red-600" /> Doctor Declined

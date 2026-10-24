@@ -11,7 +11,7 @@ export interface DoctorAffiliatedClinic {
 export function resolveDoctorBranch(selection: string, affiliations: DoctorAffiliatedClinic[]): string {
   if (!affiliations.length) return "";
   if (affiliations.length === 1) return affiliations[0].clinic_id;
-  return affiliations.some(branch => branch.clinic_id === selection) ? selection : affiliations[0].clinic_id;
+  return selection === "all" || affiliations.some(branch => branch.clinic_id === selection) ? selection : "all";
 }
 
 function resolveClinicLogoUrl(client: SupabaseClient, value?: string | null): string | null {
