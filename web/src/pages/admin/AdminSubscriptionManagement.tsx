@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { CreditCard, RefreshCcw, DollarSign, Loader2, XCircle } from "lucide-react";
+import { CreditCard, RefreshCcw,  PhilippinePeso, Loader2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 import { withVat } from "@/lib/vat";
@@ -251,7 +251,7 @@ export default function AdminSubscriptionManagement() {
         <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px]">
           <div className="flex items-center justify-between">
             <p className="text-sm font-semibold text-black">Revenue</p>
-            <DollarSign className="w-5 h-5 text-magenta-600"/>
+            <PhilippinePeso className="w-5 h-5 text-magenta-600"/>
           </div>
           <p className="mt-5 text-4xl font-bold text-black tabular-nums">{formatPhp(totalRevenue)}</p>
           <p className="mt-2 text-sm text-gray-600">Total paid transactions</p>

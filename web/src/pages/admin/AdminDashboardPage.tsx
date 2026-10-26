@@ -5,6 +5,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { Microscope, Users, Building2, ClipboardList, AlertTriangle, ChevronDown, MapPin, TrendingUp, Activity, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import CebuSkinConditionMap from "./CebuSkinConditionMap";
+import CebuAnalysisMap from "./CebuAnalysisMap";
+import { fetchCebuScanCounts, fetchRecentScanActivity, type ScanActivity } from "@/lib/adminDashboardService";
 import { supabase } from "@/lib/supabaseClient";
 const dashboardFeatures = [
   { id: "overview", label: "Overview", icon: TrendingUp },
@@ -24,70 +26,37 @@ const TRACKED_CONDITIONS = [
   "Acne Vulgaris",
 ];
 
-/** Geographic positions for each Cebu district (no hardcoded counts) */
-const cebuDistrictGeo: Array<{ name: string; x: number; y: number }> = [
-  { name: "Alcantara", x: 36, y: 72 },
-  { name: "Alcoy", x: 40, y: 78 },
-  { name: "Alegria", x: 34, y: 80 },
-  { name: "Aloguinsan", x: 33, y: 62 },
-  { name: "Argao", x: 38, y: 74 },
-  { name: "Asturias", x: 30, y: 45 },
-  { name: "Badian", x: 32, y: 82 },
-  { name: "Balamban", x: 32, y: 50 },
-  { name: "Bantayan", x: 46, y: 4 },
-  { name: "Barili", x: 35, y: 68 },
-  { name: "Bogo City", x: 58, y: 10 },
-  { name: "Boljoon", x: 40, y: 82 },
-  { name: "Borbon", x: 60, y: 18 },
-  { name: "Carmen", x: 56, y: 20 },
-  { name: "Carcar City", x: 40, y: 70 },
-  { name: "Catmon", x: 57, y: 22 },
-  { name: "Compostela", x: 60, y: 32 },
-  { name: "Consolacion", x: 50, y: 28 },
-  { name: "Cordova", x: 64, y: 42 },
-  { name: "Daanbantayan", x: 55, y: 6 },
-  { name: "Dalaguete", x: 42, y: 76 },
-  { name: "Danao City", x: 56, y: 16 },
-  { name: "Dumanjug", x: 34, y: 70 },
-  { name: "Ginatilan", x: 36, y: 84 },
-  { name: "Lapu-Lapu City", x: 62, y: 40 },
-  { name: "Liloan", x: 55, y: 24 },
-  { name: "Madridejos", x: 50, y: 3 },
-  { name: "Malabuyoc", x: 35, y: 86 },
-  { name: "Medellin", x: 54, y: 8 },
-  { name: "Minglanilla", x: 44, y: 58 },
-  { name: "Moalboal", x: 32, y: 76 },
-  { name: "Naga City", x: 42, y: 64 },
-  { name: "Oslob", x: 40, y: 86 },
-  { name: "Pinamungajan", x: 31, y: 56 },
-  { name: "Ronda", x: 34, y: 74 },
-  { name: "Samboan", x: 38, y: 88 },
-  { name: "San Fernando", x: 44, y: 62 },
-  { name: "San Remigio", x: 52, y: 12 },
-  { name: "Santa Fe", x: 48, y: 5 },
-  { name: "Santander", x: 40, y: 90 },
-  { name: "Sibonga", x: 41, y: 72 },
-  { name: "Sogod", x: 60, y: 14 },
-  { name: "Tabogon", x: 58, y: 12 },
-  { name: "Tabuelan", x: 30, y: 40 },
-  { name: "Talisay City", x: 46, y: 52 },
-  { name: "Toledo City", x: 30, y: 52 },
-  { name: "Tuburan", x: 28, y: 42 },
-];
 
 export default function AdminDashboardPage() {
-  const [hoveredDistrict, setHoveredDistrict] = useState<string | null>(null);
   const [selectedFeature, setSelectedFeature] = useState<string>("overview");
   const [showMenu, setShowMenu] = useState(false);
 
   // Live data from Supabase
   const [liveUsers, setLiveUsers] = useState<{ id: string }[]>([]);
   const [liveScans, setLiveScans] = useState<{ analysis_id: string; status: string; body_part: string | null; skin_condition: { name: string } | null }[]>([]);
-  const [districtCounts, setDistrictCounts] = useState<Record<string, number>>({});
   const [verifiedClinicCount, setVerifiedClinicCount] = useState(0);
   const [pendingClinicCount, setPendingClinicCount] = useState(0);
   const [trendData, setTrendData] = useState<Array<{ week: string; analyses: number }>>([]);
-  const [activityLog, setActivityLog] = useState<Array<{ action: string; user: string; time: string; type: string }>>([]);
+  const [activityLog, setActivityLog] = useState<ScanActivity[]>([]);
+
+  const [activityLoading, setActivityLoading] = useState(true);
+  const [activityError, setActivityError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refreshScans() {
+      const [, activity] = await Promise.allSettled([
+        fetchCebuScanCounts(), fetchRecentScanActivity(),
+      ]);
+      if (cancelled) return;
+      setActivityError(activity.status === "rejected");
+      if (activity.status === "fulfilled") setActivityLog(activity.value);
+      setActivityLoading(false);
+    }
+    void refreshScans();
+    const timer = window.setInterval(() => void refreshScans(), 60000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, []);
 
   useEffect(() => {
     async function loadData() {
@@ -101,30 +70,6 @@ export default function AdminDashboardPage() {
           .from("ai_scan_result")
           .select("analysis_id, status, body_part, skin_condition:condition_id ( name )");
         setLiveScans((scans ?? []).map((s: any) => s));
-
-        // District counts from clinics and appointments
-        const counts: Record<string, number> = {};
-        const { data: clinicsWithDistrict } = await supabase
-          .from("clinic")
-          .select("district");
-        (clinicsWithDistrict ?? []).forEach((c: { district: string | null }) => {
-          if (c.district) {
-            const key = c.district.trim().toLowerCase();
-            counts[key] = (counts[key] ?? 0) + 1;
-          }
-        });
-
-        const { data: apptsWithDistrict } = await supabase
-          .from("patient_appointment")
-          .select("clinic:clinic_id ( district )");
-        (apptsWithDistrict ?? []).forEach((a: any) => {
-          const clinicObj: any = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
-          if (clinicObj?.district) {
-            const key = clinicObj.district.trim().toLowerCase();
-            counts[key] = (counts[key] ?? 0) + 1;
-          }
-        });
-        setDistrictCounts(counts);
 
         // Trend data — group by week
         const { data: trendRows } = await supabase
@@ -147,21 +92,7 @@ export default function AdminDashboardPage() {
         setVerifiedClinicCount(approved ?? 0);
         setPendingClinicCount(pending ?? 0);
 
-        // Activity log from system_audit_log
-        const { data: logs } = await supabase
-          .from("system_audit_log")
-          .select("log_id, action, user_type, log_type, timestamp, user:user_id ( full_name )")
-          .order("timestamp", { ascending: false })
-          .limit(20);
-        setActivityLog(((logs ?? []) as any[]).map((l: any) => {
-          const userObj = Array.isArray(l.user) ? l.user[0] : l.user;
-          return {
-            action: l.action,
-            user: userObj?.full_name ?? l.user_type,
-            time: new Date(l.timestamp).toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit" }),
-            type: l.log_type,
-          };
-        }));
+
       } catch (err) {
         console.error("Failed to load admin dashboard data:", err);
       }
@@ -181,22 +112,6 @@ export default function AdminDashboardPage() {
     })),
     [liveScans]);
 
-  // Derive per-district counts from real clinic & appointment activity
-  const cebuDistricts = useMemo(() => {
-    return cebuDistrictGeo.map((d) => {
-      const dNameLower = d.name.toLowerCase();
-      let count = 0;
-      for (const [key, val] of Object.entries(districtCounts)) {
-        if (key.includes(dNameLower) || dNameLower.includes(key)) {
-          count += val;
-        }
-      }
-      return {
-        ...d,
-        count,
-      };
-    }).sort((a, b) => b.count - a.count);
-  }, [districtCounts]);
 
   const stats = useMemo(() => [
     {
@@ -417,71 +332,7 @@ export default function AdminDashboardPage() {
 
     {selectedFeature === "activity" && (<div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
       {/* Cebu Analysis Map */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="lg:col-span-2 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-7 pt-6 pb-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-black">Cebu analysis map</h3>
-            <span className="text-xs px-3 py-1 rounded-full border border-magenta-200 bg-magenta-50 text-black font-semibold flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-magenta-500 animate-pulse" />
-              Live
-            </span>
-          </div>
-          <p className="text-sm text-gray-600 mt-1">Skin analysis density across Cebu</p>
-        </div>
-
-        <div className="px-7 pb-5">
-          <div className="relative bg-gray-50 rounded-xl overflow-hidden h-75 border border-gray-200">
-            <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full" style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.03))" }}>
-              <path d="M 52 5 C 54 8, 57 12, 58 18 C 59 22, 57 26, 56 30 C 55 34, 54 36, 53 38 C 52 40, 54 42, 55 44 C 56 46, 58 44, 60 42 C 62 40, 65 38, 66 40 C 67 42, 64 44, 62 46 C 60 48, 56 48, 54 48 C 52 48, 50 50, 49 52 C 48 54, 48 56, 47 58 C 46 60, 46 62, 45 64 C 44 66, 43 68, 42 70 C 41 72, 40 74, 39 76 C 38 78, 37 80, 36 82 C 35 84, 34 86, 35 88 C 36 90, 38 90, 39 88 C 40 86, 41 84, 42 82 C 43 80, 44 78, 44 76 C 44 74, 45 72, 46 70 C 47 68, 48 66, 48 64 C 48 62, 49 60, 50 58 C 51 56, 52 54, 52 52 C 52 50, 53 48, 55 46 C 57 44, 56 42, 55 40 C 54 38, 55 36, 56 34 C 57 32, 58 28, 57 24 C 56 20, 55 16, 54 12 C 53 8, 52 6, 52 5Z" fill="#f9fafb" stroke="#e5e7eb" strokeWidth="0.4" />
-              <ellipse cx="64" cy="42" rx="5" ry="2.5" fill="#f9fafb" stroke="#e5e7eb" strokeWidth="0.4" />
-            </svg>
-
-            {cebuDistricts.map((district) => {
-              const isHovered = hoveredDistrict === district.name;
-              const size = Math.min(Math.max(district.count / 300, 1), 3.5);
-              return (<div key={district.name} className="absolute cursor-pointer" style={{ left: `${district.x}%`, top: `${district.y}%`, transform: "translate(-50%, -50%)", zIndex: isHovered ? 30 : 10 }} onMouseEnter={() => setHoveredDistrict(district.name)} onMouseLeave={() => setHoveredDistrict(null)}>
-                <div className="absolute inset-0 rounded-full bg-magenta-400 opacity-20 animate-ping" style={{ width: `${12 * size}px`, height: `${12 * size}px`, left: `${-(12 * size - 10 * size) / 2}px`, top: `${-(12 * size - 10 * size) / 2}px`, animationDuration: "2.5s" }} />
-                <div className={`rounded-full border-2 border-white shadow-md transition-all duration-200 ${isHovered ? "bg-magenta-600 scale-[1.3]" : "bg-magenta-500"}`} style={{ width: `${10 * size}px`, height: `${10 * size}px` }} />
-                {isHovered && (<div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-white rounded-lg shadow-lg border border-gray-200 px-3 py-2 whitespace-nowrap z-40">
-                  <p className="text-xs font-bold text-black">{district.name}</p>
-                  <p className="text-[11px] text-black font-medium">{district.count.toLocaleString()} analyses</p>
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 w-2 h-2 bg-white border-r border-b border-gray-200 rotate-45 -mt-1" />
-                </div>)}
-              </div>);
-            })}
-
-            <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-sm rounded-lg px-3 py-2 border border-gray-200">
-              <p className="text-[11px] font-semibold text-black mb-1.5">Density</p>
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-magenta-300" /><span className="text-[10px] text-black">Low</span></div>
-                <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-magenta-400" /><span className="text-[10px] text-black">Med</span></div>
-                <div className="flex items-center gap-1"><div className="w-4 h-4 rounded-full bg-magenta-600" /><span className="text-[10px] text-black">High</span></div>
-              </div>
-            </div>
-
-            <div className="absolute top-3 right-3 bg-white/95 backdrop-blur-sm rounded-lg px-3.5 py-2 border border-gray-200 text-center">
-              <p className="text-lg font-display font-bold text-black">
-                {cebuDistricts.reduce((a, b) => a + b.count, 0).toLocaleString()}
-              </p>
-              <p className="text-[10px] text-gray-600">Total in Cebu</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Top districts list */}
-        <div className="px-7 pb-6 space-y-3">
-          {cebuDistricts.slice(0, 5).map((d, i) => (<div key={d.name} className="flex items-center gap-3">
-            <span className="text-xs font-bold text-gray-600 w-4">{i + 1}</span>
-            <span className="text-sm font-medium text-black flex-1">{d.name}</span>
-            <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-              <div className="h-full bg-magenta-500 rounded-full transition-all" style={{ width: `${(d.count / cebuDistricts[0].count) * 100}%` }} />
-            </div>
-            <span className="text-xs font-semibold text-black w-12 text-right tabular-nums">
-              {d.count.toLocaleString()}
-            </span>
-          </div>))}
-        </div>
-      </motion.div>
+      <CebuAnalysisMap className="lg:col-span-2" />
 
       {/* Activity Log */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="lg:col-span-3 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -489,10 +340,18 @@ export default function AdminDashboardPage() {
           <h3 className="text-lg font-semibold text-black">
             Recent activity
           </h3>
-          <Link to="/admin/audit-logs" className="text-sm text-magenta-700 font-semibold hover:text-magenta-800 transition-colors">
+          <Link to="/admin/ai-analyses" className="text-sm text-magenta-700 font-semibold hover:text-magenta-800 transition-colors">
             View all
           </Link>
         </div>
+        {activityError && activityLog.length > 0 && <p role="alert" className="px-7 text-sm text-red-600">Unable to refresh scan activity. Displayed events may be out of date.</p>}
+        {/* Scrollable table — sticky header, custom thin scrollbar */}
+        <style>{`
+          .activity-scroll::-webkit-scrollbar { width: 5px; }
+          .activity-scroll::-webkit-scrollbar-track { background: transparent; }
+          .activity-scroll::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 9999px; }
+          .activity-scroll::-webkit-scrollbar-thumb:hover { background: #d1d5db; }
+        `}</style>
         <div className="overflow-x-auto">
           <table className="w-full text-black">
             <thead>
@@ -502,9 +361,16 @@ export default function AdminDashboardPage() {
                 <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-7 py-4">Time</th>
               </tr>
             </thead>
+          </table>
+        </div>
+        <div
+          className="activity-scroll overflow-y-auto"
+          style={{ maxHeight: "400px", scrollbarWidth: "thin", scrollbarColor: "#e5e7eb transparent" }}
+        >
+          <table className="w-full text-black">
             <tbody className="divide-y divide-gray-100">
-              {activityLog.map((log, i) => (<tr key={i} className="hover:bg-gray-50 transition-colors">
-                <td className="px-7 py-4">
+              {activityLog.map((log) => (<tr key={log.id} className="hover:bg-gray-50 transition-colors">
+                <td className="px-7 py-4 w-[55%]">
                   <div className="flex items-center gap-3">
                     <span className="inline-flex px-2.5 py-0.5 rounded-full border border-gray-300 text-[11px] font-semibold text-black capitalize shrink-0">
                       {log.type}
@@ -512,11 +378,17 @@ export default function AdminDashboardPage() {
                     <span className="text-sm text-black">{log.action}</span>
                   </div>
                 </td>
-                <td className="px-7 py-4 text-sm text-black font-medium">{log.user}</td>
-                <td className="px-7 py-4 text-sm text-gray-600 whitespace-nowrap">{log.time}</td>
+                <td className="px-7 py-4 text-sm text-black font-medium w-[25%]">{log.user}</td>
+                <td className="px-7 py-4 text-sm text-gray-600 whitespace-nowrap w-[20%]">
+                  <time dateTime={log.timestamp} title={new Date(log.timestamp).toLocaleString("en-PH", { timeZone: "Asia/Manila" })}>
+                    {log.time}
+                  </time>
+                </td>
               </tr>))}
               {activityLog.length === 0 && (<tr>
-                <td colSpan={3} className="px-7 py-12 text-center text-sm text-gray-600">No recent activity.</td>
+                <td colSpan={3} className="px-7 py-12 text-center text-sm text-gray-600">
+                  {activityLoading ? "Loading scan activity..." : activityError ? "Unable to load scan activity." : "No recent patient scans."}
+                </td>
               </tr>)}
             </tbody>
           </table>

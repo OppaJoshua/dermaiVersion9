@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { resolveAvatarUrl } from "@/utils/storage";
 import { createPatientNotification } from "@/lib/notificationService";
+import { recordDoctorAiReview } from "@/lib/doctorReviewService";
 import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 import { compareDoctorAppointments, scopeDoctorAppointments } from "@/lib/doctorAppointmentScope";
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
@@ -674,16 +675,24 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
     consultationNote?: string
   ) => {
     try {
+      const targetAppt = appointments.find(
+        (a) => a.id === appointmentId || (a as any).appointment_id === appointmentId
+      );
+
       const formattedNote = finalDiagnosis
         ? `Diagnosis: ${finalDiagnosis}${consultationNote ? ` | Note: ${consultationNote}` : ""}`
         : consultationNote;
 
-      const updatePayload: any = {
+      const updatePayload: Record<string, any> = {
         status: "completed",
         doctor_reviewed_at: new Date().toISOString(),
       };
       if (formattedNote) {
         updatePayload.doctor_note = formattedNote;
+      }
+      if (finalDiagnosis) {
+        updatePayload.final_diagnosis = finalDiagnosis;
+        updatePayload.doctor_diagnosis = finalDiagnosis;
       }
 
       // 1. Always update local storage first so UI updates immediately and offline/mock records succeed
@@ -698,9 +707,10 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
                     ...a,
                     status: "completed",
                     doctorDone: true,
+                    finalDiagnosis: finalDiagnosis || a.finalDiagnosis || a.doctorDiagnosis,
                     doctorDiagnosis: finalDiagnosis || a.doctorDiagnosis,
                     doctorNote: consultationNote || a.doctorNote,
-                    doctorReviewedAt: new Date().toISOString(),
+                    doctorReviewedAt: updatePayload.doctor_reviewed_at,
                   }
                 : a
             );
@@ -712,7 +722,25 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
         console.warn("[useDoctorAppointments] LocalStorage sync warning:", storageErr);
       }
 
-      // 2. If appointmentId is a valid UUID, persist to Supabase
+      // 2. Upsert into doctor_ai_review validation table
+      if (finalDiagnosis) {
+        recordDoctorAiReview({
+          appointmentId,
+          patientId: targetAppt?.userId,
+          doctorId: doctorIds[0] || targetAppt?.assignedDoctorId || undefined,
+          patientName: targetAppt?.patientName,
+          doctorName: doctorName || targetAppt?.assignedDoctorName || undefined,
+          aiPrediction: targetAppt?.aiConditionName || targetAppt?.conditionName,
+          confidence: targetAppt?.aiConfidence,
+          finalDiagnosis,
+          doctorNotes: consultationNote,
+          reviewedAt: updatePayload.doctor_reviewed_at,
+        }).catch((err: unknown) => {
+          console.warn("[useDoctorAppointments] recordDoctorAiReview notice:", err);
+        });
+      }
+
+      // 3. If appointmentId is a valid UUID, persist to Supabase
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(appointmentId);
       if (isUuid) {
         try {
@@ -723,13 +751,26 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
 
           if (error) {
             console.warn("[useDoctorAppointments] Supabase update warning:", error.message);
+            // Fallback retry without new columns if schema migration hasn't run yet
+            if (
+              error.message.includes("final_diagnosis") ||
+              error.message.includes("doctor_diagnosis")
+            ) {
+              const fallbackPayload: Record<string, any> = {
+                status: "completed",
+                doctor_reviewed_at: updatePayload.doctor_reviewed_at,
+              };
+              if (formattedNote) fallbackPayload.doctor_note = formattedNote;
+              await supabase
+                .from("patient_appointment")
+                .update(fallbackPayload)
+                .eq("appointment_id", appointmentId);
+            }
           }
         } catch (supaErr: any) {
           console.warn("[useDoctorAppointments] Supabase network exception:", supaErr?.message);
         }
       }
-
-      const targetAppt = appointments.find((a) => a.id === appointmentId);
       if (targetAppt?.userId) {
         createPatientNotification({
           userId: targetAppt.userId,

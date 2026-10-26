@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import type { ChangeEvent, FormEvent, DragEvent } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
+import { triggerNewClinicApplicationAlert } from "@/lib/settingsService";
 import {
   ArrowLeft,
   ArrowRight,
@@ -679,6 +680,19 @@ export default function RegisterClinic() {
             .eq("user_id", session.user.id);
         } catch {}
       }
+
+      // Trigger Admin Application Alert (Edge function verifies admin preference guard before sending)
+      triggerNewClinicApplicationAlert({
+        clinicId,
+        clinicName: formData.name.trim(),
+        clinicEmail: formData.email.trim(),
+        clinicPhone: formData.phone.trim(),
+        specialization: formData.specialization,
+        address: formData.address.trim(),
+        submittedAt: new Date().toISOString(),
+      }).catch((alertErr) => {
+        console.warn("[RegisterClinic] Admin application alert notice:", alertErr);
+      });
 
       window.scrollTo({ top: 0, left: 0, behavior: "instant" });
       setSubmitted(true);

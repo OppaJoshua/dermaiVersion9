@@ -2,41 +2,31 @@ import { useMemo, useState, useEffect, useCallback } from "react";
 import { Activity, CheckCircle2, XCircle, RefreshCw, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
+import {
+  fetchAllDoctorAiReviews,
+  type DoctorAiReviewItem,
+} from "@/lib/doctorReviewService";
 
 type ReviewFilter = "all" | "correct" | "wrong" | "retrain" | "high-confidence-wrong" | "direct";
 
-export type ReviewRecord = {
-  id: string;
-  patient: string;
-  aiPrediction: string;
-  confidence?: number;
-  doctor: string;
-  finalDiagnosis: string;
-  reviewedAt: string;
-  status?: string;
-  note?: string;
-  isDirectConsultation?: boolean;
-};
-
-function normalizeDiagnosis(value: string) {
+function normalizeDiagnosis(value: string = "") {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function isDirectConsult(aiName?: string, confidence?: number | null): boolean {
-  if (!aiName) return true;
-  const lower = aiName.toLowerCase();
-  const isGeneric = lower.includes("consultation") || lower.includes("general") || lower.includes("skin condition");
-  const hasValidScore = confidence !== undefined && confidence !== null && Number(confidence) > 0;
-  return isGeneric && !hasValidScore;
-}
-
-function isCorrect(record: ReviewRecord): boolean | null {
-  if (record.isDirectConsultation || !record.aiPrediction || record.aiPrediction.includes("Direct Consultation") || record.aiPrediction.includes("No AI")) {
+function isCorrect(record: DoctorAiReviewItem): boolean | null {
+  if (
+    record.isDirectConsultation ||
+    !record.aiPrediction ||
+    record.aiPrediction.includes("Direct Consultation") ||
+    record.aiPrediction.includes("No AI")
+  ) {
     return null;
   }
+  if (record.validationResult === "Correct") return true;
+  if (record.validationResult === "Wrong") return false;
   const ai = normalizeDiagnosis(record.aiPrediction);
   const doc = normalizeDiagnosis(record.finalDiagnosis);
-  return ai === doc || doc.includes(ai) || ai.includes(doc);
+  return Boolean(ai && doc && (ai === doc || doc.includes(ai) || ai.includes(doc)));
 }
 
 function formatDate(value: string) {
@@ -47,152 +37,19 @@ function formatDate(value: string) {
     : date.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function parseDoctorNote(rawNote?: string): { diagnosis: string; note: string } {
-  if (!rawNote) return { diagnosis: "", note: "" };
-  const match = rawNote.match(/^Diagnosis:\s*([^|\n]+)(?:[|\n]\s*(?:Note:\s*)?(.*))?$/is);
-  if (match) {
-    return {
-      diagnosis: match[1]?.trim() || "",
-      note: match[2]?.trim() || "",
-    };
-  }
-  return { diagnosis: "", note: rawNote };
-}
-
 export default function AdminDoctorAiReviewPage() {
   const [filter, setFilter] = useState<ReviewFilter>("all");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
-  const [records, setRecords] = useState<ReviewRecord[]>([]);
+  const [records, setRecords] = useState<DoctorAiReviewItem[]>([]);
 
   const fetchReviewedAppointments = useCallback(async () => {
     setLoading(true);
     try {
-      const recordMap = new Map<string, ReviewRecord>();
-
-      // 1. Fetch from Supabase patient_appointment table
-      try {
-        const { data, error } = await supabase
-          .from("patient_appointment")
-          .select(`
-            appointment_id,
-            patient_name,
-            ai_condition_name,
-            ai_confidence,
-            doctor_status,
-            doctor_note,
-            doctor_reviewed_at,
-            created_at,
-            status,
-            assigned_doctor_id,
-            clinic:clinic_id ( name )
-          `)
-          .order("doctor_reviewed_at", { ascending: false });
-
-        if (!error && data) {
-          const docIds = (data as any[]).map((r) => r.assigned_doctor_id).filter(Boolean);
-          const docNameMap = new Map<string, string>();
-          if (docIds.length > 0) {
-            try {
-              const { data: docData } = await supabase
-                .from("clinic_doctor")
-                .select("doctor_id, doctor_name")
-                .in("doctor_id", docIds);
-              if (docData) {
-                docData.forEach((d: any) => docNameMap.set(d.doctor_id, d.doctor_name));
-              }
-            } catch { }
-          }
-
-          for (const row of data as any[]) {
-            // Only include reviewed appointments (or ones with doctor notes/decisions)
-            const isReviewed = Boolean(
-              row.doctor_reviewed_at ||
-              (row.doctor_status && row.doctor_status !== "pending-review") ||
-              row.doctor_note ||
-              row.status === "completed"
-            );
-
-            if (!isReviewed) continue;
-
-            const parsed = parseDoctorNote(row.doctor_note);
-            const docName = (row.assigned_doctor_id && docNameMap.get(row.assigned_doctor_id)) || "Unassigned doctor";
-
-            const direct = isDirectConsult(row.ai_condition_name, row.ai_confidence);
-            const aiPred = direct ? "Direct Consultation (No AI)" : (row.ai_condition_name || "Skin condition");
-            const finalDiag = parsed.diagnosis || (direct ? "General Consultation" : aiPred);
-            const conf = direct ? undefined : (row.ai_confidence ? Math.round(Number(row.ai_confidence)) : undefined);
-
-            const recId = row.appointment_id
-              ? `REV-${row.appointment_id.slice(0, 8).toUpperCase()}`
-              : `REV-${Math.floor(Math.random() * 100000)}`;
-
-            recordMap.set(row.appointment_id, {
-              id: recId,
-              patient: row.patient_name || "Patient",
-              aiPrediction: aiPred,
-              confidence: conf,
-              doctor: docName,
-              finalDiagnosis: finalDiag,
-              reviewedAt: row.doctor_reviewed_at || row.created_at || new Date().toISOString(),
-              status: row.doctor_status || "approved",
-              note: parsed.note || row.doctor_note || "",
-              isDirectConsultation: direct,
-            });
-          }
-        }
-      } catch (err) {
-        console.warn("[AdminDoctorAiReviewPage] Supabase fetch error:", err);
-      }
-
-      // 2. Fetch and merge from localStorage
-      try {
-        const localData = localStorage.getItem("dermai_clinic_appointments");
-        if (localData) {
-          const parsed = JSON.parse(localData);
-          if (Array.isArray(parsed)) {
-            for (const item of parsed) {
-              const isReviewed = Boolean(
-                item.doctorReviewedAt ||
-                (item.doctorStatus && item.doctorStatus !== "pending-review") ||
-                item.doctorDiagnosis ||
-                item.doctorNote ||
-                item.status === "completed" ||
-                item.status === "accepted"
-              );
-
-              if (!isReviewed) continue;
-              if (item.id && recordMap.has(item.id)) continue;
-
-              const direct = isDirectConsult(item.aiConditionName || item.conditionName, item.aiConfidence);
-              const aiPred = direct ? "Direct Consultation (No AI)" : (item.aiConditionName || item.conditionName || "Skin condition");
-              const finalDiag = item.doctorDiagnosis || (direct ? "General Consultation" : aiPred);
-              const conf = direct ? undefined : (item.aiConfidence ? Math.round(Number(item.aiConfidence)) : undefined);
-
-              const recId = item.id
-                ? `REV-${String(item.id).slice(0, 8).toUpperCase()}`
-                : `REV-${Math.floor(Math.random() * 100000)}`;
-
-              recordMap.set(item.id || recId, {
-                id: recId,
-                patient: item.patientName || "Patient",
-                aiPrediction: aiPred,
-                confidence: conf,
-                doctor: item.assignedDoctorName || "Unassigned doctor",
-                finalDiagnosis: finalDiag,
-                reviewedAt: item.doctorReviewedAt || item.createdAt || new Date().toISOString(),
-                status: item.doctorStatus || "approved",
-                note: item.doctorNote || "",
-                isDirectConsultation: direct,
-              });
-            }
-          }
-        }
-      } catch (err) {
-        console.warn("[AdminDoctorAiReviewPage] LocalStorage fetch error:", err);
-      }
-
-      setRecords(Array.from(recordMap.values()));
+      const data = await fetchAllDoctorAiReviews();
+      setRecords(data);
+    } catch (err) {
+      console.warn("[AdminDoctorAiReviewPage] Fetch error:", err);
     } finally {
       setLoading(false);
     }
@@ -201,9 +58,16 @@ export default function AdminDoctorAiReviewPage() {
   useEffect(() => {
     fetchReviewedAppointments();
 
-    // Supabase Realtime channel for live sync
+    // Supabase Realtime channel for live sync on both tables
     const channel = supabase
       .channel("admin-doctor-review-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "doctor_ai_review" },
+        () => {
+          fetchReviewedAppointments();
+        }
+      )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "patient_appointment" },
@@ -215,16 +79,21 @@ export default function AdminDoctorAiReviewPage() {
 
     const handleCustomUpdate = () => fetchReviewedAppointments();
     const handleStorage = (e: StorageEvent) => {
-      if (e.key === "dermai_clinic_appointments") {
+      if (
+        e.key === "dermai_clinic_appointments" ||
+        e.key === "dermai_doctor_ai_reviews"
+      ) {
         fetchReviewedAppointments();
       }
     };
 
+    window.addEventListener("dermai_doctor_reviews_updated", handleCustomUpdate);
     window.addEventListener("dermai_appointments_updated", handleCustomUpdate);
     window.addEventListener("storage", handleStorage);
 
     return () => {
       supabase.removeChannel(channel);
+      window.removeEventListener("dermai_doctor_reviews_updated", handleCustomUpdate);
       window.removeEventListener("dermai_appointments_updated", handleCustomUpdate);
       window.removeEventListener("storage", handleStorage);
     };
