@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, ShieldCheck } from "lucide-react";
+import { X, ShieldCheck, ChevronDown } from "lucide-react";
 import { logAdminAction } from "@/lib/auditLog";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
@@ -25,6 +25,7 @@ type User = {
 };
 
 type StatusType = "all" | "active" | "suspended" | "inactive";
+type RoleFilterType = "ALL" | "PATIENT" | "DOCTOR" | "CLINIC";
 
 const statusBadge: Record<string, string> = {
   active: "bg-gray-100 border-gray-300 text-black",
@@ -53,6 +54,7 @@ function getInitialUsers(): User[] {
 export default function AdminUserManagement() {
   const { user: currentAuthUser } = useAuth();
   const [users, setUsers] = useState<User[]>(getInitialUsers);
+  const [selectedRole, setSelectedRole] = useState<RoleFilterType>("ALL");
   const [activeTab, setActiveTab] = useState<StatusType>("all");
   const [reviewModal, setReviewModal] = useState<string | null>(null);
 
@@ -169,7 +171,12 @@ export default function AdminUserManagement() {
     return () => { cancelled = true; };
   }, []);
 
-  const filtered = users.filter((u) => activeTab === "all" || u.status === activeTab);
+  const filtered = users.filter((u) => {
+    const matchesStatus = activeTab === "all" || u.status === activeTab;
+    const matchesRole =
+      selectedRole === "ALL" || u.role === selectedRole.toLowerCase();
+    return matchesStatus && matchesRole;
+  });
   const modalUser = users.find((u) => u.id === reviewModal);
 
   const setUserStatus = async (id: string, newStatus: UserStatus, label: string) => {
@@ -227,28 +234,49 @@ export default function AdminUserManagement() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-black mr-2">Status</span>
-        {(["all", "active", "suspended", "inactive"] as StatusType[]).map((tab) => {
-          const count =
-            tab === "all"
-              ? users.length
-              : users.filter((u) => u.status === tab).length;
-          return (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                "px-4 py-2 rounded-lg text-sm font-semibold capitalize transition-colors cursor-pointer",
-                activeTab === tab
-                  ? "bg-magenta-600 text-white"
-                  : "bg-gray-100 text-black hover:bg-gray-200"
-              )}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 md:p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Status Pills */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-black mr-2">Status</span>
+          {(["all", "active", "suspended", "inactive"] as StatusType[]).map((tab) => {
+            const count =
+              tab === "all"
+                ? users.length
+                : users.filter((u) => u.status === tab).length;
+            return (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={cn(
+                  "px-4 py-2 rounded-lg text-sm font-semibold capitalize transition-colors cursor-pointer",
+                  activeTab === tab
+                    ? "bg-magenta-600 text-white"
+                    : "bg-gray-100 text-black hover:bg-gray-200"
+                )}
+              >
+                {tab} ({count})
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Role Dropdown */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <span className="text-sm font-medium text-black">Role</span>
+          <div className="relative">
+            <select
+              value={selectedRole}
+              onChange={(e) => setSelectedRole(e.target.value as RoleFilterType)}
+              className="appearance-none bg-white border border-gray-200 rounded-lg pl-3.5 pr-9 py-2 text-sm font-medium text-black focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 cursor-pointer shadow-xs transition-all hover:border-gray-300"
             >
-              {tab} ({count})
-            </button>
-          );
-        })}
+              <option value="ALL">All Roles</option>
+              <option value="PATIENT">Patients</option>
+              <option value="DOCTOR">Doctors</option>
+              <option value="CLINIC">Clinics</option>
+            </select>
+            <ChevronDown className="w-4 h-4 text-gray-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
+        </div>
       </div>
 
       {/* Table */}
