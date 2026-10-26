@@ -110,7 +110,12 @@ export async function validateAndSyncSubscription(
           plan_id,
           name,
           price,
-          scan_limit
+          scan_limit,
+          description,
+          plan_feature (
+            feature_id,
+            feature_text
+          )
         )
       `)
       .eq("user_id", userId)

@@ -23,6 +23,7 @@ import { supabase } from "../../lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { predictSkinCondition, getConditionUUID, AIPredictionError } from "../../lib/aiApi";
 import { createPatientNotification } from "../../lib/notificationService";
+import AIScanningAnimationView from "../../components/common/AIScanningAnimationView";
 import { validateAndSyncSubscription } from "@/lib/subscriptionService";
 import {
   QUESTIONNAIRE_QUESTIONS,
@@ -188,6 +189,7 @@ export default function ScanSkinPage() {
   const allPhotosUploaded = !!closeUpImage && !!wideImage;
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isInferenceComplete, setIsInferenceComplete] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [showResult, setShowResult] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResultData | null>(null);
@@ -338,6 +340,8 @@ export default function ScanSkinPage() {
 
     setIsAnalyzing(true);
     setAnalyzeError(null);
+    setIsInferenceComplete(false);
+    const animStartTime = Date.now();
 
     let analysisId: string | null = null;
     let uploadedCloseUpPath: string | undefined;
@@ -483,7 +487,7 @@ export default function ScanSkinPage() {
             role: "patient",
             category: "Scan",
             action: "AI Skin Scan Completed",
-target: `${conditionLabel} (${effectiveConfidence}%)`,
+            target: `${conditionLabel} (${effectiveConfidence}%)`,
             details: `Patient completed AI skin analysis: identified ${conditionLabel} with ${effectiveConfidence}% confidence (Close-up: ${aiResult.confidence}%${aiResult.is_combined
               ? `, Combined 70/30: ${effectiveConfidence}%`
               : ""
@@ -586,6 +590,15 @@ target: `${conditionLabel} (${effectiveConfidence}%)`,
         combinedEvidenceScore: aiResult.combined_evidence_score ?? null,
       });
 
+      // Ensure the full 5-phase scanning animation (3600ms) runs completely before revealing result
+      const elapsed = Date.now() - animStartTime;
+      if (elapsed < 3600) {
+        await new Promise((resolve) => setTimeout(resolve, 3600 - elapsed));
+      }
+      setIsInferenceComplete(true);
+      // Give 350ms for the 100% progress bar fill to smoothly complete before transitioning
+      await new Promise((resolve) => setTimeout(resolve, 350));
+
       setShowResult(true);
       setCurrentStep(3);
 
@@ -599,6 +612,10 @@ target: `${conditionLabel} (${effectiveConfidence}%)`,
       }
     } catch (err) {
       console.error("[ScanSkin] Analysis failed:", err);
+      const elapsed = Date.now() - animStartTime;
+      if (elapsed < 1200) {
+        await new Promise((resolve) => setTimeout(resolve, 1200 - elapsed));
+      }
       setAnalyzeError(
         err instanceof Error
           ? err.message
@@ -606,6 +623,7 @@ target: `${conditionLabel} (${effectiveConfidence}%)`,
       );
     } finally {
       setIsAnalyzing(false);
+      setIsInferenceComplete(false);
     }
   };
 
@@ -657,7 +675,7 @@ target: `${conditionLabel} (${effectiveConfidence}%)`,
   }, [scanResult, returnClinicId]);
 
   return (
-    <div className="min-h-screen bg-slate-50/50 text-slate-900 pt-8 pb-16">
+    <div className="min-h-screen bg-patient-bg text-slate-900 pt-8 pb-16">
       <div className="max-w-3xl mx-auto px-4 sm:px-6">
         <input
           ref={closeUpInputRef}
@@ -1214,33 +1232,13 @@ target: `${conditionLabel} (${effectiveConfidence}%)`,
             </motion.div>
           )}
 
-          {/* Analyzing progress state */}
+          {/* Analyzing progress state: Futuristic multi-phase scanning and dual-image merge animation */}
           {isAnalyzing && (
-            <motion.div
-              key="analyzing"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-8 text-center"
-            >
-              <div className="w-16 h-16 rounded-full bg-magenta-50 text-magenta-600 flex items-center justify-center mx-auto mb-4 animate-spin">
-                <Sparkles className="w-8 h-8" />
-              </div>
-              <h2 className="text-xl font-display font-bold text-slate-900 mb-2">
-                Analyzing Skin Assessment…
-              </h2>
-              <p className="text-sm text-slate-500 max-w-md mx-auto mb-6">
-                Please wait a moment while we check your photos and review your answers. This usually takes just a few seconds.
-              </p>
-              <div className="w-48 h-2 bg-slate-100 rounded-full mx-auto overflow-hidden">
-                <motion.div
-                  className="h-full bg-magenta-600 rounded-full"
-                  initial={{ width: "10%" }}
-                  animate={{ width: "95%" }}
-                  transition={{ duration: 2.5, ease: "easeInOut" }}
-                />
-              </div>
-            </motion.div>
+            <AIScanningAnimationView
+              closeUpImage={closeUpImage}
+              wideImage={wideImage}
+              isInferenceComplete={isInferenceComplete}
+            />
           )}
 
           {/* =========================================================================
@@ -1277,11 +1275,8 @@ target: `${conditionLabel} (${effectiveConfidence}%)`,
                   <div className="flex items-center justify-between mb-1.5">
                     <div>
                       <span className="text-sm font-semibold text-slate-900">
-                        {scanResult.isCombined ? "Combined image evidence score" : "Model output score"}
+                        AI Confidence Score
                       </span>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        Preliminary pattern similarity score — not a clinical diagnosis or calibrated probability.
-                      </p>
                     </div>
                     <span className="text-xl font-bold text-magenta-600 shrink-0 ml-4">
                       {formatConfidencePercent(scanResult.confidence)}

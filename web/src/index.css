@@ -18,12 +18,17 @@
   --color-mediczen-blue-light: #EFF6FF;
   --color-mediczen-blue-border: #DBEAFE;
 
+  /* Patient Theme Colors */
+  --color-patient-bg: #f8f5f6;
+
   --font-sans: "Plus Jakarta Sans", "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: "Plus Jakarta Sans", "Poppins", sans-serif;
   --font-mono-accent: "JetBrains Mono", monospace;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   background-color: #ffffff;
 }
 

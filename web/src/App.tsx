@@ -135,6 +135,9 @@ function App() {
         <Route path="/dashboard/settings/account" element={<Navigate to="/dashboard/profile" replace />} />
         <Route path="/dashboard/settings/help" element={<UserLayout><HelpPage /></UserLayout>} />
         <Route path="/dashboard/settings/billing" element={<UserLayout><BillingSettingsPage /></UserLayout>} />
+        <Route path="/dashboard/billing" element={<Navigate to="/dashboard/settings/billing" replace />} />
+        <Route path="/patient/billing" element={<Navigate to="/dashboard/settings/billing" replace />} />
+        <Route path="/billing" element={<Navigate to="/dashboard/settings/billing" replace />} />
         <Route path="/dashboard/notifications" element={<UserLayout><PatientNotifications /></UserLayout>} />
         <Route path="/patient/notifications" element={<Navigate to="/dashboard/notifications" replace />} />
         <Route path="/patient/appointments/:appointmentId/reassign" element={<UserLayout><ReassignDoctorPage /></UserLayout>} />

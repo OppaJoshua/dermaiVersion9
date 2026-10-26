@@ -448,7 +448,7 @@ const togglePrice = (type: "monthly" | "yearly") => {
   };
 
   return (
-    <div className="min-h-screen bg-white text-gray-900 pt-8 pb-20 px-4 font-sans antialiased">
+    <div className="min-h-screen bg-patient-bg text-gray-900 pt-8 pb-20 px-4 font-sans antialiased">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <div className="text-center max-w-xl mx-auto mb-8">

@@ -951,7 +951,7 @@ export default function FindClinicsPage() {
     };
 
     return (
-        <div className="relative w-full h-[calc(100vh-4rem)] min-h-[600px] overflow-hidden bg-slate-50 flex">
+        <div className="relative w-full h-[calc(100vh-4rem)] min-h-[600px] overflow-hidden bg-patient-bg flex">
             {/* ── Ultra-Minimal Clinic Details Modal ────────────────────── */}
             <ModalPortal isOpen={Boolean(selectedClinic)}>
                 <AnimatePresence>

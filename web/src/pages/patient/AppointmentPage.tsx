@@ -2477,7 +2477,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
   if (loadingClinic) {
     return (
-      <div className="min-h-screen bg-slate-50/50 flex items-center justify-center px-4">
+      <div className="min-h-screen bg-patient-bg flex items-center justify-center px-4">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="w-7 h-7 animate-spin text-magenta-500" />
           <p className="text-xs font-semibold text-gray-500">Loading clinic &amp; doctor schedule...</p>
@@ -2488,7 +2488,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
   if (!selectedClinic) {
     return (
-      <div className="min-h-screen bg-slate-50/50 flex items-center justify-center px-4">
+      <div className="min-h-screen bg-patient-bg flex items-center justify-center px-4">
         <div className="max-w-md w-full bg-white rounded-3xl p-6 sm:p-8 border border-gray-200 text-center shadow-sm space-y-4">
           <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-500 mx-auto flex items-center justify-center">
             <ShieldX className="w-6 h-6" />
@@ -2517,7 +2517,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         : "—";
 
     return (
-      <div className="min-h-screen bg-slate-50/60 py-12 px-4 sm:px-6 flex items-center justify-center">
+      <div className="min-h-screen bg-patient-bg py-12 px-4 sm:px-6 flex items-center justify-center">
         <motion.div
           initial={{ opacity: 0, scale: 0.96, y: 10 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -2657,7 +2657,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50/50 py-8 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-patient-bg py-8 px-4 sm:px-6 lg:px-8">
       <div className={`mx-auto space-y-4 transition-all duration-300 ${currentStep === 2 ? "max-w-6xl xl:max-w-7xl" : "max-w-3xl"}`}>
         {/* Back navigation */}
         <div className="flex items-center justify-between">

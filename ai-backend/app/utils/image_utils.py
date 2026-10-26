@@ -106,7 +106,10 @@ def preprocess_image(img: Image.Image, target_size: tuple = INPUT_SIZE) -> np.nd
         np.ndarray of shape (1, 224, 224, 3) ready for model.predict()
     """
     # Import inside function to avoid circular deps
-    from tensorflow.keras.applications.resnet50 import preprocess_input
+    try:
+        from tensorflow.keras.applications.resnet50 import preprocess_input  # type: ignore
+    except (ImportError, AttributeError):
+        from keras.applications.resnet50 import preprocess_input  # type: ignore
     
     # Resize
     img_resized = img.resize(target_size, Image.Resampling.LANCZOS)

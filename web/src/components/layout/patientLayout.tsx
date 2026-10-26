@@ -516,7 +516,7 @@ export default function UserLayout({
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-patient-bg flex flex-col lg:flex-row">
       {/* Backdrop Overlay */}
       <div
         className={cn(
@@ -676,8 +676,8 @@ export default function UserLayout({
       </aside>
 
       {/* Main Content — connected panel */}
-      <main className="flex-1 lg:ml-64 min-w-0 flex flex-col w-full min-h-screen">
-        <div className="flex-1 flex flex-col bg-white min-h-screen">
+      <main className="flex-1 lg:ml-64 min-w-0 flex flex-col w-full min-h-screen bg-patient-bg">
+        <div className="flex-1 flex flex-col bg-patient-bg min-h-screen">
           {/* Top Header — breadcrumb pill + bell + profile */}
           <div className="px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-20 bg-white/90 backdrop-blur border-b border-gray-100">
             <div className="flex items-center gap-3">
@@ -751,7 +751,7 @@ export default function UserLayout({
             </div>
           </div>
 
-          <div className="flex-1 overflow-x-hidden">{children}</div>
+          <div className="flex-1 overflow-x-hidden bg-patient-bg">{children}</div>
         </div>
       </main>
     </div>

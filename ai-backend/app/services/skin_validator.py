@@ -77,7 +77,14 @@ class SkinValidator:
         if threshold is None:
             threshold = SKIN_VALIDATOR_THRESHOLD
 
-        from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+        try:
+            from tensorflow.keras.applications.mobilenet_v2 import preprocess_input  # type: ignore
+        except (ImportError, AttributeError):
+            try:
+                from keras.applications.mobilenet_v2 import preprocess_input  # type: ignore
+            except (ImportError, AttributeError):
+                # Standard MobileNetV2 preprocessing: scale [0, 255] to [-1, 1]
+                preprocess_input = lambda x: (x / 127.5) - 1.0  # type: ignore
 
         model = self.get_model()
 
