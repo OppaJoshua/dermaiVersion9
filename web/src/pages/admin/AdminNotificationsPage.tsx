@@ -238,7 +238,7 @@ type Broadcast = {
   sentAt: string;
 };
 
-const seedAlerts: Array<{ id: string; title: string; text: string; level: string }> = [];
+
 
 export default function AdminNotificationsPage() {
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
@@ -400,23 +400,6 @@ export default function AdminNotificationsPage() {
             </div>
           )}
 
-          {/* System quality alerts */}
-          <div className="bg-white rounded-lg border border-gray-200">
-            <h2 className="px-5 py-3.5 text-sm font-semibold text-gray-900 border-b border-gray-200">System quality alerts</h2>
-            <div className="px-5 py-4">
-              {seedAlerts.length === 0 && (
-                <p className="text-sm text-gray-500">No alerts at this time.</p>
-              )}
-              <div className="space-y-2">
-                {seedAlerts.map((alert) => (
-                  <div key={alert.id} className="border-l-2 border-amber-400 pl-3 py-0.5">
-                    <p className="text-sm font-medium text-gray-900">{alert.title}</p>
-                    <p className="text-sm text-gray-600 mt-0.5">{alert.text}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
