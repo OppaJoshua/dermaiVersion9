@@ -48,22 +48,33 @@ dermaisupport@gmail.com`;
       .maybeSingle();
 
     if (matchedUser?.user_id) {
-      const emailNotifPayload = {
-        user_id: matchedUser.user_id,
-        type: "clinic_application",
-        subtype: "application_approved",
-        title: "Clinic Application Approved",
-        body: `Congratulations! Your clinic application for ${clinicName} has been approved by the platform administrator. You can now access your full clinic dashboard, manage doctors, and accept patient appointments.`,
-        is_read: false,
-        created_at: new Date().toISOString(),
-      };
+      // Guard against double-insert if AdminClinicManagement already inserted an approval notification
+      const { data: existing } = await supabase
+        .from("user_notification")
+        .select("notif_id")
+        .eq("user_id", matchedUser.user_id)
+        .eq("subtype", "application_approved")
+        .gte("created_at", new Date(Date.now() - 60000).toISOString())
+        .limit(1);
 
-      const { error: metaErr } = await supabase.from("user_notification").insert({
-        ...emailNotifPayload,
-        metadata: { clinic_id: clinicId, status: "approved" },
-      });
-      if (metaErr) {
-        await supabase.from("user_notification").insert(emailNotifPayload);
+      if (!existing || existing.length === 0) {
+        const emailNotifPayload = {
+          user_id: matchedUser.user_id,
+          type: "clinic_application",
+          subtype: "application_approved",
+          title: "Clinic Application Approved",
+          body: `Congratulations! Your clinic application for ${clinicName} has been approved by the platform administrator. You can now access your full clinic dashboard, manage doctors, and accept patient appointments.`,
+          is_read: false,
+          created_at: new Date().toISOString(),
+        };
+
+        const { error: metaErr } = await supabase.from("user_notification").insert({
+          ...emailNotifPayload,
+          metadata: { clinic_id: clinicId, status: "approved" },
+        });
+        if (metaErr) {
+          await supabase.from("user_notification").insert(emailNotifPayload);
+        }
       }
     }
   } catch (err) {

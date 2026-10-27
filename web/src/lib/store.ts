@@ -339,20 +339,17 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
           (lt) => lt.id === (t.ticket_id || t.id)
         );
 
-        let mappedStatus: HelpdeskTicketStatus = "pending";
-        if (rawStatus === "open") {
-          // If legacy DB stored 'open' but ticket was updated to 'in_progress'
-          if (localMatch?.status === "in_progress") {
-            mappedStatus = "in_progress";
-          } else {
-            mappedStatus = "open";
-          }
-        } else if (rawStatus === "in_progress" || rawStatus === "in-progress") {
+        let mappedStatus: HelpdeskTicketStatus = "open";
+        if (rawStatus === "in_progress" || rawStatus === "in-progress") {
           mappedStatus = "in_progress";
         } else if (rawStatus === "resolved" || rawStatus === "closed") {
           mappedStatus = "resolved";
-        } else {
+        } else if (rawStatus === "open") {
+          mappedStatus = "open";
+        } else if (rawStatus === "pending") {
           mappedStatus = "pending";
+        } else {
+          mappedStatus = "open";
         }
 
         const userEmail = (userInfo?.email || t.email || "").toLowerCase().trim();
@@ -642,8 +639,28 @@ export async function updateHelpdeskTicketStatus(
     }
   }
 
-  const recipientUserId = data.user_id || options?.ticketUserId;
-  const ticketSubject = data.subject || options?.ticketSubject || "Support Ticket";
+  let recipientUserId = data?.user_id || options?.ticketUserId;
+  let ticketSubject = data?.subject || options?.ticketSubject;
+  const ticketId = data?.ticket_id || id;
+
+  if (!recipientUserId || !ticketSubject) {
+    try {
+      const { data: ticketRow } = await supabase
+        .from("user_support_ticket")
+        .select("ticket_id, user_id, subject")
+        .eq("ticket_id", id)
+        .maybeSingle();
+
+      if (ticketRow) {
+        if (!recipientUserId) recipientUserId = ticketRow.user_id;
+        if (!ticketSubject) ticketSubject = ticketRow.subject;
+      }
+    } catch (err) {
+      console.warn("[store] Could not probe ticket details:", err);
+    }
+  }
+
+  const effectiveSubject = ticketSubject || "Support Ticket";
 
   // Central audit log: action: 'Ticket Status Updated', category: 'System', target: 'Ticket #' + ticket_id, details: 'Status changed to ' + newStatus
   logAuditEvent({
@@ -659,50 +676,39 @@ export async function updateHelpdeskTicketStatus(
     },
   }).catch(() => {});
 
-  // Real-Time Patient Notification Trigger (Requirement 3)
+  // Real-Time Notification Trigger for Ticket Owner (Patient, Doctor, or Clinic)
   if (recipientUserId) {
     try {
-      const prev = options?.previousStatus;
+      const prev = options?.previousStatus
+        ? String(options.previousStatus).toLowerCase().trim()
+        : undefined;
       const isStatusTransition = !prev || prev !== normalizedStatus;
 
-      if (normalizedStatus === "in_progress" && isStatusTransition) {
+      if (normalizedStatus === "in_progress" && (isStatusTransition || !prev)) {
         const notifPayload = {
           user_id: recipientUserId,
           type: "support_ticket",
           subtype: "ticket_in_progress",
           title: "Support Ticket In Progress",
-          body: `Your support ticket regarding "${ticketSubject}" is now being reviewed by our support team.`,
+          body: `Your support ticket #${ticketId} ('${effectiveSubject}') is now being processed by our support team.`,
           is_read: false,
         };
-        const { error: notifErr } = await supabase.from("user_notification").insert({
-          ...notifPayload,
-          metadata: { ticket_id: id, status: "in_progress" },
-        });
-        if (
-          notifErr &&
-          (notifErr.message?.includes("metadata") || (notifErr as any).code === "42703")
-        ) {
-          await supabase.from("user_notification").insert(notifPayload);
+        const { error: notifErr } = await supabase.from("user_notification").insert(notifPayload);
+        if (notifErr) {
+          console.warn("[store] Failed to insert in_progress notification:", notifErr.message);
         }
-      } else if (normalizedStatus === "resolved" && (isStatusTransition || response)) {
-        const respPreview = response ? ` Response: ${response}` : "";
+      } else if (normalizedStatus === "resolved" && (isStatusTransition || response || !prev)) {
         const notifPayload = {
           user_id: recipientUserId,
           type: "support_ticket",
           subtype: "ticket_resolved",
           title: "Support Ticket Resolved",
-          body: `Your support ticket regarding "${ticketSubject}" has been resolved.${respPreview}`,
+          body: `Your support ticket #${ticketId} ('${effectiveSubject}') has been resolved.`,
           is_read: false,
         };
-        const { error: notifErr } = await supabase.from("user_notification").insert({
-          ...notifPayload,
-          metadata: { ticket_id: id, status: "resolved" },
-        });
-        if (
-          notifErr &&
-          (notifErr.message?.includes("metadata") || (notifErr as any).code === "42703")
-        ) {
-          await supabase.from("user_notification").insert(notifPayload);
+        const { error: notifErr } = await supabase.from("user_notification").insert(notifPayload);
+        if (notifErr) {
+          console.warn("[store] Failed to insert resolved notification:", notifErr.message);
         }
       }
     } catch (notifErr) {

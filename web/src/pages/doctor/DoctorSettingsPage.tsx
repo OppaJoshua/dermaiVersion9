@@ -18,6 +18,7 @@ import { DoctorAvatar } from "@/components/common/DoctorAvatar";
 import { updateDoctorAvatar, removeDoctorAvatar } from "@/lib/doctorAvatarService";
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
 import { DoctorDutyScheduleCard } from "@/components/common/DoctorDutyScheduleCard";
+import { MySupportTickets } from "@/components/support/MySupportTickets";
 
 function CaduceusIcon({ className = "w-7 h-7 text-[#5B6B82]" }: { className?: string }) {
   return (
@@ -709,6 +710,14 @@ export default function DoctorSettingsPage() {
           </div>
         </form>
       </div>
+
+      {/* Submitted Doctor Support Tickets */}
+      <MySupportTickets
+        userId={profile.id}
+        portalTheme="doctor"
+        title="My support tickets"
+        hideWhenEmpty={false}
+      />
     </div>
   );
 }

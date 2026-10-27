@@ -80,6 +80,75 @@ function saveAllReadIds(role: NotificationRole, ids: string[], userId?: string) 
 }
 
 /**
+ * Deduplicate notification items defensively:
+ * 1. Checks item.id (deduping by exact ID)
+ * 2. Checks broadcast_id (deduping identical announcements across user_notification and admin_broadcast)
+ * 3. Checks content fingerprint: normalized title + message (prevents duplicate entries with identical content)
+ * 4. Prioritizes persistent DB records (UUID) over synthetic prefixes (broadcast-, ticket-update-, appt-)
+ */
+export function deduplicateNotificationItems(items: NotificationItem[]): NotificationItem[] {
+  if (!Array.isArray(items) || items.length === 0) return [];
+
+  const seenIds = new Set<string>();
+  const seenBroadcastIds = new Set<string>();
+  const seenContentKeys = new Set<string>();
+
+  // Sort so persistent database records with UUID IDs take precedence over synthetic fallback IDs
+  const isUuid = (str: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
+  const sorted = [...items].sort((a, b) => {
+    const aIsUuid = isUuid(a.id);
+    const bIsUuid = isUuid(b.id);
+    if (aIsUuid && !bIsUuid) return -1;
+    if (!aIsUuid && bIsUuid) return 1;
+    return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+  });
+
+  const unique: NotificationItem[] = [];
+
+  for (const item of sorted) {
+    if (!item || !item.id) continue;
+
+    // A. Direct ID check
+    if (seenIds.has(item.id)) continue;
+
+    // B. Broadcast ID check
+    const bId =
+      item.metadata?.broadcast_id ||
+      (item.id.startsWith("broadcast-") ||
+      item.id.startsWith("clinic-broadcast-") ||
+      item.id.startsWith("doc-broadcast-")
+        ? item.id.replace(/^(clinic-|doc-)?broadcast-/, "")
+        : undefined);
+
+    if (bId) {
+      if (seenBroadcastIds.has(bId)) continue;
+      seenBroadcastIds.add(bId);
+    }
+
+    // C. Content Fingerprint: normalized title + body
+    const normTitle = (item.title || "").trim().toLowerCase();
+    const normMsg = (item.message || "").trim().toLowerCase();
+    const contentKey = `${normTitle}:::${normMsg}`;
+
+    if (normTitle && normMsg && seenContentKeys.has(contentKey)) {
+      continue;
+    }
+
+    seenIds.add(item.id);
+    if (normTitle && normMsg) {
+      seenContentKeys.add(contentKey);
+    }
+    unique.push(item);
+  }
+
+  return unique.sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+}
+
+/**
  * ----------------------------------------------------------------------------
  * PATIENT NOTIFICATIONS
  * Strict Privacy: user_id = auth.uid()
@@ -95,7 +164,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     // 1. Direct user_notification records for this patient
     const { data: dbNotifs } = await supabase
       .from("user_notification")
-      .select("notif_id, type, subtype, title, body, is_read, created_at")
+      .select("notif_id, type, subtype, title, body, is_read, metadata, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(40);
@@ -106,6 +175,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
         const isTicket = n.type === "support_ticket" || n.type?.includes("ticket");
         const isAdminSystem = isBroadcast || isMaintenance;
+        const ticketIdMatch = n.body?.match(/ticket #([^ ')]+)/i)?.[1];
 
         items.push({
           id: n.notif_id,
@@ -128,6 +198,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
           metadata: {
             ...(n as any).metadata,
+            ticket_id: ticketIdMatch || (n as any).metadata?.ticket_id,
             subtype: n.subtype,
           },
         });
@@ -240,9 +311,19 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
 
     if (tickets) {
       tickets.forEach((ticket: any) => {
-        const alreadyNotified = items.some(
-          (i) => i.metadata?.ticket_id === ticket.ticket_id
-        );
+        const fullTicketId = String(ticket.ticket_id || "").toLowerCase();
+        const shortTicketId = fullTicketId.slice(0, 8);
+        const alreadyNotified = items.some((i) => {
+          const metaTicketId = String(i.metadata?.ticket_id || "").toLowerCase();
+          if (metaTicketId && (metaTicketId === fullTicketId || metaTicketId.includes(shortTicketId))) {
+            return true;
+          }
+          if (i.category === "ticket" || i.type?.includes("ticket")) {
+            const bodyLower = (i.message || "").toLowerCase();
+            if (shortTicketId && bodyLower.includes(shortTicketId)) return true;
+          }
+          return false;
+        });
         if (
           !alreadyNotified &&
           (ticket.response ||
@@ -279,6 +360,16 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
 
     if (broadcasts) {
       broadcasts.forEach((b: any) => {
+        const normBTitle = (b.title || "").trim().toLowerCase();
+        const normBMsg = (b.message || "").trim().toLowerCase();
+        const alreadyDelivered = items.some((i) => {
+          if (i.metadata?.broadcast_id === b.broadcast_id) return true;
+          const iTitle = (i.title || "").trim().toLowerCase();
+          const iMsg = (i.message || "").trim().toLowerCase();
+          return iTitle === normBTitle && iMsg === normBMsg;
+        });
+        if (alreadyDelivered) return;
+
         const notifId = `broadcast-${b.broadcast_id}`;
         items.push({
           id: notifId,
@@ -301,21 +392,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     console.warn("[notificationService] Error fetching patient notifications:", err);
   }
 
-  // De-duplicate by ID and broadcast_id, and sort newest first
-  const seen = new Set<string>();
-  const seenBroadcastIds = new Set<string>();
-  const unique = items.filter((item) => {
-    if (seen.has(item.id)) return false;
-    const bId = item.metadata?.broadcast_id;
-    if (bId) {
-      if (seenBroadcastIds.has(bId)) return false;
-      seenBroadcastIds.add(bId);
-    }
-    seen.add(item.id);
-    return true;
-  });
-
-  return unique.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  return deduplicateNotificationItems(items);
 }
 
 /**
@@ -647,6 +724,16 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
 
     if (broadcasts) {
       broadcasts.forEach((b: any) => {
+        const normBTitle = (b.title || "").trim().toLowerCase();
+        const normBMsg = (b.message || "").trim().toLowerCase();
+        const alreadyDelivered = items.some((i) => {
+          if (i.metadata?.broadcast_id === b.broadcast_id) return true;
+          const iTitle = (i.title || "").trim().toLowerCase();
+          const iMsg = (i.message || "").trim().toLowerCase();
+          return iTitle === normBTitle && iMsg === normBMsg;
+        });
+        if (alreadyDelivered) return;
+
         const notifId = `doc-broadcast-${b.broadcast_id}`;
         items.push({
           id: notifId,
@@ -679,7 +766,9 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       directNotifs.forEach((n) => {
         const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
         const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
+        const isTicket = n.type === "support_ticket" || n.type?.includes("ticket");
         const isAdminSystem = isBroadcast || isMaintenance;
+        const ticketIdMatch = n.body?.match(/ticket #([^ ')]+)/i)?.[1];
 
         const meta = (n as any).metadata || {};
         const metaClinicId = meta.clinicId || meta.clinic_id;
@@ -688,13 +777,15 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
 
         const resolvedLink =
           meta.link ||
-          (metaClinicId && metaPatientId
+          (isTicket
+            ? "/doctor/settings"
+            : metaClinicId && metaPatientId
             ? `/doctor/clinics/${metaClinicId}/patients/${metaPatientId}${metaApptId ? `?appointmentId=${metaApptId}` : ""}`
             : undefined);
 
         const category =
           meta.category ||
-          (isBroadcast ? "broadcast" : n.type === "appointment_request" || n.type === "appointment" ? "appointment" : "system");
+          (isTicket ? "ticket" : isBroadcast ? "broadcast" : n.type === "appointment_request" || n.type === "appointment" ? "appointment" : "system");
 
         items.push({
           id: n.notif_id,
@@ -705,13 +796,14 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           link: resolvedLink,
           senderName:
             meta.sender_name ||
-            (isAdminSystem ? "Platform Administrator" : "DERMAI Admin"),
-          senderType: isAdminSystem ? "admin" : (n.subtype as any) || "system",
+            (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : "DERMAI Admin"),
+          senderType: isAdminSystem || isTicket ? "admin" : (n.subtype as any) || "system",
           senderAvatar: meta.avatar_url || (isAdminSystem ? adminAvatar : undefined),
           timestamp: n.created_at,
           isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
           metadata: {
             ...meta,
+            ticket_id: ticketIdMatch || meta.ticket_id,
             subtype: n.subtype,
           },
         });
@@ -721,20 +813,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
     console.warn("[notificationService] Error fetching doctor notifications:", err);
   }
 
-  const seen = new Set<string>();
-  const seenBroadcastIds = new Set<string>();
-  const unique = items.filter((item) => {
-    if (seen.has(item.id)) return false;
-    const bId = item.metadata?.broadcast_id;
-    if (bId) {
-      if (seenBroadcastIds.has(bId)) return false;
-      seenBroadcastIds.add(bId);
-    }
-    seen.add(item.id);
-    return true;
-  });
-
-  return unique.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  return deduplicateNotificationItems(items);
 }
 
 /**
@@ -986,7 +1065,7 @@ export async function fetchClinicNotifications(
     if (resolvedUserId) {
       const { data: userNotifs } = await supabase
         .from("user_notification")
-        .select("notif_id, type, subtype, title, body, is_read, created_at")
+        .select("notif_id, type, subtype, title, body, is_read, metadata, created_at")
         .eq("user_id", resolvedUserId)
         .order("created_at", { ascending: false })
         .limit(30);
@@ -999,24 +1078,27 @@ export async function fetchClinicNotifications(
             n.subtype === "clinic_approval";
           const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
           const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
+          const isTicket = n.type === "support_ticket" || n.type?.includes("ticket");
           const isAdminSystem = isBroadcast || isMaintenance;
+          const ticketIdMatch = n.body?.match(/ticket #([^ ')]+)/i)?.[1];
 
           items.push({
             id: n.notif_id,
             type: isApproval ? "application_approved" : n.subtype || n.type || "system",
-            category: isBroadcast ? "broadcast" : isApproval ? "clinic" : "system",
+            category: isBroadcast ? "broadcast" : isApproval ? "clinic" : isTicket ? "ticket" : "system",
             title: n.title,
             message: n.body || "",
             senderName:
               (n as any).metadata?.sender_name ||
-              (isAdminSystem ? "Platform Administrator" : isApproval ? "Platform Admin" : "DERMAI Admin"),
+              (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : isApproval ? "Platform Admin" : "DERMAI Admin"),
             senderType: "admin",
             senderAvatar: adminAvatar || undefined,
-            link: isApproval ? "/clinic" : undefined,
+            link: isApproval ? "/clinic" : isTicket ? "/clinic/settings" : undefined,
             timestamp: n.created_at,
             isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
             metadata: {
               ...(n as any).metadata,
+              ticket_id: ticketIdMatch || (n as any).metadata?.ticket_id,
               subtype: n.subtype,
               ...(isApproval ? { clinic_id: resolvedClinicId, status: "approved" } : {}),
             },
@@ -1066,6 +1148,21 @@ export async function fetchClinicNotifications(
 
       if (tickets) {
         tickets.forEach((ticket: any) => {
+          const fullTicketId = String(ticket.ticket_id || "").toLowerCase();
+          const shortTicketId = fullTicketId.slice(0, 8);
+          const alreadyNotified = items.some((i) => {
+            const metaTicketId = String(i.metadata?.ticket_id || "").toLowerCase();
+            if (metaTicketId && (metaTicketId === fullTicketId || metaTicketId.includes(shortTicketId))) {
+              return true;
+            }
+            if (i.category === "ticket" || i.type?.includes("ticket")) {
+              const bodyLower = (i.message || "").toLowerCase();
+              if (shortTicketId && bodyLower.includes(shortTicketId)) return true;
+            }
+            return false;
+          });
+          if (alreadyNotified) return;
+
           if (ticket.response || ticket.status !== "open") {
             const notifId = `clinic-ticket-${ticket.ticket_id}`;
             items.push({
@@ -1096,6 +1193,16 @@ export async function fetchClinicNotifications(
 
     if (broadcasts) {
       broadcasts.forEach((b: any) => {
+        const normBTitle = (b.title || "").trim().toLowerCase();
+        const normBMsg = (b.message || "").trim().toLowerCase();
+        const alreadyDelivered = items.some((i) => {
+          if (i.metadata?.broadcast_id === b.broadcast_id) return true;
+          const iTitle = (i.title || "").trim().toLowerCase();
+          const iMsg = (i.message || "").trim().toLowerCase();
+          return iTitle === normBTitle && iMsg === normBMsg;
+        });
+        if (alreadyDelivered) return;
+
         const notifId = `clinic-broadcast-${b.broadcast_id}`;
         items.push({
           id: notifId,
@@ -1119,20 +1226,7 @@ export async function fetchClinicNotifications(
     console.warn("[notificationService] Error fetching clinic notifications:", err);
   }
 
-  const seen = new Set<string>();
-  const seenBroadcastIds = new Set<string>();
-  const unique = items.filter((item) => {
-    if (seen.has(item.id)) return false;
-    const bId = item.metadata?.broadcast_id;
-    if (bId) {
-      if (seenBroadcastIds.has(bId)) return false;
-      seenBroadcastIds.add(bId);
-    }
-    seen.add(item.id);
-    return true;
-  });
-
-  return unique.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  return deduplicateNotificationItems(items);
 }
 
 /**
@@ -1776,9 +1870,10 @@ export function useRoleNotifications(
       } else if (role === "admin") {
         data = await fetchAdminNotifications();
       }
-      const unread = data.filter((n) => !n.isRead).length;
+      const deduplicated = deduplicateNotificationItems(data);
+      const unread = deduplicated.filter((n) => !n.isRead).length;
       store.state = {
-        notifications: data,
+        notifications: deduplicated,
         unreadCount: unread,
         loading: false,
       };

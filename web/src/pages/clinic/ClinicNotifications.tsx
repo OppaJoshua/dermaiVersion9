@@ -31,13 +31,13 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
   const [activeTab, setActiveTab] = useState<"all" | "clinic" | "requests" | "doctor-action" | "ticket" | "broadcast">("all");
 
   const filtered = useMemo(() => {
-    if (activeTab === "all") return notifications;
-    if (activeTab === "clinic") return notifications.filter((n) => n.category === "clinic" || n.type === "application_approved" || n.type === "clinic_application");
-    if (activeTab === "requests") return notifications.filter((n) => n.type === "appointment-request" || n.type === "patient-reselection");
-    if (activeTab === "doctor-action") return notifications.filter((n) => n.type.includes("doctor-") || n.type === "consultation-completed");
-    if (activeTab === "ticket") return notifications.filter((n) => n.category === "ticket");
-    if (activeTab === "broadcast") {
-      return notifications.filter(
+    let list = notifications;
+    if (activeTab === "clinic") list = notifications.filter((n) => n.category === "clinic" || n.type === "application_approved" || n.type === "clinic_application");
+    else if (activeTab === "requests") list = notifications.filter((n) => n.type === "appointment-request" || n.type === "patient-reselection");
+    else if (activeTab === "doctor-action") list = notifications.filter((n) => n.type.includes("doctor-") || n.type === "consultation-completed");
+    else if (activeTab === "ticket") list = notifications.filter((n) => n.category === "ticket");
+    else if (activeTab === "broadcast") {
+      list = notifications.filter(
         (n) =>
           n.category === "broadcast" ||
           n.type === "broadcast" ||
@@ -46,7 +46,23 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
           n.type === "maintenance_alert"
       );
     }
-    return notifications;
+
+    const seenIds = new Set<string>();
+    const seenContent = new Set<string>();
+    return list.filter((n) => {
+      if (!n || !n.id) return false;
+      if (seenIds.has(n.id)) return false;
+      seenIds.add(n.id);
+
+      const normTitle = (n.title || "").trim().toLowerCase();
+      const normMsg = (n.message || "").trim().toLowerCase();
+      const contentKey = `${normTitle}:::${normMsg}`;
+      if (normTitle && normMsg) {
+        if (seenContent.has(contentKey)) return false;
+        seenContent.add(contentKey);
+      }
+      return true;
+    });
   }, [notifications, activeTab]);
 
   const timeAgo = (iso: string) => {

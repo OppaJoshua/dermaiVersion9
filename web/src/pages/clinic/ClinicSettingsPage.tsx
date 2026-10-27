@@ -15,6 +15,7 @@ import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { createHelpdeskTicketAsync } from "@/lib/store";
+import { MySupportTickets } from "@/components/support/MySupportTickets";
 import LocationPickerMap from "@/components/common/LocationPickerMap";
 import {
   findConflictingDoctorSchedules,
@@ -1566,6 +1567,13 @@ export default function ClinicSettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Submitted Clinic Support Tickets */}
+      <MySupportTickets
+        portalTheme="clinic"
+        title="My support tickets"
+        hideWhenEmpty={false}
+      />
     </div>
   );
 }

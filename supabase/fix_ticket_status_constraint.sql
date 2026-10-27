@@ -15,14 +15,16 @@ alter table if exists user_support_ticket add column if not exists resolved_at t
 alter table if exists user_support_ticket add column if not exists response text;
 alter table if exists user_support_ticket add column if not exists category text default 'General Support';
 
--- 2. Normalise any legacy status spellings
-update user_support_ticket set status = 'in_progress' where status = 'in-progress';
-update user_support_ticket set status = 'resolved' where status = 'closed';
-
--- 3. Replace the status check constraint to permit full ticket lifecycle
+-- 2. Drop the restrictive legacy constraint first so we can normalize data
 alter table if exists user_support_ticket drop constraint if exists user_support_ticket_status_check;
+
+-- 3. Normalise any legacy status spellings
+update user_support_ticket set status = 'in_progress' where lower(status) in ('in-progress', 'in_progress');
+update user_support_ticket set status = 'resolved' where lower(status) in ('closed', 'resolved');
+
+-- 4. Replace the status check constraint to permit full ticket lifecycle
 alter table if exists user_support_ticket add constraint user_support_ticket_status_check
-  check (status in ('pending','open','in_progress','resolved','closed'));
+  check (lower(status) in ('pending','open','in_progress','resolved','closed'));
 
 -- 4. Ensure columns exist on user_notification for ticket alerts
 alter table if exists user_notification add column if not exists subtype varchar(50);

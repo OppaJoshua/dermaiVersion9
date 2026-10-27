@@ -25,10 +25,10 @@ const statusConfig: Record<
   string,
   { label: string; pill: string }
 > = {
-  pending: { label: "Pending", pill: "bg-amber-50 border-amber-200 text-amber-800" },
+  pending: { label: "Pending", pill: "bg-slate-100 border-slate-200 text-slate-700" },
   open: { label: "Open", pill: "bg-magenta-50 border-magenta-200 text-magenta-900" },
-  in_progress: { label: "In Progress", pill: "bg-blue-50 border-blue-200 text-blue-800" },
-  "in-progress": { label: "In Progress", pill: "bg-blue-50 border-blue-200 text-blue-800" },
+  in_progress: { label: "In Progress", pill: "bg-amber-50 border-amber-200 text-amber-800" },
+  "in-progress": { label: "In Progress", pill: "bg-amber-50 border-amber-200 text-amber-800" },
   resolved: { label: "Resolved", pill: "bg-emerald-50 border-emerald-200 text-emerald-800" },
   closed: { label: "Resolved", pill: "bg-emerald-50 border-emerald-200 text-emerald-800" },
 };
@@ -283,8 +283,11 @@ export default function AdminHelpdeskPage() {
   const handleStatusChange = async (id: string, newStatus: HelpdeskTicketStatus) => {
     setActionError(null);
     setReplySuccess(false);
+    const targetTicket =
+      tickets.find((t) => t.id === id) ||
+      (selectedTicket?.id === id ? selectedTicket : undefined);
     const persistedStatus = toModalStatus(
-      tickets.find((t) => t.id === id)?.status ?? modalStatus
+      targetTicket?.status ?? modalStatus
     );
     setModalStatus(newStatus);
 
@@ -294,9 +297,9 @@ export default function AdminHelpdeskPage() {
         newStatus,
         replyText.trim() || undefined,
         {
-          ticketSubject: selectedTicket?.subject,
-          ticketUserId: selectedTicket?.userId,
-          previousStatus: selectedTicket?.status,
+          ticketSubject: targetTicket?.subject,
+          ticketUserId: targetTicket?.userId,
+          previousStatus: targetTicket?.status,
         }
       );
       setTickets((prev) =>

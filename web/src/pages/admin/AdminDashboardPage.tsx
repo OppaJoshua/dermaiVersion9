@@ -15,28 +15,16 @@ const dashboardFeatures = [
   { id: "skin-map", label: "Cebu Skin Condition Map", icon: MapPin },
 ];
 
-// TODO: Load weekly trend data from Supabase — now loaded dynamically below
-
-/** The 5 skin conditions tracked on the dashboard */
-const TRACKED_CONDITIONS = [
-  "Atopic Dermatitis",
-  "Vitiligo",
-  "Contact Dermatitis",
-  "Melasma",
-  "Acne Vulgaris",
-];
-
-
 export default function AdminDashboardPage() {
   const [selectedFeature, setSelectedFeature] = useState<string>("overview");
   const [showMenu, setShowMenu] = useState(false);
+  const [trendTab, setTrendTab] = useState<"weekly" | "monthly">("weekly");
 
   // Live data from Supabase
   const [liveUsers, setLiveUsers] = useState<{ id: string }[]>([]);
-  const [liveScans, setLiveScans] = useState<{ analysis_id: string; status: string; body_part: string | null; skin_condition: { name: string } | null }[]>([]);
+  const [liveScans, setLiveScans] = useState<{ analysis_id: string; status: string; body_part: string | null; scanned_at?: string; skin_condition: { name: string } | null }[]>([]);
   const [verifiedClinicCount, setVerifiedClinicCount] = useState(0);
   const [pendingClinicCount, setPendingClinicCount] = useState(0);
-  const [trendData, setTrendData] = useState<Array<{ week: string; analyses: number }>>([]);
   const [activityLog, setActivityLog] = useState<ScanActivity[]>([]);
 
   const [activityLoading, setActivityLoading] = useState(true);
@@ -65,33 +53,29 @@ export default function AdminDashboardPage() {
         const { data: users } = await supabase.from("user").select("user_id");
         setLiveUsers((users ?? []).map((u: { user_id: string }) => ({ id: u.user_id })));
 
-        // Scans
-        const { data: scans } = await supabase
+        // Scans - load live scans from Supabase
+        let rawScans: any[] = [];
+        const { data: scans, error: scansErr } = await supabase
           .from("ai_scan_result")
-          .select("analysis_id, status, body_part, skin_condition:condition_id ( name )");
-        setLiveScans((scans ?? []).map((s: any) => s));
+          .select("analysis_id, status, body_part, scanned_at, skin_condition:condition_id ( name )")
+          .order("scanned_at", { ascending: true });
 
-        // Trend data — group by week
-        const { data: trendRows } = await supabase
-          .from("ai_scan_result")
-          .select("scanned_at")
-          .order("scanned_at");
-        if (trendRows) {
-          const weekMap: Record<string, number> = {};
-          trendRows.forEach((r: { scanned_at: string }) => {
-            const d = new Date(r.scanned_at);
-            const week = `W${Math.ceil(d.getDate() / 7)} ${d.toLocaleString("en-PH", { month: "short" })}`;
-            weekMap[week] = (weekMap[week] ?? 0) + 1;
-          });
-          setTrendData(Object.entries(weekMap).map(([week, analyses]) => ({ week, analyses })));
+        if (!scansErr && scans) {
+          rawScans = scans;
+        } else {
+          const { data: altScans } = await supabase
+            .from("ai_skin_analysis")
+            .select("analysis_id, status, body_part, scanned_at, skin_condition:condition_id ( name )")
+            .order("scanned_at", { ascending: true });
+          if (altScans) rawScans = altScans;
         }
+        setLiveScans(rawScans);
 
         // Clinic counts
         const { count: approved } = await supabase.from("clinic").select("*", { count: "exact", head: true }).eq("status", "approved");
         const { count: pending } = await supabase.from("clinic").select("*", { count: "exact", head: true }).eq("status", "pending");
         setVerifiedClinicCount(approved ?? 0);
         setPendingClinicCount(pending ?? 0);
-
 
       } catch (err) {
         console.error("Failed to load admin dashboard data:", err);
@@ -102,15 +86,70 @@ export default function AdminDashboardPage() {
 
   const flaggedScans = liveScans.filter((s) => s.status === "flagged" || s.status === "invalid");
 
-  // Derive top-5 condition counts from real scan data
-  const topConditions = useMemo(() =>
-    TRACKED_CONDITIONS.map((name) => ({
-      name,
-      count: liveScans.filter(
-        (s) => (s.skin_condition as { name: string } | null)?.name?.toLowerCase() === name.toLowerCase()
-      ).length,
-    })),
-    [liveScans]);
+  // Top 5 detected conditions filtered by current month from live Supabase scans
+  const topConditions = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+
+    const currentMonthScans = liveScans.filter((s) => {
+      if (!s.scanned_at) return false;
+      const d = new Date(s.scanned_at);
+      return !isNaN(d.getTime()) && d.getFullYear() === currentYear && d.getMonth() === currentMonth;
+    });
+
+    const conditionMap = new Map<string, number>();
+    currentMonthScans.forEach((s) => {
+      const cond = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+      const name = cond?.name?.trim();
+      if (name) {
+        conditionMap.set(name, (conditionMap.get(name) ?? 0) + 1);
+      }
+    });
+
+    return Array.from(conditionMap.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+  }, [liveScans]);
+
+  // Weekly trend grouped from live Supabase scans
+  const weeklyTrendData = useMemo(() => {
+    const weekMap = new Map<string, number>();
+    liveScans.forEach((r) => {
+      if (!r.scanned_at) return;
+      const d = new Date(r.scanned_at);
+      if (isNaN(d.getTime())) return;
+      const week = `W${Math.ceil(d.getDate() / 7)} ${d.toLocaleString("en-PH", { month: "short" })}`;
+      weekMap.set(week, (weekMap.get(week) ?? 0) + 1);
+    });
+    return Array.from(weekMap.entries()).map(([period, analyses]) => ({
+      period,
+      week: period,
+      month: period,
+      analyses,
+    }));
+  }, [liveScans]);
+
+  // Monthly trend grouped from live Supabase scans
+  const monthlyTrendData = useMemo(() => {
+    const monthMap = new Map<string, number>();
+    liveScans.forEach((r) => {
+      if (!r.scanned_at) return;
+      const d = new Date(r.scanned_at);
+      if (isNaN(d.getTime())) return;
+      const month = d.toLocaleString("en-PH", { month: "short" });
+      monthMap.set(month, (monthMap.get(month) ?? 0) + 1);
+    });
+    return Array.from(monthMap.entries()).map(([period, analyses]) => ({
+      period,
+      week: period,
+      month: period,
+      analyses,
+    }));
+  }, [liveScans]);
+
+  const activeTrendData = trendTab === "weekly" ? weeklyTrendData : monthlyTrendData;
 
 
   const stats = useMemo(() => [
@@ -236,15 +275,21 @@ export default function AdminDashboardPage() {
             <span className="text-sm text-gray-600">This month</span>
           </div>
           <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={topConditions}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="name" tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
-                <YAxis tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Bar dataKey="count" fill="#A0195A" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {topConditions.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={topConditions}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="name" tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
+                  <YAxis tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} allowDecimals={false} />
+                  <Tooltip contentStyle={tooltipStyle} />
+                  <Bar dataKey="count" fill="#A0195A" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-sm text-gray-400">
+                No skin condition analyses recorded this month.
+              </div>
+            )}
           </div>
         </motion.div>
 
@@ -255,23 +300,43 @@ export default function AdminDashboardPage() {
               Analysis trends
             </h3>
             <div className="flex gap-1">
-              {["Weekly", "Monthly"].map((tab, i) => (<button key={tab} className={`px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-colors ${i === 0
-                ? "bg-magenta-50 text-black border border-magenta-200"
-                : "text-gray-600 hover:bg-gray-50 border border-transparent"}`}>
-                {tab}
-              </button>))}
+              {(["weekly", "monthly"] as const).map((tab) => {
+                const isActive = trendTab === tab;
+                const label = tab === "weekly" ? "Weekly" : "Monthly";
+                return (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setTrendTab(tab)}
+                    className={cn(
+                      "px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-colors cursor-pointer",
+                      isActive
+                        ? "bg-magenta-50 text-black border border-magenta-200"
+                        : "text-gray-600 hover:bg-gray-50 border border-transparent"
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trendData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="week" tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
-                <YAxis tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Line type="monotone" dataKey="analyses" stroke="#A0195A" strokeWidth={2.5} dot={{ fill: "#A0195A", r: 4, strokeWidth: 2, stroke: "#fff" }} activeDot={{ r: 6, fill: "#A0195A" }} />
-              </LineChart>
-            </ResponsiveContainer>
+            {activeTrendData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={activeTrendData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="period" tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
+                  <YAxis tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} allowDecimals={false} />
+                  <Tooltip contentStyle={tooltipStyle} />
+                  <Line type="monotone" dataKey="analyses" stroke="#A0195A" strokeWidth={2.5} dot={{ fill: "#A0195A", r: 4, strokeWidth: 2, stroke: "#fff" }} activeDot={{ r: 6, fill: "#A0195A" }} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-sm text-gray-400">
+                No analysis trend data available.
+              </div>
+            )}
           </div>
         </motion.div>
       </div>
@@ -289,15 +354,21 @@ export default function AdminDashboardPage() {
             <span className="text-sm text-gray-600">This month</span>
           </div>
           <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={topConditions}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="name" tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
-                <YAxis tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Bar dataKey="count" fill="#A0195A" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {topConditions.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={topConditions}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="name" tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
+                  <YAxis tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} allowDecimals={false} />
+                  <Tooltip contentStyle={tooltipStyle} />
+                  <Bar dataKey="count" fill="#A0195A" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-sm text-gray-400">
+                No skin condition analyses recorded this month.
+              </div>
+            )}
           </div>
         </motion.div>
 
@@ -308,23 +379,43 @@ export default function AdminDashboardPage() {
               Analysis trends
             </h3>
             <div className="flex gap-1">
-              {["Weekly", "Monthly"].map((tab, i) => (<button key={tab} className={`px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-colors ${i === 0
-                ? "bg-magenta-50 text-black border border-magenta-200"
-                : "text-gray-600 hover:bg-gray-50 border border-transparent"}`}>
-                {tab}
-              </button>))}
+              {(["weekly", "monthly"] as const).map((tab) => {
+                const isActive = trendTab === tab;
+                const label = tab === "weekly" ? "Weekly" : "Monthly";
+                return (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setTrendTab(tab)}
+                    className={cn(
+                      "px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-colors cursor-pointer",
+                      isActive
+                        ? "bg-magenta-50 text-black border border-magenta-200"
+                        : "text-gray-600 hover:bg-gray-50 border border-transparent"
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trendData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="week" tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
-                <YAxis tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Line type="monotone" dataKey="analyses" stroke="#A0195A" strokeWidth={2.5} dot={{ fill: "#A0195A", r: 4, strokeWidth: 2, stroke: "#fff" }} activeDot={{ r: 6, fill: "#A0195A" }} />
-              </LineChart>
-            </ResponsiveContainer>
+            {activeTrendData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={activeTrendData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="period" tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} />
+                  <YAxis tick={axisTick} axisLine={{ stroke: "#A0195A", strokeWidth: 1.5 }} tickLine={false} allowDecimals={false} />
+                  <Tooltip contentStyle={tooltipStyle} />
+                  <Line type="monotone" dataKey="analyses" stroke="#A0195A" strokeWidth={2.5} dot={{ fill: "#A0195A", r: 4, strokeWidth: 2, stroke: "#fff" }} activeDot={{ r: 6, fill: "#A0195A" }} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-sm text-gray-400">
+                No analysis trend data available.
+              </div>
+            )}
           </div>
         </motion.div>
       </div>

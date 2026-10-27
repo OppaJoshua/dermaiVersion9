@@ -28,9 +28,9 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
   const [activeTab, setActiveTab] = useState<"all" | "appointment" | "ticket" | "broadcast">("all");
 
   const filtered = useMemo(() => {
-    if (activeTab === "all") return notifications;
+    let list = notifications;
     if (activeTab === "broadcast") {
-      return notifications.filter(
+      list = notifications.filter(
         (n) =>
           n.category === "broadcast" ||
           n.type === "broadcast" ||
@@ -38,8 +38,26 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
           n.metadata?.subtype === "maintenance_alert" ||
           n.type === "maintenance_alert"
       );
+    } else if (activeTab !== "all") {
+      list = notifications.filter((n) => n.category === activeTab);
     }
-    return notifications.filter((n) => n.category === activeTab);
+
+    const seenIds = new Set<string>();
+    const seenContent = new Set<string>();
+    return list.filter((n) => {
+      if (!n || !n.id) return false;
+      if (seenIds.has(n.id)) return false;
+      seenIds.add(n.id);
+
+      const normTitle = (n.title || "").trim().toLowerCase();
+      const normMsg = (n.message || "").trim().toLowerCase();
+      const contentKey = `${normTitle}:::${normMsg}`;
+      if (normTitle && normMsg) {
+        if (seenContent.has(contentKey)) return false;
+        seenContent.add(contentKey);
+      }
+      return true;
+    });
   }, [notifications, activeTab]);
 
   const timeAgo = (iso: string) => {
