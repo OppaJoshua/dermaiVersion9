@@ -112,3 +112,20 @@ body {
   background-image: linear-gradient(135deg, #9f1239 0%, #881337 100%);
   color: #ffffff;
 }
+
+/* PayMongo Consultation Verification Indeterminate Progress Bar */
+@keyframes payment-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+.animate-payment-indeterminate {
+  animation: payment-indeterminate 1.3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-payment-indeterminate {
+    animation: none;
+    transform: translateX(75%);
+  }
+}

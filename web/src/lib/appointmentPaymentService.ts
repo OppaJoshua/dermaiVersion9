@@ -69,18 +69,22 @@ export interface ProcessSimulatedPaymentResult {
 
 /**
  * Checks whether the client-side simulated payment demonstration UI is enabled.
- * NOTE: Server-side database restriction is authoritatively enforced via `app_feature_flag`.
+ * Since PayMongo is the authoritative payment gateway, simulated payments are disabled by default.
  */
 export function isSimulatedPaymentEnabled(): boolean {
   try {
-    const envFlag = import.meta.env?.VITE_ENABLE_SIMULATED_PAYMENT;
-    if (envFlag === "false" || envFlag === "0") {
+    // If real PayMongo gateway is configured, simulated payment is disabled
+    if (import.meta.env?.VITE_PAYMONGO_PUBLIC_KEY) {
       return false;
     }
+    const envFlag = import.meta.env?.VITE_ENABLE_SIMULATED_PAYMENT;
+    if (envFlag === "true" || envFlag === "1") {
+      return true;
+    }
   } catch {
-    // Default to true in client demonstration environments
+    // Default to false in production environments
   }
-  return true;
+  return false;
 }
 
 /**

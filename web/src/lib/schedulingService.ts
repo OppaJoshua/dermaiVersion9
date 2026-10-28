@@ -346,8 +346,8 @@ export function getEffectiveShiftSettings(
   // Capacity is determined by the available appointment times (possibleSlots).
   // If an explicit override is set on the shift or doctor, respect it (up to possibleSlots);
   // otherwise, capacity equals possibleSlots without artificial arbitrary caps.
-  let capacity = possibleSlots;
-  let capacitySource: "shift" | "doctor" | "clinic" = "clinic";
+  let capacity: number;
+  let capacitySource: "shift" | "doctor" | "clinic";
 
   if (shift.maxPatientsPerShift && shift.maxPatientsPerShift > 0) {
     capacity = Math.min(possibleSlots, shift.maxPatientsPerShift);
@@ -498,9 +498,14 @@ export function parseDoctorSchedule(
   }
 
   // If dutyDays was provided, strictly enforce it as the authority on active days:
-  // 1. Clear any shifts on days not included in dutyDays
-  // 2. Ensure each active duty day has at least one shift
-  if (dutyDays.length > 0) {
+  // 1. If explicitly empty array (off-duty), clear all shifts
+  // 2. Clear any shifts on days not included in dutyDays
+  // 3. Ensure each active duty day has at least one shift
+  if (Array.isArray(rawDutyDays) && rawDutyDays.length === 0) {
+    ALL_DAYS_OF_WEEK.forEach((day) => {
+      weeklyShifts[day] = [];
+    });
+  } else if (dutyDays.length > 0) {
     ALL_DAYS_OF_WEEK.forEach((day) => {
       if (!dutyDays.includes(day)) {
         weeklyShifts[day] = [];
@@ -534,7 +539,7 @@ export function serializeDoctorSchedule(
   schedule: DoctorWeeklySchedule,
   dutyDays?: string[]
 ): Record<string, any> {
-  const activeDays = (dutyDays && dutyDays.length > 0)
+  const activeDays = Array.isArray(dutyDays)
     ? dutyDays.map(normalizeDayName).filter(Boolean)
     : ALL_DAYS_OF_WEEK.filter((d) => schedule.weeklyShifts[d] && schedule.weeklyShifts[d].length > 0);
 
@@ -1070,9 +1075,10 @@ export function isDoctorOnDutyOnDay(
     return false;
   }
 
-  // Strict check: If doc.dutyDays is defined and has days, target day must be in dutyDays
+  // Strict check: If doc.dutyDays is defined, target day must be in dutyDays (empty array = off-duty on all days)
   const dutyDays = doc.dutyDays || doc.duty_days;
-  if (Array.isArray(dutyDays) && dutyDays.length > 0) {
+  if (Array.isArray(dutyDays)) {
+    if (dutyDays.length === 0) return false;
     const isDayIncluded = dutyDays.some((d: string) => normalizeDayName(d) === target);
     if (!isDayIncluded) return false;
   }

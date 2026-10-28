@@ -1,5 +1,4 @@
 import { useAuth } from "@/context/AuthContext";
-import { DoctorDutyScheduleView } from "@/components/common/DoctorDutyScheduleCard";
 import { parseAssignedDutySchedule } from "@/lib/doctorDutySchedule";
 import { findCrossClinicDutyConflicts, type ScheduleConflict } from "@/lib/doctorScheduleConflicts";
 import { fetchClinicDoctorRows } from "@/lib/clinicDoctorRoster";
@@ -20,7 +19,6 @@ import {
   AlertTriangle,
   Check,
   ChevronDown,
-  ChevronRight,
   HelpCircle,
   Plus,
   Copy,
@@ -45,6 +43,7 @@ import {
   timeToMinutes,
   minutesToTime,
   formatTime12h,
+  normalizeDayName,
   generateTimeOptionsForClinicHours,
   getEffectiveShiftSettings,
   parseDoctorSchedule,
@@ -222,13 +221,13 @@ function OnDutyDoctorAvatar({ name, photo }: { name: string; photo?: string }) {
         src={resolvedPhoto}
         alt={name}
         onError={() => setImgError(true)}
-        className="w-10.5 h-10.5 rounded-full object-cover border border-pink-100 shadow-2xs shrink-0"
+        className="w-11 h-11 rounded-full object-cover border border-gray-200 shadow-2xs shrink-0"
       />
     );
   }
 
   return (
-    <div className="w-10.5 h-10.5 rounded-full bg-pink-100 text-[#801336] font-bold text-xs flex items-center justify-center border border-pink-200 shrink-0">
+    <div className="w-11 h-11 rounded-full bg-pink-100 text-[#801336] font-bold text-xs flex items-center justify-center border border-pink-200 shrink-0">
       {initials}
     </div>
   );
@@ -272,6 +271,53 @@ function RegisteredDoctorAvatar({ name, photo }: { name: string; photo?: string 
       {initials}
     </div>
   );
+}
+
+/* ── Doctor Shift Retrieval Helper ───────────────────────────────── */
+function getDoctorShiftForDay(
+  doc: { dutyStartTime?: string; dutyEndTime?: string; dutySchedule?: Record<string, any> },
+  day: string
+): { startTime: string; endTime: string } {
+  if (doc.dutySchedule) {
+    let schedule: any = doc.dutySchedule;
+    if (typeof schedule === "string") {
+      try {
+        schedule = JSON.parse(schedule);
+      } catch {
+        schedule = undefined;
+      }
+    }
+    if (schedule) {
+      if (schedule.weeklyShifts) {
+        const shifts = schedule.weeklyShifts[day] || schedule.weeklyShifts[normalizeDayName(day)];
+        if (Array.isArray(shifts) && shifts.length > 0) {
+          return {
+            startTime: shifts[0].startTime || shifts[0].start_time || "08:00",
+            endTime: shifts[shifts.length - 1].endTime || shifts[shifts.length - 1].end_time || "17:00",
+          };
+        }
+      }
+      const direct = schedule[day] || schedule[normalizeDayName(day)];
+      if (direct && typeof direct === "object") {
+        if (Array.isArray(direct) && direct.length > 0) {
+          return {
+            startTime: direct[0].startTime || direct[0].start_time || "08:00",
+            endTime: direct[direct.length - 1].endTime || direct[direct.length - 1].end_time || "17:00",
+          };
+        }
+        if (direct.startTime && direct.endTime) {
+          return {
+            startTime: direct.startTime,
+            endTime: direct.endTime,
+          };
+        }
+      }
+    }
+  }
+  return {
+    startTime: doc.dutyStartTime || "08:00",
+    endTime: doc.dutyEndTime || "17:00",
+  };
 }
 
 /* ── Modern Time Select Component ─────────────────────────────────── */
@@ -599,6 +645,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
     doctorName: string;
     daysCount: number;
     shiftsCount: number;
+    isOffDuty?: boolean;
   } | null>(null);
 
   // Cross-clinic schedule collision detection state
@@ -630,6 +677,25 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
 
   const [showInstructionsModal, setShowInstructionsModal] = useState(false);
   const [selectedDoctorForDetails, setSelectedDoctorForDetails] = useState<DoctorAccount | null>(null);
+
+  const detailDutyDays = useMemo(() => {
+    if (!selectedDoctorForDetails) return [];
+    let days: string[] = [];
+    if (Array.isArray(selectedDoctorForDetails.dutyDays) && selectedDoctorForDetails.dutyDays.length > 0) {
+      days = selectedDoctorForDetails.dutyDays;
+    } else if (selectedDoctorForDetails.dutySchedule) {
+      const s = selectedDoctorForDetails.dutySchedule;
+      if (s.weeklyShifts && typeof s.weeklyShifts === "object") {
+        days = Object.keys(s.weeklyShifts).filter((k) => Array.isArray(s.weeklyShifts[k]) && s.weeklyShifts[k].length > 0);
+      } else if (typeof s === "object") {
+        days = Object.keys(s).filter((k) => ALL_DAYS_OF_WEEK.includes(k as any) || ALL_DAYS_OF_WEEK.includes(normalizeDayName(k) as any));
+      }
+    }
+    return days
+      .map(normalizeDayName)
+      .filter((d): d is typeof ALL_DAYS_OF_WEEK[number] => ALL_DAYS_OF_WEEK.includes(d as any))
+      .sort((a, b) => ALL_DAYS_OF_WEEK.indexOf(a) - ALL_DAYS_OF_WEEK.indexOf(b));
+  }, [selectedDoctorForDetails]);
   const [statusConfirmDoctor, setStatusConfirmDoctor] = useState<DoctorAccount | null>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -1327,7 +1393,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
     } finally {
       if (requestId === doctorRequestRef.current) setLoadingDoctors(false);
     }
-  }, [clinicId, clinicDisplayName, user?.id, rosterCacheKey]);
+  }, [clinicId, clinicDisplayName, user, rosterCacheKey]);
 
   useEffect(() => {
     fetchSpecializations();
@@ -1544,7 +1610,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
           contact_number: doctorContact,
           photo_url: uploadedPhotoUrl || null,
           duty_days: [],
-            duty_schedule: null,
+          duty_schedule: null,
           duty_start_time: null,
           duty_end_time: null,
         };
@@ -1814,8 +1880,8 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
       }) || { weeklyShifts: {} };
 
       const activeDays = ALL_DAYS_OF_WEEK.filter(
-          (day) => parsed.weeklyShifts[day] && parsed.weeklyShifts[day].length > 0
-        );
+        (day) => parsed.weeklyShifts[day] && parsed.weeklyShifts[day].length > 0
+      );
 
       const finalDays = activeDays;
 
@@ -1834,13 +1900,15 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
       setScheduleError("Please select a registered doctor and clinic first.");
       return;
     }
-    if (scheduleForm.dutyDays.length === 0) {
-      setScheduleError("Please select at least one weekly duty day.");
-      return;
-    }
+
+    const isScheduleEmpty =
+      scheduleForm.dutyDays.length === 0 ||
+      scheduleForm.dutyDays.every(
+        (day) => !scheduleForm.weeklyShifts[day] || scheduleForm.weeklyShifts[day].length === 0
+      );
 
     // Pre-save conflict validation: Block saving if hours conflict with another clinic
-    if (scheduleConflicts.length > 0) {
+    if (!isScheduleEmpty && scheduleConflicts.length > 0) {
       const first = scheduleConflicts[0];
       setScheduleError(
         `Doctor is not available: ${first.doctorName} is already on duty at ${first.otherClinicName} on ${first.day} from ${first.otherStartTime} to ${first.otherEndTime}. Please select non-overlapping hours.`
@@ -1854,24 +1922,29 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
       normalizedWeeklyShifts[d] = [];
     });
 
-    for (const day of scheduleForm.dutyDays) {
-      const shifts = scheduleForm.weeklyShifts[day] || [];
-      if (!shifts.length) {
-        setScheduleError(`Please add a shift for ${day} or turn off that duty day.`);
-        return;
-      }
+    const finalDutyDays: string[] = isScheduleEmpty ? [] : [...scheduleForm.dutyDays];
 
-      const errors = validateDoctorShifts(shifts, day, clinicOpenTime, clinicCloseTime, clinicOperatingDays);
-      if (errors.length > 0) {
-        setScheduleError(errors[0].message);
-        return;
+    if (!isScheduleEmpty) {
+      for (const day of scheduleForm.dutyDays) {
+        const shifts = scheduleForm.weeklyShifts[day] || [];
+        if (!shifts.length) {
+          setScheduleError(`Please add a shift for ${day} or turn off that duty day.`);
+          return;
+        }
+
+        const errors = validateDoctorShifts(shifts, day, clinicOpenTime, clinicCloseTime, clinicOperatingDays);
+        if (errors.length > 0) {
+          setScheduleError(errors[0].message);
+          return;
+        }
+        normalizedWeeklyShifts[day] = shifts;
       }
-      normalizedWeeklyShifts[day] = shifts;
     }
 
     // Sync form state with normalized shifts
     setScheduleForm((prev) => ({
       ...prev,
+      dutyDays: finalDutyDays,
       weeklyShifts: normalizedWeeklyShifts,
     }));
 
@@ -1880,45 +1953,46 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
     setScheduleSavedFeedback(null);
 
     try {
-      // Recheck authorized assignments immediately before saving. The RPC
-      // excludes the current affiliation; the validator also excludes it.
-      const { data: freshOtherShifts, error: shiftsError } = await supabase.rpc("get_owned_doctor_other_shifts", {
-        target_doctor_id: selectedDoctor.id,
-      });
-      if (shiftsError) throw new Error("Could not verify cross-clinic duty conflicts. Please try again.");
-      const freshConflicts = findCrossClinicDutyConflicts(freshOtherShifts || [], {
-        doctorId: selectedDoctor.id,
-        clinicId: clinicId || "",
-        doctorName: selectedDoctor.name,
-        days: scheduleForm.dutyDays,
-        weeklyShifts: normalizedWeeklyShifts,
-      });
-      if (freshConflicts.length) throw new Error(freshConflicts[0].message);
+      if (!isScheduleEmpty) {
+        // Recheck authorized assignments immediately before saving. The RPC
+        // excludes the current affiliation; the validator also excludes it.
+        const { data: freshOtherShifts, error: shiftsError } = await supabase.rpc("get_owned_doctor_other_shifts", {
+          target_doctor_id: selectedDoctor.id,
+        });
+        if (shiftsError) throw new Error("Could not verify cross-clinic duty conflicts. Please try again.");
+        const freshConflicts = findCrossClinicDutyConflicts(freshOtherShifts || [], {
+          doctorId: selectedDoctor.id,
+          clinicId: clinicId || "",
+          doctorName: selectedDoctor.name,
+          days: finalDutyDays,
+          weeklyShifts: normalizedWeeklyShifts,
+        });
+        if (freshConflicts.length) throw new Error(freshConflicts[0].message);
+      }
 
       const serializedSchedule = serializeDoctorSchedule(
         {
           weeklyShifts: normalizedWeeklyShifts,
           slotIntervalMinutes: scheduleForm.doctorSlotInterval ?? undefined,
-          isCustomSchedule: true,
+          isCustomSchedule: !isScheduleEmpty,
         },
-        scheduleForm.dutyDays
+        finalDutyDays
       );
 
       // Compute primary start/end time fallback from the first active day
-      const firstActiveDay = scheduleForm.dutyDays[0];
-      const firstShifts = normalizedWeeklyShifts[firstActiveDay] || [];
-      const primaryStart = firstShifts[0]?.startTime || clinicOpenTime || "08:00";
-      const primaryEnd =
-        firstShifts[firstShifts.length - 1]?.endTime || clinicCloseTime || "17:00";
+      const firstActiveDay = finalDutyDays[0];
+      const firstShifts = firstActiveDay ? (normalizedWeeklyShifts[firstActiveDay] || []) : [];
+      const primaryStart = isScheduleEmpty ? null : (firstShifts[0]?.startTime || clinicOpenTime || "08:00");
+      const primaryEnd = isScheduleEmpty ? null : (firstShifts[firstShifts.length - 1]?.endTime || clinicCloseTime || "17:00");
 
       const effectiveInterval =
         scheduleForm.doctorSlotInterval || clinicDefaultInterval;
 
       const updatedDoctor: DoctorAccount = {
         ...selectedDoctor,
-        dutyDays: [...scheduleForm.dutyDays],
-        dutyStartTime: primaryStart,
-        dutyEndTime: primaryEnd,
+        dutyDays: [...finalDutyDays],
+        dutyStartTime: primaryStart || "",
+        dutyEndTime: primaryEnd || "",
         dutySchedule: serializedSchedule,
         slotIntervalMinutes: effectiveInterval,
       };
@@ -1926,8 +2000,8 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
       // Persist to Supabase clinic_doctor table
       const updatePayload: Record<string, unknown> = {
         duty_days: updatedDoctor.dutyDays,
-        duty_start_time: updatedDoctor.dutyStartTime,
-        duty_end_time: updatedDoctor.dutyEndTime,
+        duty_start_time: isScheduleEmpty ? null : primaryStart,
+        duty_end_time: isScheduleEmpty ? null : primaryEnd,
         duty_schedule: serializedSchedule,
       };
 
@@ -1957,10 +2031,15 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
         doctorName: updatedDoctor.name,
         daysCount: updatedDoctor.dutyDays.length,
         shiftsCount: totalConfiguredShifts,
+        isOffDuty: isScheduleEmpty,
       });
       setTimeout(() => setScheduleSavedFeedback(null), 5000);
 
-      setSuccessMsg(`Duty schedule and shifts for ${updatedDoctor.name} updated successfully.`);
+      if (isScheduleEmpty) {
+        setSuccessMsg("Doctor's schedule saved. Doctor is now off duty.");
+      } else {
+        setSuccessMsg(`Duty schedule and shifts for ${updatedDoctor.name} updated successfully.`);
+      }
       setTimeout(() => setSuccessMsg(""), 4500);
 
       logAuditEvent({
@@ -1968,12 +2047,15 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
         category: "Clinic",
         action: "Doctor Schedule Updated",
         target: `Dr. ${updatedDoctor.name}`,
-        details: `Updated duty schedule for Dr. ${updatedDoctor.name}: ${updatedDoctor.dutyDays.join(", ")} (${totalConfiguredShifts} shifts).`,
+        details: isScheduleEmpty
+          ? `Updated duty schedule for Dr. ${updatedDoctor.name}: Doctor is now Off Duty (0 duty days, 0 shifts).`
+          : `Updated duty schedule for Dr. ${updatedDoctor.name}: ${updatedDoctor.dutyDays.join(", ")} (${totalConfiguredShifts} shifts).`,
         metadata: {
           doctorName: updatedDoctor.name,
           doctorId: updatedDoctor.id,
           dutyDays: updatedDoctor.dutyDays,
           shiftsCount: totalConfiguredShifts,
+          isOffDuty: isScheduleEmpty,
         },
       }).catch(() => { });
     } catch (err: unknown) {
@@ -2362,111 +2444,100 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
           /* ══════════════════════════════════════════════════════════
              DOCTOR DASHBOARD & ROSTER
              ══════════════════════════════════════════════════════════ */
-          <div className="space-y-6">
-            {/* 1. On Duty Today Card (UPDATED UI) */}
-            <div className="bg-white rounded-2xl border border-gray-200/70 p-5 sm:p-6 shadow-xs text-left">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-bold text-gray-900 tracking-tight">On Duty Today</h2>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    Scheduled to work today, {formattedTodayDate}.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab("schedule");
-                  }}
-                  className="text-xs font-semibold text-[#801336] hover:text-[#5a0c24] cursor-pointer inline-flex items-center gap-1 transition-colors"
-                >
-                  <span>View all schedules</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {loadingDoctors ? (
-                <div className="py-8 text-center">
-                  <Loader2 className="w-5 h-5 text-[#801336] animate-spin mx-auto mb-2" />
-                  <p className="text-xs text-gray-400">Checking scheduled doctors...</p>
-                </div>
-              ) : onDutyDoctors.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center bg-gray-50/50 mt-4">
-                  <div className="w-9 h-9 rounded-full bg-pink-50 border border-pink-100 flex items-center justify-center mx-auto mb-2">
-                    <Stethoscope className="w-4 h-4 text-[#801336]" />
+          <div className="flex flex-col lg:flex-row gap-6 items-start">
+            {/* 1. On Duty Today Card (Left Side) */}
+            <div className="w-full lg:w-[360px] xl:w-[380px] shrink-0">
+              <div className="bg-white rounded-2xl border border-gray-200/80 p-4 sm:p-5 shadow-xs text-left">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base sm:text-lg font-bold text-gray-900 tracking-tight">On Duty Today</h2>
+                      <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-bold bg-pink-100 text-pink-700">
+                        {onDutyDoctors.length}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Scheduled to work today, {formattedTodayDate}.
+                    </p>
                   </div>
-                  <p className="text-sm font-bold text-gray-800">No Doctors on Duty Today ({todayDayName})</p>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    No attending dermatologists are currently on duty or scheduled for further consultation today.
-                  </p>
                 </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fill,minmax(270px,330px))] gap-4 mt-4">
-                  {onDutyDoctors.map((item) => (
-                    <div
-                      key={item.doctor.id}
-                      className="relative overflow-hidden rounded-2xl border border-pink-100 bg-linear-to-bl from-pink-100/60 via-pink-50/30 to-white p-4 flex flex-col justify-between text-left shadow-[0_8px_22px_-12px_rgba(128,19,54,0.22)] hover:border-pink-200 hover:shadow-[0_10px_26px_-12px_rgba(128,19,54,0.30)] transition-all w-full max-w-82.5"
-                    >
-                      {/* Left accent bar */}
-                      <span className="absolute left-0 top-3.5 bottom-3.5 w-1 rounded-r-full bg-linear-to-b from-[#b0245f] to-[#801336]" />
 
-                      <div>
-                        {/* Top row: avatar + name/specialty + On Duty pill */}
-                        <div className="flex items-start justify-between gap-2.5">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div
-                              className="relative shrink-0 cursor-pointer"
-                              onClick={() => setSelectedDoctorForDetails(item.doctor)}
-                              title="Click to view doctor details"
-                            >
-                              <div className="p-0.5 rounded-full bg-white ring-2 ring-[#b0245f]">
+                {loadingDoctors ? (
+                  <div className="py-8 text-center">
+                    <Loader2 className="w-5 h-5 text-[#801336] animate-spin mx-auto mb-2" />
+                    <p className="text-xs text-gray-400">Checking scheduled doctors...</p>
+                  </div>
+                ) : onDutyDoctors.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center bg-gray-50/50 mt-4">
+                    <div className="w-9 h-9 rounded-full bg-pink-50 border border-pink-100 flex items-center justify-center mx-auto mb-2">
+                      <Stethoscope className="w-4 h-4 text-[#801336]" />
+                    </div>
+                    <p className="text-sm font-bold text-gray-800">No Doctors on Duty Today ({todayDayName})</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      No attending dermatologists are currently on duty or scheduled today.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3.5 mt-4">
+                    {onDutyDoctors.map((item) => (
+                      <div
+                        key={item.doctor.id}
+                        className="bg-white rounded-2xl border border-gray-200 p-4 flex flex-col justify-between text-left shadow-2xs hover:shadow-xs transition-all w-full"
+                      >
+                        <div>
+                          {/* Top row: avatar + name/specialty + On duty pill */}
+                          <div className="flex items-start justify-between gap-2.5">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div
+                                className="relative shrink-0 cursor-pointer"
+                                onClick={() => setSelectedDoctorForDetails(item.doctor)}
+                                title="Click to view doctor details"
+                              >
                                 <OnDutyDoctorAvatar
                                   name={item.displayName}
                                   photo={item.doctor.photo}
                                 />
+                                <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white" />
+                              </div>
+
+                              <div className="min-w-0 flex-1">
+                                <h3
+                                  className="font-bold text-sm text-gray-900 truncate hover:text-[#801336] transition-colors cursor-pointer"
+                                  title={item.displayName}
+                                  onClick={() => setSelectedDoctorForDetails(item.doctor)}
+                                >
+                                  {item.displayName}
+                                </h3>
+                                <p className="text-xs text-gray-500 truncate mt-0.5">
+                                  {item.primarySpec}
+                                </p>
                               </div>
                             </div>
 
-                            <div className="min-w-0 flex-1">
-                              <h3
-                                className="font-bold text-sm text-gray-900 truncate hover:text-[#801336] transition-colors cursor-pointer"
-                                title={item.displayName}
-                                onClick={() => setSelectedDoctorForDetails(item.doctor)}
-                              >
-                                {item.displayName}
-                              </h3>
-                              <div className="flex items-center gap-1 text-[11px] text-gray-500 truncate mt-0.5">
-                                <Stethoscope className="w-3 h-3 text-gray-400 shrink-0" />
-                                <span className="truncate">{item.primarySpec}</span>
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-[#eafbf0] text-[#16a34a] border border-[#d2f6df] shrink-0">
+                              On duty
+                            </span>
+                          </div>
+
+                          {/* Duty hours box with clock, Today label and shift progress */}
+                          <div className="bg-[#fcfcfd] rounded-xl border border-gray-100 p-2.5 sm:p-3 mt-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Clock className="w-4 h-4 text-[#801336] shrink-0" />
+                                <span
+                                  className="font-bold text-xs sm:text-[13px] text-gray-900 truncate"
+                                  title={item.hoursDisplay}
+                                >
+                                  {item.hoursDisplay}
+                                </span>
                               </div>
-                            </div>
-                          </div>
-
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 shrink-0">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            On Duty
-                          </span>
-                        </div>
-
-                        {/* Duty hours box with clock tile, Today pill and shift progress */}
-                        <div className="bg-white/90 rounded-xl border border-pink-100/80 px-3 py-2.5 mt-3 flex items-center gap-2.5 shadow-2xs">
-                          <div className="w-8 h-8 rounded-lg bg-pink-100/70 flex items-center justify-center shrink-0">
-                            <Clock className="w-4 h-4 text-[#801336]" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center justify-between gap-1.5">
-                              <span
-                                className="font-semibold text-xs sm:text-[13px] text-gray-900 truncate"
-                                title={item.hoursDisplay}
-                              >
-                                {item.hoursDisplay}
-                              </span>
-                              <span className="text-[10px] font-semibold text-[#801336] bg-pink-100/80 px-2 py-0.5 rounded-full shrink-0">
+                              <span className="text-xs font-medium text-gray-500 shrink-0">
                                 Today
                               </span>
                             </div>
+
                             <div
-                              className="w-full bg-pink-100/70 rounded-full h-1 mt-1.5 overflow-hidden"
+                              className="w-full bg-gray-100 rounded-full h-1.5 mt-2.5 overflow-hidden"
                               role="progressbar"
                               aria-label={`${item.displayName} shift progress`}
                               aria-valuemin={0}
@@ -2474,229 +2545,221 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                               aria-valuenow={item.shiftProgress || 35}
                             >
                               <div
-                                className="h-full rounded-full bg-linear-to-r from-[#b0245f] to-[#801336] transition-all"
+                                className="h-full rounded-full bg-[#801336] transition-all"
                                 style={{ width: `${item.shiftProgress || 35}%` }}
                               />
                             </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Actions */}
-                      <div className="grid grid-cols-2 gap-2 mt-3 pt-0.5">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedDoctorForDetails(item.doctor)}
-                          className="h-9 w-full px-2 rounded-xl text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 border border-gray-200 transition-colors cursor-pointer shadow-2xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                        >
-                          <Eye className="w-3.5 h-3.5 text-gray-600 shrink-0" />
-                          <span>View details</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedDoctorId(item.doctor.id);
-                            setActiveTab("schedule");
-                          }}
-                          className="h-9 w-full px-2 rounded-xl text-xs font-semibold text-white bg-linear-to-r from-[#801336] to-[#a3246b] hover:from-[#6c0f2d] hover:to-[#8f1d5c] transition-all cursor-pointer shadow-[0_6px_14px_-6px_rgba(128,19,54,0.5)] inline-flex items-center justify-center gap-1 whitespace-nowrap"
-                        >
-                          <span>Set duty hours</span>
-                          <span className="text-white/90 font-bold ml-0.5">›</span>
-                        </button>
+                        {/* Actions */}
+                        <div className="grid grid-cols-2 gap-2 mt-3.5">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedDoctorForDetails(item.doctor)}
+                            className="h-9 w-full px-2 rounded-xl text-xs font-semibold text-gray-800 bg-white hover:bg-gray-50 border border-gray-200 transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                            <span>View details</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedDoctorId(item.doctor.id);
+                              setActiveTab("schedule");
+                            }}
+                            className="h-9 w-full px-2 rounded-xl text-xs font-semibold text-[#801336] bg-white hover:bg-pink-50/50 border border-pink-200 transition-colors cursor-pointer inline-flex items-center justify-center"
+                          >
+                            <span>Set duty hours</span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* 2. All Registered Doctors Card */}
-            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs text-left">
-              <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base font-bold text-gray-900">All Registered Doctors</h2>
-                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-pink-100 text-[#801336]">
-                      {allDoctors.length}
-                    </span>
+            {/* 2. All Registered Doctors Card (Right Side, wider container) */}
+            <div className="w-full lg:flex-1 min-w-0">
+              <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs text-left">
+                <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-bold text-gray-900">All Registered Doctors</h2>
+                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-pink-100 text-[#801336]">
+                        {allDoctors.length}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {doctorsError && (
-                <div role="alert" className="mt-3 text-sm text-red-600">
-                  {doctorsError} <button type="button" onClick={() => void fetchDoctors()} className="underline">Retry</button>
-                </div>
-              )}
-              {/* Search & Filter Controls */}
-              <div className="flex items-center gap-3 mt-4">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={doctorSearchQuery}
-                    onChange={(e) => setDoctorSearchQuery(e.target.value)}
-                    placeholder="Search name or specialty..."
-                    className="w-full pl-9 pr-7 py-2 rounded-lg border border-gray-200 text-xs text-gray-800 placeholder-gray-400 focus:outline-none focus:border-[#801336] transition-all bg-white"
-                  />
-                  {doctorSearchQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setDoctorSearchQuery("")}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                <div className="relative shrink-0">
-                  <select
-                    value={selectedSpecialtyFilter}
-                    onChange={(e) => setSelectedSpecialtyFilter(e.target.value)}
-                    className="appearance-none bg-white border border-gray-200 rounded-lg pl-3 pr-8 py-2 text-xs font-medium text-gray-700 focus:outline-none focus:border-[#801336] cursor-pointer shadow-2xs"
-                  >
-                    <option value="All Specialties">All Specialties</option>
-                    {availableSpecialtyOptions.map((spec) => (
-                      <option key={spec} value={spec}>
-                        {spec}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                </div>
-              </div>
-
-              {/* Doctors List */}
-              {loadingDoctors ? (
-                <div className="py-12 text-center">
-                  <Loader2 className="w-6 h-6 text-[#801336] animate-spin mx-auto mb-2" />
-                  <p className="text-xs text-gray-400">Loading registered doctors...</p>
-                </div>
-              ) : filteredRegisteredDoctors.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center bg-gray-50/50 mt-4">
-                  <Users className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                  <p className="text-sm font-bold text-gray-800">
-                    {allDoctors.length === 0 ? "No Doctors Registered" : "No Matching Doctors Found"}
-                  </p>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    {allDoctors.length === 0
-                      ? "Use the form on the right to register your clinic's attending dermatologists."
-                      : "Try adjusting your search query or specialty filter."}
-                  </p>
-                  {(doctorSearchQuery || selectedSpecialtyFilter !== "All Specialties") && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDoctorSearchQuery("");
-                        setSelectedSpecialtyFilter("All Specialties");
-                      }}
-                      className="mt-3 px-3 py-1.5 rounded-lg text-xs font-semibold text-[#801336] bg-pink-50 hover:bg-pink-100 border border-pink-200 transition-colors cursor-pointer inline-flex items-center gap-1"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                      <span>Clear Filters</span>
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="divide-y divide-gray-100 mt-4">
-                  {filteredRegisteredDoctors.map((doc) => {
-                    const cleanDocName = doc.name.trim();
-                    const displayName = cleanDocName.startsWith("Dr.") ? cleanDocName : `Dr. ${cleanDocName}`;
-
-                    return (
-                      <div
-                        key={doc.id}
-                        className="py-4.5 first:pt-2 last:pb-0 flex flex-col sm:flex-row sm:items-start justify-between gap-4 text-left"
+                {doctorsError && (
+                  <div role="alert" className="mt-3 text-sm text-red-600">
+                    {doctorsError} <button type="button" onClick={() => void fetchDoctors()} className="underline">Retry</button>
+                  </div>
+                )}
+                {/* Search & Filter Controls */}
+                <div className="flex items-center gap-3 mt-4">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={doctorSearchQuery}
+                      onChange={(e) => setDoctorSearchQuery(e.target.value)}
+                      placeholder="Search name or specialty..."
+                      className="w-full pl-9 pr-7 py-2 rounded-lg border border-gray-200 text-xs text-gray-800 placeholder-gray-400 focus:outline-none focus:border-[#801336] transition-all bg-white"
+                    />
+                    {doctorSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setDoctorSearchQuery("")}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer"
                       >
-                        <div className="flex items-start gap-3.5 min-w-0 flex-1">
-                          <RegisteredDoctorAvatar name={doc.name} photo={doc.photo} />
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
 
-                          <div className="min-w-0 flex-1 space-y-1">
-                            {/* Name & PRC */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h3
-                                className="font-bold text-gray-900 text-sm hover:text-[#801336] transition-colors cursor-pointer"
-                                onClick={() => setSelectedDoctorForDetails(doc)}
-                              >
-                                {displayName}
-                              </h3>
-                              <span className="text-xs text-gray-400 font-normal">
-                                PRC: {doc.prcLicense ? (doc.prcLicense.startsWith("#") ? doc.prcLicense : `#${doc.prcLicense}`) : "#Pending"}
-                              </span>
-                            </div>
+                  <div className="relative shrink-0">
+                    <select
+                      value={selectedSpecialtyFilter}
+                      onChange={(e) => setSelectedSpecialtyFilter(e.target.value)}
+                      className="appearance-none bg-white border border-gray-200 rounded-lg pl-3 pr-8 py-2 text-xs font-medium text-gray-700 focus:outline-none focus:border-[#801336] cursor-pointer shadow-2xs"
+                    >
+                      <option value="All Specialties">All Specialties</option>
+                      {availableSpecialtyOptions.map((spec) => (
+                        <option key={spec} value={spec}>
+                          {spec}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  </div>
+                </div>
 
-                            {/* Email & Phone */}
-                            <p className="text-xs text-gray-500">
-                              {doc.email}
-                              {doc.contactNumber ? (
-                                <>
-                                  <span className="mx-1.5 text-gray-300">•</span>
-                                  <span>{doc.contactNumber}</span>
-                                </>
-                              ) : null}
-                            </p>
+                {/* Doctors List */}
+                {loadingDoctors ? (
+                  <div className="py-12 text-center">
+                    <Loader2 className="w-6 h-6 text-[#801336] animate-spin mx-auto mb-2" />
+                    <p className="text-xs text-gray-400">Loading registered doctors...</p>
+                  </div>
+                ) : filteredRegisteredDoctors.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center bg-gray-50/50 mt-4">
+                    <Users className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                    <p className="text-sm font-bold text-gray-800">
+                      {allDoctors.length === 0 ? "No Doctors Registered" : "No Matching Doctors Found"}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {allDoctors.length === 0
+                        ? "Use the form on the right to register your clinic's attending dermatologists."
+                        : "Try adjusting your search query or specialty filter."}
+                    </p>
+                    {(doctorSearchQuery || selectedSpecialtyFilter !== "All Specialties") && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDoctorSearchQuery("");
+                          setSelectedSpecialtyFilter("All Specialties");
+                        }}
+                        className="mt-3 px-3 py-1.5 rounded-lg text-xs font-semibold text-[#801336] bg-pink-50 hover:bg-pink-100 border border-pink-200 transition-colors cursor-pointer inline-flex items-center gap-1"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Clear Filters</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="divide-y divide-gray-100 mt-4">
+                    {filteredRegisteredDoctors.map((doc) => {
+                      const cleanDocName = doc.name.trim();
+                      const displayName = cleanDocName.startsWith("Dr.") ? cleanDocName : `Dr. ${cleanDocName}`;
 
-                            {/* Specialization pills */}
-                            <div className="flex flex-wrap gap-1.5 pt-0.5">
-                              {doc.specializations && doc.specializations.length > 0 ? (
-                                doc.specializations.map((spec) => (
-                                  <span
-                                    key={spec.id}
-                                    className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-pink-50 text-[#801336] border border-pink-100 font-medium"
-                                  >
-                                    {spec.name}
-                                  </span>
-                                ))
-                              ) : doc.specialization ? (
-                                doc.specialization.split(",").map((s, idx) => (
-                                  <span
-                                    key={idx}
-                                    className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-pink-50 text-[#801336] border border-pink-100 font-medium"
-                                  >
-                                    {s.trim()}
-                                  </span>
-                                ))
-                              ) : (
-                                <span className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-pink-50 text-[#801336] border border-pink-100 font-medium">
-                                  General Dermatology
+                      return (
+                        <div
+                          key={doc.id}
+                          className="py-4.5 first:pt-2 last:pb-0 flex flex-col sm:flex-row sm:items-start justify-between gap-4 text-left"
+                        >
+                          <div className="flex items-start gap-3.5 min-w-0 flex-1">
+                            <RegisteredDoctorAvatar name={doc.name} photo={doc.photo} />
+
+                            <div className="min-w-0 flex-1 space-y-1">
+                              {/* Name & PRC */}
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3
+                                  className="font-bold text-gray-900 text-sm hover:text-[#801336] transition-colors cursor-pointer"
+                                  onClick={() => setSelectedDoctorForDetails(doc)}
+                                >
+                                  {displayName}
+                                </h3>
+                                <span className="text-xs text-gray-400 font-normal">
+                                  PRC: {doc.prcLicense ? (doc.prcLicense.startsWith("#") ? doc.prcLicense : `#${doc.prcLicense}`) : "#Pending"}
                                 </span>
-                              )}
+                              </div>
+
+                              {/* Email & Phone */}
+                              <p className="text-xs text-gray-500">
+                                {doc.email}
+                                {doc.contactNumber ? (
+                                  <>
+                                    <span className="mx-1.5 text-gray-300">•</span>
+                                    <span>{doc.contactNumber}</span>
+                                  </>
+                                ) : null}
+                              </p>
+
+                              {/* Specialization pills */}
+                              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                                {doc.specializations && doc.specializations.length > 0 ? (
+                                  doc.specializations.map((spec) => (
+                                    <span
+                                      key={spec.id}
+                                      className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-pink-50 text-[#801336] border border-pink-100 font-medium"
+                                    >
+                                      {spec.name}
+                                    </span>
+                                  ))
+                                ) : doc.specialization ? (
+                                  doc.specialization.split(",").map((s, idx) => (
+                                    <span
+                                      key={idx}
+                                      className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-pink-50 text-[#801336] border border-pink-100 font-medium"
+                                    >
+                                      {s.trim()}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-pink-50 text-[#801336] border border-pink-100 font-medium">
+                                    General Dermatology
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        {/* Action buttons */}
-                        <div className="flex items-center gap-2 shrink-0 self-start pt-1">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditDoctor(doc)}
-                            className="px-3.5 py-1.5 rounded-lg bg-[#801336] hover:bg-[#6c0f2d] text-white text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
-                          >
-                            Edit profile
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSelectedDoctorForDetails(doc)}
-                            className="px-3.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors cursor-pointer shadow-2xs"
-                          >
-                            Details
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDeleteTarget(doc.id)}
-                            className="px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-medium transition-colors cursor-pointer shadow-2xs inline-flex items-center gap-1"
-                            title="Remove doctor"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">Remove</span>
-                          </button>
+                          {/* Action buttons */}
+                          <div className="flex items-center gap-2 shrink-0 self-start pt-1">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditDoctor(doc)}
+                              className="px-3.5 py-1.5 rounded-lg bg-[#801336] hover:bg-[#6c0f2d] text-white text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
+                            >
+                              Edit profile
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedDoctorForDetails(doc)}
+                              className="px-3.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors cursor-pointer shadow-2xs"
+                            >
+                              Details
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         ) : (
@@ -2853,7 +2916,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                       onClick={() => setExpandedDays([])}
                       className="text-xs font-semibold text-gray-500 hover:text-gray-700 hover:underline cursor-pointer ml-2"
                     >
-                      Collapse all
+                      Close all
                     </button>
                   </div>
 
@@ -2898,11 +2961,10 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                       return (
                         <div
                           key={day}
-                          className={`rounded-2xl border transition-all overflow-hidden ${
-                            isExpanded && isDuty
-                              ? "bg-white border-pink-200 ring-2 ring-pink-500/10 shadow-xs"
-                              : "bg-white border-gray-200/80 shadow-2xs hover:border-gray-300"
-                          }`}
+                          className={`rounded-2xl border transition-all overflow-hidden ${isExpanded && isDuty
+                            ? "bg-white border-pink-200 ring-2 ring-pink-500/10 shadow-xs"
+                            : "bg-white border-gray-200/80 shadow-2xs hover:border-gray-300"
+                            }`}
                         >
                           {/* Day Card Header */}
                           <div
@@ -2924,11 +2986,10 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                                     setExpandedDays((prev) => [...prev, day]);
                                   }
                                 }}
-                                className={`relative flex items-center justify-center shrink-0 cursor-pointer rounded-full transition-all duration-200 focus:outline-none ${
-                                  isDuty
-                                    ? "w-5.5 h-5.5 bg-[#801336] text-white ring-2 ring-pink-100 shadow-2xs"
-                                    : "w-5.5 h-5.5 bg-white border-[1.5px] border-gray-300 hover:border-gray-400"
-                                }`}
+                                className={`relative flex items-center justify-center shrink-0 cursor-pointer rounded-full transition-all duration-200 focus:outline-none ${isDuty
+                                  ? "w-5.5 h-5.5 bg-[#801336] text-white ring-2 ring-pink-100 shadow-2xs"
+                                  : "w-5.5 h-5.5 bg-white border-[1.5px] border-gray-300 hover:border-gray-400"
+                                  }`}
                                 title={isDuty ? `Disable ${day}` : `Enable ${day}`}
                               >
                                 {isDuty && (
@@ -2986,9 +3047,8 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                                 </div>
                               )}
                               <ChevronDown
-                                className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
-                                  isExpanded ? "rotate-180 text-[#801336]" : ""
-                                }`}
+                                className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${isExpanded ? "rotate-180 text-[#801336]" : ""
+                                  }`}
                               />
                             </div>
                           </div>
@@ -3018,18 +3078,18 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                                   <button
                                     type="button"
                                     onClick={() => addShiftToDay(day)}
-                                    className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold text-[#801336] bg-white hover:bg-pink-50 border border-pink-200 transition-colors cursor-pointer"
+                                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold text-[#801336] bg-white hover:bg-pink-50/80 border border-pink-200 shadow-2xs transition-colors cursor-pointer"
                                   >
                                     <Plus className="w-3.5 h-3.5" />
-                                    <span>+ Add shift</span>
+                                    <span>Add shift</span>
                                   </button>
                                 </div>
                               </div>
 
                               {/* Shifts List */}
                               {shifts.length === 0 ? (
-                                <div className="p-4 rounded-xl bg-gray-50 border border-dashed border-gray-200 text-center text-xs text-gray-400">
-                                  No shifts configured for {day}. Click "+ Add shift" above to add duty hours.
+                                <div className="p-4 rounded-xl bg-gray-50/80 border border-dashed border-gray-200 text-center text-xs text-gray-500">
+                                  No shifts configured for {day}. Click &ldquo;Add shift&rdquo; above to add duty hours.
                                 </div>
                               ) : (
                                 <div className="space-y-3">
@@ -3302,11 +3362,10 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                       return (
                         <span
                           key={idx}
-                          className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs transition-all ${
-                            isActive
-                              ? "bg-white text-[#801336] shadow-2xs font-extrabold"
-                              : "bg-white/20 text-white/70 font-semibold"
-                          }`}
+                          className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs transition-all ${isActive
+                            ? "bg-white text-[#801336] shadow-2xs font-extrabold"
+                            : "bg-white/20 text-white/70 font-semibold"
+                            }`}
                           title={`${day}: ${isActive ? "Active on duty" : "Off"}`}
                         >
                           {initial}
@@ -3332,11 +3391,10 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                           Doctor's default
                         </label>
                         <span
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                            scheduleForm.doctorSlotInterval === null
-                              ? "bg-gray-100 text-gray-600 border-gray-200"
-                              : "bg-sky-50 text-sky-700 border-sky-200"
-                          }`}
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${scheduleForm.doctorSlotInterval === null
+                            ? "bg-gray-100 text-gray-600 border-gray-200"
+                            : "bg-sky-50 text-sky-700 border-sky-200"
+                            }`}
                         >
                           {scheduleForm.doctorSlotInterval === null
                             ? `Using clinic default`
@@ -3485,7 +3543,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
             {/* Bottom Actions: Save & Reset */}
             <div className="bg-white rounded-2xl border border-gray-200/80 p-4 shadow-xs">
               {/* Conflict Action Block Notice */}
-              {scheduleConflicts.length > 0 && (
+              {scheduleForm.dutyDays.length > 0 && scheduleConflicts.length > 0 && (
                 <div className="mb-3 flex items-start gap-2.5 text-xs font-semibold text-red-800 bg-red-50 border border-red-200 rounded-xl px-4 py-3 shadow-2xs">
                   <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                   <div>
@@ -3499,7 +3557,15 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                 <div className="mb-3 flex items-center gap-2.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-300 rounded-xl px-4 py-3 shadow-xs">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span>
-                    Duty schedule successfully saved for <strong>{scheduleSavedFeedback.doctorName}</strong> ({scheduleSavedFeedback.daysCount} active days, {scheduleSavedFeedback.shiftsCount} shift{scheduleSavedFeedback.shiftsCount > 1 ? "s" : ""} configured).
+                    {scheduleSavedFeedback.isOffDuty || scheduleSavedFeedback.daysCount === 0 ? (
+                      <>
+                        Doctor&apos;s schedule saved. <strong>{scheduleSavedFeedback.doctorName}</strong> is now off duty.
+                      </>
+                    ) : (
+                      <>
+                        Duty schedule successfully saved for <strong>{scheduleSavedFeedback.doctorName}</strong> ({scheduleSavedFeedback.daysCount} active days, {scheduleSavedFeedback.shiftsCount} shift{scheduleSavedFeedback.shiftsCount > 1 ? "s" : ""} configured).
+                      </>
+                    )}
                   </span>
                 </div>
               )}
@@ -3522,19 +3588,18 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                 <button
                   type="button"
                   onClick={handleSaveSchedule}
-                  disabled={savingSchedule || !selectedDoctor || scheduleConflicts.length > 0 || loadingOtherShifts}
+                  disabled={savingSchedule || !selectedDoctor || (scheduleForm.dutyDays.length > 0 && scheduleConflicts.length > 0) || loadingOtherShifts}
                   title={
-                    scheduleConflicts.length > 0
+                    scheduleForm.dutyDays.length > 0 && scheduleConflicts.length > 0
                       ? "Cannot save: Doctor has overlapping duty hours at another clinic"
                       : undefined
                   }
-                  className={`inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-60 shadow-xs cursor-pointer ${
-                    scheduleConflicts.length > 0
-                      ? "bg-gray-400 hover:bg-gray-400 text-white cursor-not-allowed"
-                      : scheduleSavedFeedback
+                  className={`inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-60 shadow-xs cursor-pointer ${scheduleForm.dutyDays.length > 0 && scheduleConflicts.length > 0
+                    ? "bg-gray-400 hover:bg-gray-400 text-white cursor-not-allowed"
+                    : scheduleSavedFeedback
                       ? "bg-emerald-600 hover:bg-emerald-700 text-white"
                       : "bg-[#801336] hover:bg-[#6c0f2d] text-white"
-                  }`}
+                    }`}
                 >
                   {savingSchedule ? (
                     <>
@@ -3546,7 +3611,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       <span>Checking Shifts...</span>
                     </>
-                  ) : scheduleConflicts.length > 0 ? (
+                  ) : scheduleForm.dutyDays.length > 0 && scheduleConflicts.length > 0 ? (
                     <>
                       <AlertTriangle className="w-3.5 h-3.5 text-white" />
                       <span>Doctor Unavailable (Conflict)</span>
@@ -4166,13 +4231,38 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                     </div>
                   </div>
 
-                  <DoctorDutyScheduleView
-                    clinicName={selectedDoctorForDetails.clinicName}
-                    schedule={parseAssignedDutySchedule({
-                      duty_schedule: selectedDoctorForDetails.dutySchedule,
-                      duty_days: selectedDoctorForDetails.dutyDays,
-                    })}
-                  />
+                  <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 text-xs space-y-1.5">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+                      Duty Hours &amp; Days
+                    </span>
+                    {detailDutyDays.length === 0 ? (
+                      <div className="py-1">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-600 border border-gray-200">
+                          Off Duty
+                        </span>
+                        <p className="text-[11px] text-gray-500 mt-1">
+                          No scheduled consultation hours
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-1 mt-1">
+                        {detailDutyDays.map((d) => {
+                          const shift = getDoctorShiftForDay(selectedDoctorForDetails, d);
+                          return (
+                            <div
+                              key={d}
+                              className="flex items-center justify-between text-xs py-0.5 border-b border-gray-200/50 last:border-b-0"
+                            >
+                              <span className="font-semibold text-gray-800">{d}</span>
+                              <span className="font-bold text-magenta-700">
+                                {formatTime12h(shift.startTime)} – {formatTime12h(shift.endTime)}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
 
                   <div className="p-3 rounded-xl bg-pink-50/50 border border-pink-100 text-xs space-y-1">
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
@@ -4257,34 +4347,21 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                         : "Re-activate Doctor"}
                     </button>
 
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const doc = selectedDoctorForDetails;
-                        setSelectedDoctorForDetails(null);
-                        setDeleteTarget(doc.id);
-                      }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Remove</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const doc = selectedDoctorForDetails;
-                        setSelectedDoctorForDetails(null);
-                        handleOpenEditDoctor(doc);
-                      }}
-                      className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                      <span>Edit Profile</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const doc = selectedDoctorForDetails;
+                          setSelectedDoctorForDetails(null);
+                          handleOpenEditDoctor(doc);
+                        }}
+                        className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-[#c0166a] hover:bg-[#a01258] text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Edit Profile</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
                 </div>
               </motion.div>
             </div>
@@ -4483,7 +4560,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                           <strong>Duty Start &amp; End:</strong> Set consultation hours within clinic operating boundaries.
                         </li>
                         <li>
-                          <strong>Multiple Shifts (+ Add Shift):</strong> Click <strong>+ Add Shift</strong> to split duty hours (e.g., Morning Shift 7:30 AM – 12:00 PM and Afternoon Shift 1:00 PM – 5:00 PM) for lunch breaks or multi-session days.
+                          <strong>Multiple Shifts (Add Shift):</strong> Click <strong>Add Shift</strong> to split duty hours (e.g., Morning Shift 7:30 AM – 12:00 PM and Afternoon Shift 1:00 PM – 5:00 PM) for lunch breaks or multi-session days.
                         </li>
                         <li>
                           <strong>Shift Override:</strong> Customize slot duration per individual shift if needed, or leave as Default.

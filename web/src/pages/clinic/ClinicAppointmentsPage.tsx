@@ -455,174 +455,174 @@ export default function ClinicAppointmentsPage() {
         return paySt !== "pending_hold" && paySt !== "expired" && paySt !== "failed" && paySt !== "cancelled";
       })
       .map((a: any) => {
-      const photoUrl = a.skin_photo_url || undefined;
+        const photoUrl = a.skin_photo_url || undefined;
 
-      const apptDate = a.date ? new Date(a.date) : null;
-      const isValidDate = apptDate && !isNaN(apptDate.getTime());
-      let dateStr = "";
-      let timeStr = "";
-      if (isValidDate) {
-        const dFormatter = new Intl.DateTimeFormat("en-CA", {
-          timeZone: "Asia/Manila",
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        });
-        dateStr = dFormatter.format(apptDate);
-        const tFormatter = new Intl.DateTimeFormat("en-GB", {
-          timeZone: "Asia/Manila",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        });
-        timeStr = tFormatter.format(apptDate);
-      }
-      if (a.time) {
-        timeStr = a.time;
-      }
-
-      let displayStatus: AppointmentRecord["status"] = "pending";
-      if (a.status === "confirmed" || a.status === "scheduled") displayStatus = "scheduled";
-      else if (a.status === "completed") displayStatus = "completed";
-      else if (a.status === "cancelled") displayStatus = "cancelled";
-      else if (a.status === "rejected") displayStatus = "rejected";
-      else if (a.status === "accepted") displayStatus = "accepted";
-
-      // Robust doctor name resolution
-      let docName: string | undefined = undefined;
-      if (a.assigned_doctor_id) {
-        const matchedDoc = docRows.find((d: any) => d.doctor_id === a.assigned_doctor_id);
-        if (matchedDoc?.doctor_name) docName = matchedDoc.doctor_name;
-      }
-      if (!docName && a.assigned_doctor_id) {
-        try {
-          const rawDocs = localStorage.getItem("dermai_clinic_doctors");
-          if (rawDocs) {
-            const parsed = JSON.parse(rawDocs);
-            if (Array.isArray(parsed)) {
-              const found = parsed.find((d: any) => d.id === a.assigned_doctor_id);
-              if (found?.name) docName = found.name;
-            }
-          }
-        } catch { }
-      }
-      if (!docName && a.clinic_note) {
-        const match = a.clinic_note.match(/(?:Assigned to|Re-assigned to|Attending Doctor:|Attending:?)\s*(?:Dr\.\s*)?([A-Za-z\s]+?)(?:\s+for|\s+accepted|\s+declined|\||\.|$)/i);
-        if (match && match[1] && match[1].trim().toLowerCase() !== "dr") {
-          docName = match[1].trim();
+        const apptDate = a.date ? new Date(a.date) : null;
+        const isValidDate = apptDate && !isNaN(apptDate.getTime());
+        let dateStr = "";
+        let timeStr = "";
+        if (isValidDate) {
+          const dFormatter = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Asia/Manila",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          });
+          dateStr = dFormatter.format(apptDate);
+          const tFormatter = new Intl.DateTimeFormat("en-GB", {
+            timeZone: "Asia/Manila",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          });
+          timeStr = tFormatter.format(apptDate);
         }
-      }
-      const resolvedDoctorDisplay = formatDoctorDisplay(docName);
+        if (a.time) {
+          timeStr = a.time;
+        }
 
-      let calculatedAge: number | undefined = undefined;
-      if (a.patient_birthdate) {
-        try {
-          const b = new Date(a.patient_birthdate);
-          if (!isNaN(b.getTime())) {
-            const today = new Date();
-            let age = today.getFullYear() - b.getFullYear();
-            const m = today.getMonth() - b.getMonth();
-            if (m < 0 || (m === 0 && today.getDate() < b.getDate())) age--;
-            if (age >= 0 && age < 130) calculatedAge = age;
+        let displayStatus: AppointmentRecord["status"] = "pending";
+        if (a.status === "confirmed" || a.status === "scheduled") displayStatus = "scheduled";
+        else if (a.status === "completed") displayStatus = "completed";
+        else if (a.status === "cancelled") displayStatus = "cancelled";
+        else if (a.status === "rejected") displayStatus = "rejected";
+        else if (a.status === "accepted") displayStatus = "accepted";
+
+        // Robust doctor name resolution
+        let docName: string | undefined = undefined;
+        if (a.assigned_doctor_id) {
+          const matchedDoc = docRows.find((d: any) => d.doctor_id === a.assigned_doctor_id);
+          if (matchedDoc?.doctor_name) docName = matchedDoc.doctor_name;
+        }
+        if (!docName && a.assigned_doctor_id) {
+          try {
+            const rawDocs = localStorage.getItem("dermai_clinic_doctors");
+            if (rawDocs) {
+              const parsed = JSON.parse(rawDocs);
+              if (Array.isArray(parsed)) {
+                const found = parsed.find((d: any) => d.id === a.assigned_doctor_id);
+                if (found?.name) docName = found.name;
+              }
+            }
+          } catch { }
+        }
+        if (!docName && a.clinic_note) {
+          const match = a.clinic_note.match(/(?:Assigned to|Re-assigned to|Attending Doctor:|Attending:?)\s*(?:Dr\.\s*)?([A-Za-z\s]+?)(?:\s+for|\s+accepted|\s+declined|\||\.|$)/i);
+          if (match && match[1] && match[1].trim().toLowerCase() !== "dr") {
+            docName = match[1].trim();
           }
-        } catch { }
-      }
+        }
+        const resolvedDoctorDisplay = formatDoctorDisplay(docName);
 
-      const qAnswers = typeof a.questionnaire_answers === "object" && a.questionnaire_answers !== null ? a.questionnaire_answers : {};
-      const rescheduleRequested = Boolean(a.reschedule_requested ?? qAnswers.reschedule_requested);
-      const rescheduleDate = a.reschedule_date || qAnswers.reschedule_date || undefined;
-      const rescheduleTime = a.reschedule_time || qAnswers.reschedule_time || undefined;
-      const rescheduleReason = a.reschedule_reason || qAnswers.reschedule_reason || undefined;
-      const needsPatientReschedule = Boolean(a.needs_patient_reschedule ?? qAnswers.needs_patient_reschedule);
-      const appointmentHistory = Array.isArray(a.appointment_history)
-        ? a.appointment_history
-        : (Array.isArray(qAnswers.appointment_history) ? qAnswers.appointment_history : []);
-      const primaryScanId = a.primary_scan_id || qAnswers.primary_scan_id || undefined;
+        let calculatedAge: number | undefined = undefined;
+        if (a.patient_birthdate) {
+          try {
+            const b = new Date(a.patient_birthdate);
+            if (!isNaN(b.getTime())) {
+              const today = new Date();
+              let age = today.getFullYear() - b.getFullYear();
+              const m = today.getMonth() - b.getMonth();
+              if (m < 0 || (m === 0 && today.getDate() < b.getDate())) age--;
+              if (age >= 0 && age < 130) calculatedAge = age;
+            }
+          } catch { }
+        }
 
-      // Extract payment details
-      const rawPayStatus = String(a.payment_status || qAnswers.payment_status || "").toLowerCase().trim();
-      const isPaidBool =
-        a.is_paid === true ||
-        qAnswers.is_paid === true ||
-        rawPayStatus === "paid" ||
-        rawPayStatus === "success" ||
-        rawPayStatus === "completed" ||
-        /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(String(a.clinic_note || "")) ||
-        /paid online|gcash ref|maya ref/i.test(String(a.notes || ""));
+        const qAnswers = typeof a.questionnaire_answers === "object" && a.questionnaire_answers !== null ? a.questionnaire_answers : {};
+        const rescheduleRequested = Boolean(a.reschedule_requested ?? qAnswers.reschedule_requested);
+        const rescheduleDate = a.reschedule_date || qAnswers.reschedule_date || undefined;
+        const rescheduleTime = a.reschedule_time || qAnswers.reschedule_time || undefined;
+        const rescheduleReason = a.reschedule_reason || qAnswers.reschedule_reason || undefined;
+        const needsPatientReschedule = Boolean(a.needs_patient_reschedule ?? qAnswers.needs_patient_reschedule);
+        const appointmentHistory = Array.isArray(a.appointment_history)
+          ? a.appointment_history
+          : (Array.isArray(qAnswers.appointment_history) ? qAnswers.appointment_history : []);
+        const primaryScanId = a.primary_scan_id || qAnswers.primary_scan_id || undefined;
 
-      let payMethod = a.payment_method || qAnswers.payment_method || "";
-      if (!payMethod && a.clinic_note) {
-        if (/maya/i.test(a.clinic_note)) payMethod = "Maya";
-        else if (/gcash/i.test(a.clinic_note)) payMethod = "GCash";
-      }
-      let payRef = a.payment_reference || qAnswers.payment_reference || "";
-      if (!payRef && a.clinic_note) {
-        const refMatch = a.clinic_note.match(/(?:Ref|Reference):\s*([A-Za-z0-9_-]+)/i);
-        if (refMatch) payRef = refMatch[1];
-      }
-      const payAmount = a.payment_amount || qAnswers.payment_amount || resolvedFee;
+        // Extract payment details
+        const rawPayStatus = String(a.payment_status || qAnswers.payment_status || "").toLowerCase().trim();
+        const isPaidBool =
+          a.is_paid === true ||
+          qAnswers.is_paid === true ||
+          rawPayStatus === "paid" ||
+          rawPayStatus === "success" ||
+          rawPayStatus === "completed" ||
+          /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(String(a.clinic_note || "")) ||
+          /paid online|gcash ref|maya ref/i.test(String(a.notes || ""));
 
-      // Resolve real patient profile avatar from user join or userProfileMap
-      const userObj = Array.isArray(a.user) ? a.user[0] : a.user;
-      const rawPatientAvatar =
-        userObj?.avatar_url ||
-        (a.user_id ? userProfileMap.get(a.user_id) : undefined) ||
-        (a.patient_email ? userProfileMap.get(a.patient_email.toLowerCase().trim()) : undefined) ||
-        a.patient_avatar ||
-        qAnswers.patient_avatar;
-      const resolvedPatientAvatar = resolveAvatarUrl(rawPatientAvatar);
+        let payMethod = a.payment_method || qAnswers.payment_method || "";
+        if (!payMethod && a.clinic_note) {
+          if (/maya/i.test(a.clinic_note)) payMethod = "Maya";
+          else if (/gcash/i.test(a.clinic_note)) payMethod = "GCash";
+        }
+        let payRef = a.payment_reference || qAnswers.payment_reference || "";
+        if (!payRef && a.clinic_note) {
+          const refMatch = a.clinic_note.match(/(?:Ref|Reference):\s*([A-Za-z0-9_-]+)/i);
+          if (refMatch) payRef = refMatch[1];
+        }
+        const payAmount = a.payment_amount || qAnswers.payment_amount || resolvedFee;
 
-      return {
-        id: a.appointment_id,
-        clinicId: 0,
-        clinicName: clinicName || "Clinic",
-        patientName: a.patient_name || userObj?.full_name || "Patient",
-        patientAge: calculatedAge,
-        patientGender: a.patient_gender || undefined,
-        patientBirthdate: a.patient_birthdate || undefined,
-        patientAvatar: resolvedPatientAvatar,
-        patientEmail: a.patient_email || undefined,
-        patientAddress: a.patient_address || undefined,
-        patientContact: a.patient_contact || undefined,
-        emergencyContactName: a.emergency_contact_name || undefined,
-        emergencyContactPhone: a.emergency_contact_phone || undefined,
-        emergencyRelationship: a.emergency_contact_relationship || undefined,
-        consultationType: "face-to-face" as const,
-        conditionName: a.ai_condition_name || undefined,
-        date: dateStr,
-        time: timeStr,
-        notes: a.notes || "",
-        status: displayStatus,
-        clinicNote: a.clinic_note || undefined,
-        assignedDoctorId: a.assigned_doctor_id || undefined,
-        assignedDoctorName: resolvedDoctorDisplay || undefined,
-        doctorStatus: a.doctor_status || undefined,
-        doctorNote: a.doctor_note || undefined,
-        doctorReviewedAt: a.doctor_reviewed_at || undefined,
-        scheduleSentToDoctor: a.schedule_sent_to_doctor || false,
-        createdAt: a.created_at || new Date().toISOString(),
-        skinPhotoUrl: photoUrl,
-        aiConditionName: a.ai_condition_name || undefined,
-        aiConfidence: a.ai_confidence ? Number(a.ai_confidence) : undefined,
-        queueNumber: a.queue_number || 1,
-        batchTime: a.batch_time || undefined,
-        checkInStatus: a.check_in_status || "scheduled",
-        isWalkIn: Boolean(a.is_walk_in),
-        userId: a.user_id || undefined,
-        rescheduleRequested,
-        rescheduleDate,
-        rescheduleTime,
-        rescheduleReason,
-        needsPatientReschedule,
-        appointmentHistory,
-        primaryScanId,
-        paymentStatus: isPaidBool ? "paid" : (rawPayStatus || "pending"),
-        isPaid: isPaidBool,
-        paymentAmount: payAmount,
-        paymentMethod: payMethod || undefined,
-        paymentReference: payRef || undefined,
-      };
-    });
+        // Resolve real patient profile avatar from user join or userProfileMap
+        const userObj = Array.isArray(a.user) ? a.user[0] : a.user;
+        const rawPatientAvatar =
+          userObj?.avatar_url ||
+          (a.user_id ? userProfileMap.get(a.user_id) : undefined) ||
+          (a.patient_email ? userProfileMap.get(a.patient_email.toLowerCase().trim()) : undefined) ||
+          a.patient_avatar ||
+          qAnswers.patient_avatar;
+        const resolvedPatientAvatar = resolveAvatarUrl(rawPatientAvatar);
+
+        return {
+          id: a.appointment_id,
+          clinicId: 0,
+          clinicName: clinicName || "Clinic",
+          patientName: a.patient_name || userObj?.full_name || "Patient",
+          patientAge: calculatedAge,
+          patientGender: a.patient_gender || undefined,
+          patientBirthdate: a.patient_birthdate || undefined,
+          patientAvatar: resolvedPatientAvatar,
+          patientEmail: a.patient_email || undefined,
+          patientAddress: a.patient_address || undefined,
+          patientContact: a.patient_contact || undefined,
+          emergencyContactName: a.emergency_contact_name || undefined,
+          emergencyContactPhone: a.emergency_contact_phone || undefined,
+          emergencyRelationship: a.emergency_contact_relationship || undefined,
+          consultationType: "face-to-face" as const,
+          conditionName: a.ai_condition_name || undefined,
+          date: dateStr,
+          time: timeStr,
+          notes: a.notes || "",
+          status: displayStatus,
+          clinicNote: a.clinic_note || undefined,
+          assignedDoctorId: a.assigned_doctor_id || undefined,
+          assignedDoctorName: resolvedDoctorDisplay || undefined,
+          doctorStatus: a.doctor_status || undefined,
+          doctorNote: a.doctor_note || undefined,
+          doctorReviewedAt: a.doctor_reviewed_at || undefined,
+          scheduleSentToDoctor: a.schedule_sent_to_doctor || false,
+          createdAt: a.created_at || new Date().toISOString(),
+          skinPhotoUrl: photoUrl,
+          aiConditionName: a.ai_condition_name || undefined,
+          aiConfidence: a.ai_confidence ? Number(a.ai_confidence) : undefined,
+          queueNumber: a.queue_number || 1,
+          batchTime: a.batch_time || undefined,
+          checkInStatus: a.check_in_status || "scheduled",
+          isWalkIn: Boolean(a.is_walk_in),
+          userId: a.user_id || undefined,
+          rescheduleRequested,
+          rescheduleDate,
+          rescheduleTime,
+          rescheduleReason,
+          needsPatientReschedule,
+          appointmentHistory,
+          primaryScanId,
+          paymentStatus: isPaidBool ? "paid" : (rawPayStatus || "pending"),
+          isPaid: isPaidBool,
+          paymentAmount: payAmount,
+          paymentMethod: payMethod || undefined,
+          paymentReference: payRef || undefined,
+        };
+      });
 
     // Merge with local storage appointments
     try {
@@ -1510,7 +1510,7 @@ export default function ClinicAppointmentsPage() {
         doctorName: doc.name,
         isReassign: assignDoctorModal.isReassign,
       },
-    }).catch(() => {});
+    }).catch(() => { });
 
     setAssignDoctorModal(null);
     setSelectedDoctorId("");
@@ -2067,8 +2067,8 @@ export default function ClinicAppointmentsPage() {
                     !cell.inCurrentMonth
                       ? "bg-gray-50/50 border-gray-200/60 text-gray-300"
                       : isSelected
-                      ? "bg-linear-to-b from-rose-50/90 to-pink-50/50 border-rose-300 shadow-2xs"
-                      : "bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/50"
+                        ? "bg-linear-to-b from-rose-50/90 to-pink-50/50 border-rose-300 shadow-2xs"
+                        : "bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/50"
                   )}
                 >
                   <p
@@ -2077,8 +2077,8 @@ export default function ClinicAppointmentsPage() {
                       !cell.inCurrentMonth
                         ? "text-gray-300"
                         : isSelected
-                        ? "text-[#c0166a] font-bold"
-                        : "text-gray-800"
+                          ? "text-[#c0166a] font-bold"
+                          : "text-gray-800"
                     )}
                   >
                     {cell.date.getDate()}
@@ -2087,7 +2087,7 @@ export default function ClinicAppointmentsPage() {
                   {/* Status Indicator Line */}
                   <div className="flex items-center justify-center min-h-2.5 mt-1">
                     {hasAppointment ? (
-                      <span className="w-5 sm:w-6 h-1 rounded-full bg-[#c0166a]" />
+                      <span className="w-5 sm:w-6 h-1 rounded-full bg-magenta-500" />
                     ) : null}
                   </div>
                 </div>
@@ -2236,12 +2236,12 @@ export default function ClinicAppointmentsPage() {
                 type="button"
                 onClick={() => setQueueFilter(tab.key as any)}
                 className={`px-3 py-1.5 rounded-xl font-semibold shrink-0 transition-all flex items-center gap-1.5 cursor-pointer ${queueFilter === tab.key
-                    ? "bg-magenta-600 text-white shadow-xs"
-                    : tab.highlight
-                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
-                      : tab.alert
-                        ? "bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
-                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  ? "bg-magenta-600 text-white shadow-xs"
+                  : tab.highlight
+                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                    : tab.alert
+                      ? "bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
+                      : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                   }`}
               >
                 <span>{tab.label}</span>
@@ -2287,8 +2287,8 @@ export default function ClinicAppointmentsPage() {
                 <div
                   key={appointment.id}
                   className={`rounded-2xl border p-4 transition-all ${urgency !== null
-                      ? "border-amber-300 bg-amber-50/70"
-                      : isDoctorDeclined
+                    ? "border-amber-300 bg-amber-50/70"
+                    : isDoctorDeclined
                       ? "border-red-200 bg-red-50/30"
                       : isApproved
                         ? "border-emerald-200 bg-emerald-50/30"
@@ -2368,36 +2368,6 @@ export default function ClinicAppointmentsPage() {
                     </div>
                   </div>
 
-                  {/* Patient Requested Schedule Banner with Queue Badge & Payment Verified Badge */}
-                  <div className="mb-2.5 p-2 rounded-xl bg-magenta-50/70 border border-magenta-100 flex items-center justify-between text-xs flex-wrap gap-1.5">
-                    <div className="flex items-center gap-1.5 font-bold text-magenta-950">
-                      <Calendar className="w-3.5 h-3.5 text-magenta-600" />
-                      <span>
-                        {appointment.date || "Date pending"}
-                        {(appointment.batchTime || appointment.time)
-                          ? ` · ${formatAppointmentTime(appointment.batchTime || appointment.time)}`
-                          : ""}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {isApproved && (
-                        appointment.checkInStatus === "arrived" ? (
-                          <span className="px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-800 font-bold text-[9px] flex items-center gap-0.5">
-                            <span className="w-1 h-1 rounded-full bg-sky-500 inline-block" /> In Lobby
-                          </span>
-                        ) : appointment.checkInStatus === "in-consultation" ? (
-                          <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[9px] flex items-center gap-0.5 animate-pulse">
-                            <span className="w-1 h-1 rounded-full bg-emerald-500 inline-block" /> In Room
-                          </span>
-                        ) : appointment.checkInStatus === "no-show" ? (
-                          <span className="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[9px]">
-                            Absent / No-Show
-                          </span>
-                        ) : null
-                      )}
-                    </div>
-                  </div>
-
                   {/* Stage Workflow Banners */}
                   {isDoctorDeclined ? (() => {
                     const privilege = getPatientPrivilegeStatus(appointment);
@@ -2442,13 +2412,43 @@ export default function ClinicAppointmentsPage() {
                       </div>
                     </div>
                   ) : isInReview ? (
-                    <div className="mb-2.5 p-2 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-800 flex items-center gap-1.5">
+                    <div className="mb-2.5 px-0.5 py-0.5 text-xs text-blue-800 flex items-center gap-1.5">
                       <Stethoscope className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                       <span className="font-medium">
-                        Assigned to <strong>{formatDoctorDisplay(appointment.assignedDoctorName) || "Doctor"}</strong> for pre-consultation review.
+                        Assigned to <strong className="text-gray-900 font-bold">{formatDoctorDisplay(appointment.assignedDoctorName) || "Doctor"}</strong> for pre-consultation review.
                       </span>
                     </div>
                   ) : null}
+
+                  {/* Patient Requested Schedule Banner with Queue Badge & Payment Verified Badge */}
+                  <div className="mb-2.5 p-2 rounded-xl bg-magenta-50/70 border border-magenta-100 flex items-center justify-between text-xs flex-wrap gap-1.5">
+                    <div className="flex items-center gap-1.5 font-bold text-magenta-950">
+                      <Calendar className="w-3.5 h-3.5 text-magenta-600" />
+                      <span>
+                        {appointment.date || "Date pending"}
+                        {(appointment.batchTime || appointment.time)
+                          ? ` · ${formatAppointmentTime(appointment.batchTime || appointment.time)}`
+                          : ""}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {isApproved && (
+                        appointment.checkInStatus === "arrived" ? (
+                          <span className="px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-800 font-bold text-[9px] flex items-center gap-0.5">
+                            <span className="w-1 h-1 rounded-full bg-sky-500 inline-block" /> In Lobby
+                          </span>
+                        ) : appointment.checkInStatus === "in-consultation" ? (
+                          <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[9px] flex items-center gap-0.5 animate-pulse">
+                            <span className="w-1 h-1 rounded-full bg-emerald-500 inline-block" /> In Room
+                          </span>
+                        ) : appointment.checkInStatus === "no-show" ? (
+                          <span className="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[9px]">
+                            Absent / No-Show
+                          </span>
+                        ) : null
+                      )}
+                    </div>
+                  </div>
 
                   {/* Rule 1: Patient Reschedule Request Banner */}
                   {appointment.rescheduleRequested && (
@@ -2639,11 +2639,10 @@ export default function ClinicAppointmentsPage() {
                                 ? `Patient has an exclusive 24-hour privilege window to select an alternate doctor (${privilege.hoursRemaining}h ${privilege.minutesRemaining}m remaining). Clinic cannot reassign until this window expires or the patient requests clinic assistance.`
                                 : undefined
                             }
-                            className={`flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl text-xs font-semibold transition-all shadow-xs ${
-                              privilege.isLocked
-                                ? "bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed"
-                                : "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
-                            }`}
+                            className={`flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl text-xs font-semibold transition-all shadow-xs ${privilege.isLocked
+                              ? "bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed"
+                              : "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+                              }`}
                           >
                             {privilege.isLocked ? (
                               <>
@@ -2698,246 +2697,246 @@ export default function ClinicAppointmentsPage() {
       </div>      {/* ── Day Detail Modal ─────────────────────────────────── */}
       <ModalPortal isOpen={Boolean(dayDetailDate)}>
         {dayDetailDate && (() => {
-        const dayModalAll = appointmentsByDate[dayDetailDate] || [];
-        const dayModalCompletedCount = dayModalAll.filter(
-          (a) => a.status === "completed" || a.checkInStatus === "completed"
-        ).length;
-        const dayModalActionable = sortAppointmentsByDailyQueue(
-          dayModalAll.filter(
-            (a) =>
-              a.status !== "completed" &&
-              a.checkInStatus !== "completed" &&
-              a.status !== "cancelled" &&
-              a.status !== "rejected" &&
-              a.checkInStatus !== "no-show"
-          )
-        );
+          const dayModalAll = appointmentsByDate[dayDetailDate] || [];
+          const dayModalCompletedCount = dayModalAll.filter(
+            (a) => a.status === "completed" || a.checkInStatus === "completed"
+          ).length;
+          const dayModalActionable = sortAppointmentsByDailyQueue(
+            dayModalAll.filter(
+              (a) =>
+                a.status !== "completed" &&
+                a.checkInStatus !== "completed" &&
+                a.status !== "cancelled" &&
+                a.status !== "rejected" &&
+                a.checkInStatus !== "no-show"
+            )
+          );
 
-        return (
-          <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDayDetailDate(null)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.96, y: 10 }}
-              transition={{ duration: 0.2 }}
-              className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-start justify-between">
-                <div>
-                  <h3 className="text-base font-bold text-gray-900 leading-tight">
-                    {new Date(dayDetailDate + "T00:00:00").toLocaleDateString("en-US", {
-                      weekday: "long", month: "long", day: "numeric", year: "numeric",
-                    })}
-                  </h3>
-                  <p className="text-xs text-gray-500 mt-0.5 font-medium">
-                    {dayModalActionable.length} patient(s) scheduled
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDayDetailDate(null)}
-                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-                  title="Close"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Body */}
-              <div className="p-6 max-h-[62vh] overflow-y-auto space-y-3.5 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                {dayModalActionable.length === 0 ? (
-                  <div className="border border-dashed border-gray-200 rounded-2xl p-7 text-center bg-gray-50/50">
-                    {dayModalCompletedCount > 0 ? (
-                      <>
-                        <div className="w-10 h-10 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center mx-auto mb-2 text-emerald-600">
-                          <CheckCircle2 className="w-5 h-5" />
-                        </div>
-                        <p className="text-xs font-bold text-gray-800">
-                          All scheduled visits for this date are completed
-                        </p>
-                        <p className="text-[11px] text-gray-500 mt-1 max-w-xs mx-auto leading-relaxed">
-                          {dayModalCompletedCount} completed appointment{dayModalCompletedCount > 1 ? "s" : ""} on record. Completed visits are preserved in patient records and appointment history.
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <Calendar className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                        <p className="text-xs font-semibold text-gray-500">No actionable patients scheduled for this date.</p>
-                      </>
-                    )}
+          return (
+            <div className="fixed inset-0 z-9998 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDayDetailDate(null)}>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96, y: 10 }}
+                transition={{ duration: 0.2 }}
+                className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-start justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900 leading-tight">
+                      {new Date(dayDetailDate + "T00:00:00").toLocaleDateString("en-US", {
+                        weekday: "long", month: "long", day: "numeric", year: "numeric",
+                      })}
+                    </h3>
+                    <p className="text-xs text-gray-500 mt-0.5 font-medium">
+                      {dayModalActionable.length} patient(s) scheduled
+                    </p>
                   </div>
-                ) : (
-                  dayModalActionable.map((appt) => {
-                    const isOverdue = isAppointmentPastDue(appt);
-                    return (
-                      <div
-                        key={appt.id}
-                        className={`rounded-2xl border transition-all p-4 space-y-3 shadow-2xs ${isOverdue
+                  <button
+                    type="button"
+                    onClick={() => setDayDetailDate(null)}
+                    className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                    title="Close"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Body */}
+                <div className="p-6 max-h-[62vh] overflow-y-auto space-y-3.5 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                  {dayModalActionable.length === 0 ? (
+                    <div className="border border-dashed border-gray-200 rounded-2xl p-7 text-center bg-gray-50/50">
+                      {dayModalCompletedCount > 0 ? (
+                        <>
+                          <div className="w-10 h-10 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center mx-auto mb-2 text-emerald-600">
+                            <CheckCircle2 className="w-5 h-5" />
+                          </div>
+                          <p className="text-xs font-bold text-gray-800">
+                            All scheduled visits for this date are completed
+                          </p>
+                          <p className="text-[11px] text-gray-500 mt-1 max-w-xs mx-auto leading-relaxed">
+                            {dayModalCompletedCount} completed appointment{dayModalCompletedCount > 1 ? "s" : ""} on record. Completed visits are preserved in patient records and appointment history.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <Calendar className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                          <p className="text-xs font-semibold text-gray-500">No actionable patients scheduled for this date.</p>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    dayModalActionable.map((appt) => {
+                      const isOverdue = isAppointmentPastDue(appt);
+                      return (
+                        <div
+                          key={appt.id}
+                          className={`rounded-2xl border transition-all p-4 space-y-3 shadow-2xs ${isOverdue
                             ? "bg-[#fff5f5] border-rose-200/90"
                             : "bg-white border-gray-100"
-                          }`}
-                      >
-                        {/* Patient Info Row */}
-                        <div className="flex items-center gap-3">
-                          <PatientAvatar
-                            name={appt.patientName}
-                            photoUrl={appt.patientAvatar}
-                            userId={appt.userId}
-                            className="w-11 h-11"
-                          />
+                            }`}
+                        >
+                          {/* Patient Info Row */}
+                          <div className="flex items-center gap-3">
+                            <PatientAvatar
+                              name={appt.patientName}
+                              photoUrl={appt.patientAvatar}
+                              userId={appt.userId}
+                              className="w-11 h-11"
+                            />
 
-                          <div className="flex-1 min-w-0">
-                            <h4 className="text-sm font-bold text-gray-900 truncate">
-                              {appt.patientName || "Unknown Patient"}
-                            </h4>
-                            {appt.patientAge ? (
-                              <p className="text-xs text-gray-500 font-normal mt-0.5">
-                                {appt.patientAge} years old
-                              </p>
-                            ) : (
-                              <p className="text-xs text-gray-400 font-normal mt-0.5">
-                                Patient
-                              </p>
+                            <div className="flex-1 min-w-0">
+                              <h4 className="text-sm font-bold text-gray-900 truncate">
+                                {appt.patientName || "Unknown Patient"}
+                              </h4>
+                              {appt.patientAge ? (
+                                <p className="text-xs text-gray-500 font-normal mt-0.5">
+                                  {appt.patientAge} years old
+                                </p>
+                              ) : (
+                                <p className="text-xs text-gray-400 font-normal mt-0.5">
+                                  Patient
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="shrink-0 flex items-center gap-1.5">
+                              <span className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full bg-white text-gray-700 border border-gray-200 shadow-2xs">
+                                <Clock className="w-3.5 h-3.5 text-gray-400" />
+                                {formatAppointmentTime(appt.time)}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Overdue Banner if scheduled time has passed */}
+                          {isOverdue && (
+                            <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-rose-100/60 border border-rose-200/80 text-xs">
+                              <div className="flex items-center gap-1.5 text-rose-700 font-medium min-w-0">
+                                <Clock className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                                <span className="truncate">Due Date Past — Patient did not attend</span>
+                                <span
+                                  className="w-3.5 h-3.5 rounded-full border border-rose-400 text-rose-700 flex items-center justify-center text-[10px] font-bold shrink-0 cursor-help"
+                                  title="Scheduled consultation date/time has passed and attendance needs confirmation."
+                                >
+                                  i
+                                </span>
+                              </div>
+                              <span className="shrink-0 text-xs px-2.5 py-0.5 rounded-full font-semibold border border-rose-300 text-rose-700 bg-rose-50">
+                                missed
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Doctor & Status Row */}
+                          <div className="flex items-center justify-between text-xs pt-0.5">
+                            <div className="flex items-center gap-1.5 min-w-0 text-gray-700">
+                              <Stethoscope className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                              <span className="font-medium truncate">
+                                {appt.assignedDoctorName || <span className="text-gray-400 italic">No doctor assigned</span>}
+                              </span>
+                            </div>
+                            {!isOverdue && (
+                              <span className="text-xs px-2.5 py-0.5 rounded-full font-medium border bg-emerald-50/60 text-emerald-700 border-emerald-200">
+                                {appt.status === "scheduled" || appt.status === "confirmed" ? "scheduled" : appt.status}
+                              </span>
                             )}
                           </div>
 
-                          <div className="shrink-0 flex items-center gap-1.5">
-                            <span className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full bg-white text-gray-700 border border-gray-200 shadow-2xs">
-                              <Clock className="w-3.5 h-3.5 text-gray-400" />
-                              {formatAppointmentTime(appt.time)}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Overdue Banner if scheduled time has passed */}
-                        {isOverdue && (
-                          <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-rose-100/60 border border-rose-200/80 text-xs">
-                            <div className="flex items-center gap-1.5 text-rose-700 font-medium min-w-0">
-                              <Clock className="w-3.5 h-3.5 shrink-0 text-rose-600" />
-                              <span className="truncate">Due Date Past — Patient did not attend</span>
-                              <span
-                                className="w-3.5 h-3.5 rounded-full border border-rose-400 text-rose-700 flex items-center justify-center text-[10px] font-bold shrink-0 cursor-help"
-                                title="Scheduled consultation date/time has passed and attendance needs confirmation."
-                              >
-                                i
-                              </span>
-                            </div>
-                            <span className="shrink-0 text-xs px-2.5 py-0.5 rounded-full font-semibold border border-rose-300 text-rose-700 bg-rose-50">
-                              missed
-                            </span>
-                          </div>
-                        )}
-
-                        {/* Doctor & Status Row */}
-                        <div className="flex items-center justify-between text-xs pt-0.5">
-                          <div className="flex items-center gap-1.5 min-w-0 text-gray-700">
-                            <Stethoscope className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                            <span className="font-medium truncate">
-                              {appt.assignedDoctorName || <span className="text-gray-400 italic">No doctor assigned</span>}
-                            </span>
-                          </div>
-                          {!isOverdue && (
-                            <span className="text-xs px-2.5 py-0.5 rounded-full font-medium border bg-emerald-50/60 text-emerald-700 border-emerald-200">
-                              {appt.status === "scheduled" || appt.status === "confirmed" ? "scheduled" : appt.status}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Actions */}
-                        <div className="space-y-2 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDayDetailDate(null);
-                              setViewingPatient(appt);
-                            }}
-                            className="w-full py-2.5 rounded-xl bg-[#7a123a] hover:bg-[#600e2e] text-white text-xs font-semibold transition-colors shadow-xs cursor-pointer text-center"
-                          >
-                            View Appointment Details
-                          </button>
-
-                          <div className="grid grid-cols-2 gap-2">
+                          {/* Actions */}
+                          <div className="space-y-2 pt-1">
                             <button
                               type="button"
                               onClick={() => {
                                 setDayDetailDate(null);
-                                if (appt.rescheduleRequested) {
-                                  setQueueFilter("reschedule_requests");
-                                } else {
-                                  setRequestPatientRescheduleModal({
-                                    appointmentId: appt.id,
-                                    patientName: appt.patientName || "Patient",
-                                    currentDate: appt.date,
-                                    currentTime: appt.time,
-                                    userId: appt.userId,
-                                  });
-                                  setReschedulePromptReason("");
-                                  setReschedulePromptError("");
-                                }
+                                setViewingPatient(appt);
                               }}
-                              className="py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer text-center"
+                              className="w-full py-2.5 rounded-xl bg-[#7a123a] hover:bg-[#600e2e] text-white text-xs font-semibold transition-colors shadow-xs cursor-pointer text-center"
                             >
-                              {appt.rescheduleRequested ? "Review Reschedule" : "Request Reschedule"}
+                              View Appointment Details
                             </button>
 
-                            {isOverdue ? (
+                            <div className="grid grid-cols-2 gap-2">
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setNoShowConfirmModal(appt);
-                                  setNoShowError("");
-                                  setNoShowSuccess("");
-                                }}
-                                className="py-2 rounded-xl border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs font-semibold transition-colors cursor-pointer text-center"
-                              >
-                                Mark as No-Show
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setRejectModal({
-                                    appointmentId: appt.id,
-                                    patientName: appt.patientName || "Patient",
-                                    clinicName: appt.clinicName || clinicName,
-                                    patientEmail: appt.patientEmail,
-                                    date: appt.date,
-                                    time: appt.time,
-                                  });
-                                  setRejectReason("");
-                                  setSelectedPresetReason("");
-                                  setRejectError("");
                                   setDayDetailDate(null);
+                                  if (appt.rescheduleRequested) {
+                                    setQueueFilter("reschedule_requests");
+                                  } else {
+                                    setRequestPatientRescheduleModal({
+                                      appointmentId: appt.id,
+                                      patientName: appt.patientName || "Patient",
+                                      currentDate: appt.date,
+                                      currentTime: appt.time,
+                                      userId: appt.userId,
+                                    });
+                                    setReschedulePromptReason("");
+                                    setReschedulePromptError("");
+                                  }
                                 }}
-                                className="py-2 rounded-xl border border-rose-200 bg-white hover:bg-rose-50 text-rose-600 text-xs font-semibold transition-colors cursor-pointer text-center"
+                                className="py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer text-center"
                               >
-                                Cancel
+                                {appt.rescheduleRequested ? "Review Reschedule" : "Request Reschedule"}
                               </button>
-                            )}
+
+                              {isOverdue ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setNoShowConfirmModal(appt);
+                                    setNoShowError("");
+                                    setNoShowSuccess("");
+                                  }}
+                                  className="py-2 rounded-xl border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs font-semibold transition-colors cursor-pointer text-center"
+                                >
+                                  Mark as No-Show
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRejectModal({
+                                      appointmentId: appt.id,
+                                      patientName: appt.patientName || "Patient",
+                                      clinicName: appt.clinicName || clinicName,
+                                      patientEmail: appt.patientEmail,
+                                      date: appt.date,
+                                      time: appt.time,
+                                    });
+                                    setRejectReason("");
+                                    setSelectedPresetReason("");
+                                    setRejectError("");
+                                    setDayDetailDate(null);
+                                  }}
+                                  className="py-2 rounded-xl border border-rose-200 bg-white hover:bg-rose-50 text-rose-600 text-xs font-semibold transition-colors cursor-pointer text-center"
+                                >
+                                  Cancel
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
+                      );
+                    })
+                  )}
+                </div>
 
-              {/* Footer */}
-              <div className="px-6 pb-5 pt-3 border-t border-gray-100 bg-white">
-                <button
-                  type="button"
-                  onClick={() => setDayDetailDate(null)}
-                  className="w-full py-2.5 rounded-full border border-gray-200 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
-                >
-                  Close
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        );
-      })()}
+                {/* Footer */}
+                <div className="px-6 pb-5 pt-3 border-t border-gray-100 bg-white">
+                  <button
+                    type="button"
+                    onClick={() => setDayDetailDate(null)}
+                    className="w-full py-2.5 rounded-full border border-gray-200 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          );
+        })()}
       </ModalPortal>
 
       {/* ── No-Show Confirmation Modal ───────────────────────── */}
@@ -2951,121 +2950,121 @@ export default function ClinicAppointmentsPage() {
               className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden text-left"
               onClick={(e) => e.stopPropagation()}
             >
-            <div className="px-6 pt-6 pb-4 border-b border-gray-100 flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
-                  <AlertTriangle className="w-5 h-5" />
+              <div className="px-6 pt-6 pb-4 border-b border-gray-100 flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900 leading-tight">
+                      Confirm Patient No-Show
+                    </h3>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Attendance review confirmation
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-base font-bold text-gray-900 leading-tight">
-                    Confirm Patient No-Show
-                  </h3>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    Attendance review confirmation
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!markingNoShow) {
+                      setNoShowConfirmModal(null);
+                      setNoShowError("");
+                    }
+                  }}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                  title="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                {/* Appointment Details Summary */}
+                <div className="rounded-2xl border border-gray-200/80 bg-gray-50/70 p-4 space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500 font-medium">Patient:</span>
+                    <span className="font-bold text-gray-900">
+                      {noShowConfirmModal.patientName || "Patient"}
+                      {noShowConfirmModal.patientAge ? ` (${noShowConfirmModal.patientAge} years old)` : ""}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500 font-medium">Scheduled Date:</span>
+                    <span className="font-semibold text-gray-800">
+                      {noShowConfirmModal.date}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500 font-medium">Scheduled Time:</span>
+                    <span className="font-semibold text-gray-800">
+                      {formatAppointmentTime(noShowConfirmModal.time)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500 font-medium">Assigned Doctor:</span>
+                    <span className="font-semibold text-gray-800">
+                      {noShowConfirmModal.assignedDoctorName || "Unassigned"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Consequence Explanation Banner */}
+                <div className="p-3.5 rounded-2xl bg-rose-50/70 border border-rose-200/70 text-xs text-rose-900 space-y-1">
+                  <p className="font-bold flex items-center gap-1.5 text-rose-800">
+                    <Info className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    Attendance Confirmation Notice
+                  </p>
+                  <p className="text-[11px] text-rose-700 leading-relaxed">
+                    This records that the patient was absent and did not attend their consultation. Once finalized, ordinary appointment actions (such as rescheduling or conducting visit) will be disabled.
                   </p>
                 </div>
+
+                {noShowError && (
+                  <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
+                    {noShowError}
+                  </div>
+                )}
+
+                {noShowSuccess && (
+                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-700 font-medium flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    {noShowSuccess}
+                  </div>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!markingNoShow) {
+
+              <div className="px-6 pb-6 pt-2 border-t border-gray-100 flex items-center justify-end gap-3 bg-gray-50/50">
+                <button
+                  type="button"
+                  disabled={markingNoShow}
+                  onClick={() => {
                     setNoShowConfirmModal(null);
                     setNoShowError("");
-                  }
-                }}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-                title="Close"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              {/* Appointment Details Summary */}
-              <div className="rounded-2xl border border-gray-200/80 bg-gray-50/70 p-4 space-y-2.5 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 font-medium">Patient:</span>
-                  <span className="font-bold text-gray-900">
-                    {noShowConfirmModal.patientName || "Patient"}
-                    {noShowConfirmModal.patientAge ? ` (${noShowConfirmModal.patientAge} years old)` : ""}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 font-medium">Scheduled Date:</span>
-                  <span className="font-semibold text-gray-800">
-                    {noShowConfirmModal.date}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 font-medium">Scheduled Time:</span>
-                  <span className="font-semibold text-gray-800">
-                    {formatAppointmentTime(noShowConfirmModal.time)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 font-medium">Assigned Doctor:</span>
-                  <span className="font-semibold text-gray-800">
-                    {noShowConfirmModal.assignedDoctorName || "Unassigned"}
-                  </span>
-                </div>
+                  }}
+                  className="px-4 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={markingNoShow || !!noShowSuccess}
+                  onClick={handleConfirmNoShow}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {markingNoShow ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      Finalizing...
+                    </>
+                  ) : (
+                    "Confirm No-Show"
+                  )}
+                </button>
               </div>
-
-              {/* Consequence Explanation Banner */}
-              <div className="p-3.5 rounded-2xl bg-rose-50/70 border border-rose-200/70 text-xs text-rose-900 space-y-1">
-                <p className="font-bold flex items-center gap-1.5 text-rose-800">
-                  <Info className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  Attendance Confirmation Notice
-                </p>
-                <p className="text-[11px] text-rose-700 leading-relaxed">
-                  This records that the patient was absent and did not attend their consultation. Once finalized, ordinary appointment actions (such as rescheduling or conducting visit) will be disabled.
-                </p>
-              </div>
-
-              {noShowError && (
-                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
-                  {noShowError}
-                </div>
-              )}
-
-              {noShowSuccess && (
-                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-700 font-medium flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  {noShowSuccess}
-                </div>
-              )}
-            </div>
-
-            <div className="px-6 pb-6 pt-2 border-t border-gray-100 flex items-center justify-end gap-3 bg-gray-50/50">
-              <button
-                type="button"
-                disabled={markingNoShow}
-                onClick={() => {
-                  setNoShowConfirmModal(null);
-                  setNoShowError("");
-                }}
-                className="px-4 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={markingNoShow || !!noShowSuccess}
-                onClick={handleConfirmNoShow}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
-              >
-                {markingNoShow ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    Finalizing...
-                  </>
-                ) : (
-                  "Confirm No-Show"
-                )}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
+            </motion.div>
+          </div>
+        )}
       </ModalPortal>
 
       {/* ── Patient Details Review Modal ─────────────────────── */}
@@ -3079,450 +3078,449 @@ export default function ClinicAppointmentsPage() {
               transition={{ duration: 0.2 }}
               className="relative z-9999 w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[88vh] text-left"
             >
-            {/* Header */}
-            <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <PatientAvatar
-                  name={viewingPatient.patientName}
-                  photoUrl={viewingPatient.patientAvatar}
-                  userId={viewingPatient.userId}
-                  className="w-11 h-11"
-                />
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-base font-bold text-gray-900 leading-tight">
-                      {viewingPatient.patientName || "Unknown Patient"}
-                    </p>
-                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
-                      <MapPin className="w-2.5 h-2.5 text-gray-400" /> Face-to-Face
-                    </span>
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> {getPaymentBadgeInfo(viewingPatient).label}
-                    </span>
+              {/* Header */}
+              <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <PatientAvatar
+                    name={viewingPatient.patientName}
+                    photoUrl={viewingPatient.patientAvatar}
+                    userId={viewingPatient.userId}
+                    className="w-11 h-11"
+                  />
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-base font-bold text-gray-900 leading-tight">
+                        {viewingPatient.patientName || "Unknown Patient"}
+                      </p>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
+                        <MapPin className="w-2.5 h-2.5 text-gray-400" /> Face-to-Face
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> {getPaymentBadgeInfo(viewingPatient).label}
+                      </span>
+                    </div>
+                    {viewingPatient.patientAge ? (
+                      <p className="text-xs text-gray-500 mt-0.5">{viewingPatient.patientAge} years old</p>
+                    ) : (
+                      <p className="text-xs text-gray-400 mt-0.5">Appointment Request</p>
+                    )}
                   </div>
-                  {viewingPatient.patientAge ? (
-                    <p className="text-xs text-gray-500 mt-0.5">{viewingPatient.patientAge} years old</p>
-                  ) : (
-                    <p className="text-xs text-gray-400 mt-0.5">Appointment Request</p>
-                  )}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setViewingPatient(null)}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                  title="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setViewingPatient(null)}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-                title="Close"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            {/* Body */}
-            <div className="p-6 space-y-4 overflow-y-auto no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-              {/* Doctor Review Status Summary */}
-              {viewingPatient.assignedDoctorName && (
-                <div className={`p-3 rounded-2xl border ${viewingPatient.doctorStatus === "approved"
+              {/* Body */}
+              <div className="p-6 space-y-4 overflow-y-auto no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                {/* Doctor Review Status Summary */}
+                {viewingPatient.assignedDoctorName && (
+                  <div className={`p-3 rounded-2xl border ${viewingPatient.doctorStatus === "approved"
                     ? "bg-emerald-50 border-emerald-200 text-emerald-900"
                     : viewingPatient.doctorStatus === "rejected"
                       ? "bg-red-50 border-red-200 text-red-900"
                       : "bg-blue-50 border-blue-200 text-blue-900"
-                  }`}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold uppercase tracking-wider">Attending Doctor</span>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${viewingPatient.doctorStatus === "approved"
+                    }`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider">Attending Doctor</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${viewingPatient.doctorStatus === "approved"
                         ? "bg-emerald-200 text-emerald-800"
                         : viewingPatient.doctorStatus === "rejected"
                           ? "bg-red-200 text-red-800"
                           : "bg-blue-200 text-blue-800"
-                      }`}>
-                      {viewingPatient.doctorStatus === "approved"
-                        ? "Approved"
-                        : viewingPatient.doctorStatus === "rejected"
-                          ? "Declined"
-                          : "Reviewing"}
-                    </span>
-                  </div>
-                  <p className="text-xs font-bold mt-1">Dr. {viewingPatient.assignedDoctorName.replace(/^dr\.\s*/i, "")}</p>
-                  {viewingPatient.doctorNote && (
-                    <p className="text-[11px] mt-1 italic">
-                      Note: "{viewingPatient.doctorNote}"
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* Personal Information */}
-              <div>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Personal Information</p>
-                <div className="space-y-1.5 bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
-                  {(
-                    [
-                      { label: "Full Name", value: viewingPatient.patientName },
-                      { label: "Email", value: viewingPatient.patientEmail },
-                      { label: "Address", value: viewingPatient.patientAddress },
-                      { label: "Contact", value: viewingPatient.patientContact },
-                      {
-                        label: "Emergency Contact",
-                        value: viewingPatient.emergencyContactName
-                          ? `${viewingPatient.emergencyContactName} ${viewingPatient.emergencyRelationship ? `(${viewingPatient.emergencyRelationship})` : ""} - ${viewingPatient.emergencyContactPhone || ""}`
-                          : undefined,
-                      },
-                    ] as { label: string; value?: string }[]
-                  ).map(({ label, value }) => (
-                    <div key={label} className="grid grid-cols-[120px_1fr] items-center text-xs">
-                      <span className="font-semibold text-gray-400">{label}:</span>
-                      <span className="text-gray-900 font-medium truncate">{value || <span className="text-gray-300 italic">—</span>}</span>
+                        }`}>
+                        {viewingPatient.doctorStatus === "approved"
+                          ? "Approved"
+                          : viewingPatient.doctorStatus === "rejected"
+                            ? "Declined"
+                            : "Reviewing"}
+                      </span>
                     </div>
-                  ))}
-                  {viewingPatient.date && (
-                    <div className="grid grid-cols-[120px_1fr] items-start text-xs pt-1.5 border-t border-gray-200/60 mt-1">
-                      <span className="font-semibold text-green-700">Schedule:</span>
-                      <div className="text-gray-900 font-semibold">
-                        {new Date(`${viewingPatient.date.includes("T") ? viewingPatient.date.split("T")[0] : viewingPatient.date}T${viewingPatient.time || "00:00"}`).toLocaleString("en-US", {
-                          weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  {viewingPatient.checkInStatus === "no-show" ? (
-                    <div className="mt-2.5 p-2.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center gap-2 text-rose-800 text-xs font-bold">
-                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                      <span>Recorded as Absent / No-Show</span>
-                    </div>
-                  ) : isAppointmentPastDue(viewingPatient) && viewingPatient.status !== "completed" && viewingPatient.checkInStatus !== "completed" ? (
-                    <div className="mt-2.5 p-2.5 rounded-xl bg-rose-50/90 border border-rose-200 flex items-start gap-2.5 text-xs text-rose-900">
-                      <Clock className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="font-bold">Consultation Date &amp; Time Has Passed</p>
-                        <p className="text-[11px] text-rose-700 mt-0.5">
-                          Patient did not attend during the scheduled time window. You can mark this appointment as Arrived or No-Show to update records.
-                        </p>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              {/* Uploaded Skin Photo */}
-              <div>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Uploaded Skin Photo</p>
-                {viewingPatient.skinPhotoUrl ? (
-                  <div className="rounded-2xl border border-gray-100 bg-gray-50 overflow-hidden">
-                    <LazySkinPhoto
-                      pathOrUrl={viewingPatient.skinPhotoUrl}
-                      alt="Patient skin photo"
-                      className="w-full max-h-48 object-contain"
-                    />
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/50 px-4 py-5 text-center text-xs text-gray-400 italic">
-                    No skin photo uploaded.
-                  </div>
-                )}
-              </div>
-
-              {/* AI Analysis Result */}
-              <div>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">AI Scan Result</p>
-                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3.5 space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-gray-500">Condition:</span>
-                    <span className="font-bold text-gray-900">
-                      {viewingPatient.aiConditionName || viewingPatient.conditionName || "General Consultation"}
-                    </span>
-                  </div>
-                  {viewingPatient.aiConfidence !== undefined && (
-                    <div className="flex items-center justify-between pt-1 border-t border-gray-200/60">
-                      <span className="font-semibold text-gray-500">Confidence:</span>
-                      <span className="font-bold text-magenta-700">{formatConfidencePercent(viewingPatient.aiConfidence)}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Additional Notes */}
-              <div>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Patient Notes</p>
-                <div className="text-xs text-gray-700 bg-gray-50 border border-gray-100 rounded-2xl p-3.5 leading-relaxed">
-                  {viewingPatient.notes || <span className="text-gray-400 italic">No additional notes provided.</span>}
-                </div>
-              </div>
-
-              {/* Rule 1: Reschedule Request Card if present */}
-              {viewingPatient.rescheduleRequested && (
-                <div className="p-3.5 rounded-2xl bg-purple-50/90 border border-purple-200 text-purple-900 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-purple-800 flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5 text-purple-600" /> Patient Requested Reschedule
-                    </span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-200 text-purple-800 font-bold">
-                      Pending Review
-                    </span>
-                  </div>
-                  <div className="text-xs space-y-1">
-                    <p className="text-gray-600">
-                      Current Reserved: <strong className="text-gray-900">{viewingPatient.date} at {formatAppointmentTime(viewingPatient.time)}</strong>
-                    </p>
-                    <p className="text-purple-950 font-semibold">
-                      Proposed Slot: <strong className="text-purple-700">{viewingPatient.rescheduleDate} at {formatAppointmentTime(viewingPatient.rescheduleTime)}</strong>
-                    </p>
-                    {viewingPatient.rescheduleReason && (
-                      <p className="text-[11px] text-purple-800 italic bg-white/70 p-2 rounded-lg border border-purple-100">
-                        Reason: "{viewingPatient.rescheduleReason}"
+                    <p className="text-xs font-bold mt-1 text-gray-900">Dr. {viewingPatient.assignedDoctorName.replace(/^dr\.\s*/i, "")}</p>
+                    {viewingPatient.doctorNote && (
+                      <p className="text-[11px] mt-1 italic">
+                        Note: "{viewingPatient.doctorNote}"
                       </p>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const appt = viewingPatient;
-                        setViewingPatient(null);
-                        handleAcceptPatientReschedule(appt);
-                      }}
-                      className="py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-2xs cursor-pointer flex items-center justify-center gap-1"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Accept New Slot
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const appt = viewingPatient;
-                        setViewingPatient(null);
-                        setDeclinePatientRescheduleModal({
-                          appointmentId: appt.id,
-                          patientName: appt.patientName || "Patient",
-                          requestedDate: appt.rescheduleDate,
-                          requestedTime: appt.rescheduleTime,
-                          currentDate: appt.date,
-                          currentTime: appt.time,
-                          userId: appt.userId,
-                        });
-                        setDeclineRescheduleReason("");
-                        setDeclineRescheduleError("");
-                      }}
-                      className="py-2 px-3 rounded-xl border border-red-200 bg-white hover:bg-red-50 text-red-600 text-xs font-semibold transition cursor-pointer flex items-center justify-center gap-1"
-                    >
-                      <X className="w-3.5 h-3.5" /> Decline Request
-                    </button>
-                  </div>
-                </div>
-              )}
+                )}
 
-              {/* Rule 5: Traceable Appointment History & Audit Trail */}
-              {viewingPatient.appointmentHistory && viewingPatient.appointmentHistory.length > 0 && (
-                <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-100">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-gray-700 mb-2.5">
-                    <History className="w-4 h-4 text-magenta-600" />
-                    <span>Appointment History &amp; Audit Trail</span>
-                  </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                    {viewingPatient.appointmentHistory.map((item, idx) => (
-                      <div key={idx} className="p-2.5 rounded-xl bg-white border border-gray-100 text-xs shadow-2xs">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-bold text-gray-900 capitalize">
-                            {item.action.replace(/_/g, " ")}
-                          </span>
-                          <span className="text-[10px] text-gray-400 shrink-0">
-                            {new Date(item.timestamp).toLocaleDateString("en-PH", {
-                              month: "short",
-                              day: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                        </div>
-                        {item.actor && (
-                          <p className="text-[11px] text-gray-500 mt-0.5">By: <strong className="text-gray-700 capitalize">{item.actor}</strong></p>
-                        )}
-                        {item.previousDoctorName && item.newDoctorName && (
-                          <p className="text-[11px] text-blue-700 mt-0.5 font-medium">
-                            Reassigned from {item.previousDoctorName} &rarr; {item.newDoctorName}
-                          </p>
-                        )}
-                        {item.newDate && item.newTime && (
-                          <p className="text-[11px] text-purple-700 mt-0.5 font-medium">
-                            Target slot: {item.newDate} at {item.newTime}
-                          </p>
-                        )}
-                        {item.reason && (
-                          <p className="text-[11px] text-gray-600 italic mt-0.5">
-                            "{item.reason}"
-                          </p>
-                        )}
+                {/* Personal Information */}
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Personal Information</p>
+                  <div className="space-y-1.5 bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
+                    {(
+                      [
+                        { label: "Full Name", value: viewingPatient.patientName },
+                        { label: "Email", value: viewingPatient.patientEmail },
+                        { label: "Address", value: viewingPatient.patientAddress },
+                        { label: "Contact", value: viewingPatient.patientContact },
+                        {
+                          label: "Emergency Contact",
+                          value: viewingPatient.emergencyContactName
+                            ? `${viewingPatient.emergencyContactName} ${viewingPatient.emergencyRelationship ? `(${viewingPatient.emergencyRelationship})` : ""} - ${viewingPatient.emergencyContactPhone || ""}`
+                            : undefined,
+                        },
+                      ] as { label: string; value?: string }[]
+                    ).map(({ label, value }) => (
+                      <div key={label} className="grid grid-cols-[120px_1fr] items-center text-xs">
+                        <span className="font-semibold text-gray-400">{label}:</span>
+                        <span className="text-gray-900 font-medium truncate">{value || <span className="text-gray-300 italic">—</span>}</span>
                       </div>
                     ))}
+                    {viewingPatient.date && (
+                      <div className="grid grid-cols-[120px_1fr] items-start text-xs pt-1.5 border-t border-gray-200/60 mt-1">
+                        <span className="font-semibold text-green-700">Schedule:</span>
+                        <div className="text-gray-900 font-semibold">
+                          {new Date(`${viewingPatient.date.includes("T") ? viewingPatient.date.split("T")[0] : viewingPatient.date}T${viewingPatient.time || "00:00"}`).toLocaleString("en-US", {
+                            weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {viewingPatient.checkInStatus === "no-show" ? (
+                      <div className="mt-2.5 p-2.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center gap-2 text-rose-800 text-xs font-bold">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>Recorded as Absent / No-Show</span>
+                      </div>
+                    ) : isAppointmentPastDue(viewingPatient) && viewingPatient.status !== "completed" && viewingPatient.checkInStatus !== "completed" ? (
+                      <div className="mt-2.5 p-2.5 rounded-xl bg-rose-50/90 border border-rose-200 flex items-start gap-2.5 text-xs text-rose-900">
+                        <Clock className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-bold">Consultation Date &amp; Time Has Passed</p>
+                          <p className="text-[11px] text-rose-700 mt-0.5">
+                            The scheduled time for this consultation has passed. Please update the appointment status to reflect the outcome.
+                          </p>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
-              )}
 
-              {/* Submission timestamp */}
-              <p className="text-[11px] text-gray-400 pt-1">
-                Requested: {new Date(viewingPatient.createdAt).toLocaleString("en-US", {
-                  month: "short", day: "numeric", year: "numeric",
-                  hour: "2-digit", minute: "2-digit",
-                })}
-              </p>
-            </div>
-
-            {/* Contextual Footer actions */}
-            <div className="px-6 pb-5 pt-3 border-t border-gray-100 bg-white">
-              {viewingPatient.checkInStatus === "no-show" ? (
-                <button
-                  type="button"
-                  onClick={() => setViewingPatient(null)}
-                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
-                >
-                  Close
-                </button>
-              ) : isAppointmentPastDue(viewingPatient) && viewingPatient.checkInStatus !== "completed" && viewingPatient.status !== "completed" && viewingPatient.checkInStatus !== "arrived" ? (
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await handleMarkArrived(viewingPatient.id);
-                      setViewingPatient(null);
-                    }}
-                    className="py-3 rounded-full bg-[#dcfce7] hover:bg-[#bbf7d0] text-[#059669] text-xs sm:text-sm font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5 border border-[#bbf7d0] active:scale-[0.98]"
-                    title="Patient arrived"
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-[#059669]" />
-                    <span>Arrived</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const target = viewingPatient;
-                      setViewingPatient(null);
-                      setNoShowConfirmModal(target);
-                      setNoShowError("");
-                      setNoShowSuccess("");
-                    }}
-                    className="py-3 rounded-full bg-[#e1004a] hover:bg-[#c0003e] text-white text-xs sm:text-sm font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5 active:scale-[0.98]"
-                    title="Mark patient as absent / no-show"
-                  >
-                    <Ban className="w-4 h-4 text-white stroke-[2.2]" />
-                    <span>Mark as No-Show</span>
-                  </button>
+                {/* Uploaded Skin Photo */}
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Uploaded Skin Photo</p>
+                  {viewingPatient.skinPhotoUrl ? (
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50 overflow-hidden">
+                      <LazySkinPhoto
+                        pathOrUrl={viewingPatient.skinPhotoUrl}
+                        alt="Patient skin photo"
+                        className="w-full max-h-48 object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/50 px-4 py-5 text-center text-xs text-gray-400 italic">
+                      No skin photo uploaded.
+                    </div>
+                  )}
                 </div>
-              ) : viewingPatient.checkInStatus === "arrived" || viewingPatient.status === "completed" || viewingPatient.checkInStatus === "completed" ? (
-                <button
-                  type="button"
-                  onClick={() => setViewingPatient(null)}
-                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
-                >
-                  Close
-                </button>
-              ) : viewingPatient.status === "scheduled" ? (
-                <div className="flex flex-col sm:flex-row gap-2.5">
+
+                {/* AI Analysis Result */}
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">AI Scan Result</p>
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3.5 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-gray-500">Condition:</span>
+                      <span className="font-bold text-gray-900">
+                        {viewingPatient.aiConditionName || viewingPatient.conditionName || "General Consultation"}
+                      </span>
+                    </div>
+                    {viewingPatient.aiConfidence !== undefined && (
+                      <div className="flex items-center justify-between pt-1 border-t border-gray-200/60">
+                        <span className="font-semibold text-gray-500">Confidence:</span>
+                        <span className="font-bold text-magenta-700">{formatConfidencePercent(viewingPatient.aiConfidence)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Additional Notes */}
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Patient Notes</p>
+                  <div className="text-xs text-gray-700 bg-gray-50 border border-gray-100 rounded-2xl p-3.5 leading-relaxed">
+                    {viewingPatient.notes || <span className="text-gray-400 italic">No additional notes provided.</span>}
+                  </div>
+                </div>
+
+                {/* Rule 1: Reschedule Request Card if present */}
+                {viewingPatient.rescheduleRequested && (
+                  <div className="p-3.5 rounded-2xl bg-purple-50/90 border border-purple-200 text-purple-900 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-purple-800 flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5 text-purple-600" /> Patient Requested Reschedule
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-200 text-purple-800 font-bold">
+                        Pending Review
+                      </span>
+                    </div>
+                    <div className="text-xs space-y-1">
+                      <p className="text-gray-600">
+                        Current Reserved: <strong className="text-gray-900">{viewingPatient.date} at {formatAppointmentTime(viewingPatient.time)}</strong>
+                      </p>
+                      <p className="text-purple-950 font-semibold">
+                        Proposed Slot: <strong className="text-purple-700">{viewingPatient.rescheduleDate} at {formatAppointmentTime(viewingPatient.rescheduleTime)}</strong>
+                      </p>
+                      {viewingPatient.rescheduleReason && (
+                        <p className="text-[11px] text-purple-800 italic bg-white/70 p-2 rounded-lg border border-purple-100">
+                          Reason: "{viewingPatient.rescheduleReason}"
+                        </p>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const appt = viewingPatient;
+                          setViewingPatient(null);
+                          handleAcceptPatientReschedule(appt);
+                        }}
+                        className="py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-2xs cursor-pointer flex items-center justify-center gap-1"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Accept New Slot
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const appt = viewingPatient;
+                          setViewingPatient(null);
+                          setDeclinePatientRescheduleModal({
+                            appointmentId: appt.id,
+                            patientName: appt.patientName || "Patient",
+                            requestedDate: appt.rescheduleDate,
+                            requestedTime: appt.rescheduleTime,
+                            currentDate: appt.date,
+                            currentTime: appt.time,
+                            userId: appt.userId,
+                          });
+                          setDeclineRescheduleReason("");
+                          setDeclineRescheduleError("");
+                        }}
+                        className="py-2 px-3 rounded-xl border border-red-200 bg-white hover:bg-red-50 text-red-600 text-xs font-semibold transition cursor-pointer flex items-center justify-center gap-1"
+                      >
+                        <X className="w-3.5 h-3.5" /> Decline Request
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Rule 5: Traceable Appointment History & Audit Trail */}
+                {viewingPatient.appointmentHistory && viewingPatient.appointmentHistory.length > 0 && (
+                  <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-100">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-gray-700 mb-2.5">
+                      <History className="w-4 h-4 text-magenta-600" />
+                      <span>Appointment History &amp; Audit Trail</span>
+                    </div>
+                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                      {viewingPatient.appointmentHistory.map((item, idx) => (
+                        <div key={idx} className="p-2.5 rounded-xl bg-white border border-gray-100 text-xs shadow-2xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-gray-900 capitalize">
+                              {item.action.replace(/_/g, " ")}
+                            </span>
+                            <span className="text-[10px] text-gray-400 shrink-0">
+                              {new Date(item.timestamp).toLocaleDateString("en-PH", {
+                                month: "short",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                          </div>
+                          {item.actor && (
+                            <p className="text-[11px] text-gray-500 mt-0.5">By: <strong className="text-gray-700 capitalize">{item.actor}</strong></p>
+                          )}
+                          {item.previousDoctorName && item.newDoctorName && (
+                            <p className="text-[11px] text-blue-700 mt-0.5 font-medium">
+                              Reassigned from {item.previousDoctorName} &rarr; {item.newDoctorName}
+                            </p>
+                          )}
+                          {item.newDate && item.newTime && (
+                            <p className="text-[11px] text-purple-700 mt-0.5 font-medium">
+                              Target slot: {item.newDate} at {item.newTime}
+                            </p>
+                          )}
+                          {item.reason && (
+                            <p className="text-[11px] text-gray-600 italic mt-0.5">
+                              "{item.reason}"
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Submission timestamp */}
+                <p className="text-[11px] text-gray-400 pt-1">
+                  Requested: {new Date(viewingPatient.createdAt).toLocaleString("en-US", {
+                    month: "short", day: "numeric", year: "numeric",
+                    hour: "2-digit", minute: "2-digit",
+                  })}
+                </p>
+              </div>
+
+              {/* Contextual Footer actions */}
+              <div className="px-6 pb-5 pt-3 border-t border-gray-100 bg-white">
+                {viewingPatient.checkInStatus === "no-show" ? (
                   <button
                     type="button"
                     onClick={() => setViewingPatient(null)}
-                    className="flex-1 py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                    className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
                   >
                     Close
                   </button>
-                  {viewingPatient.rescheduleRequested && (
+                ) : isAppointmentPastDue(viewingPatient) && viewingPatient.checkInStatus !== "completed" && viewingPatient.status !== "completed" && viewingPatient.checkInStatus !== "arrived" ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await handleMarkArrived(viewingPatient.id);
+                        setViewingPatient(null);
+                      }}
+                      className="py-3 rounded-full bg-[#dcfce7] hover:bg-[#bbf7d0] text-[#059669] text-xs sm:text-sm font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5 border border-[#bbf7d0] active:scale-[0.98]"
+                      title="Patient arrived"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-[#059669]" />
+                      <span>Arrived</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
+                        const target = viewingPatient;
                         setViewingPatient(null);
-                        setQueueFilter("reschedule_requests");
+                        setNoShowConfirmModal(target);
+                        setNoShowError("");
+                        setNoShowSuccess("");
                       }}
-                      className="flex-1 py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                      className="py-3 rounded-full bg-[#e1004a] hover:bg-[#c0003e] text-white text-xs sm:text-sm font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                      title="Mark patient as absent / no-show"
                     >
-                      Review Reschedule
+                      <Ban className="w-4 h-4 text-white stroke-[2.2]" />
+                      <span>Mark as No-Show</span>
                     </button>
-                  )}
-                </div>
-              ) : viewingPatient.doctorStatus === "approved" ? (
-                <button
-                  type="button"
-                  onClick={() => setViewingPatient(null)}
-                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
-                >
-                  Close
-                </button>
-              ) : viewingPatient.doctorStatus === "rejected" ? (
-                <div className="grid grid-cols-2 gap-3">
+                  </div>
+                ) : viewingPatient.checkInStatus === "arrived" || viewingPatient.status === "completed" || viewingPatient.checkInStatus === "completed" ? (
                   <button
                     type="button"
-                    onClick={() => {
-                      setRejectModal({
-                        appointmentId: viewingPatient.id,
-                        patientName: viewingPatient.patientName || "Patient",
-                        clinicName: viewingPatient.clinicName || clinicName,
-                        patientEmail: viewingPatient.patientEmail,
-                      });
-                      setRejectReason(viewingPatient.doctorNote ? `Doctor declined: ${viewingPatient.doctorNote}` : "Declined by clinic.");
-                      setSelectedPresetReason("");
-                      setRejectError("");
-                      setViewingPatient(null);
-                    }}
-                    className="py-3 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                    onClick={() => setViewingPatient(null)}
+                    className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
                   >
-                    Confirm Decline
+                    Close
                   </button>
-                  {(() => {
-                    const privilege = viewingPatient ? getPatientPrivilegeStatus(viewingPatient) : null;
-                    const isLocked = Boolean(privilege?.isLocked);
-                    return (
+                ) : viewingPatient.status === "scheduled" ? (
+                  <div className="flex flex-col sm:flex-row gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setViewingPatient(null)}
+                      className="flex-1 py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                    >
+                      Close
+                    </button>
+                    {viewingPatient.rescheduleRequested && (
                       <button
                         type="button"
-                        disabled={isLocked}
                         onClick={() => {
-                          const apptToReassign = viewingPatient;
                           setViewingPatient(null);
-                          setSelectedDoctorId("");
-                          setAssignDoctorModal({
-                            appointmentId: apptToReassign.id,
-                            patientName: apptToReassign.patientName,
-                            isReassign: true,
-                            currentDoctorId: apptToReassign.assignedDoctorId,
-                            currentDoctorName: apptToReassign.assignedDoctorName,
-                            doctorNote: apptToReassign.doctorNote,
-                            targetDate: apptToReassign.date,
-                            targetTime: apptToReassign.time,
-                            primaryScanId: apptToReassign.primaryScanId,
-                            userId: apptToReassign.userId,
-                          });
+                          setQueueFilter("reschedule_requests");
                         }}
-                        title={
-                          isLocked && privilege
-                            ? `Patient has an exclusive 24-hour privilege window (${privilege.hoursRemaining}h ${privilege.minutesRemaining}m remaining).`
-                            : undefined
-                        }
-                        className={`py-3 rounded-full text-xs font-semibold transition-colors shadow-sm flex items-center justify-center gap-1.5 ${
-                          isLocked
+                        className="flex-1 py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                      >
+                        Review Reschedule
+                      </button>
+                    )}
+                  </div>
+                ) : viewingPatient.doctorStatus === "approved" ? (
+                  <button
+                    type="button"
+                    onClick={() => setViewingPatient(null)}
+                    className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                  >
+                    Close
+                  </button>
+                ) : viewingPatient.doctorStatus === "rejected" ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRejectModal({
+                          appointmentId: viewingPatient.id,
+                          patientName: viewingPatient.patientName || "Patient",
+                          clinicName: viewingPatient.clinicName || clinicName,
+                          patientEmail: viewingPatient.patientEmail,
+                        });
+                        setRejectReason(viewingPatient.doctorNote ? `Doctor declined: ${viewingPatient.doctorNote}` : "Declined by clinic.");
+                        setSelectedPresetReason("");
+                        setRejectError("");
+                        setViewingPatient(null);
+                      }}
+                      className="py-3 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                    >
+                      Confirm Decline
+                    </button>
+                    {(() => {
+                      const privilege = viewingPatient ? getPatientPrivilegeStatus(viewingPatient) : null;
+                      const isLocked = Boolean(privilege?.isLocked);
+                      return (
+                        <button
+                          type="button"
+                          disabled={isLocked}
+                          onClick={() => {
+                            const apptToReassign = viewingPatient;
+                            setViewingPatient(null);
+                            setSelectedDoctorId("");
+                            setAssignDoctorModal({
+                              appointmentId: apptToReassign.id,
+                              patientName: apptToReassign.patientName,
+                              isReassign: true,
+                              currentDoctorId: apptToReassign.assignedDoctorId,
+                              currentDoctorName: apptToReassign.assignedDoctorName,
+                              doctorNote: apptToReassign.doctorNote,
+                              targetDate: apptToReassign.date,
+                              targetTime: apptToReassign.time,
+                              primaryScanId: apptToReassign.primaryScanId,
+                              userId: apptToReassign.userId,
+                            });
+                          }}
+                          title={
+                            isLocked && privilege
+                              ? `Patient has an exclusive 24-hour privilege window (${privilege.hoursRemaining}h ${privilege.minutesRemaining}m remaining).`
+                              : undefined
+                          }
+                          className={`py-3 rounded-full text-xs font-semibold transition-colors shadow-sm flex items-center justify-center gap-1.5 ${isLocked
                             ? "bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed"
                             : "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
-                        }`}
-                      >
-                        {isLocked ? (
-                          <>
-                            <Lock className="w-3.5 h-3.5 text-gray-400" />
-                            <span>Re-assign (Patient Privilege Active)</span>
-                          </>
-                        ) : (
-                          <span>Re-assign Doctor</span>
-                        )}
-                      </button>
-                    );
-                  })()}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setViewingPatient(null)}
-                  className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
-                >
-                  Close
-                </button>
-              )}
-            </div>
-          </motion.div>
-        </div>
-      )}
+                            }`}
+                        >
+                          {isLocked ? (
+                            <>
+                              <Lock className="w-3.5 h-3.5 text-gray-400" />
+                              <span>Re-assign (Patient Privilege Active)</span>
+                            </>
+                          ) : (
+                            <span>Re-assign Doctor</span>
+                          )}
+                        </button>
+                      );
+                    })()}
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setViewingPatient(null)}
+                    className="w-full py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                  >
+                    Close
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
       </ModalPortal>
 
       {/* ── Finalize Schedule Modal (After Doctor Approval) ─────────────────────── */}
@@ -3536,84 +3534,84 @@ export default function ClinicAppointmentsPage() {
               transition={{ duration: 0.2 }}
               className="relative z-9999 w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
             >
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-emerald-600" />
-                {finalizeScheduleModal.isReschedule ? "Reschedule Consultation" : "Finalize Consultation Schedule"}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setFinalizeScheduleModal(null)}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <p className="text-xs text-gray-500 mb-4">
-              Patient: <strong className="text-gray-800">{finalizeScheduleModal.patientName}</strong>
-              {finalizeScheduleModal.assignedDoctorName && (
-                <span> &bull; Attending: <strong className="text-gray-800">Dr. {finalizeScheduleModal.assignedDoctorName.replace(/^dr\.\s*/i, "")}</strong></span>
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-emerald-600" />
+                  {finalizeScheduleModal.isReschedule ? "Reschedule Consultation" : "Finalize Consultation Schedule"}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setFinalizeScheduleModal(null)}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mb-4">
+                Patient: <strong className="text-gray-800">{finalizeScheduleModal.patientName}</strong>
+                {finalizeScheduleModal.assignedDoctorName && (
+                  <span> &bull; Attending: <strong className="text-gray-800">Dr. {finalizeScheduleModal.assignedDoctorName.replace(/^dr\.\s*/i, "")}</strong></span>
+                )}
+              </p>
+
+              {scheduleError && (
+                <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                  {scheduleError}
+                </div>
               )}
-            </p>
 
-            {scheduleError && (
-              <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
-                {scheduleError}
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Consultation Date</label>
+                  <input
+                    type="date"
+                    value={finalizeScheduleModal.date}
+                    onChange={(e) =>
+                      setFinalizeScheduleModal((prev) =>
+                        prev ? { ...prev, date: e.target.value } : prev
+                      )
+                    }
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 transition-all bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Consultation Time</label>
+                  <input
+                    type="time"
+                    value={finalizeScheduleModal.time}
+                    onChange={(e) =>
+                      setFinalizeScheduleModal((prev) =>
+                        prev ? { ...prev, time: e.target.value } : prev
+                      )
+                    }
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 transition-all bg-white"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Operating hours: {clinicSettings.openTime} &ndash; {clinicSettings.closeTime}
+                  </p>
+                </div>
               </div>
-            )}
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Consultation Date</label>
-                <input
-                  type="date"
-                  value={finalizeScheduleModal.date}
-                  onChange={(e) =>
-                    setFinalizeScheduleModal((prev) =>
-                      prev ? { ...prev, date: e.target.value } : prev
-                    )
-                  }
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 transition-all bg-white"
-                />
+              <div className="mt-6 grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setFinalizeScheduleModal(null)}
+                  className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmFinalizeSchedule}
+                  className="py-3 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                >
+                  Confirm &amp; Schedule
+                </button>
               </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Consultation Time</label>
-                <input
-                  type="time"
-                  value={finalizeScheduleModal.time}
-                  onChange={(e) =>
-                    setFinalizeScheduleModal((prev) =>
-                      prev ? { ...prev, time: e.target.value } : prev
-                    )
-                  }
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 transition-all bg-white"
-                />
-                <p className="text-[10px] text-gray-400 mt-1">
-                  Operating hours: {clinicSettings.openTime} &ndash; {clinicSettings.closeTime}
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-6 grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => setFinalizeScheduleModal(null)}
-                className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmFinalizeSchedule}
-                className="py-3 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
-              >
-                Confirm &amp; Schedule
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
+            </motion.div>
+          </div>
+        )}
       </ModalPortal>
 
       {/* ── Assign Doctor for Review Modal (also used for Re-assigning) ─────────────────────── */}
@@ -3627,192 +3625,192 @@ export default function ClinicAppointmentsPage() {
               transition={{ duration: 0.2 }}
               className="relative z-9999 w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 text-left"
             >
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
-                <Stethoscope className="w-4 h-4 text-magenta-600" />
-                {assignDoctorModal.isReassign ? "Re-assign Doctor" : "Assign Doctor for Review"}
-              </h3>
-              <button
-                type="button"
-                onClick={() => { setAssignDoctorModal(null); setSelectedDoctorId(""); setAssignError(""); }}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <p className="text-xs text-gray-500 mb-3">
-              {assignDoctorModal.isReassign
-                ? `Reassign to an available doctor in your clinic at the original consultation schedule.`
-                : `Select a doctor to review this patient's case and approve the consultation.`}
-            </p>
-
-            {/* Upfront Payment Verification Banner */}
-            <div className="mb-3 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center justify-between">
-              <div className="flex items-center gap-1.5 font-semibold">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Upfront Consultation Fee Verified (₱{clinicFee.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
-              </div>
-              <span className="text-[10px] text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-full font-bold">
-                Paid
-              </span>
-            </div>
-
-            {/* Original Appointment Slot Reminder */}
-            {assignDoctorModal.targetDate && (
-              <div className="mb-3 p-2.5 rounded-xl bg-purple-50 border border-purple-200 text-xs text-purple-900 flex items-center justify-between">
-                <div className="flex items-center gap-1.5 font-medium">
-                  <Calendar className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Original Slot: <strong>{assignDoctorModal.targetDate} at {formatAppointmentTime(assignDoctorModal.targetTime)}</strong></span>
-                </div>
-                <span className="text-[10px] text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full font-bold">Slot Preserved</span>
-              </div>
-            )}
-
-            {assignDoctorModal.doctorNote && (
-              <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
-                <strong>Previous Doctor's Note:</strong> "{assignDoctorModal.doctorNote}"
-              </div>
-            )}
-
-            {assignError && (
-              <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
-                {assignError}
-              </div>
-            )}
-
-            {/* Doctors list or No Doctor Available alert */}
-            {assignDoctorModal.isReassign && reassignAvailability.availableDoctors.length === 0 ? (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50/90 p-4 text-center my-3">
-                <AlertTriangle className="w-7 h-7 text-amber-600 mx-auto mb-2" />
-                <p className="text-xs font-bold text-amber-900">No Doctor Available for This Slot</p>
-                <p className="text-[11px] text-amber-700 mt-1 leading-relaxed">
-                  None of the registered clinic dermatologists have an open shift or available capacity for <strong>{assignDoctorModal.targetDate} at {formatAppointmentTime(assignDoctorModal.targetTime)}</strong>.
-                </p>
-                <p className="text-[11px] text-gray-600 mt-2">
-                  Per DermAI policy, the clinic cannot automatically reschedule the patient. Please notify the patient so they can select a new schedule.
-                </p>
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
+                  <Stethoscope className="w-4 h-4 text-magenta-600" />
+                  {assignDoctorModal.isReassign ? "Re-assign Doctor" : "Assign Doctor for Review"}
+                </h3>
                 <button
                   type="button"
-                  onClick={handleNotifyPatientNoDoctorAvailable}
-                  className="mt-3.5 w-full py-2.5 px-3 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-bold transition shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                  onClick={() => { setAssignDoctorModal(null); setSelectedDoctorId(""); setAssignError(""); }}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
                 >
-                  <Send className="w-3.5 h-3.5" /> Notify Patient to Select New Schedule
+                  <X className="w-5 h-5" />
                 </button>
               </div>
-            ) : (
-              <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                {clinicDoctors.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-4 text-center">
-                    <p className="text-xs text-gray-500">No doctors registered yet.</p>
-                    <Link
-                      to="/clinic/doctors"
-                      className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-magenta-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-magenta-700 transition-colors shadow-xs"
-                    >
-                      <Stethoscope className="w-3.5 h-3.5" /> Add Doctor
-                    </Link>
+              <p className="text-xs text-gray-500 mb-3">
+                {assignDoctorModal.isReassign
+                  ? `Reassign to an available doctor in your clinic at the original consultation schedule.`
+                  : `Select a doctor to review this patient's case and approve the consultation.`}
+              </p>
+
+              {/* Upfront Payment Verification Banner */}
+              <div className="mb-3 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Upfront Consultation Fee Verified (₱{clinicFee.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
+                </div>
+                <span className="text-[10px] text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-full font-bold">
+                  Paid
+                </span>
+              </div>
+
+              {/* Original Appointment Slot Reminder */}
+              {assignDoctorModal.targetDate && (
+                <div className="mb-3 p-2.5 rounded-xl bg-purple-50 border border-purple-200 text-xs text-purple-900 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <Calendar className="w-3.5 h-3.5 text-purple-600" />
+                    <span>Original Slot: <strong>{assignDoctorModal.targetDate} at {formatAppointmentTime(assignDoctorModal.targetTime)}</strong></span>
                   </div>
-                ) : assignDoctorModal.isReassign ? (
-                  <>
-                    {/* Available Doctors */}
-                    {reassignAvailability.availableDoctors.map(({ doctor }) => (
+                  <span className="text-[10px] text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full font-bold">Slot Preserved</span>
+                </div>
+              )}
+
+              {assignDoctorModal.doctorNote && (
+                <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+                  <strong>Previous Doctor's Note:</strong> "{assignDoctorModal.doctorNote}"
+                </div>
+              )}
+
+              {assignError && (
+                <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                  {assignError}
+                </div>
+              )}
+
+              {/* Doctors list or No Doctor Available alert */}
+              {assignDoctorModal.isReassign && reassignAvailability.availableDoctors.length === 0 ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50/90 p-4 text-center my-3">
+                  <AlertTriangle className="w-7 h-7 text-amber-600 mx-auto mb-2" />
+                  <p className="text-xs font-bold text-amber-900">No Doctor Available for This Slot</p>
+                  <p className="text-[11px] text-amber-700 mt-1 leading-relaxed">
+                    None of the registered clinic dermatologists have an open shift or available capacity for <strong>{assignDoctorModal.targetDate} at {formatAppointmentTime(assignDoctorModal.targetTime)}</strong>.
+                  </p>
+                  <p className="text-[11px] text-gray-600 mt-2">
+                    Per DermAI policy, the clinic cannot automatically reschedule the patient. Please notify the patient so they can select a new schedule.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleNotifyPatientNoDoctorAvailable}
+                    className="mt-3.5 w-full py-2.5 px-3 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-bold transition shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Send className="w-3.5 h-3.5" /> Notify Patient to Select New Schedule
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                  {clinicDoctors.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-4 text-center">
+                      <p className="text-xs text-gray-500">No doctors registered yet.</p>
+                      <Link
+                        to="/clinic/doctors"
+                        className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-magenta-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-magenta-700 transition-colors shadow-xs"
+                      >
+                        <Stethoscope className="w-3.5 h-3.5" /> Add Doctor
+                      </Link>
+                    </div>
+                  ) : assignDoctorModal.isReassign ? (
+                    <>
+                      {/* Available Doctors */}
+                      {reassignAvailability.availableDoctors.map(({ doctor }) => (
+                        <button
+                          key={doctor.id}
+                          type="button"
+                          onClick={() => setSelectedDoctorId(doctor.id)}
+                          className={`w-full text-left px-3.5 py-2.5 rounded-2xl border text-xs transition-colors cursor-pointer flex items-center gap-3 ${selectedDoctorId === doctor.id
+                            ? "border-magenta-500 bg-magenta-50/50 text-magenta-900 ring-2 ring-magenta-500/20 shadow-xs"
+                            : "border-gray-200 hover:border-gray-300 bg-white"
+                            }`}
+                        >
+                          <DoctorAvatar
+                            doctorId={doctor.id}
+                            doctor={doctor}
+                            name={doctor.name}
+                            className="w-9 h-9 rounded-xl border border-magenta-200 shrink-0 font-bold text-xs"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-1">
+                              <p className="font-bold text-gray-900 truncate">{doctor.name}</p>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800 shrink-0">
+                                Available
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-gray-500 mt-0.5 truncate">{doctor.specialization}</p>
+                          </div>
+                        </button>
+                      ))}
+
+                      {/* Unavailable Doctors */}
+                      {reassignAvailability.unavailableDoctors.map(({ doctor, reason }) => (
+                        <div
+                          key={doctor.id}
+                          className="w-full text-left px-3.5 py-2 rounded-2xl border border-gray-100 bg-gray-50/60 text-xs opacity-60 flex items-center gap-3"
+                        >
+                          <DoctorAvatar
+                            doctorId={doctor.id}
+                            doctor={doctor}
+                            name={doctor.name}
+                            className="w-9 h-9 rounded-xl border border-gray-200 shrink-0 font-bold text-xs opacity-60"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-1">
+                              <p className="font-semibold text-gray-700 truncate">{doctor.name}</p>
+                              <span className="text-[9px] px-1.5 py-0.5 rounded-md font-semibold bg-gray-200 text-gray-600 shrink-0 truncate max-w-37.5">
+                                {reason}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-gray-400 mt-0.5 truncate">{doctor.specialization}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    clinicDoctors.map((doc) => (
                       <button
-                        key={doctor.id}
+                        key={doc.id}
                         type="button"
-                        onClick={() => setSelectedDoctorId(doctor.id)}
-                        className={`w-full text-left px-3.5 py-2.5 rounded-2xl border text-xs transition-colors cursor-pointer flex items-center gap-3 ${selectedDoctorId === doctor.id
+                        onClick={() => setSelectedDoctorId(doc.id)}
+                        className={`w-full text-left px-3.5 py-2.5 rounded-2xl border text-xs transition-colors cursor-pointer flex items-center gap-3 ${selectedDoctorId === doc.id
                           ? "border-magenta-500 bg-magenta-50/50 text-magenta-900 ring-2 ring-magenta-500/20 shadow-xs"
                           : "border-gray-200 hover:border-gray-300 bg-white"
                           }`}
                       >
                         <DoctorAvatar
-                          doctorId={doctor.id}
-                          doctor={doctor}
-                          name={doctor.name}
+                          doctorId={doc.id}
+                          doctor={doc}
+                          name={doc.name}
                           className="w-9 h-9 rounded-xl border border-magenta-200 shrink-0 font-bold text-xs"
                         />
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-1">
-                            <p className="font-bold text-gray-900 truncate">{doctor.name}</p>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800 shrink-0">
-                              Available
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-gray-500 mt-0.5 truncate">{doctor.specialization}</p>
+                          <p className="font-bold text-gray-900 truncate">{doc.name}</p>
+                          <p className="text-[11px] text-gray-500 mt-0.5 truncate">{doc.specialization}</p>
                         </div>
                       </button>
-                    ))}
+                    ))
+                  )}
+                </div>
+              )}
 
-                    {/* Unavailable Doctors */}
-                    {reassignAvailability.unavailableDoctors.map(({ doctor, reason }) => (
-                      <div
-                        key={doctor.id}
-                        className="w-full text-left px-3.5 py-2 rounded-2xl border border-gray-100 bg-gray-50/60 text-xs opacity-60 flex items-center gap-3"
-                      >
-                        <DoctorAvatar
-                          doctorId={doctor.id}
-                          doctor={doctor}
-                          name={doctor.name}
-                          className="w-9 h-9 rounded-xl border border-gray-200 shrink-0 font-bold text-xs opacity-60"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-1">
-                            <p className="font-semibold text-gray-700 truncate">{doctor.name}</p>
-                            <span className="text-[9px] px-1.5 py-0.5 rounded-md font-semibold bg-gray-200 text-gray-600 shrink-0 truncate max-w-37.5">
-                              {reason}
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-gray-400 mt-0.5 truncate">{doctor.specialization}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                ) : (
-                  clinicDoctors.map((doc) => (
-                    <button
-                      key={doc.id}
-                      type="button"
-                      onClick={() => setSelectedDoctorId(doc.id)}
-                      className={`w-full text-left px-3.5 py-2.5 rounded-2xl border text-xs transition-colors cursor-pointer flex items-center gap-3 ${selectedDoctorId === doc.id
-                        ? "border-magenta-500 bg-magenta-50/50 text-magenta-900 ring-2 ring-magenta-500/20 shadow-xs"
-                        : "border-gray-200 hover:border-gray-300 bg-white"
-                        }`}
-                    >
-                      <DoctorAvatar
-                        doctorId={doc.id}
-                        doctor={doc}
-                        name={doc.name}
-                        className="w-9 h-9 rounded-xl border border-magenta-200 shrink-0 font-bold text-xs"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="font-bold text-gray-900 truncate">{doc.name}</p>
-                        <p className="text-[11px] text-gray-500 mt-0.5 truncate">{doc.specialization}</p>
-                      </div>
-                    </button>
-                  ))
-                )}
+              <div className="mt-5 grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => { setAssignDoctorModal(null); setSelectedDoctorId(""); setAssignError(""); }}
+                  className="py-2.5 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDoctorAssignment}
+                  disabled={!selectedDoctorId}
+                  className="py-2.5 rounded-full bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-xs cursor-pointer"
+                >
+                  {assignDoctorModal.isReassign ? "Confirm Reassignment" : "Assign for Review"}
+                </button>
               </div>
-            )}
-
-            <div className="mt-5 grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => { setAssignDoctorModal(null); setSelectedDoctorId(""); setAssignError(""); }}
-                className="py-2.5 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDoctorAssignment}
-                disabled={!selectedDoctorId}
-                className="py-2.5 rounded-full bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-xs cursor-pointer"
-              >
-                {assignDoctorModal.isReassign ? "Confirm Reassignment" : "Assign for Review"}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
+            </motion.div>
+          </div>
+        )}
       </ModalPortal>
 
       {/* ── Request Patient to Reschedule Modal (Clinic permissions: cannot change date/time unilaterally) ── */}
@@ -3826,113 +3824,113 @@ export default function ClinicAppointmentsPage() {
               transition={{ duration: 0.2 }}
               className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
             >
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-magenta-600" />
-                  Request Patient to Reschedule
-                </h3>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  Patient: <span className="font-semibold text-gray-800">{requestPatientRescheduleModal.patientName}</span>
-                </p>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
+                    <Calendar className="w-4 h-4 text-magenta-600" />
+                    Request Patient to Reschedule
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Patient: <span className="font-semibold text-gray-800">{requestPatientRescheduleModal.patientName}</span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRequestPatientRescheduleModal(null);
+                    setReschedulePromptReason("");
+                    setReschedulePromptError("");
+                  }}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setRequestPatientRescheduleModal(null);
-                  setReschedulePromptReason("");
-                  setReschedulePromptError("");
-                }}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            <div className="mb-3.5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
-              <strong>DermAI Scheduling Policy:</strong> The clinic cannot unilaterally change a patient's date or time. Submitting this will notify the patient to select a new available date and time.
-            </div>
-
-            <div className="mb-3 text-xs text-gray-600">
-              Current schedule: <strong className="text-gray-900">{requestPatientRescheduleModal.currentDate} at {formatAppointmentTime(requestPatientRescheduleModal.currentTime)}</strong>
-            </div>
-
-            {reschedulePromptError && (
-              <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
-                {reschedulePromptError}
+              <div className="mb-3.5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                <strong>DermAI Scheduling Policy:</strong> The clinic cannot unilaterally change a patient's date or time. Submitting this will notify the patient to select a new available date and time.
               </div>
-            )}
 
-            {/* Presets */}
-            <div className="mb-3">
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
-                Quick Reason Suggestions
-              </label>
-              <div className="space-y-1">
-                {[
-                  "Attending doctor on emergency leave for this day",
-                  "Clinic undergoing facility maintenance on this date",
-                  "Doctor shift schedule adjusted by clinic management",
-                ].map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => {
-                      setReschedulePromptReason(preset);
-                      setReschedulePromptError("");
-                    }}
-                    className={`w-full text-left px-3 py-1.5 rounded-xl text-xs transition-colors border cursor-pointer ${reschedulePromptReason === preset
-                      ? "bg-magenta-50 border-magenta-200 text-magenta-800 font-semibold"
-                      : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
-                      }`}
-                  >
-                    • {preset}
-                  </button>
-                ))}
+              <div className="mb-3 text-xs text-gray-600">
+                Current schedule: <strong className="text-gray-900">{requestPatientRescheduleModal.currentDate} at {formatAppointmentTime(requestPatientRescheduleModal.currentTime)}</strong>
               </div>
-            </div>
 
-            {/* Note Textarea */}
-            <div className="mb-5">
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                Note to Patient (Required)
-              </label>
-              <textarea
-                value={reschedulePromptReason}
-                onChange={(e) => {
-                  setReschedulePromptReason(e.target.value);
-                  setReschedulePromptError("");
-                }}
-                rows={3}
-                placeholder="Explain why the patient should choose a new schedule..."
-                className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 bg-white"
-              />
-            </div>
+              {reschedulePromptError && (
+                <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                  {reschedulePromptError}
+                </div>
+              )}
 
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setRequestPatientRescheduleModal(null);
-                  setReschedulePromptReason("");
-                  setReschedulePromptError("");
-                }}
-                className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={reschedulePromptSaving || !reschedulePromptReason.trim()}
-                onClick={handleConfirmRequestPatientReschedule}
-                className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer disabled:opacity-50"
-              >
-                {reschedulePromptSaving ? "Sending..." : "Send Request to Patient"}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
+              {/* Presets */}
+              <div className="mb-3">
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                  Quick Reason Suggestions
+                </label>
+                <div className="space-y-1">
+                  {[
+                    "Attending doctor on emergency leave for this day",
+                    "Clinic undergoing facility maintenance on this date",
+                    "Doctor shift schedule adjusted by clinic management",
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setReschedulePromptReason(preset);
+                        setReschedulePromptError("");
+                      }}
+                      className={`w-full text-left px-3 py-1.5 rounded-xl text-xs transition-colors border cursor-pointer ${reschedulePromptReason === preset
+                        ? "bg-magenta-50 border-magenta-200 text-magenta-800 font-semibold"
+                        : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
+                        }`}
+                    >
+                      • {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Note Textarea */}
+              <div className="mb-5">
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                  Note to Patient (Required)
+                </label>
+                <textarea
+                  value={reschedulePromptReason}
+                  onChange={(e) => {
+                    setReschedulePromptReason(e.target.value);
+                    setReschedulePromptError("");
+                  }}
+                  rows={3}
+                  placeholder="Explain why the patient should choose a new schedule..."
+                  className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 bg-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRequestPatientRescheduleModal(null);
+                    setReschedulePromptReason("");
+                    setReschedulePromptError("");
+                  }}
+                  className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={reschedulePromptSaving || !reschedulePromptReason.trim()}
+                  onClick={handleConfirmRequestPatientReschedule}
+                  className="py-3 rounded-full bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  {reschedulePromptSaving ? "Sending..." : "Send Request to Patient"}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </ModalPortal>
 
       {/* ── Decline Patient Reschedule Request Modal (Retains original schedule) ── */}
@@ -3946,81 +3944,81 @@ export default function ClinicAppointmentsPage() {
               transition={{ duration: 0.2 }}
               className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
             >
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="font-bold text-gray-900 text-base">Decline Reschedule Request</h3>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  Patient: <span className="font-semibold text-gray-800">{declinePatientRescheduleModal.patientName}</span>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="font-bold text-gray-900 text-base">Decline Reschedule Request</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Patient: <span className="font-semibold text-gray-800">{declinePatientRescheduleModal.patientName}</span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeclinePatientRescheduleModal(null);
+                    setDeclineRescheduleReason("");
+                    setDeclineRescheduleError("");
+                  }}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="mb-3.5 p-3 rounded-xl bg-slate-50 border border-gray-200 text-xs text-gray-700 space-y-1">
+                <p>
+                  Patient requested: <strong>{declinePatientRescheduleModal.requestedDate} at {formatAppointmentTime(declinePatientRescheduleModal.requestedTime)}</strong>
+                </p>
+                <p className="text-emerald-700 font-semibold">
+                  Original schedule ({declinePatientRescheduleModal.currentDate} at {formatAppointmentTime(declinePatientRescheduleModal.currentTime)}) will remain active.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setDeclinePatientRescheduleModal(null);
-                  setDeclineRescheduleReason("");
-                  setDeclineRescheduleError("");
-                }}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            <div className="mb-3.5 p-3 rounded-xl bg-slate-50 border border-gray-200 text-xs text-gray-700 space-y-1">
-              <p>
-                Patient requested: <strong>{declinePatientRescheduleModal.requestedDate} at {formatAppointmentTime(declinePatientRescheduleModal.requestedTime)}</strong>
-              </p>
-              <p className="text-emerald-700 font-semibold">
-                Original schedule ({declinePatientRescheduleModal.currentDate} at {formatAppointmentTime(declinePatientRescheduleModal.currentTime)}) will remain active.
-              </p>
-            </div>
+              {declineRescheduleError && (
+                <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                  {declineRescheduleError}
+                </div>
+              )}
 
-            {declineRescheduleError && (
-              <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
-                {declineRescheduleError}
+              <div className="mb-4">
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                  Reason for Patient (Optional)
+                </label>
+                <textarea
+                  value={declineRescheduleReason}
+                  onChange={(e) => {
+                    setDeclineRescheduleReason(e.target.value);
+                    setDeclineRescheduleError("");
+                  }}
+                  rows={3}
+                  placeholder="e.g. Doctor is fully booked at this requested time..."
+                  className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-400/10 bg-white"
+                />
               </div>
-            )}
 
-            <div className="mb-4">
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                Reason for Patient (Optional)
-              </label>
-              <textarea
-                value={declineRescheduleReason}
-                onChange={(e) => {
-                  setDeclineRescheduleReason(e.target.value);
-                  setDeclineRescheduleError("");
-                }}
-                rows={3}
-                placeholder="e.g. Doctor is fully booked at this requested time..."
-                className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-400/10 bg-white"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setDeclinePatientRescheduleModal(null);
-                  setDeclineRescheduleReason("");
-                  setDeclineRescheduleError("");
-                }}
-                className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={declineRescheduleSaving}
-                onClick={handleConfirmDeclineReschedule}
-                className="py-3 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer disabled:opacity-50"
-              >
-                {declineRescheduleSaving ? "Saving..." : "Decline (Keep Original)"}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeclinePatientRescheduleModal(null);
+                    setDeclineRescheduleReason("");
+                    setDeclineRescheduleError("");
+                  }}
+                  className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={declineRescheduleSaving}
+                  onClick={handleConfirmDeclineReschedule}
+                  className="py-3 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  {declineRescheduleSaving ? "Saving..." : "Decline (Keep Original)"}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </ModalPortal>
 
       {/* ── Reject Request with Reason Modal ─────────────────────── */}
@@ -4034,109 +4032,109 @@ export default function ClinicAppointmentsPage() {
               transition={{ duration: 0.2 }}
               className="relative z-9999 w-full max-w-md bg-white rounded-3xl shadow-2xl p-6 border border-gray-100 text-left"
             >
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="font-bold text-gray-900 text-base">Decline Appointment</h3>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  Patient: <span className="font-semibold text-gray-800">{rejectModal.patientName}</span>
-                </p>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="font-bold text-gray-900 text-base">Decline Appointment</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Patient: <span className="font-semibold text-gray-800">{rejectModal.patientName}</span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRejectModal(null);
+                    setRejectReason("");
+                    setSelectedPresetReason("");
+                    setRejectError("");
+                  }}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setRejectModal(null);
-                  setRejectReason("");
-                  setSelectedPresetReason("");
-                  setRejectError("");
-                }}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            <p className="text-xs text-gray-600 mb-3.5 leading-relaxed">
-              Please provide a reason. The patient will receive a notification with this note.
-            </p>
+              <p className="text-xs text-gray-600 mb-3.5 leading-relaxed">
+                Please provide a reason. The patient will receive a notification with this note.
+              </p>
 
-            {rejectError && (
-              <div className="mb-3 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
-                {rejectError}
+              {rejectError && (
+                <div className="mb-3 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                  {rejectError}
+                </div>
+              )}
+
+              {/* Quick Reason Presets */}
+              <div className="space-y-1.5 mb-3.5">
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                  Common Reasons
+                </label>
+                <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+                  {[
+                    "Doctor unavailable for the requested consultation",
+                    "Clinic has reached full capacity for consultations",
+                    "Condition requires specialized tertiary hospital facility",
+                    "Incomplete or unclear patient skin condition details",
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setSelectedPresetReason(preset);
+                        setRejectReason(preset);
+                        setRejectError("");
+                      }}
+                      className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-colors border cursor-pointer ${selectedPresetReason === preset || rejectReason === preset
+                        ? "bg-red-50 border-red-200 text-red-700 font-semibold"
+                        : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
+                        }`}
+                    >
+                      • {preset}
+                    </button>
+                  ))}
+                </div>
               </div>
-            )}
 
-            {/* Quick Reason Presets */}
-            <div className="space-y-1.5 mb-3.5">
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                Common Reasons
-              </label>
-              <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
-                {[
-                  "Doctor unavailable for the requested consultation",
-                  "Clinic has reached full capacity for consultations",
-                  "Condition requires specialized tertiary hospital facility",
-                  "Incomplete or unclear patient skin condition details",
-                ].map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => {
-                      setSelectedPresetReason(preset);
-                      setRejectReason(preset);
-                      setRejectError("");
-                    }}
-                    className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-colors border cursor-pointer ${selectedPresetReason === preset || rejectReason === preset
-                      ? "bg-red-50 border-red-200 text-red-700 font-semibold"
-                      : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
-                      }`}
-                  >
-                    • {preset}
-                  </button>
-                ))}
+              {/* Custom Reason Note */}
+              <div className="mb-5">
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                  Note for Patient
+                </label>
+                <textarea
+                  value={rejectReason}
+                  onChange={(e) => {
+                    setRejectReason(e.target.value);
+                    setRejectError("");
+                  }}
+                  rows={3}
+                  placeholder="Type the decline note for the patient..."
+                  className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-400/10 bg-white"
+                />
               </div>
-            </div>
 
-            {/* Custom Reason Note */}
-            <div className="mb-5">
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                Note for Patient
-              </label>
-              <textarea
-                value={rejectReason}
-                onChange={(e) => {
-                  setRejectReason(e.target.value);
-                  setRejectError("");
-                }}
-                rows={3}
-                placeholder="Type the decline note for the patient..."
-                className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-400/10 bg-white"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setRejectModal(null);
-                  setRejectReason("");
-                  setSelectedPresetReason("");
-                  setRejectError("");
-                }}
-                className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmRejection}
-                className="py-3 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
-              >
-                Confirm Decline
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRejectModal(null);
+                    setRejectReason("");
+                    setSelectedPresetReason("");
+                    setRejectError("");
+                  }}
+                  className="py-3 rounded-full border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmRejection}
+                  className="py-3 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                >
+                  Confirm Decline
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </ModalPortal>
 
     </div>

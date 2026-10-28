@@ -344,8 +344,8 @@ export default function ClinicDashboardPage() {
                 dutyDays: Array.isArray(d.duty_days)
                   ? d.duty_days
                   : typeof d.duty_days === "string"
-                  ? d.duty_days.split(",").map((s: string) => s.trim())
-                  : [],
+                    ? d.duty_days.split(",").map((s: string) => s.trim())
+                    : [],
                 dutyStartTime: d.duty_start_time || "08:00",
                 dutyEndTime: d.duty_end_time || "17:00",
                 dutySchedule: d.duty_schedule,
@@ -1299,11 +1299,6 @@ export default function ClinicDashboardPage() {
             {now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
           </p>
         </div>
-        {verificationStatus === "verified" && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-bold border border-emerald-200">
-            <CheckCircle2 className="w-3.5 h-3.5" /> Active Clinic
-          </span>
-        )}
       </div>
 
       {/* ── Verified dashboard content ──────────────────────── */}

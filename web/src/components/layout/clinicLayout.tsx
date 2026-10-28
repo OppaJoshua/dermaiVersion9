@@ -132,7 +132,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
   const currentPage = sidebarLinks.find((l) => l.path === location.pathname)?.label || "Dashboard";
-  return (<div className="min-h-screen bg-gray-50/80 flex">
+  return (<div className="min-h-screen bg-patient-bg flex">
     {sidebarOpen && (<div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-25 lg:hidden" onClick={() => setSidebarOpen(false)} />)}
 
     <aside className={cn("flex flex-col w-65 bg-white border-r border-gray-100 min-h-screen fixed left-0 top-0 z-30 transition-transform duration-300 text-[14px]", sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0")}>
@@ -255,7 +255,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
       </div>
     </aside>
 
-    <main className="flex-1 lg:ml-65 min-h-screen">
+    <main className="flex-1 lg:ml-65 min-h-screen bg-patient-bg">
       <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-20">
         <div className="flex items-center gap-3">
           <button className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500" onClick={() => setSidebarOpen(true)}>

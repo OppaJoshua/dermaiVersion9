@@ -349,6 +349,9 @@ Deno.serve(async (req: Request) => {
             reference_number: paymongoPaymentId,
             paymongo_payment_id: paymongoPaymentId,
             paymongo_payment_intent_id: paymentIntentId,
+            appointment_id: appointmentId,
+            clinic_id: metadata?.clinic_id || null,
+            payment_type: "appointment_consultation",
           });
 
         if (paymentInsertError) {
@@ -363,27 +366,37 @@ Deno.serve(async (req: Request) => {
         const paySummary = `Paid Online (${paymentMethodLabel} Ref: ${paymongoPaymentId})`;
         const { data: currentAppt } = await supabase
           .from("patient_appointment")
-          .select("clinic_note")
+          .select("clinic_note, user_id, payment_status, payment_amount")
           .eq("appointment_id", appointmentId)
           .maybeSingle();
 
-        const existingNote = currentAppt?.clinic_note || "";
-        const updatedNote = existingNote.includes("Paid Online")
-          ? existingNote
-          : existingNote ? `${existingNote} | ${paySummary}` : paySummary;
+        if (currentAppt) {
+          if (userId && currentAppt.user_id && currentAppt.user_id !== userId) {
+            console.warn(`[webhook] User ID mismatch for appointment ${appointmentId}: expected ${userId}, got ${currentAppt.user_id}`);
+          } else {
+            const existingNote = currentAppt.clinic_note || "";
+            const updatedNote = existingNote.includes("Paid Online")
+              ? existingNote
+              : existingNote ? `${existingNote} | ${paySummary}` : paySummary;
 
-        const { error: apptUpdateError } = await supabase
-          .from("patient_appointment")
-          .update({
-            clinic_note: updatedNote,
-            check_in_status: "scheduled",
-          })
-          .eq("appointment_id", appointmentId);
+            const { error: apptUpdateError } = await supabase
+              .from("patient_appointment")
+              .update({
+                payment_status: "paid",
+                payment_reference: paymongoPaymentId,
+                payment_amount: amount,
+                paid_at: paymentDateIso,
+                clinic_note: updatedNote,
+                check_in_status: "scheduled",
+              })
+              .eq("appointment_id", appointmentId);
 
-        if (apptUpdateError) {
-          console.warn("[webhook] patient_appointment update note:", apptUpdateError.message);
-        } else {
-          console.log("[webhook] patient_appointment updated for booking:", appointmentId);
+            if (apptUpdateError) {
+              console.warn("[webhook] patient_appointment update note:", apptUpdateError.message);
+            } else {
+              console.log("[webhook] patient_appointment marked paid for booking:", appointmentId);
+            }
+          }
         }
       }
 

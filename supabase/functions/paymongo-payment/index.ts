@@ -502,6 +502,9 @@ async function fulfillBookingPaymentAndSendEmail({
         reference_number: paymongoPaymentId,
         paymongo_payment_id: paymongoPaymentId,
         paymongo_payment_intent_id: paymentIntentId,
+        appointment_id: appointmentId,
+        clinic_id: metadata?.clinic_id || null,
+        payment_type: "appointment_consultation",
       });
 
     if (insertErr) {
@@ -516,27 +519,37 @@ async function fulfillBookingPaymentAndSendEmail({
     const paySummary = `Paid Online (${paymentMethodLabel} Ref: ${paymongoPaymentId})`;
     const { data: currentAppt } = await adminSupabase
       .from("patient_appointment")
-      .select("clinic_note")
+      .select("clinic_note, user_id, payment_status, payment_amount")
       .eq("appointment_id", appointmentId)
       .maybeSingle();
 
-    const existingNote = currentAppt?.clinic_note || "";
-    const updatedNote = existingNote.includes("Paid Online")
-      ? existingNote
-      : existingNote ? `${existingNote} | ${paySummary}` : paySummary;
+    if (currentAppt) {
+      if (userId && currentAppt.user_id && currentAppt.user_id !== userId) {
+        console.warn(`[fulfillBookingPayment] User ID mismatch for appointment ${appointmentId}: expected ${userId}, got ${currentAppt.user_id}`);
+      } else {
+        const existingNote = currentAppt?.clinic_note || "";
+        const updatedNote = existingNote.includes("Paid Online")
+          ? existingNote
+          : existingNote ? `${existingNote} | ${paySummary}` : paySummary;
 
-    const { error: apptErr } = await adminSupabase
-      .from("patient_appointment")
-      .update({
-        clinic_note: updatedNote,
-        check_in_status: "scheduled",
-      })
-      .eq("appointment_id", appointmentId);
+        const { error: apptErr } = await adminSupabase
+          .from("patient_appointment")
+          .update({
+            payment_status: "paid",
+            payment_reference: paymongoPaymentId,
+            payment_amount: grossAmount,
+            paid_at: paymentDateIso,
+            clinic_note: updatedNote,
+            check_in_status: "scheduled",
+          })
+          .eq("appointment_id", appointmentId);
 
-    if (apptErr) {
-      console.warn("[fulfillBookingPayment] patient_appointment update note:", apptErr.message);
-    } else {
-      console.log("[fulfillBookingPayment] patient_appointment updated for booking:", appointmentId);
+        if (apptErr) {
+          console.warn("[fulfillBookingPayment] patient_appointment update note:", apptErr.message);
+        } else {
+          console.log("[fulfillBookingPayment] patient_appointment marked paid for booking:", appointmentId);
+        }
+      }
     }
   }
 
