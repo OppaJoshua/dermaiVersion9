@@ -428,11 +428,13 @@ function DoctorSelectDropdown({
   selectedDoctorId,
   onSelect,
   disabled = false,
+  clinicDefaultInterval,
 }: {
   doctors: DoctorAccount[];
   selectedDoctorId: string;
   onSelect: (id: string) => void;
   disabled?: boolean;
+  clinicDefaultInterval?: number | null;
 }) {
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -554,7 +556,11 @@ function DoctorSelectDropdown({
                             : doc.specialization || "General Dermatology"}
                         </span>
                         {doc.dutyDays && doc.dutyDays.length > 0 ? (
-                          <span className="text-emerald-700 font-semibold">• {doc.dutyDays.length} days ({doc.slotIntervalMinutes || 20}m, Max {doc.maxPatientsPerDay || 20}/shift)</span>
+                          (doc.slotIntervalMinutes || clinicDefaultInterval) ? (
+                            <span className="text-emerald-700 font-semibold">• {doc.dutyDays.length} days ({doc.slotIntervalMinutes || clinicDefaultInterval}m, Max {doc.maxPatientsPerDay || 20}/shift)</span>
+                          ) : (
+                            <span className="text-amber-600 font-semibold">• {doc.dutyDays.length} days (Interval unconfigured)</span>
+                          )
                         ) : (
                           <span className="text-amber-600">• No schedule</span>
                         )}
@@ -628,7 +634,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
   const [clinicOpenTime, setClinicOpenTime] = useState("08:00");
   const [clinicCloseTime, setClinicCloseTime] = useState("21:00");
   const [clinicOperatingDays, setClinicOperatingDays] = useState("Monday - Saturday");
-  const [clinicDefaultInterval, setClinicDefaultInterval] = useState(30);
+  const [clinicDefaultInterval, setClinicDefaultInterval] = useState<number | null>(null);
 
   const [scheduleForm, setScheduleForm] = useState<{
     dutyDays: string[];
@@ -908,7 +914,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
             slotIntervalMinutes: scheduleForm.doctorSlotInterval ?? undefined,
           },
           {
-            defaultSlotIntervalMinutes: clinicDefaultInterval,
+            defaultSlotIntervalMinutes: clinicDefaultInterval || undefined,
             openTime: clinicOpenTime,
             closeTime: clinicCloseTime,
           }
@@ -987,7 +993,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
             slotIntervalMinutes: scheduleForm.doctorSlotInterval ?? undefined,
           },
           {
-            defaultSlotIntervalMinutes: clinicDefaultInterval,
+            defaultSlotIntervalMinutes: clinicDefaultInterval || undefined,
             openTime: clinicOpenTime,
             closeTime: clinicCloseTime,
           }
@@ -1384,6 +1390,8 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
         try {
           localStorage.setItem(rosterCacheKey, JSON.stringify(mapped));
         } catch { }
+
+        
       }
     } catch {
       if (requestId === doctorRequestRef.current) {
@@ -1590,7 +1598,11 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
             status: "Active",
             user_id: existingUserId,
             duty_days: [],
-            duty_schedule: null,
+            duty_schedule: serializeDoctorSchedule({
+              weeklyShifts: {},
+              slotIntervalMinutes: clinicDefaultInterval || undefined,
+              isCustomSchedule: false,
+            }, [], clinicDefaultInterval || undefined),
             duty_start_time: null,
             duty_end_time: null,
           })
@@ -1610,7 +1622,11 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
           contact_number: doctorContact,
           photo_url: uploadedPhotoUrl || null,
           duty_days: [],
-          duty_schedule: null,
+          duty_schedule: serializeDoctorSchedule({
+            weeklyShifts: {},
+            slotIntervalMinutes: clinicDefaultInterval || undefined,
+            isCustomSchedule: false,
+          }, [], clinicDefaultInterval || undefined),
           duty_start_time: null,
           duty_end_time: null,
         };
@@ -1970,13 +1986,24 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
         if (freshConflicts.length) throw new Error(freshConflicts[0].message);
       }
 
+      const effectiveInterval =
+        scheduleForm.doctorSlotInterval || clinicDefaultInterval;
+
+      if (!effectiveInterval || effectiveInterval <= 0) {
+        setScheduleError(
+          "A valid consultation interval is required. Please set an interval for this doctor or configure your clinic default interval in Clinic Settings."
+        );
+        return;
+      }
+
       const serializedSchedule = serializeDoctorSchedule(
         {
           weeklyShifts: normalizedWeeklyShifts,
-          slotIntervalMinutes: scheduleForm.doctorSlotInterval ?? undefined,
+          slotIntervalMinutes: effectiveInterval,
           isCustomSchedule: !isScheduleEmpty,
         },
-        finalDutyDays
+        finalDutyDays,
+        clinicDefaultInterval || undefined
       );
 
       // Compute primary start/end time fallback from the first active day
@@ -1984,9 +2011,6 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
       const firstShifts = firstActiveDay ? (normalizedWeeklyShifts[firstActiveDay] || []) : [];
       const primaryStart = isScheduleEmpty ? null : (firstShifts[0]?.startTime || clinicOpenTime || "08:00");
       const primaryEnd = isScheduleEmpty ? null : (firstShifts[firstShifts.length - 1]?.endTime || clinicCloseTime || "17:00");
-
-      const effectiveInterval =
-        scheduleForm.doctorSlotInterval || clinicDefaultInterval;
 
       const updatedDoctor: DoctorAccount = {
         ...selectedDoctor,
@@ -2939,7 +2963,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                             slotIntervalMinutes: scheduleForm.doctorSlotInterval ?? undefined,
                           },
                           {
-                            defaultSlotIntervalMinutes: clinicDefaultInterval,
+                            defaultSlotIntervalMinutes: clinicDefaultInterval || undefined,
                             openTime: clinicOpenTime,
                             closeTime: clinicCloseTime,
                           }
@@ -3102,7 +3126,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                                         slotIntervalMinutes: scheduleForm.doctorSlotInterval ?? undefined,
                                       },
                                       {
-                                        defaultSlotIntervalMinutes: clinicDefaultInterval,
+                                        defaultSlotIntervalMinutes: clinicDefaultInterval || undefined,
                                         openTime: clinicOpenTime,
                                         closeTime: clinicCloseTime,
                                       }
@@ -3384,6 +3408,17 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                   </div>
 
                   <div className="space-y-3">
+                    {!scheduleForm.doctorSlotInterval && !clinicDefaultInterval && (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                        <div>
+                          <p className="font-bold">Consultation Interval Required</p>
+                          <p className="text-[11px] text-amber-800 mt-0.5">
+                            This doctor has no interval configured and the clinic has no default interval. Please select a doctor's default interval below before saving.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                     {/* Doctor's Default Interval */}
                     <div className="p-3.5 rounded-xl bg-gray-50/70 border border-gray-200/80 space-y-2">
                       <div className="flex items-center justify-between">
@@ -3415,7 +3450,11 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                           }}
                           className="w-full h-9 px-3 pr-8 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-900 appearance-none focus:outline-none focus:border-[#801336] hover:border-gray-300 transition-colors cursor-pointer"
                         >
-                          <option value="default">Inherit Clinic Default ({clinicDefaultInterval} minutes)</option>
+                          <option value="default" disabled={!clinicDefaultInterval}>
+                            {clinicDefaultInterval
+                              ? `Inherit Clinic Default (${clinicDefaultInterval} minutes)`
+                              : "Inherit Clinic Default (Not configured in Clinic Settings)"}
+                          </option>
                           {APPOINTMENT_INTERVAL_OPTIONS.map((opt) => (
                             <option key={opt.value} value={opt.value}>
                               {opt.label}
@@ -3437,15 +3476,21 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between h-9 px-3 bg-white border border-gray-200/80 rounded-xl text-xs">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-bold text-gray-900">{clinicDefaultInterval} minutes</span>
-                          <span className="text-[11px] text-gray-400">· operating</span>
+                      {clinicDefaultInterval ? (
+                        <div className="flex items-center justify-between h-9 px-3 bg-white border border-gray-200/80 rounded-xl text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-gray-900">{clinicDefaultInterval} minutes</span>
+                            <span className="text-[11px] text-gray-400">· operating</span>
+                          </div>
+                          <span className="text-[11px] font-semibold text-gray-600 bg-gray-50 px-2 py-0.5 rounded-md border border-gray-200/60 shadow-2xs">
+                            ~{Math.round(60 / clinicDefaultInterval)} slots / hr
+                          </span>
                         </div>
-                        <span className="text-[11px] font-semibold text-gray-600 bg-gray-50 px-2 py-0.5 rounded-md border border-gray-200/60 shadow-2xs">
-                          ~{Math.round(60 / clinicDefaultInterval)} slots / hr
-                        </span>
-                      </div>
+                      ) : (
+                        <div className="flex items-center justify-between h-9 px-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                          <span className="font-semibold">Not configured in Clinic Settings</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

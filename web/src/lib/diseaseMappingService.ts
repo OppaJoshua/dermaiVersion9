@@ -686,7 +686,7 @@ export function compareAIAndQuestionnaire(
   if (normalizedKey && questionnaireSupportForAIClass === "Strong support") {
     agreementStatus = "aligned";
     summary =
-      "The AI noticed signs in your photo that match the symptoms you selected in the questionnaire. This consistency increases the accuracy of the result.";
+      "The AI noticed signs in your photo that match the symptoms you selected in the questionnaire. This supports the result.";
     recommendation =
       "Consult a dermatologist to confirm diagnosis and discuss tailored care.";
   } else if (normalizedKey && questionnaireSupportForAIClass === "Moderate support") {
@@ -706,9 +706,9 @@ export function compareAIAndQuestionnaire(
       "Because the photo features and reported symptoms suggest different possibilities, an in-person dermatological evaluation is strongly advised to determine the correct condition.";
   } else if (questionnaireSupportForAIClass === "Limited / no specific support") {
     agreementStatus = "differing";
-    summary = `The skin image model indicated ${aiPredictedCondition} (${Math.round(aiConfidence)}% confidence), but your reported questionnaire symptoms provide limited specific support for this pattern.`;
+    summary = `Your photo looks like it might be ${aiPredictedCondition}, but this doesn't fully match the symptoms you selected in the questionnaire.`;
     recommendation =
-      "Image-based predictions may capture superficial visual similarities. Please consult a dermatologist for an accurate diagnostic exam.";
+      "Photos can sometimes be misleading on their own. Please consult a dermatologist to review your symptoms in person.";
   } else {
     agreementStatus = "inconclusive";
     summary = `Image analysis predicted ${aiPredictedCondition} (${Math.round(aiConfidence)}% confidence). Questionnaire findings are inconclusive or non-specific.`;

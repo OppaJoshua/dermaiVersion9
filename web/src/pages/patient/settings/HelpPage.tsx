@@ -26,48 +26,58 @@ const guideSteps = [
     icon: ShieldCheck,
     title: "Create Your Account",
     steps: [
-      "Go to the DermAI Register page and click Register.",
-      "Fill in your full name, email address, and a secure password.",
-      "Confirm your email and log in to access your dashboard.",
+      "Open the DermAI Login Page and select Continue with Google.",
+      "Sign in with your Google account.",
+      "Complete your personal information.",
+      "Select Save Changes to update your profile.",
     ],
   },
   {
     icon: Scan,
     title: "Run a Skin Scan",
     steps: [
-      "Tap Scan Skin from the sidebar or home screen.",
-      "Answer the short symptom questionnaire honestly.",
-      "Upload a clear, well-lit photo of the affected skin area.",
+      "Select Scan Skin from the sidebar.",
+      "Answer the short symptom questionnaire honestly and accurately.",
+      "Review your answers before continuing.",
+      "Upload clear, well-lit photos of the affected skin area, including a close-up photo and a wide-view photo showing the surrounding skin.",
+      "Submit your photos for analysis.",
       "Review your AI-generated result, confidence score, and care tips.",
+      "Reminder: DermAI provides informational analysis, not a medical diagnosis. Consult a dermatologist for professional assessment and treatment.",
     ],
   },
   {
     icon: Search,
-    title: "Find & Book a Clinic",
+    title: "Find and Book a Clinic",
     steps: [
       "Go to Appointment Booking → Search Clinic in the sidebar.",
       "Browse verified dermatology clinics near you.",
-      "Select a clinic and fill in your preferred date, time, and consultation type.",
-      "Submit the request and wait for the clinic's confirmation.",
+      "Select a clinic and complete the required personal information.",
+      "Choose your preferred doctor, appointment date, and time.",
+      "Review and submit your appointment request.",
+      "Complete the required payment and wait for the doctor’s confirmation.",
+      "Note: Your preferred schedule is subject to the doctor’s approval. Submitting a request and payment does not automatically confirm your appointment.",
     ],
   },
   {
     icon: CalendarDays,
     title: "Track Your Appointments",
     steps: [
-      "Go to Appointment Booking → Appointment Status.",
-      "You will see all your pending, scheduled, or completed appointments.",
-      "You will be notified once a clinic accepts or rejects your request.",
+      "Go to Monitor → Appointment Status.",
+      "View your pending, scheduled, or completed appointments.",
+      "Check your notifications to see whether the clinic has accepted or rejected your request.",
+      "Once accepted, review your confirmed appointment details.",
     ],
   },
   {
     icon: CreditCard,
     title: "Upgrade to Pro",
     steps: [
-      "Free accounts are limited to 3 skin scans per account.",
-      "Upgrade to Pro (₱199/month or ₱1,999/year) for unlimited scans.",
+      "Free accounts include three skin scans per account. Upgrade to Pro for unlimited scans.",
+      "Go to Subscription → Upgrade Plan.",
+      "Choose your preferred Pro subscription: Monthly (₱199 per month) or Yearly (₱1,999 per year).",
+      "Follow the payment instructions to complete your upgrade.",
       "Go to Settings → Billing to manage your subscription and payment method.",
-      "You can cancel at any time; Pro access stays active until the period ends.",
+      "You can cancel your subscription at any time. Your Pro access will remain active until the end of your current paid subscription period.",
     ],
   },
 ];
@@ -211,9 +221,9 @@ export default function HelpPage() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto py-10 px-4 sm:px-6 lg:px-8 space-y-8">
+    <div className="max-w-6xl mx-auto py-10 px-4 sm:px-6 lg:px-8 space-y-5">
       {/* Page Header */}
-      <div className="pb-6 border-b border-gray-200">
+      <div className="pb-2">
         <h1 className="text-3xl font-bold font-display text-black tracking-tight">
           Help &amp; Support
         </h1>

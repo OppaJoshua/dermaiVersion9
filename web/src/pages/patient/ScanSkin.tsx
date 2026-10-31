@@ -333,7 +333,10 @@ export default function ScanSkinPage() {
 
     if (!freshIsPro && !freshCanScan) {
       setAnalyzeError("Your free scans have been used up. Please upgrade to Pro for unlimited scans.");
-      navigate("/dashboard/upgrade");
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      navigate("/dashboard/subscription-status");
       return;
     }
     if (!closeUpFile || !wideFile) return;
@@ -1380,13 +1383,23 @@ export default function ScanSkinPage() {
                       <div className="text-xs leading-relaxed">
                         <p className="font-bold text-sm mb-1">
                           {scanResult.comparison.agreementStatus === "aligned"
-                            ? "Your photos and answers match."
+                            ? "Your photos and questionnaire answers match."
                             : scanResult.comparison.agreementStatus === "differing"
                               ? "We noticed a mismatch in your results"
                               : "Assessment Context"}
                         </p>
-                        <p>{scanResult.comparison.summary}</p>
-                        <p className="font-semibold mt-1.5">{scanResult.comparison.recommendation}</p>
+                        <p>
+                          {scanResult.comparison.summary?.includes("increases the accuracy")
+                            ? "The AI noticed signs in your photo that match the symptoms you selected in the questionnaire. This supports the result."
+                            : scanResult.comparison.summary?.includes("provide limited specific support")
+                              ? `Your photo looks like it might be ${scanResult.condition}, but this doesn't fully match the symptoms you selected in the questionnaire.`
+                              : scanResult.comparison.summary}
+                        </p>
+                        <p className="font-semibold mt-1.5">
+                          {scanResult.comparison.recommendation?.includes("Image-based predictions may capture")
+                            ? "Photos can sometimes be misleading on their own. Please consult a dermatologist to review your symptoms in person."
+                            : scanResult.comparison.recommendation}
+                        </p>
                       </div>
                     </div>
                   </div>

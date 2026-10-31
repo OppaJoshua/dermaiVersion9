@@ -15,11 +15,19 @@ import {
   UserCheck,
   X,
   RotateCcw,
+  Sparkles,
+  FileText,
+  HelpCircle,
+  Loader2,
+  Maximize2,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { SelectAlternateDoctorModal } from "./SelectAlternateDoctorModal";
+import { extractConsultationQuestionnaire } from "@/lib/consultationDetailsService";
+import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
+import { extractClinicCancellationReason, detectOnlinePaymentMethod } from "@/lib/appointmentPaymentService";
 
 interface Appointment {
   id: string;
@@ -42,6 +50,10 @@ interface Appointment {
   clinicNote?: string;
   doctorNote?: string;
   doctorDiagnosis?: string;
+  aiConditionName?: string;
+  aiConfidence?: number;
+  skinPhotoUrl?: string;
+  questionnaireAnswers?: any;
   rejectionReason?: string;
   createdAt?: string;
   doctorReviewedAt?: string;
@@ -57,6 +69,7 @@ interface Appointment {
   paymentStatus?: "pending_hold" | "paid" | "failed" | "cancelled" | "expired" | "exempt";
   paymentAmount?: number;
   paymentReference?: string;
+  paymentMethod?: string;
   paidAt?: string;
 }
 
@@ -64,8 +77,8 @@ const STEPS = ["Request Sent", "Doctor Review", "Scheduled", "Completed"];
 
 function getStepIndex(app: Appointment): number {
   if (app.status === "Completed") return 3;
-  if (app.status === "Scheduled" || app.doctorStatus === "approved") return 2;
-  if (app.status === "Pending") return 1;
+  if ((app.status === "Scheduled" || app.doctorStatus === "approved") && app.doctorStatus !== "rejected") return 2;
+  if (app.status === "Pending" && app.assignedDoctorId && app.doctorStatus === "pending-review") return 1;
   return 0;
 }
 
@@ -86,20 +99,22 @@ function StatusBadge({ app }: { app: Appointment }) {
     );
   }
 
-  if (app.rescheduleRequested) {
+  // Doctor declined/rejected takes precedence so unaccepted requests are never shown as confirmed
+  if (app.doctorStatus === "rejected") {
+    const declinedTimestamp = app.doctorReviewedAt
+      ? new Date(app.doctorReviewedAt).getTime()
+      : app.createdAt
+      ? new Date(app.createdAt).getTime()
+      : Date.now();
+    const isExpired = Date.now() - (isNaN(declinedTimestamp) ? Date.now() : declinedTimestamp) > 24 * 3600 * 1000;
+
     return (
-      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-200">
-        Reschedule Under Review
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-200">
+        {isExpired ? "Clinic Reassigning Doctor" : "Action Required • Select Doctor"}
       </span>
     );
   }
-  if (app.status === "Scheduled" || app.doctorStatus === "approved") {
-    return (
-      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
-        Confirmed &amp; Scheduled
-      </span>
-    );
-  }
+
   if (app.status === "Rejected") {
     return (
       <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-red-100 text-red-700 border border-red-200">
@@ -115,14 +130,22 @@ function StatusBadge({ app }: { app: Appointment }) {
     );
   }
 
-  // Pending / Review states
-  if (app.doctorStatus === "rejected") {
+  if (app.rescheduleRequested) {
     return (
-      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-200">
-        Action Required • Select Doctor
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-200">
+        Reschedule Under Review
       </span>
     );
   }
+  if (app.status === "Scheduled" || app.doctorStatus === "approved") {
+    return (
+      <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
+        Confirmed &amp; Scheduled
+      </span>
+    );
+  }
+
+  // Pending / Review states
   if (app.assignedDoctorId && app.doctorStatus === "pending-review") {
     return (
       <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-sky-100 text-sky-800 border border-sky-200">
@@ -141,7 +164,7 @@ function StatusTracker({ app }: { app: Appointment }) {
   const isCancelled = app.status === "Cancelled" || app.status === "Rejected" || app.checkInStatus === "no-show";
   const activeStep = isCancelled ? -1 : getStepIndex(app);
 
-  const isConfirmedScheduled = app.status === "Scheduled" || app.doctorStatus === "approved";
+  const isConfirmedScheduled = (app.status === "Scheduled" || app.doctorStatus === "approved") && app.doctorStatus !== "rejected";
   const isUnderDoctorReview = !!app.assignedDoctorId && app.doctorStatus === "pending-review";
   const isDoctorDeclined = app.doctorStatus === "rejected";
 
@@ -186,17 +209,20 @@ function StatusTracker({ app }: { app: Appointment }) {
                 )}
               </div>
             )}
-            {app.clinicNote && (
-              <div className="mt-2 rounded-lg bg-white border border-red-200 p-2.5 shadow-2xs">
-                <div className="flex items-center gap-1 text-red-700 font-bold text-[10px] uppercase tracking-wider mb-0.5">
-                  <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
-                  <span>Reason / Note from Clinic:</span>
+            {(() => {
+              const cancellationReason = extractClinicCancellationReason(app.rejectionReason || app.clinicNote);
+              return cancellationReason ? (
+                <div className="mt-2 rounded-lg bg-white border border-red-200 p-2.5 shadow-2xs">
+                  <div className="flex items-center gap-1 text-red-700 font-bold text-[10px] uppercase tracking-wider mb-0.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
+                    <span>Reason / Note from Clinic:</span>
+                  </div>
+                  <p className="text-xs text-gray-800 font-medium leading-relaxed">
+                    "{cancellationReason}"
+                  </p>
                 </div>
-                <p className="text-xs text-gray-800 font-medium leading-relaxed">
-                  "{app.clinicNote}"
-                </p>
-              </div>
-            )}
+              ) : null;
+            })()}
             <p className="text-[11px] text-gray-500 mt-2">
               You may search for other clinics and book a new consultation anytime.
             </p>
@@ -288,13 +314,15 @@ function StatusTracker({ app }: { app: Appointment }) {
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500 font-medium">Scheduled Time:</span>
+                  <span className="text-gray-500 font-medium">
+                    {isConfirmedScheduled ? "Confirmed Time:" : "Requested Time:"}
+                  </span>
                   <strong className="text-gray-900 font-bold">
                     {app.time || (app.batchTime ? `${app.batchTime} Batch` : "Pending")}
                   </strong>
                 </div>
 
-                {/* Live Check-in Status */}
+                {/* Live Check-in Status & Authoritative Payment Instructions */}
                 {isConfirmedScheduled ? (
                   app.checkInStatus === "arrived" || app.checkInStatus === "in-consultation" ? (
                     <div className="p-2.5 rounded-xl bg-sky-50 border border-sky-200 text-sky-900 flex items-center gap-2">
@@ -321,41 +349,61 @@ function StatusTracker({ app }: { app: Appointment }) {
                       </p>
                     </div>
                   ) : (
-                    <div className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 text-gray-700 space-y-1">
+                    <div className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 text-gray-700 space-y-1.5">
                       <div className="flex items-center gap-2">
                         <Clock className="w-3.5 h-3.5 text-magenta-500 shrink-0" />
                         <p className="text-[11px] text-gray-600">
                           Expected Arrival: <strong className="text-gray-900">{app.time || (app.batchTime ? `${app.batchTime} Batch` : "")}</strong>. Please check in with the clinic receptionist upon arrival.
                         </p>
                       </div>
-                      <p className="text-[10px] text-emerald-700 font-semibold pl-5.5">
-                        💵 Consultation fee is paid physically at the clinic counter upon arrival.
-                      </p>
+                      {app.paymentStatus === "paid" ? (
+                        <p className="text-[10px] text-emerald-700 font-semibold pl-5.5 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600 inline shrink-0" />
+                          <span>Consultation fee paid online (Verified{app.paymentReference ? ` • Ref: ${app.paymentReference}` : ""}). Present booking reference at front desk.</span>
+                        </p>
+                      ) : app.paymentStatus === "exempt" ? (
+                        <p className="text-[10px] text-emerald-700 font-semibold pl-5.5">
+                          ✓ Consultation fee exempt.
+                        </p>
+                      ) : app.paymentStatus === "failed" ? (
+                        <p className="text-[10px] text-rose-700 font-semibold pl-5.5">
+                          ⚠️ Payment incomplete or failed. Please coordinate with clinic front desk upon arrival.
+                        </p>
+                      ) : app.paymentStatus === "expired" ? (
+                        <p className="text-[10px] text-rose-700 font-semibold pl-5.5">
+                          ⚠️ Reservation hold expired without payment. Please coordinate with clinic reception.
+                        </p>
+                      ) : app.paymentStatus === "pending_hold" ? (
+                        <p className="text-[10px] text-amber-700 font-semibold pl-5.5">
+                          ⏳ Online payment authorization pending.
+                        </p>
+                      ) : app.paymentStatus === "cancelled" ? (
+                        <p className="text-[10px] text-gray-500 font-medium pl-5.5">
+                          Appointment booking cancelled (unpaid).
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-gray-600 font-medium pl-5.5">
+                          💳 Consultation fee is payable online via PayMongo (GCash / Maya).
+                        </p>
+                      )}
                     </div>
                   )
-                ) : (
-                  <div className="p-2.5 rounded-xl bg-amber-50/80 border border-amber-200 text-amber-900 flex items-center gap-2">
-                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <p className="text-[11px] text-amber-800">
-                      Appointment requested. Awaiting doctor's review &amp; confirmation.
-                    </p>
-                  </div>
-                )}
+                ) : null}
               </div>
             )}
 
             {app.status === "Completed" ? (
               <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-emerald-900">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
-                <p className="text-[11px] leading-relaxed">
-                  Your physical consultation with <strong className="inline-flex items-center gap-1 text-emerald-950 font-bold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> has been completed.
+                <p className="text-xs font-semibold leading-relaxed">
+                  Consultation completed. Thank you for visiting.
                 </p>
               </div>
             ) : isConfirmedScheduled ? (
               <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl p-3 text-blue-900">
                 <Calendar className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-                <p className="text-[11px] leading-relaxed">
-                  Your appointment with <strong className="inline-flex items-center gap-1 text-blue-950 font-bold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong> is confirmed and finalized on <strong className="text-blue-950">{app.date}</strong> at <strong className="text-blue-950">{app.time}</strong> with <strong className="text-blue-950">{app.doctor}</strong>. Please arrive 10 minutes prior to your consultation.
+                <p className="text-xs font-medium leading-relaxed">
+                  Confirmed consultation. Please arrive 10 minutes prior to your scheduled time.
                 </p>
               </div>
             ) : isDoctorDeclined ? (
@@ -415,7 +463,7 @@ function StatusTracker({ app }: { app: Appointment }) {
                 <div>
                   <p className="text-xs font-bold text-sky-800">Under Pre-Consultation Review</p>
                   <p className="text-[11px] text-sky-700 mt-0.5 leading-relaxed">
-                    Assigned to <strong className="text-sky-950 font-semibold">{app.doctor}</strong> at <strong className="inline-flex items-center gap-1 text-sky-950 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong>. The doctor is reviewing your skin concern and chosen schedule (<span className="font-semibold text-sky-950">{app.date} at {app.time}</span>). Once accepted, your schedule is finalized!
+                    The assigned doctor is reviewing your skin assessment and requested slot. You will be notified once accepted.
                   </p>
                 </div>
               </div>
@@ -425,33 +473,11 @@ function StatusTracker({ app }: { app: Appointment }) {
                 <div>
                   <p className="text-xs font-bold text-amber-800">Clinic Assignment Pending</p>
                   <p className="text-[11px] text-amber-700 mt-0.5 leading-relaxed">
-                    Your appointment request for <strong className="text-amber-950 font-semibold">{app.date} at {app.time}</strong> was received by <strong className="inline-flex items-center gap-1 text-amber-950 font-semibold">{app.clinicName} <VerifiedBadge size={12} className="w-3 h-3" /></strong>. The clinic is assigning a dermatologist to review and finalize your schedule.
+                    Your request was received. The clinic is assigning an available dermatologist to review your consultation.
                   </p>
                 </div>
               </div>
             )}
-
-            {/* Doctor Clinical Diagnosis / Assessment Card (only when a real clinical diagnosis exists and doctor did not decline) */}
-            {!isDoctorDeclined &&
-              app.status !== "Cancelled" &&
-              app.status !== "Rejected" &&
-              app.doctorDiagnosis &&
-              !app.doctorDiagnosis.toLowerCase().includes("general dermatol") &&
-              !app.doctorDiagnosis.toLowerCase().includes("general consult") && (
-                <div className="rounded-xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200 p-3.5 shadow-2xs">
-                  <div className="flex items-center gap-1.5 text-blue-800 font-bold text-[10px] uppercase tracking-wider mb-1">
-                    <Stethoscope className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Dermatologist Clinical Assessment &amp; Diagnosis</span>
-                  </div>
-                  <p className="text-sm font-bold text-blue-950">{app.doctorDiagnosis}</p>
-                  {app.doctorNote && (
-                    <p className="text-xs text-blue-800/90 mt-1 pt-1 border-t border-blue-200/60 leading-relaxed">
-                      <span className="font-semibold text-blue-900">Clinical Notes / Advice:</span> {app.doctorNote}
-                    </p>
-                  )}
-                </div>
-              )}
-
           </div>
         </>
       )}
@@ -465,21 +491,15 @@ function AppointmentCard({
   onReschedule,
   onWithdrawReschedule,
   onSelectAlternateDoctor,
+  onViewDetails,
 }: {
   app: Appointment;
   onCancel?: (app: Appointment) => void;
   onReschedule?: (app: Appointment) => void;
   onWithdrawReschedule?: (app: Appointment) => void;
   onSelectAlternateDoctor?: (app: Appointment) => void;
+  onViewDetails?: (app: Appointment) => void;
 }) {
-  const isFinalized = app.status === "Scheduled" || app.doctorStatus === "approved" || app.status === "Completed";
-  const isConfirmed = app.status === "Scheduled" || app.status === "Completed";
-  const isTerminal = app.status === "Completed" || app.status === "Cancelled" || app.status === "Rejected";
-  // Pending appointments can be cancelled
-  const canCancel = app.status === "Pending" && !isFinalized;
-  // Patient can request reschedule as long as consultation is active (Rule 1)
-  const canRequestReschedule = !isTerminal && app.checkInStatus !== "no-show";
-
   const rawStatus = (app.status || "").toLowerCase();
   const docStatus = (app.doctorStatus || "").toLowerCase();
   const isDeclined =
@@ -488,6 +508,14 @@ function AppointmentCard({
     rawStatus === "declined" ||
     rawStatus === "clinic_reassigning" ||
     rawStatus === "needs_doctor";
+
+  const isFinalized = (app.status === "Scheduled" || app.doctorStatus === "approved" || app.status === "Completed") && !isDeclined;
+  const isConfirmed = (app.status === "Scheduled" || app.status === "Completed") && !isDeclined;
+  const isTerminal = app.status === "Completed" || app.status === "Cancelled" || app.status === "Rejected";
+  // Pending appointments can be cancelled
+  const canCancel = app.status === "Pending" && !isFinalized;
+  // Patient can request reschedule as long as consultation is active (Rule 1)
+  const canRequestReschedule = !isTerminal && app.checkInStatus !== "no-show";
 
   const declinedTimestamp = app.doctorReviewedAt
     ? new Date(app.doctorReviewedAt).getTime()
@@ -533,14 +561,26 @@ function AppointmentCard({
             </p>
             <p className="text-sm font-semibold text-gray-900 mt-0.5">{app.time}</p>
           </div>
-          {app.paymentReference && (
-            <div>
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Payment</p>
+          <div>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Payment</p>
+            {app.paymentStatus === "paid" ? (
               <p className="text-xs font-semibold text-emerald-700 mt-0.5">
-                Paid Online {app.paymentAmount ? `(₱${app.paymentAmount.toFixed(2)})` : ""}
+                Paid Online {app.paymentMethod ? `via ${app.paymentMethod}` : ""} {app.paymentAmount ? `(₱${app.paymentAmount.toFixed(2)})` : ""}
               </p>
-            </div>
-          )}
+            ) : app.paymentStatus === "exempt" ? (
+              <p className="text-xs font-semibold text-emerald-700 mt-0.5">Exempt</p>
+            ) : app.paymentStatus === "failed" ? (
+              <p className="text-xs font-semibold text-rose-700 mt-0.5">Payment Failed</p>
+            ) : app.paymentStatus === "expired" ? (
+              <p className="text-xs font-semibold text-rose-700 mt-0.5">Hold Expired</p>
+            ) : app.paymentStatus === "pending_hold" ? (
+              <p className="text-xs font-semibold text-amber-700 mt-0.5">Payment Pending</p>
+            ) : app.paymentStatus === "cancelled" ? (
+              <p className="text-xs font-semibold text-gray-500 mt-0.5">Cancelled (Unpaid)</p>
+            ) : (
+              <p className="text-xs font-semibold text-gray-600 mt-0.5">Online Payment (PayMongo)</p>
+            )}
+          </div>
         </div>
 
         <StatusTracker app={app} />
@@ -548,6 +588,16 @@ function AppointmentCard({
         {/* Action Controls */}
         <div className="mt-4 pt-3 border-t border-gray-100 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2 flex-wrap">
+                        {/* View Consultation Details Button */}
+            <button
+              type="button"
+              onClick={() => onViewDetails && onViewDetails(app)}
+              className="text-xs font-semibold text-gray-700 hover:text-gray-900 bg-white hover:bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-200 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            >
+              <FileText className="w-3.5 h-3.5 text-gray-500" />
+              <span>View Consultation Details</span>
+            </button>
+
             {/* Primary 'Select Alternate Doctor' button styled in brand #A21D5C */}
             {canChooseAlternateDoctor && (
               <button
@@ -613,6 +663,312 @@ function AppointmentCard({
   );
 }
 
+
+
+
+function ConsultationDetailsModal({
+  app,
+  onClose,
+}: {
+  app: Appointment;
+  onClose: () => void;
+}) {
+  const [loadingScan, setLoadingScan] = useState(false);
+  const [loadingPhoto, setLoadingPhoto] = useState(false);
+  const [resolvedPhotoUrl, setResolvedPhotoUrl] = useState<string | null>(null);
+  const [showImagePreview, setShowImagePreview] = useState(false);
+  const [scanData, setScanData] = useState<{
+    photoUrl?: string;
+    conditionName?: string;
+    confidence?: number;
+    questionnaireAnswers?: any;
+  } | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadScanAndPhoto() {
+      const effectiveScanId = app.primaryScanId || (app.questionnaireAnswers && (app.questionnaireAnswers as any).primary_scan_id);
+      let rawPhotoPath: string | null = app.skinPhotoUrl || (app.questionnaireAnswers && (app.questionnaireAnswers as any).skin_photo_url) || null;
+
+      if (effectiveScanId) {
+        setLoadingScan(true);
+        try {
+          // Query ai_scan_result authoritatively using analysis_id primary key
+          const { data, error } = await supabase
+            .from("ai_scan_result")
+            .select(`
+              analysis_id,
+              photo_url,
+              photo_url_wide,
+              confidence_score,
+              condition_id,
+              questionnaire_answers,
+              skin_condition:condition_id (
+                name,
+                local_name
+              )
+            `)
+            .eq("analysis_id", effectiveScanId)
+            .maybeSingle();
+
+          if (error) {
+            console.warn("[ConsultationDetailsModal] ai_scan_result fetch note:", error.message);
+          }
+
+          if (isMounted && data) {
+            const condObj = Array.isArray(data.skin_condition) ? data.skin_condition[0] : data.skin_condition;
+            const fetchedPhoto = data.photo_url || data.photo_url_wide || undefined;
+            if (fetchedPhoto) {
+              rawPhotoPath = fetchedPhoto;
+            }
+
+            setScanData({
+              photoUrl: fetchedPhoto,
+              conditionName: condObj?.name || undefined,
+              confidence: data.confidence_score != null ? Number(data.confidence_score) : undefined,
+              questionnaireAnswers: data.questionnaire_answers || undefined,
+            });
+          }
+        } catch (err) {
+          console.warn("[ConsultationDetailsModal] Failed to fetch scan details:", err);
+        } finally {
+          if (isMounted) setLoadingScan(false);
+        }
+      }
+
+      // Authoritatively resolve signed skin photo URL from Supabase storage
+      if (rawPhotoPath) {
+        setLoadingPhoto(true);
+        try {
+          const signed = await getSignedSkinPhotoUrl(rawPhotoPath);
+          if (isMounted && signed) {
+            setResolvedPhotoUrl(signed);
+          }
+        } catch (signErr) {
+          console.warn("[ConsultationDetailsModal] Failed to sign photo URL:", signErr);
+        } finally {
+          if (isMounted) setLoadingPhoto(false);
+        }
+      }
+    }
+
+    void loadScanAndPhoto();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [app.primaryScanId, app.skinPhotoUrl, app.questionnaireAnswers]);
+
+  const displayCondition = scanData?.conditionName || app.aiConditionName;
+  const displayConfidence = scanData?.confidence != null ? scanData.confidence : app.aiConfidence;
+  const rawQa = app.questionnaireAnswers || scanData?.questionnaireAnswers;
+  const normalizedAnswers = extractConsultationQuestionnaire(rawQa);
+
+  return (
+    <>
+      <div className="fixed inset-0 z-[9998] flex items-center justify-center p-3 sm:p-4 bg-black/50 backdrop-blur-xs overflow-y-auto">
+        <div className="relative z-[9999] bg-white rounded-2xl max-w-xl w-full my-8 p-5 sm:p-6 shadow-2xl border border-gray-100 flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95">
+          {/* Header */}
+          <div className="flex items-start justify-between gap-3 pb-4 border-b border-gray-100">
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-gray-900">Consultation Details</h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {app.clinicName} • {app.date} at {app.time}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Scrollable Content */}
+          <div className="overflow-y-auto pr-1 py-4 space-y-5 flex-1">
+            {/* Section 1: AI Scan Reference (Non-Diagnostic) */}
+            <div className="rounded-2xl bg-purple-50/70 border border-purple-200/90 p-4 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-1.5 text-purple-900 font-bold text-xs uppercase tracking-wider">
+                  <Sparkles className="w-4 h-4 text-purple-600 shrink-0" />
+                  <span>AI Scan Reference</span>
+                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200">
+                  Preliminary Scan Indication
+                </span>
+              </div>
+
+              <div className="flex items-start gap-3.5">
+                {loadingPhoto ? (
+                  <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl border border-purple-200 bg-purple-100/50 flex flex-col items-center justify-center shrink-0">
+                    <Loader2 className="w-5 h-5 text-purple-600 animate-spin" />
+                    <span className="text-[9px] text-purple-600 mt-1 font-medium">Loading photo...</span>
+                  </div>
+                ) : resolvedPhotoUrl ? (
+                  <div className="relative group shrink-0">
+                    <img
+                      src={resolvedPhotoUrl}
+                      alt="Skin Scan"
+                      onClick={() => setShowImagePreview(true)}
+                      className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl object-cover border border-purple-200 shadow-2xs cursor-pointer hover:opacity-90 transition-opacity"
+                      title="Click to expand scan photo"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowImagePreview(true)}
+                      className="absolute bottom-1 right-1 bg-black/60 hover:bg-black/80 text-white rounded p-1 shadow-xs transition-colors cursor-pointer"
+                      title="Expand photo"
+                    >
+                      <Maximize2 className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-purple-100/60 border border-purple-200 flex flex-col items-center justify-center text-purple-400 p-1.5 text-center shrink-0">
+                    <Sparkles className="w-5 h-5 text-purple-400 mb-0.5" />
+                    <span className="text-[9px] font-semibold text-purple-600 leading-tight">Skin Scan</span>
+                  </div>
+                )}
+
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm sm:text-base font-bold text-purple-950 truncate">
+                    {displayCondition || "General Consultation"}
+                  </p>
+                  {displayConfidence != null && (
+                    <p className="text-xs font-semibold text-purple-700 mt-0.5">
+                      {Math.round(displayConfidence)}% visual match
+                    </p>
+                  )}
+                  <p className="text-[11px] text-purple-700/80 mt-1 leading-relaxed">
+                    Preliminary AI assessment provided as reference for the dermatologist.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-white/80 border border-purple-200/70 text-[11px] text-purple-900 leading-relaxed flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-purple-600 mt-0.5 shrink-0" />
+                <span>
+                  <strong>Important Notice:</strong> This is an AI-generated preliminary result, not a confirmed medical diagnosis. Your dermatologist will conduct an independent clinical evaluation during your consultation.
+                </span>
+              </div>
+            </div>
+
+            {/* Section 2: Pre-Consultation Questionnaire */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                    <FileText className="w-4 h-4 text-magenta-600" />
+                    <span>Pre-Consultation Questionnaire</span>
+                  </h4>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    15-question pre-screening answers submitted for this consultation
+                  </p>
+                </div>
+                {normalizedAnswers.length > 0 && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    {normalizedAnswers.length} answered
+                  </span>
+                )}
+              </div>
+
+              {loadingScan ? (
+                <div className="py-8 flex flex-col items-center justify-center gap-2">
+                  <div className="w-6 h-6 border-2 border-magenta-600 border-t-transparent rounded-full animate-spin" />
+                  <p className="text-xs text-gray-500 font-medium">Loading questionnaire answers...</p>
+                </div>
+              ) : normalizedAnswers.length > 0 ? (
+                <div className="space-y-2.5">
+                  {normalizedAnswers.map((qa) => (
+                    <div
+                      key={qa.id}
+                      className="p-3.5 rounded-xl bg-gray-50/80 border border-gray-200/70 space-y-1.5 text-xs"
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="font-bold text-magenta-700 bg-magenta-50 px-1.5 py-0.5 rounded text-[10px] shrink-0">
+                          Q{qa.number}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-gray-900 leading-snug">{qa.question}</p>
+                          {qa.tagalogQuestion && (
+                            <p className="text-[10px] text-gray-400 italic mt-0.5">{qa.tagalogQuestion}</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="pl-6 pt-1">
+                        <p className="text-xs font-medium text-gray-800 bg-white border border-gray-200/80 rounded-lg p-2 leading-relaxed">
+                          {qa.answer}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-8 px-4 bg-gray-50/70 rounded-2xl border border-dashed border-gray-200 text-center">
+                  <HelpCircle className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                  <p className="text-xs font-semibold text-gray-700">No questionnaire answers on record</p>
+                  <p className="text-[11px] text-gray-400 mt-1 max-w-xs mx-auto">
+                    No pre-consultation questionnaire answers were submitted or linked for this appointment.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Section 3: Clinician Consultation Record (Separated from AI) */}
+            {app.doctorDiagnosis &&
+              !app.doctorDiagnosis.toLowerCase().includes("general dermatol") &&
+              !app.doctorDiagnosis.toLowerCase().includes("general consult") && (
+                <div className="rounded-2xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200 p-4 space-y-2">
+                  <div className="flex items-center gap-1.5 text-blue-800 font-bold text-xs uppercase tracking-wider">
+                    <Stethoscope className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span>Attending Dermatologist Assessment (Post-Consultation)</span>
+                  </div>
+                  <p className="text-sm font-bold text-blue-950">{app.doctorDiagnosis}</p>
+                  {app.doctorNote && (
+                    <p className="text-xs text-blue-900/90 mt-1 pt-2 border-t border-blue-200/70 leading-relaxed">
+                      <span className="font-semibold text-blue-950">Clinical Notes:</span> {app.doctorNote}
+                    </p>
+                  )}
+                </div>
+              )}
+          </div>
+
+          {/* Footer */}
+          <div className="pt-3 border-t border-gray-100 flex justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-5 py-2 rounded-xl bg-gray-900 hover:bg-gray-800 text-white text-xs font-semibold transition cursor-pointer shadow-xs"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Full Size Image Preview Modal */}
+      {showImagePreview && resolvedPhotoUrl && (
+        <div
+          className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs"
+          onClick={() => setShowImagePreview(false)}
+        >
+          <div className="relative max-w-2xl max-h-[85vh] bg-black rounded-2xl overflow-hidden shadow-2xl p-1" onClick={(e) => e.stopPropagation()}>
+            <img src={resolvedPhotoUrl} alt="Skin Scan Full View" className="max-w-full max-h-[80vh] object-contain rounded-xl mx-auto" />
+            <button
+              type="button"
+              onClick={() => setShowImagePreview(false)}
+              className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/70 hover:bg-black text-white flex items-center justify-center cursor-pointer transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function getCachedAppointments(): Appointment[] {
   try {
     const rawLocal = localStorage.getItem("dermai_clinic_appointments");
@@ -662,7 +1018,11 @@ function getCachedAppointments(): Appointment[] {
           status: (localItem.status === "cancelled" ? "Cancelled" : localItem.status === "confirmed" || localItem.status === "scheduled" || localItem.doctorStatus === "approved" ? "Scheduled" : localItem.status === "completed" ? "Completed" : localItem.status === "rejected" ? "Rejected" : "Pending") as Appointment["status"],
           clinicNote: localItem.clinicNote,
           doctorNote: localItem.doctorNote,
-          doctorDiagnosis: localItem.conditionName || localItem.aiConditionName || localItem.doctorDiagnosis,
+          doctorDiagnosis: localItem.doctorDiagnosis || undefined,
+          aiConditionName: localItem.aiConditionName || localItem.conditionName || undefined,
+          aiConfidence: localItem.aiConfidence != null ? Number(localItem.aiConfidence) : undefined,
+          skinPhotoUrl: localItem.skinPhotoUrl || localItem.skin_photo_url || localItem.photoUrl || undefined,
+          questionnaireAnswers: localItem.questionnaireAnswers || localItem.questionnaire_answers || undefined,
           createdAt: localItem.createdAt || new Date().toISOString(),
           userId: localItem.userId,
           patientEmail: localItem.patientEmail,
@@ -673,7 +1033,7 @@ function getCachedAppointments(): Appointment[] {
           rescheduleReason: localItem.rescheduleReason || localItem.reschedule_reason,
           needsPatientReschedule: Boolean(localItem.needsPatientReschedule || localItem.needs_patient_reschedule),
           appointmentHistory: localItem.appointmentHistory || localItem.appointment_history || [],
-          paymentStatus: localItem.paymentStatus || "paid",
+          paymentStatus: (localItem.paymentStatus as Appointment["paymentStatus"]) || undefined,
           paymentAmount: localItem.paymentAmount ? Number(localItem.paymentAmount) : undefined,
           paymentReference: localItem.paymentReference || undefined,
           paidAt: localItem.paidAt || undefined,
@@ -705,6 +1065,7 @@ const AppointmentStatusPage: React.FC = () => {
 
   // Reassign Alternate Doctor Modal State
   const [reassignModalAppt, setReassignModalAppt] = useState<Appointment | null>(null);
+  const [selectedDetailsAppt, setSelectedDetailsAppt] = useState<Appointment | null>(null);
 
   // Reschedule Modal State
   const [rescheduleModalAppt, setRescheduleModalAppt] = useState<Appointment | null>(null);
@@ -752,6 +1113,8 @@ const AppointmentStatusPage: React.FC = () => {
           clinic_note,
           doctor_note,
           ai_condition_name,
+          ai_confidence,
+          skin_photo_url,
           assigned_doctor_id,
           doctor_reviewed_at,
           created_at,
@@ -763,6 +1126,10 @@ const AppointmentStatusPage: React.FC = () => {
           user_id,
           primary_scan_id,
           questionnaire_answers,
+          payment_status,
+          payment_reference,
+          payment_amount,
+          paid_at,
           clinic:clinic_id ( name )
         `)
         .order("created_at", { ascending: false });
@@ -917,7 +1284,11 @@ const AppointmentStatusPage: React.FC = () => {
             clinicNote: a.clinic_note || undefined,
             doctorNote: docNoteClean || undefined,
             doctorDiagnosis: !isDocRejected ? (docDiagnosis || undefined) : undefined,
-            rejectionReason: a.clinic_note || undefined,
+            aiConditionName: a.ai_condition_name || undefined,
+            aiConfidence: a.ai_confidence != null ? Number(a.ai_confidence) : undefined,
+            skinPhotoUrl: a.skin_photo_url || undefined,
+            questionnaireAnswers: a.questionnaire_answers || undefined,
+            rejectionReason: extractClinicCancellationReason(a.clinic_note) || undefined,
             createdAt: a.created_at,
             doctorReviewedAt: a.doctor_reviewed_at || undefined,
             userId: a.user_id || undefined,
@@ -929,9 +1300,10 @@ const AppointmentStatusPage: React.FC = () => {
             rescheduleReason: rReason,
             needsPatientReschedule,
             appointmentHistory,
-            paymentStatus: a.payment_status || (displayStatus === "Completed" || displayStatus === "Scheduled" ? "paid" : undefined),
+            paymentStatus: (a.payment_status as Appointment["paymentStatus"]) || undefined,
             paymentAmount: a.payment_amount ? Number(a.payment_amount) : undefined,
             paymentReference: a.payment_reference || undefined,
+            paymentMethod: detectOnlinePaymentMethod(a.clinic_note, a.payment_reference),
             paidAt: a.paid_at || undefined,
           };
         });
@@ -985,7 +1357,11 @@ const AppointmentStatusPage: React.FC = () => {
                     status: (localItem.status === "cancelled" ? "Cancelled" : localItem.status === "confirmed" || localItem.status === "scheduled" || localItem.doctorStatus === "approved" ? "Scheduled" : localItem.status === "completed" ? "Completed" : localItem.status === "rejected" ? "Rejected" : "Pending") as Appointment["status"],
                     clinicNote: localItem.clinicNote,
                     doctorNote: localItem.doctorNote,
-                    doctorDiagnosis: localItem.conditionName || localItem.aiConditionName,
+                    doctorDiagnosis: localItem.doctorDiagnosis || undefined,
+                    aiConditionName: localItem.aiConditionName || localItem.conditionName || undefined,
+                    aiConfidence: localItem.aiConfidence != null ? Number(localItem.aiConfidence) : undefined,
+                    skinPhotoUrl: localItem.skinPhotoUrl || localItem.skin_photo_url || localItem.photoUrl || undefined,
+                    questionnaireAnswers: localItem.questionnaireAnswers || localItem.questionnaire_answers || undefined,
                     createdAt: localItem.createdAt || new Date().toISOString(),
                     userId: localItem.userId,
                     patientEmail: localItem.patientEmail,
@@ -996,9 +1372,11 @@ const AppointmentStatusPage: React.FC = () => {
                     rescheduleReason: localItem.rescheduleReason || localItem.reschedule_reason,
                     needsPatientReschedule: Boolean(localItem.needsPatientReschedule || localItem.needs_patient_reschedule),
                     appointmentHistory: localItem.appointmentHistory || localItem.appointment_history || [],
-                    paymentStatus: localItem.paymentStatus || "paid",
+                    paymentStatus: (localItem.paymentStatus as Appointment["paymentStatus"]) || undefined,
                     paymentAmount: localItem.paymentAmount ? Number(localItem.paymentAmount) : undefined,
                     paymentReference: localItem.paymentReference || undefined,
+                    paymentMethod: detectOnlinePaymentMethod(localItem.clinicNote, localItem.paymentReference),
+                    rejectionReason: extractClinicCancellationReason(localItem.clinicNote) || undefined,
                     paidAt: localItem.paidAt || undefined,
                   });
                 }
@@ -1444,6 +1822,7 @@ const AppointmentStatusPage: React.FC = () => {
             onReschedule={(item) => handleOpenRescheduleModal(item)}
             onWithdrawReschedule={(item) => setWithdrawModalAppt(item)}
             onSelectAlternateDoctor={(item) => setReassignModalAppt(item)}
+            onViewDetails={(item) => setSelectedDetailsAppt(item)}
           />
         ))}
       </div>
@@ -1751,6 +2130,17 @@ const AppointmentStatusPage: React.FC = () => {
           </div>
         </div>
       )}
+      </ModalPortal>
+
+      
+      {/* Consultation Details Modal */}
+      <ModalPortal isOpen={Boolean(selectedDetailsAppt)}>
+        {selectedDetailsAppt && (
+          <ConsultationDetailsModal
+            app={selectedDetailsAppt}
+            onClose={() => setSelectedDetailsAppt(null)}
+          />
+        )}
       </ModalPortal>
 
       {/* Cancellation Confirmation Modal */}

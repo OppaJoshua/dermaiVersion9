@@ -42,6 +42,20 @@ export default function SubscriptionStatusPage() {
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
 
   useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }, []);
+
+  useEffect(() => {
+    if (!loading) {
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    }
+  }, [loading]);
+
+  useEffect(() => {
     let isMounted = true;
 
     // Wait until auth is resolved to avoid false unauthenticated state

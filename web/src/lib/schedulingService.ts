@@ -60,6 +60,9 @@ export interface ConsultationSlot {
   label: string;          // "8:00 AM"
   durationMinutes: number;// 45
   isBooked: boolean;
+  isReserved?: boolean;   // Active temporary checkout hold
+  isOccupied?: boolean;   // Booked or reserved
+  occupancyType?: "available" | "reserved" | "booked" | "unavailable";
   isPast: boolean;
   isCapacityFull: boolean;
   isAvailable: boolean;
@@ -537,7 +540,8 @@ export function parseDoctorSchedule(
  */
 export function serializeDoctorSchedule(
   schedule: DoctorWeeklySchedule,
-  dutyDays?: string[]
+  dutyDays?: string[],
+  clinicDefaultInterval?: number
 ): Record<string, any> {
   const activeDays = Array.isArray(dutyDays)
     ? dutyDays.map(normalizeDayName).filter(Boolean)
@@ -548,9 +552,17 @@ export function serializeDoctorSchedule(
     cleanWeeklyShifts[day] = activeDays.includes(day) ? (schedule.weeklyShifts[day] || []) : [];
   });
 
+  const parsedInterval =
+    schedule.slotIntervalMinutes && Number(schedule.slotIntervalMinutes) > 0
+      ? Number(schedule.slotIntervalMinutes)
+      : clinicDefaultInterval && Number(clinicDefaultInterval) > 0
+      ? Number(clinicDefaultInterval)
+      : 30;
+
   const payload: Record<string, any> = {
     weeklyShifts: cleanWeeklyShifts,
-    slotIntervalMinutes: schedule.slotIntervalMinutes,
+    slotIntervalMinutes: parsedInterval,
+    slot_interval_minutes: parsedInterval,
     maxPatientsPerShift: schedule.maxPatientsPerShift,
     maxPatientsPerDay: schedule.maxPatientsPerShift, // Backward compatibility
     isCustomSchedule: schedule.isCustomSchedule ?? true,
@@ -560,10 +572,15 @@ export function serializeDoctorSchedule(
   activeDays.forEach((day) => {
     const shifts = cleanWeeklyShifts[day];
     if (shifts && shifts.length > 0) {
+      const shiftInterval =
+        shifts[0].slotIntervalMinutes && Number(shifts[0].slotIntervalMinutes) > 0
+          ? Number(shifts[0].slotIntervalMinutes)
+          : parsedInterval;
       payload[day] = {
         startTime: shifts[0].startTime,
         endTime: shifts[0].endTime,
-        slotIntervalMinutes: shifts[0].slotIntervalMinutes || schedule.slotIntervalMinutes,
+        slotIntervalMinutes: shiftInterval,
+        slot_interval_minutes: shiftInterval,
         maxPatientsPerShift: shifts[0].maxPatientsPerShift || schedule.maxPatientsPerShift,
       };
     }
@@ -1141,6 +1158,8 @@ export function isAppointmentHoldOrReservationActive(
     doctorStatus?: string | null;
     payment_status?: string | null;
     paymentStatus?: string | null;
+    occupancy_type?: string | null;
+    occupancyType?: string | null;
     payment_hold_expires_at?: string | null;
     paymentHoldExpiresAt?: string | null;
   } | null,
@@ -1157,15 +1176,35 @@ export function isAppointmentHoldOrReservationActive(
     return false;
   }
 
+  // Authoritative occupancy_type check (from get_occupied_appointment_slots RPC)
+  const occType = String(appt.occupancy_type || appt.occupancyType || "").toLowerCase().trim();
+  if (occType === "reserved" || occType === "booked") {
+    const rawExp = appt.payment_hold_expires_at || appt.paymentHoldExpiresAt;
+    if (rawExp) {
+      const expTime = new Date(rawExp).getTime();
+      if (!isNaN(expTime)) {
+        const nowMs = currentTimeMs ?? Date.now();
+        if (expTime <= nowMs) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   if (paySt === "pending_hold") {
     const rawExp = appt.payment_hold_expires_at || appt.paymentHoldExpiresAt;
-    if (!rawExp) return false;
-    const expTime = new Date(rawExp).getTime();
-    if (isNaN(expTime)) return false;
-    const nowMs = currentTimeMs ?? Date.now();
-    if (expTime <= nowMs) {
-      return false;
+    if (rawExp) {
+      const expTime = new Date(rawExp).getTime();
+      if (!isNaN(expTime)) {
+        const nowMs = currentTimeMs ?? Date.now();
+        if (expTime <= nowMs) {
+          return false;
+        }
+      }
     }
+    // If rawExp is omitted (e.g. from get_occupied_appointment_slots RPC), trust the database
+    return true;
   }
 
   return true;
@@ -1185,6 +1224,9 @@ export function generateSlotsForShift({
 }: GenerateShiftSlotsParams): {
   slots: ConsultationSlot[];
   totalBookedInShift: number;
+  totalReservedInSlots: number;
+  totalConfirmedBooked: number;
+  totalOccupiedInSlots: number;
   remainingShiftCapacity: number;
   isShiftCapacityReached: boolean;
   effectiveSettings: EffectiveShiftSettings;
@@ -1209,9 +1251,18 @@ export function generateSlotsForShift({
   const activeBookingsInShift = activeAppointments.filter((appt) => {
     if (!isAppointmentHoldOrReservationActive(appt)) return false;
 
-    // Doctor match
-    if (doctorId && appt.assigned_doctor_id && String(appt.assigned_doctor_id) !== String(doctorId)) {
-      return false;
+    // Doctor match (supports UUID-to-UUID and local ID comparisons resiliently)
+    if (doctorId && appt.assigned_doctor_id) {
+      const cleanDoc = String(doctorId).trim().toLowerCase();
+      const cleanApptDoc = String(appt.assigned_doctor_id).trim().toLowerCase();
+      const isDocUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanDoc);
+      const isApptDocUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanApptDoc);
+
+      if (isDocUuid && isApptDocUuid) {
+        if (cleanDoc !== cleanApptDoc) return false;
+      } else if (!isDocUuid && !isApptDocUuid) {
+        if (cleanDoc !== cleanApptDoc) return false;
+      }
     }
 
     // Time inside this shift bounds: [startMin, endMin)
@@ -1221,7 +1272,6 @@ export function generateSlotsForShift({
   });
 
   const totalBookedInShift = activeBookingsInShift.length;
-  const remainingShiftCapacity = Math.max(0, capacity - totalBookedInShift);
   const isShiftCapacityReached = totalBookedInShift >= capacity;
 
   const slots: ConsultationSlot[] = [];
@@ -1238,13 +1288,32 @@ export function generateSlotsForShift({
 
     const isPast = isToday && slotStart <= currentMinutesNow;
 
-    const isBooked = activeBookingsInShift.some((appt) => {
+    const matchedBooking = activeBookingsInShift.find((appt) => {
       const bTime = (appt.time || appt.batch_time || "").slice(0, 5);
       return bTime === slotTimeStr;
     });
 
+    const isOccupied = !!matchedBooking;
+    let isReserved = false;
+    let isBooked = isOccupied;
+
+    if (matchedBooking) {
+      const paySt = String(matchedBooking.payment_status || matchedBooking.paymentStatus || "").toLowerCase().trim();
+      const occType = String(matchedBooking.occupancy_type || matchedBooking.occupancyType || "").toLowerCase().trim();
+      if (occType === "reserved" || paySt === "pending_hold") {
+        isReserved = true;
+      }
+    }
+
     const isCapacityFull = isShiftCapacityReached;
-    const isAvailable = !isBooked && !isPast && !isCapacityFull;
+    const isAvailable = !isOccupied && !isPast && !isCapacityFull;
+    const occupancyType: "available" | "reserved" | "booked" | "unavailable" = isAvailable
+      ? "available"
+      : isReserved
+      ? "reserved"
+      : isBooked
+      ? "booked"
+      : "unavailable";
 
     slots.push({
       shiftId: shift.id || shift.shiftId || `shift-${slotIndex}`,
@@ -1256,6 +1325,9 @@ export function generateSlotsForShift({
       label,
       durationMinutes: interval,
       isBooked,
+      isReserved,
+      isOccupied,
+      occupancyType,
       isPast,
       isCapacityFull,
       isAvailable,
@@ -1265,11 +1337,24 @@ export function generateSlotsForShift({
     slotIndex++;
   }
 
+  const totalOccupiedInSlots = slots.filter((s) => s.isOccupied).length;
+  const totalReservedInSlots = slots.filter((s) => s.isReserved).length;
+  const totalConfirmedBooked = slots.filter((s) => s.isBooked && !s.isReserved).length;
+  const totalAvailableInSlots = slots.filter((s) => s.isAvailable).length;
+
+  // Authoritative shift metrics derived directly from evaluated slots
+  const effectiveBooked = Math.max(totalBookedInShift, totalOccupiedInSlots);
+  const effectiveRemaining = Math.max(0, Math.min(capacity - effectiveBooked, totalAvailableInSlots));
+  const effectiveCapacityReached = effectiveRemaining <= 0 || effectiveBooked >= capacity;
+
   return {
     slots,
-    totalBookedInShift,
-    remainingShiftCapacity,
-    isShiftCapacityReached,
+    totalBookedInShift: effectiveBooked,
+    totalReservedInSlots,
+    totalConfirmedBooked,
+    totalOccupiedInSlots,
+    remainingShiftCapacity: effectiveRemaining,
+    isShiftCapacityReached: effectiveCapacityReached,
     effectiveSettings,
   };
 }
@@ -1278,6 +1363,9 @@ export interface DayShiftSlotsGroup {
   shift: DoctorShift;
   effectiveSettings: EffectiveShiftSettings;
   totalBooked: number;
+  totalReserved: number;
+  totalConfirmedBooked: number;
+  totalOccupied: number;
   remainingCapacity: number;
   isCapacityReached: boolean;
   slots: ConsultationSlot[];
@@ -1351,6 +1439,9 @@ export function generateDaySlotsForDoctor({
       shift,
       effectiveSettings: res.effectiveSettings,
       totalBooked: res.totalBookedInShift,
+      totalReserved: res.totalReservedInSlots,
+      totalConfirmedBooked: res.totalConfirmedBooked,
+      totalOccupied: res.totalOccupiedInSlots,
       remainingCapacity: res.remainingShiftCapacity,
       isCapacityReached: res.isShiftCapacityReached,
       slots: res.slots,

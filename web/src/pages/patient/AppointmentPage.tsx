@@ -1,4 +1,4 @@
-import React, { type FormEvent, useState, useEffect, useMemo } from "react";
+import React, { type FormEvent, useState, useEffect, useMemo, useRef } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -46,6 +46,7 @@ import {
   computeNextQueueNumber,
   isClinicOpenOnDay,
   isDoctorOnDutyOnDay,
+  getManilaCalendarDate,
 } from "@/lib/schedulingService";
 import {
   type DemoCheckoutData,
@@ -54,9 +55,53 @@ import {
 import { cn } from "@/lib/utils";
 import gcashLogo from "@/assets/gcash.png";
 import mayaLogo from "@/assets/maya.png";
-import { acquireAppointmentSlotHold } from "@/lib/appointmentPaymentService";
+import {
+  useSlotAvailabilityRealtime,
+  broadcastSlotChange,
+  fetchAuthoritativeOccupiedSlots,
+  type OccupiedSlotRecord,
+  type BroadcastSlotChangePayload,
+} from "@/lib/slotAvailabilityRealtime";
+import {
+  acquireAppointmentSlotHold,
+  extractEdgeFunctionError,
+  releaseAppointmentHoldSafely,
+  setCheckoutRedirectRecord,
+  isCheckoutRedirectActiveForAppointment,
+  clearCheckoutRedirectRecord,
+} from "@/lib/appointmentPaymentService";
 
 const PAYMONGO_PUBLIC_KEY = import.meta.env.VITE_PAYMONGO_PUBLIC_KEY || "";
+
+/**
+ * Sanitizes technical error codes into user-friendly booking and payment notifications.
+ */
+export function isValidUuid(val?: string | null): boolean {
+  if (!val) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(val).trim());
+}
+
+function formatUserFriendlyBookingError(errStr?: string | null, slotRange?: string): string {
+  if (!errStr) return "Unable to reserve this consultation slot. Please choose another available slot.";
+  const lower = errStr.toLowerCase();
+  if (
+    lower.includes("err_slot_unavailable") ||
+    lower.includes("err_duplicate_slot") ||
+    lower.includes("already reserved") ||
+    lower.includes("already booked") ||
+    lower.includes("reserved by another patient") ||
+    lower.includes("booked by another patient") ||
+    lower.includes("exclusive_doctor_slot")
+  ) {
+    const range = slotRange || "selected";
+    return `The ${range} consultation slot was just reserved by another patient. Please choose another available consultation slot.`;
+  }
+  if (lower.includes("err_schedule_config") || lower.includes("appointment interval") || lower.includes("duty schedule")) {
+    return "This doctor's consultation schedule has not been configured with appointment intervals by the clinic. Please select another available doctor or contact the clinic.";
+  }
+  // Strip any raw tech codes like "ERR_SOMETHING: "
+  return errStr.replace(/^[A-Z0-9_]+:\s*/, "");
+}
 
 export type ClinicDoctorItem = {
   id: string;
@@ -119,6 +164,12 @@ export function parseDoctorDutyDays(rawDays: any, rawSchedule?: any): string[] {
 
   const normalized = days.map(normalizeDayName).filter(Boolean);
   return Array.from(new Set(normalized));
+}
+
+export function formatCleanDoctorTitle(name?: string | null): string {
+  if (!name) return "";
+  const cleaned = name.replace(/^dr\.?\s*/i, "").trim();
+  return cleaned ? `Dr. ${cleaned}` : "";
 }
 
 export function parseDoctorDutySchedule(rawSched: any): Record<string, { startTime: string; endTime: string }> | undefined {
@@ -808,74 +859,186 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
   const [existingBookings, setExistingBookings] = useState<any[]>([]);
   const [_loadingBookings, setLoadingBookings] = useState(false);
+  const [realtimeRefreshTick, setRealtimeRefreshTick] = useState(0);
+  const [slotConflictWarning, setSlotConflictWarning] = useState<string | null>(null);
+
+  // Stale polling race condition guard & active session conflict cache
+  const fetchBookingsSeqRef = useRef<number>(0);
+  const sessionConflictSlotsRef = useRef<Map<string, OccupiedSlotRecord>>(new Map());
+
+  // Clear slot conflict warning when date or doctor changes
+  useEffect(() => {
+    setSlotConflictWarning(null);
+  }, [selectedDate, activeDutyDoctor?.id]);
+
+  // Supabase Realtime multi-patient availability synchronization & active polling
+  useSlotAvailabilityRealtime({
+    clinicId: selectedClinic?.id,
+    selectedDate,
+    doctorId: activeDutyDoctor?.id,
+    enabled: !!selectedClinic?.id && !!selectedDate,
+    pollingIntervalMs: 5000,
+    onRefresh: (payload?: BroadcastSlotChangePayload) => {
+      if (payload && payload.slotTime && payload.date) {
+        const payloadDate = getManilaCalendarDate(payload.date);
+        const timeClean = payload.slotTime.slice(0, 5);
+
+        if (payload.changeType === "hold_acquired") {
+          // If current patient had this exact slot selected, clear immediately and show notification
+          if (
+            selectedDate === payloadDate &&
+            selectedTime === timeClean &&
+            (!payload.doctorId || !activeDutyDoctor?.id || String(payload.doctorId) === String(activeDutyDoctor.id))
+          ) {
+            setSelectedTime("");
+            const timeLabel = formatTime12h(timeClean);
+            setSlotConflictWarning(`The ${timeLabel} consultation slot was just reserved by another patient. Please choose another available consultation slot.`);
+          }
+        } else if (payload.changeType === "payment_completed") {
+          if (
+            selectedDate === payloadDate &&
+            selectedTime === timeClean &&
+            (!payload.doctorId || !activeDutyDoctor?.id || String(payload.doctorId) === String(activeDutyDoctor.id))
+          ) {
+            setSelectedTime("");
+            const timeLabel = formatTime12h(timeClean);
+            setSlotConflictWarning(`The ${timeLabel} consultation slot was just booked by another patient. Please choose another available consultation slot.`);
+          }
+        } else if (payload.changeType === "hold_released" || payload.changeType === "cancelled") {
+          setExistingBookings((prev) =>
+            prev.filter((b) => {
+              const bTime = (b.time || b.batch_time || "").slice(0, 5);
+              return bTime !== timeClean;
+            })
+          );
+        }
+      }
+
+      setRealtimeRefreshTick((t) => t + 1);
+    },
+  });
+
+  // Modal Escape key dismissal listener
+  useEffect(() => {
+    if (!showDemoCheckoutModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !demoSimulating) {
+        handleDemoReturnToBooking();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showDemoCheckoutModal, demoSimulating]);
+
+  // Tab unload / navigate away checkout hold cleanup
+  useEffect(() => {
+    const handleUnload = () => {
+      const pendingApptId = sessionStorage.getItem("dermai_pending_appointment_id");
+      try {
+        if (isCheckoutRedirectActiveForAppointment(pendingApptId)) {
+          return; // PayMongo checkout redirect in progress for this specific appointment; NEVER release or cancel hold!
+        }
+      } catch {}
+      if (pendingApptId && showDemoCheckoutModal) {
+        const timeClean = (selectedTime || "08:00").slice(0, 5);
+        releaseAppointmentHoldSafely(pendingApptId, "Checkout abandoned on tab close.", {
+          clinicId: selectedClinic?.id,
+          date: selectedDate,
+          doctorId: activeDutyDoctor?.id,
+          slotTime: timeClean,
+        });
+      }
+    };
+    window.addEventListener("beforeunload", handleUnload);
+    window.addEventListener("pagehide", handleUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleUnload);
+      window.removeEventListener("pagehide", handleUnload);
+    };
+  }, [showDemoCheckoutModal, selectedClinic?.id, selectedDate, selectedTime, activeDutyDoctor?.id]);
 
   // Fetch real-time active bookings for the clinic and chosen date
   useEffect(() => {
     let cancelled = false;
+    const currentSeq = ++fetchBookingsSeqRef.current;
+
     async function fetchBookings() {
       if (!selectedDate) return;
       setLoadingBookings(true);
       try {
         const clinicId = selectedClinic?.id;
+        let bookingsList: any[] = [];
+        let rpcCompleted = false;
 
         // Try the privacy-preserving get_occupied_appointment_slots RPC first
         if (clinicId) {
-          const { data: rpcSlots, error: rpcErr } = await (supabase.rpc as any)(
-            "get_occupied_appointment_slots",
-            {
-              p_clinic_id: clinicId,
-              p_date: selectedDate,
-              p_doctor_id: activeDutyDoctor?.id || null,
-            }
-          );
-
-          if (!cancelled && rpcSlots && !rpcErr) {
-            const mapped = rpcSlots.map((s: any) => ({
+          try {
+            const authoritativeSlots = await fetchAuthoritativeOccupiedSlots({
+              clinicId,
               date: selectedDate,
-              time: s.slot_time,
-              batch_time: s.slot_time,
-              assigned_doctor_id: s.assigned_doctor_id,
-              clinic_id: s.clinic_id,
-              status: "scheduled",
-              doctor_status: "approved",
-            }));
-            setExistingBookings(mapped);
-            return;
+              doctorId: activeDutyDoctor?.id,
+            });
+            if (!cancelled && currentSeq === fetchBookingsSeqRef.current) {
+              bookingsList = authoritativeSlots;
+              rpcCompleted = true;
+            }
+          } catch (rpcErr) {
+            console.debug("[AppointmentPage] authoritative slots fetch note:", rpcErr);
           }
         }
 
-        // Fallback for environments where RPC is not yet deployed
-        let query = supabase
-          .from("patient_appointment")
-          .select("appointment_id, date, time, batch_time, queue_number, status, doctor_status, assigned_doctor_id, clinic_id")
-          .neq("status", "cancelled")
-          .neq("status", "rejected");
+        // Direct table query fallback ONLY if RPC failed / threw an error
+        if (!rpcCompleted && bookingsList.length === 0) {
+          let query = supabase
+            .from("patient_appointment")
+            .select("appointment_id, date, time, batch_time, queue_number, status, doctor_status, assigned_doctor_id, clinic_id, payment_status, payment_hold_expires_at")
+            .neq("status", "cancelled")
+            .neq("status", "rejected");
 
-        if (clinicId) {
-          query = query.eq("clinic_id", clinicId);
+          if (clinicId) {
+            query = query.eq("clinic_id", clinicId);
+          }
+
+          const { data, error } = await query;
+          if (!cancelled && currentSeq === fetchBookingsSeqRef.current && data && !error && Array.isArray(data)) {
+            const matched = data.filter((row: any) => {
+              if (!row.date) return false;
+              const st = String(row.status || "").toLowerCase().trim();
+              if (st === "cancelled" || st === "rejected" || st === "declined") return false;
+              return getManilaCalendarDate(row.date) === selectedDate;
+            });
+
+            for (const m of matched) {
+              const mTime = (m.time || m.batch_time || "").slice(0, 5);
+              const mDocId = m.assigned_doctor_id;
+              const exists = bookingsList.some((b) => {
+                const bTime = (b.time || b.batch_time || "").slice(0, 5);
+                const bDocId = b.assigned_doctor_id;
+                return bTime === mTime && (!mDocId || !bDocId || String(bDocId) === String(mDocId));
+              });
+              if (!exists) {
+                bookingsList.push(m);
+              }
+            }
+          }
         }
 
-        const { data, error } = await query;
-        if (!cancelled && data && !error) {
-          const matched = data.filter((row: any) => {
-            if (!row.date) return false;
-            const st = String(row.status || "").toLowerCase().trim();
-            if (st === "cancelled" || st === "rejected" || st === "declined") return false;
-            return String(row.date).startsWith(selectedDate);
-          });
-          setExistingBookings(matched);
+        if (!cancelled && currentSeq === fetchBookingsSeqRef.current) {
+          setExistingBookings(bookingsList);
         }
       } catch (e) {
         console.warn("Could not query existing doctor bookings:", e);
       } finally {
-        if (!cancelled) setLoadingBookings(false);
+        if (!cancelled && currentSeq === fetchBookingsSeqRef.current) {
+          setLoadingBookings(false);
+        }
       }
     }
     fetchBookings();
     return () => {
       cancelled = true;
     };
-  }, [selectedDate, selectedClinic?.id]);
+  }, [selectedDate, selectedClinic?.id, activeDutyDoctor?.id, realtimeRefreshTick]);
 
   // Dynamically generate consecutive consultation slots grouped by shift using unified schedulingService
   const dayShiftGroups = useMemo<DayShiftSlotsGroup[]>(() => {
@@ -919,16 +1082,18 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return dayShiftGroups.flatMap((g) => g.slots);
   }, [dayShiftGroups]);
 
-  // Keep selectedTime synchronized to first available slot
+  // Detect if currently selectedTime was just occupied by another patient
   useEffect(() => {
-    if (consultationSlots.length > 0) {
-      const match = consultationSlots.find((s) => s.slotTime === selectedTime && s.isAvailable);
-      if (!match) {
-        const firstAvail = consultationSlots.find((s) => s.isAvailable);
-        if (firstAvail && firstAvail.slotTime !== selectedTime) {
-          setSelectedTime(firstAvail.slotTime);
-        }
-      }
+    if (!selectedTime || consultationSlots.length === 0) return;
+    const currentSlot = consultationSlots.find((s) => s.slotTime === selectedTime);
+    if (currentSlot && !currentSlot.isAvailable) {
+      const timeLabel = currentSlot.label || formatTime12h(selectedTime);
+      const conflictMsg = currentSlot.isReserved
+        ? `The ${timeLabel} consultation slot was just reserved by another patient. Please select another available time.`
+        : `The ${timeLabel} consultation slot was just booked by another patient. Please select another available time.`;
+      // Immediately clear the selected time and remove selection styling
+      setSelectedTime("");
+      setSlotConflictWarning(conflictMsg);
     }
   }, [consultationSlots, selectedTime]);
 
@@ -1076,6 +1241,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
                   return true;
                 });
+
 
                 if (matched.length > 0) {
                   rawDoctorRows = matched;
@@ -1390,6 +1556,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
     if (!intentId) {
       setIsVerifyingReturn(false);
+      // Browser Back handling:
+      // If no payment_intent in URL, any redirect session has ended (user clicked Back or directly navigated).
+      // Invalidate/clear the redirect record so subsequent bookings or cancellations are not blocked.
+      clearCheckoutRedirectRecord(null, "Browser Back or direct navigation without payment_intent");
       return;
     }
 
@@ -1404,6 +1574,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
     async function handlePayMongoReturn() {
       try {
+        try {
+          clearCheckoutRedirectRecord(returnedApptId, "Payment return verification initiated");
+        } catch {}
         setIsVerifyingReturn(true);
         setReturnVerificationError(null);
         setSubmitting(true);
@@ -1472,6 +1645,17 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           sessionStorage.removeItem("dermai_appointment_draft");
           sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
           sessionStorage.removeItem("dermai_pending_appointment_id");
+
+          const targetClinic = selectedClinic?.id || searchParams.get("clinic");
+          if (targetClinic) {
+            broadcastSlotChange(targetClinic, {
+              date: selectedDate || apptDate,
+              doctorId: activeDutyDoctor?.id,
+              slotTime: selectedTime || apptTime,
+              type: "payment_completed",
+            });
+            setRealtimeRefreshTick((t) => t + 1);
+          }
         } else {
           const failureReason =
             data?.error ||
@@ -1683,8 +1867,187 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     }
 
     if (decision.action === "open_demo_checkout") {
-      setDemoCheckoutData(decision.checkoutData);
-      setShowDemoCheckoutModal(true);
+      setSubmitting(true);
+      try {
+        const isValidUuid = (val?: string | null): boolean =>
+          Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(val).trim()));
+
+        let activeUserId = user?.id;
+        if (!activeUserId) {
+          try {
+            const { data: sess } = await supabase.auth.getSession();
+            activeUserId = sess.session?.user?.id;
+          } catch { }
+        }
+
+        let resolvedDoctorId: string | undefined = isValidUuid(activeDutyDoctor?.id) ? activeDutyDoctor!.id : undefined;
+        if (!resolvedDoctorId && activeDutyDoctor?.name && selectedClinic?.id) {
+          try {
+            const cleanName = activeDutyDoctor.name.replace(/^Dr\.?\s*/i, "").trim();
+            const { data: dbDoc } = await supabase
+              .from("clinic_doctor")
+              .select("doctor_id")
+              .eq("clinic_id", String(selectedClinic.id))
+              .ilike("doctor_name", `%${cleanName}%`)
+              .maybeSingle();
+            if (dbDoc?.doctor_id && isValidUuid(dbDoc.doctor_id)) {
+              resolvedDoctorId = dbDoc.doctor_id;
+            }
+          } catch { }
+        }
+        if (!resolvedDoctorId && isValidUuid(selectedDoctorId)) {
+          resolvedDoctorId = selectedDoctorId;
+        }
+
+        const validScanId = isValidUuid(selectedScanId) ? selectedScanId : undefined;
+        const validCondId = (selectedScan && isValidUuid(selectedScan.conditionId)) ? selectedScan.conditionId : undefined;
+
+        let existingHoldId: string | null = null;
+        const pendingSessionApptId = typeof window !== "undefined" ? sessionStorage.getItem("dermai_pending_appointment_id") : null;
+        if (pendingSessionApptId && isValidUuid(pendingSessionApptId)) {
+          try {
+            const { data: existingAppt } = await supabase
+              .from("patient_appointment")
+              .select("appointment_id, payment_status, payment_hold_expires_at, clinic_id")
+              .eq("appointment_id", pendingSessionApptId)
+              .maybeSingle();
+
+            if (
+              existingAppt &&
+              existingAppt.payment_status === "pending_hold" &&
+              existingAppt.clinic_id === String(selectedClinic?.id) &&
+              (!existingAppt.payment_hold_expires_at || new Date(existingAppt.payment_hold_expires_at) > new Date())
+            ) {
+              existingHoldId = existingAppt.appointment_id;
+            } else if (existingAppt && existingAppt.payment_status === "pending_hold") {
+              await releaseAppointmentHoldSafely(pendingSessionApptId, "Released to acquire fresh hold for checkout.");
+              sessionStorage.removeItem("dermai_pending_appointment_id");
+            }
+          } catch { }
+        }
+
+        let holdApptId = existingHoldId;
+        if (!holdApptId) {
+          const holdRes = await acquireAppointmentSlotHold({
+            clinicId: String(selectedClinic.id),
+            doctorId: resolvedDoctorId,
+            date: `${selectedDate}T${selectedTime || "08:00"}:00+08:00`,
+            time: `${selectedTime || "08:00"}:00`,
+            batchTime: selectedTime || "08:00",
+            patientName: patientName.trim() || user?.user_metadata?.full_name || "Patient",
+            patientEmail: patientEmail.trim() || user?.email || undefined,
+            patientContact: patientContact.trim() || undefined,
+            patientAddress: patientAddress.trim() || undefined,
+            patientGender: patientGender || undefined,
+            patientBirthdate: patientBirthdate || undefined,
+            emergencyContactName: emergencyContactName.trim() || undefined,
+            emergencyContactPhone: emergencyContactPhone.trim() || undefined,
+            emergencyContactRelationship: emergencyRelationship.trim() || undefined,
+            notes: notes.trim() || undefined,
+            clinicNote: activeDutyDoctor?.name ? `Assigned to ${formatCleanDoctorTitle(activeDutyDoctor.name)} for pre-consultation review.` : undefined,
+            questionnaireAnswers: selectedScan?.questionnaireAnswers || questionnaireData || undefined,
+            skinPhotoUrl: selectedScan?.photoUrl || undefined,
+            aiConditionName: selectedScan?.conditionName || "Skin Assessment",
+            aiConfidence: selectedScan?.confidence ? Number(selectedScan.confidence) : undefined,
+            conditionId: validCondId,
+            primaryScanId: validScanId,
+            holdDurationMinutes: 10,
+            userId: activeUserId || user?.id || "",
+          });
+
+          if (holdRes.success && holdRes.appointmentId) {
+            holdApptId = holdRes.appointmentId;
+            const timeClean = (selectedTime || "08:00").slice(0, 5);
+            broadcastSlotChange(selectedClinic?.id, {
+              date: selectedDate,
+              doctorId: resolvedDoctorId || activeDutyDoctor?.id,
+              slotTime: timeClean,
+              type: "hold_acquired",
+            });
+            setRealtimeRefreshTick((t) => t + 1);
+          } else if (!holdRes.success && (holdRes.code === "ERR_SCHEDULE_CONFIG" || holdRes.message?.includes("ERR_SCHEDULE_CONFIG") || holdRes.message?.includes("appointment interval"))) {
+            const docName = activeDutyDoctor?.name ? formatCleanDoctorTitle(activeDutyDoctor.name) : "This doctor";
+            const failureMsg = `${docName}'s consultation schedule has not been configured with appointment intervals by the clinic. Please select another available doctor or contact the clinic.`;
+            setSubmitError(failureMsg);
+            setSubmitting(false);
+            return;
+          } else if (
+            !holdRes.success &&
+            (holdRes.code === "ERR_SLOT_UNAVAILABLE" ||
+             holdRes.code === "ERR_DUPLICATE_SLOT" ||
+             holdRes.message?.includes("ERR_SLOT_UNAVAILABLE") ||
+             holdRes.message?.includes("ERR_DUPLICATE_SLOT") ||
+             holdRes.message?.includes("already reserved") ||
+             holdRes.message?.includes("already booked") ||
+             holdRes.message?.includes("reserved by another patient") ||
+             holdRes.message?.includes("booked by another patient"))
+          ) {
+            const timeClean = (selectedTime || "08:00").slice(0, 5);
+            const conflictRecord: OccupiedSlotRecord = {
+              date: selectedDate,
+              time: timeClean,
+              batch_time: timeClean,
+              assigned_doctor_id: resolvedDoctorId,
+              clinic_id: selectedClinic?.id,
+              status: "scheduled",
+              doctor_status: "approved",
+              payment_status: "paid",
+              occupancy_type: "booked",
+              payment_hold_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+            };
+            const docKey = resolvedDoctorId || "any";
+            sessionConflictSlotsRef.current.set(`${selectedDate}_${docKey}_${timeClean}`, conflictRecord);
+            broadcastSlotChange(selectedClinic?.id, {
+              date: selectedDate,
+              doctorId: resolvedDoctorId,
+              slotTime: timeClean,
+              type: "hold_acquired",
+            });
+            setExistingBookings((prev) => {
+              const exists = prev.some((b) => {
+                const bTime = (b.time || b.batch_time || "").slice(0, 5);
+                const bDocId = b.assigned_doctor_id;
+                return bTime === timeClean && (!resolvedDoctorId || !bDocId || String(bDocId) === String(resolvedDoctorId));
+              });
+              return exists ? prev : [...prev, conflictRecord];
+            });
+            const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
+            const failureMsg = `The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`;
+            setSubmitError(failureMsg);
+            setSubmitting(false);
+            return;
+          } else {
+            const fallbackRes = await executeAppointmentCreation();
+            if (fallbackRes.success && fallbackRes.appointmentId) {
+              holdApptId = fallbackRes.appointmentId;
+            } else {
+              const rawFailure = fallbackRes.error || holdRes.message || "Unable to reserve this consultation slot. Please choose another available slot.";
+              const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
+              const failureMsg = formatUserFriendlyBookingError(rawFailure, slotRange);
+              setSubmitError(failureMsg);
+              setSubmitting(false);
+              return;
+            }
+          }
+        }
+
+        if (holdApptId) {
+          try {
+            clearCheckoutRedirectRecord(null, "New slot hold acquired");
+            sessionStorage.setItem("dermai_pending_appointment_id", holdApptId);
+          } catch { }
+
+          setDemoCheckoutData({
+            ...decision.checkoutData,
+            appointmentId: holdApptId,
+          });
+          setShowDemoCheckoutModal(true);
+        }
+      } catch (err: any) {
+        setSubmitError(err?.message || "Failed to reserve appointment slot. Please try again.");
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
 
@@ -1698,10 +2061,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     method: "gcash" | "maya";
     mobileNumber?: string;
     payerName?: string;
-  }) => {
+  }): Promise<{ success: boolean; appointmentId?: string; error?: string }> => {
     if (!selectedClinic) {
-      setSubmitError("No clinic selected. Please choose a clinic first.");
-      return;
+      const err = "No clinic selected. Please choose a clinic first.";
+      setSubmitError(err);
+      return { success: false, error: err };
     }
 
     let activeUserId = user?.id;
@@ -1713,16 +2077,18 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     }
 
     if (!activeUserId) {
-      setSubmitError("You must be logged in to book an appointment. Redirecting to login...");
+      const err = "You must be logged in to book an appointment. Redirecting to login...";
+      setSubmitError(err);
       setTimeout(() => {
         navigate("/login", { state: { from: window.location.pathname + window.location.search } });
       }, 1200);
-      return;
+      return { success: false, error: err };
     }
 
     if (!selectedScanId) {
-      setSubmitError("Please select a completed AI skin scan for this appointment.");
-      return;
+      const err = "Please select a completed AI skin scan for this appointment.";
+      setSubmitError(err);
+      return { success: false, error: err };
     }
 
     setSubmitting(true);
@@ -1786,9 +2152,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       }
 
       if (!scanIdToSave) {
-        setSubmitError("The selected AI skin scan is invalid or does not belong to your account.");
+        const err = "The selected AI skin scan is invalid or does not belong to your account.";
+        setSubmitError(err);
         setSubmitting(false);
-        return;
+        return { success: false, error: err };
       }
 
       // 2. Prepare appointment payload with valid UUID clinic ID
@@ -1842,11 +2209,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           selectedClinic.operatingDays
         )
       ) {
-        setSubmitError(
-          `The clinic is closed on ${dayOfWeekForSelectedDate}s (${selectedClinic.name} operating days: ${selectedClinic.operatingDays}). Please select another date.`
-        );
+        const err = `The clinic is closed on ${dayOfWeekForSelectedDate}s (${selectedClinic.name} operating days: ${selectedClinic.operatingDays}). Please select another date.`;
+        setSubmitError(err);
         setSubmitting(false);
-        return;
+        return { success: false, error: err };
       }
 
       const clinicSchedule = {
@@ -1864,9 +2230,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
       if (activeDutyDoctor) {
         if (!isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate, clinicSchedule)) {
-          setSubmitError(`Dr. ${activeDutyDoctor.name} is not available or scheduled to work on ${dayOfWeekForSelectedDate}.`);
+          const err = `${formatCleanDoctorTitle(activeDutyDoctor.name)} is not available or scheduled to work on ${dayOfWeekForSelectedDate}.`;
+          setSubmitError(err);
           setSubmitting(false);
-          return;
+          return { success: false, error: err };
         }
       }
 
@@ -1878,9 +2245,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       });
 
       if (activeDutyDoctor && doctorShifts.length > 0 && !matchedShift) {
-        setSubmitError(`The selected time (${formatTime12h(selectedTime)}) is outside Dr. ${activeDutyDoctor.name}'s scheduled shifts on ${dayOfWeekForSelectedDate}. Please choose a valid slot.`);
+        const err = `The selected time (${formatTime12h(selectedTime)}) is outside ${formatCleanDoctorTitle(activeDutyDoctor.name)}'s scheduled shifts on ${dayOfWeekForSelectedDate}. Please choose a valid slot.`;
+        setSubmitError(err);
         setSubmitting(false);
-        return;
+        return { success: false, error: err };
       }
 
       const clinicDefaults = {
@@ -1907,11 +2275,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         const clinicCloseM = timeToMinutes(selectedClinic.closeTime);
         const interval = effectiveSettings.interval;
         if (reqStartM < clinicOpenM || reqStartM + interval > clinicCloseM) {
-          setSubmitError(
-            `The selected appointment time (${formatTime12h(selectedTime)}) is outside the clinic's operating hours (${formatTime12h(selectedClinic.openTime)} – ${formatTime12h(selectedClinic.closeTime)}).`
-          );
+          const err = `The selected appointment time (${formatTime12h(selectedTime)}) is outside the clinic's operating hours (${formatTime12h(selectedClinic.openTime)} – ${formatTime12h(selectedClinic.closeTime)}).`;
+          setSubmitError(err);
           setSubmitting(false);
-          return;
+          return { success: false, error: err };
         }
       }
 
@@ -1920,16 +2287,18 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         const shiftEndM = timeToMinutes(matchedShift.endTime);
 
         if (reqStartM + effectiveSettings.interval > shiftEndM) {
-          setSubmitError(`The selected consultation slot (${formatTime12h(selectedTime)}) exceeds the shift end time (${formatTime12h(matchedShift.endTime)}). Please choose a valid slot.`);
+          const err = `The selected consultation slot (${formatTime12h(selectedTime)}) exceeds the shift end time (${formatTime12h(matchedShift.endTime)}). Please choose a valid slot.`;
+          setSubmitError(err);
           setSubmitting(false);
-          return;
+          return { success: false, error: err };
         }
 
         // Validate interval alignment
         if ((reqStartM - shiftStartM) % effectiveSettings.interval !== 0) {
-          setSubmitError(`The selected appointment time does not match the configured ${effectiveSettings.interval}-minute interval.`);
+          const err = `The selected appointment time does not match the configured ${effectiveSettings.interval}-minute interval.`;
+          setSubmitError(err);
           setSubmitting(false);
-          return;
+          return { success: false, error: err };
         }
 
         // Validate breaks
@@ -1938,9 +2307,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             const bStart = timeToMinutes(brk.startTime);
             const bEnd = timeToMinutes(brk.endTime);
             if (reqStartM < bEnd && reqStartM + effectiveSettings.interval > bStart) {
-              setSubmitError(`The selected consultation slot overlaps with a scheduled break (${formatTime12h(brk.startTime)} – ${formatTime12h(brk.endTime)}).`);
+              const err = `The selected consultation slot overlaps with a scheduled break (${formatTime12h(brk.startTime)} – ${formatTime12h(brk.endTime)}).`;
+              setSubmitError(err);
               setSubmitting(false);
-              return;
+              return { success: false, error: err };
             }
           }
         }
@@ -1950,18 +2320,19 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const nowCheck = new Date();
       const todayIsoStr = `${nowCheck.getFullYear()}-${String(nowCheck.getMonth() + 1).padStart(2, "0")}-${String(nowCheck.getDate()).padStart(2, "0")}`;
       if (selectedDate === todayIsoStr && reqStartM <= nowCheck.getHours() * 60 + nowCheck.getMinutes()) {
-        setSubmitError(`The selected consultation slot (${formatTime12h(selectedTime)}) has already passed today.`);
+        const err = `The selected consultation slot (${formatTime12h(selectedTime)}) has already passed today.`;
+        setSubmitError(err);
         setSubmitting(false);
-        return;
+        return { success: false, error: err };
       }
 
       // Enforce doctor shift capacity and exclusive slot reservation directly against Supabase
       try {
         let capQuery = supabase
           .from("patient_appointment")
-          .select("appointment_id, time, batch_time, date, status, assigned_doctor_id")
-          .gte("date", `${selectedDate}T00:00:00`)
-          .lte("date", `${selectedDate}T23:59:59`)
+          .select("appointment_id, time, batch_time, date, status, assigned_doctor_id, payment_status, payment_hold_expires_at")
+          .gte("date", `${selectedDate}T00:00:00+08:00`)
+          .lte("date", `${selectedDate}T23:59:59+08:00`)
           .neq("status", "cancelled")
           .neq("status", "rejected");
 
@@ -1999,9 +2370,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           });
 
           if (activeShiftBookings.length >= effectiveSettings.effectiveCapacity) {
-            setSubmitError(`Dr. ${activeDutyDoctor?.name || "the attending doctor"} has no remaining available slots for this ${matchedShift.label} shift. Please select another shift or date.`);
+            const err = `${formatCleanDoctorTitle(activeDutyDoctor?.name) || "The attending doctor"} has no remaining available slots for this ${matchedShift.label} shift. Please select another shift or date.`;
+            setSubmitError(err);
             setSubmitting(false);
-            return;
+            return { success: false, error: err };
           }
         }
 
@@ -2015,18 +2387,53 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           if (b.date) {
             const d = new Date(b.date);
             if (!isNaN(d.getTime())) {
-              const hh = String(d.getHours()).padStart(2, "0");
-              const mm = String(d.getMinutes()).padStart(2, "0");
-              if (`${hh}:${mm}` === (selectedTime || "08:00").slice(0, 5)) return true;
+              const timeParts = new Intl.DateTimeFormat("en-GB", {
+                timeZone: "Asia/Manila",
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+              }).format(d);
+              if (timeParts === (selectedTime || "08:00").slice(0, 5)) return true;
             }
           }
           return false;
         });
 
         if (isSlotTaken) {
-          setSubmitError(`The ${selectedSlot?.timeRange || formatTime12h(selectedTime)} slot was just reserved by another patient. Please choose another available consultation slot.`);
+          const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
+          const err = `The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`;
+          const timeClean = (selectedTime || "08:00").slice(0, 5);
+          const conflictRecord: OccupiedSlotRecord = {
+            date: selectedDate,
+            time: timeClean,
+            batch_time: timeClean,
+            assigned_doctor_id: assignedDocId,
+            clinic_id: targetClinicId,
+            status: "scheduled",
+            doctor_status: "approved",
+            payment_status: "paid",
+            occupancy_type: "booked",
+            payment_hold_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+          };
+          const docKey = assignedDocId || "any";
+          sessionConflictSlotsRef.current.set(`${selectedDate}_${docKey}_${timeClean}`, conflictRecord);
+          broadcastSlotChange(targetClinicId, {
+            date: selectedDate,
+            doctorId: assignedDocId,
+            slotTime: timeClean,
+            type: "hold_acquired",
+          });
+          setExistingBookings((prev) => {
+            const exists = prev.some((b) => {
+              const bTime = (b.time || b.batch_time || "").slice(0, 5);
+              const bDocId = b.assigned_doctor_id;
+              return bTime === timeClean && (!assignedDocId || !bDocId || String(bDocId) === String(assignedDocId));
+            });
+            return exists ? prev : [...prev, conflictRecord];
+          });
+          setSubmitError(err);
           setSubmitting(false);
-          return;
+          return { success: false, error: err };
         }
       } catch (capErr) {
         console.warn("[AppointmentPage] Capacity pre-check warning:", capErr);
@@ -2060,7 +2467,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
       let initialClinicNote: string | null = null;
       const docDispName = activeDutyDoctor?.name
-        ? (activeDutyDoctor.name.startsWith("Dr") ? activeDutyDoctor.name : `Dr. ${activeDutyDoctor.name}`)
+        ? formatCleanDoctorTitle(activeDutyDoctor.name)
         : null;
 
       if (paymentData) {
@@ -2111,6 +2518,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         apptPayload.payment_reference = paymentData.reference;
         apptPayload.payment_amount = feeAmount;
         apptPayload.paid_at = new Date().toISOString();
+      } else {
+        apptPayload.payment_status = "pending_hold";
+        apptPayload.payment_hold_expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+        apptPayload.payment_amount = feeAmount;
       }
 
       // 3. Insert appointment request into Supabase with resilient dynamic schema stripping loop
@@ -2141,14 +2552,88 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         // Handle duplicate booking error gracefully
         if (
           insertError.message.includes("ERR_DUPLICATE_SLOT") ||
+          insertError.message.includes("ERR_SLOT_UNAVAILABLE") ||
           insertError.message.includes("exclusive_doctor_slot") ||
+          insertError.message.includes("already reserved") ||
+          insertError.message.includes("already booked") ||
+          insertError.message.includes("reserved by another patient") ||
           insertError.message.includes("duplicate")
         ) {
-          setSubmitError(
-            `The ${selectedSlot?.timeRange || formatTime12h(selectedTime)} slot was just booked by another patient. Please choose another available consultation slot.`
-          );
+          const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
+          const err = `The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`;
+          const timeClean = (selectedTime || "08:00").slice(0, 5);
+          const conflictRecord: OccupiedSlotRecord = {
+            date: selectedDate,
+            time: timeClean,
+            batch_time: timeClean,
+            assigned_doctor_id: assignedDocId,
+            clinic_id: targetClinicId,
+            status: "scheduled",
+            doctor_status: "approved",
+            payment_status: "paid",
+            occupancy_type: "booked",
+            payment_hold_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+          };
+          const docKey = assignedDocId || "any";
+          sessionConflictSlotsRef.current.set(`${selectedDate}_${docKey}_${timeClean}`, conflictRecord);
+          broadcastSlotChange(targetClinicId, {
+            date: selectedDate,
+            doctorId: assignedDocId,
+            slotTime: timeClean,
+            type: "hold_acquired",
+          });
+          setExistingBookings((prev) => {
+            const exists = prev.some((b) => {
+              const bTime = (b.time || b.batch_time || "").slice(0, 5);
+              const bDocId = b.assigned_doctor_id;
+              return bTime === timeClean && (!assignedDocId || !bDocId || String(bDocId) === String(assignedDocId));
+            });
+            return exists ? prev : [...prev, conflictRecord];
+          });
+          setSubmitError(err);
           setSubmitting(false);
-          return;
+          return { success: false, error: err };
+        }
+
+        // Dynamic Foreign Key Protection: If doctor or scan reference fails in remote schema, strip and retry
+        if (insertError.message.includes("violates foreign key constraint")) {
+          if (insertError.message.includes("assigned_doctor_id") && currentPayload.assigned_doctor_id !== null) {
+            console.warn("[AppointmentPage] Assigned doctor foreign key mismatch, falling back to unassigned clinic appointment...");
+            currentPayload.assigned_doctor_id = null;
+            continue;
+          }
+          if (insertError.message.includes("primary_scan_id") && currentPayload.primary_scan_id !== undefined) {
+            console.warn("[AppointmentPage] Primary scan foreign key mismatch, stripping primary_scan_id...");
+            delete currentPayload.primary_scan_id;
+            continue;
+          }
+          if (insertError.message.includes("condition_id") && currentPayload.condition_id !== undefined) {
+            console.warn("[AppointmentPage] Condition foreign key mismatch, stripping condition_id...");
+            delete currentPayload.condition_id;
+            continue;
+          }
+        }
+
+        // Dynamic Doctor Schedule Interval Protection: Surface clean actionable error if doctor schedule interval is unconfigured
+        if (
+          insertError.message.includes("ERR_SCHEDULE_CONFIG") ||
+          insertError.message.includes("duty schedule") ||
+          insertError.message.includes("appointment interval")
+        ) {
+          const docName = activeDutyDoctor?.name ? formatCleanDoctorTitle(activeDutyDoctor.name) : "This doctor";
+          const err = `${docName}'s consultation schedule has not been configured with appointment intervals by the clinic. Please select another available doctor or contact the clinic.`;
+          setSubmitError(err);
+          setSubmitting(false);
+          return { success: false, error: err };
+        }
+
+        // Check constraint mismatch protection (e.g. check_appointment_payment_status)
+        if (insertError.message.includes("check_appointment_payment_status") || insertError.message.includes("payment_status")) {
+          console.warn("[AppointmentPage] Database payment_status constraint mismatch, stripping hold payment fields...");
+          delete currentPayload.payment_status;
+          delete currentPayload.payment_hold_expires_at;
+          delete currentPayload.payment_amount;
+          continue;
         }
 
         // Schema cache missing column error (PGRST204) — extract column and strip from retry
@@ -2169,8 +2654,13 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           "payment_hold_expires_at",
           "is_walk_in",
           "primary_scan_id",
+          "condition_id",
+          "assigned_doctor_id",
           "check_in_status",
           "batch_time",
+          "emergency_contact_name",
+          "emergency_contact_phone",
+          "emergency_contact_relationship",
         ];
         let strippedCandidate = false;
         for (const col of candidateCols) {
@@ -2189,6 +2679,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
       if (lastInsertError) {
         console.warn("[AppointmentPage] Database insert fallback note:", lastInsertError.message);
+        if (!insertedApptId) {
+          setSubmitError(lastInsertError.message || "Failed to reserve appointment slot.");
+        }
       }
 
       // Log payment transaction into user_payment ledger table if paid online
@@ -2215,8 +2708,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             .from("patient_appointment")
             .select("appointment_id, created_at, queue_number")
             .eq("assigned_doctor_id", assignedDocId)
-            .gte("date", `${selectedDate}T00:00:00`)
-            .lte("date", `${selectedDate}T23:59:59`)
+            .gte("date", `${selectedDate}T00:00:00+08:00`)
+            .lte("date", `${selectedDate}T23:59:59+08:00`)
             .or(`time.eq.${selectedTime || "08:00"}:00,batch_time.eq.${selectedTime || "08:00"}`)
             .neq("status", "cancelled")
             .neq("status", "rejected")
@@ -2225,9 +2718,25 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           if (collisionCheck && collisionCheck.length > 1 && String(collisionCheck[0].appointment_id) !== insertedApptId) {
             // Concurrent race collision: another patient booked first, rollback this one
             await supabase.from("patient_appointment").delete().eq("appointment_id", insertedApptId);
-            setSubmitError(`This consultation slot was reserved by another patient just a moment ago. Please select another time slot.`);
+            const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
+            const err = `The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`;
+            const timeClean = (selectedTime || "08:00").slice(0, 5);
+            setExistingBookings((prev) => [
+              ...prev,
+              {
+                date: selectedDate,
+                time: timeClean,
+                batch_time: timeClean,
+                assigned_doctor_id: assignedDocId,
+                clinic_id: targetClinicId,
+                status: "scheduled",
+                doctor_status: "approved",
+                payment_status: "paid",
+              },
+            ]);
+            setSubmitError(err);
             setSubmitting(false);
-            return null;
+            return { success: false, error: err };
           }
         } catch (colErr) {
           console.warn("[AppointmentPage] Concurrency check warning:", colErr);
@@ -2348,11 +2857,18 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         } catch { }
       }
 
-      return insertedApptId;
+      if (!insertedApptId && lastInsertError) {
+        const err = lastInsertError.message || "Failed to save appointment reservation.";
+        setSubmitError(err);
+        return { success: false, error: err };
+      }
+
+      return { success: true, appointmentId: insertedApptId || undefined };
     } catch (err: any) {
       console.error("Submission error:", err);
-      setSubmitError(err?.message || "An unexpected error occurred during submission.");
-      return null;
+      const errStr = err?.message || "An unexpected error occurred during submission.";
+      setSubmitError(errStr);
+      return { success: false, error: errStr };
     } finally {
       setSubmitting(false);
     }
@@ -2370,51 +2886,206 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     const payer = (demoCheckoutData?.payerName || patientName).trim() || user?.user_metadata?.full_name || "Patient";
     const payerEmail = (demoCheckoutData?.payerEmail || patientEmail).trim() || user?.email || "";
 
-    try {
-      // 1. Acquire an atomic temporary slot hold via Postgres RPC to prevent race conditions and duplicate slots
-      let insertedApptId: string | null = null;
+    // Resolve active authenticated user ID reliably
+    let activeUserId = user?.id;
+    if (!activeUserId) {
       try {
-        const holdRes = await acquireAppointmentSlotHold({
-          clinicId: String(selectedClinic?.id),
-          doctorId: activeDutyDoctor?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(activeDutyDoctor.id) ? activeDutyDoctor.id : undefined,
-          date: `${selectedDate}T${selectedTime || "08:00"}:00+08:00`,
-          time: `${selectedTime || "08:00"}:00`,
-          batchTime: selectedTime || "08:00",
-          patientName: payer,
-          patientEmail: payerEmail,
-          patientContact: userPhone,
-          patientAddress: (demoCheckoutData?.payerAddress || patientAddress || "").trim() || undefined,
-          patientGender: patientGender || undefined,
-          patientBirthdate: patientBirthdate || undefined,
-          emergencyContactName: emergencyContactName.trim() || undefined,
-          emergencyContactPhone: emergencyContactPhone.trim() || undefined,
-          emergencyContactRelationship: emergencyRelationship.trim() || undefined,
-          notes: notes.trim() || undefined,
-          clinicNote: activeDutyDoctor?.name ? `Assigned to Dr. ${activeDutyDoctor.name} for pre-consultation review.` : undefined,
-          questionnaireAnswers: selectedScan?.questionnaireAnswers || questionnaireData || undefined,
-          skinPhotoUrl: selectedScan?.photoUrl || undefined,
-          aiConditionName: selectedScan?.conditionName || "Skin Assessment",
-          aiConfidence: selectedScan?.confidence ? Number(selectedScan.confidence) : undefined,
-          conditionId: selectedScan?.conditionId || undefined,
-          primaryScanId: selectedScanId || undefined,
-          holdDurationMinutes: 10,
-          userId: user?.id || "",
-        });
+        const { data: sess } = await supabase.auth.getSession();
+        activeUserId = sess?.session?.user?.id;
+      } catch { }
+    }
 
-        if (holdRes.success && holdRes.appointmentId) {
-          insertedApptId = holdRes.appointmentId;
-        } else if (!holdRes.success && holdRes.code === "ERR_SLOT_UNAVAILABLE") {
-          throw new Error(holdRes.message || "This slot was just reserved by another patient. Please choose another available time.");
-        } else {
-          // Fallback to executeAppointmentCreation
-          insertedApptId = (await executeAppointmentCreation()) ?? null;
+    if (!activeUserId) {
+      const authErrMsg = "You must be logged in to book an appointment. Please sign in and try again.";
+      setSubmitError(authErrMsg);
+      setDemoCheckoutData((prev) => (prev ? { ...prev, outcome: "failed", errorMessage: authErrMsg } : null));
+      setDemoSimulating(false);
+      return;
+    }
+
+    const isValidUuid = (val?: string | null): boolean =>
+      Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(val).trim()));
+
+    // Resolve doctor UUID if duty doctor uses local/display identifier
+    let resolvedDoctorId: string | undefined = isValidUuid(activeDutyDoctor?.id) ? activeDutyDoctor!.id : undefined;
+    if (!resolvedDoctorId && activeDutyDoctor?.name && selectedClinic?.id) {
+      try {
+        const cleanName = activeDutyDoctor.name.replace(/^Dr\.?\s*/i, "").trim();
+        const { data: dbDoc } = await supabase
+          .from("clinic_doctor")
+          .select("doctor_id")
+          .eq("clinic_id", String(selectedClinic.id))
+          .ilike("doctor_name", `%${cleanName}%`)
+          .maybeSingle();
+        if (dbDoc?.doctor_id && isValidUuid(dbDoc.doctor_id)) {
+          resolvedDoctorId = dbDoc.doctor_id;
         }
-      } catch (holdErr: any) {
-        if (holdErr?.message?.includes("reserved by another patient")) {
-          throw holdErr;
+      } catch { }
+    }
+    if (!resolvedDoctorId && isValidUuid(selectedDoctorId)) {
+      resolvedDoctorId = selectedDoctorId;
+    }
+
+    const validScanId = isValidUuid(selectedScanId) ? selectedScanId : undefined;
+    const validCondId = (selectedScan && isValidUuid(selectedScan.conditionId)) ? selectedScan.conditionId : undefined;
+
+    let insertedApptId: string | null = null;
+
+    try {
+      // Check for existing active hold in session storage to avoid duplicate holds on retry
+      const pendingSessionApptId = typeof window !== "undefined" ? sessionStorage.getItem("dermai_pending_appointment_id") : null;
+      if (pendingSessionApptId && isValidUuid(pendingSessionApptId)) {
+        try {
+          const { data: existingAppt } = await supabase
+            .from("patient_appointment")
+            .select("appointment_id, payment_status, payment_hold_expires_at, clinic_id")
+            .eq("appointment_id", pendingSessionApptId)
+            .maybeSingle();
+
+          if (
+            existingAppt &&
+            existingAppt.payment_status === "pending_hold" &&
+            existingAppt.clinic_id === String(selectedClinic?.id) &&
+            (!existingAppt.payment_hold_expires_at || new Date(existingAppt.payment_hold_expires_at) > new Date())
+          ) {
+            insertedApptId = existingAppt.appointment_id;
+          } else if (existingAppt && existingAppt.payment_status === "pending_hold") {
+            await releaseAppointmentHoldSafely(pendingSessionApptId, "Released to acquire fresh hold for checkout.");
+            sessionStorage.removeItem("dermai_pending_appointment_id");
+          }
+        } catch (checkErr) {
+          console.warn("[AppointmentPage] Existing hold verification note:", checkErr);
         }
-        insertedApptId = (await executeAppointmentCreation()) ?? null;
       }
+
+      // 1. Acquire an atomic temporary slot hold via Postgres RPC to prevent race conditions and duplicate slots
+      let creationFailureMessage = "";
+      if (!insertedApptId) {
+        try {
+          const holdRes = await acquireAppointmentSlotHold({
+            clinicId: String(selectedClinic?.id),
+            doctorId: resolvedDoctorId,
+            date: `${selectedDate}T${selectedTime || "08:00"}:00+08:00`,
+            time: `${selectedTime || "08:00"}:00`,
+            batchTime: selectedTime || "08:00",
+            patientName: payer,
+            patientEmail: payerEmail,
+            patientContact: userPhone,
+            patientAddress: (demoCheckoutData?.payerAddress || patientAddress || "").trim() || undefined,
+            patientGender: patientGender || undefined,
+            patientBirthdate: patientBirthdate || undefined,
+            emergencyContactName: emergencyContactName.trim() || undefined,
+            emergencyContactPhone: emergencyContactPhone.trim() || undefined,
+            emergencyContactRelationship: emergencyRelationship.trim() || undefined,
+            notes: notes.trim() || undefined,
+            clinicNote: activeDutyDoctor?.name ? `Assigned to ${formatCleanDoctorTitle(activeDutyDoctor.name)} for pre-consultation review.` : undefined,
+            questionnaireAnswers: selectedScan?.questionnaireAnswers || questionnaireData || undefined,
+            skinPhotoUrl: selectedScan?.photoUrl || undefined,
+            aiConditionName: selectedScan?.conditionName || "Skin Assessment",
+            aiConfidence: selectedScan?.confidence ? Number(selectedScan.confidence) : undefined,
+            conditionId: validCondId,
+            primaryScanId: validScanId,
+            holdDurationMinutes: 10,
+            userId: activeUserId,
+          });
+
+          if (holdRes.success && holdRes.appointmentId) {
+            insertedApptId = holdRes.appointmentId;
+            const timeClean = (selectedTime || "08:00").slice(0, 5);
+            broadcastSlotChange(selectedClinic?.id, {
+              date: selectedDate,
+              doctorId: resolvedDoctorId || activeDutyDoctor?.id,
+              slotTime: timeClean,
+              type: "hold_acquired",
+            });
+            setRealtimeRefreshTick((t) => t + 1);
+          } else if (
+            !holdRes.success &&
+            (holdRes.code === "ERR_SLOT_UNAVAILABLE" ||
+             holdRes.code === "ERR_DUPLICATE_SLOT" ||
+             holdRes.message?.includes("ERR_SLOT_UNAVAILABLE") ||
+             holdRes.message?.includes("ERR_DUPLICATE_SLOT") ||
+             holdRes.message?.includes("already reserved") ||
+             holdRes.message?.includes("already booked") ||
+             holdRes.message?.includes("reserved by another patient") ||
+             holdRes.message?.includes("booked by another patient"))
+          ) {
+            const timeClean = (selectedTime || "08:00").slice(0, 5);
+            const conflictRecord: OccupiedSlotRecord = {
+              date: selectedDate,
+              time: timeClean,
+              batch_time: timeClean,
+              assigned_doctor_id: resolvedDoctorId,
+              clinic_id: selectedClinic?.id,
+              status: "scheduled",
+              doctor_status: "approved",
+              payment_status: "paid",
+              occupancy_type: "booked",
+              payment_hold_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+            };
+            const docKey = resolvedDoctorId || "any";
+            sessionConflictSlotsRef.current.set(`${selectedDate}_${docKey}_${timeClean}`, conflictRecord);
+            broadcastSlotChange(selectedClinic?.id, {
+              date: selectedDate,
+              doctorId: resolvedDoctorId,
+              slotTime: timeClean,
+              type: "hold_acquired",
+            });
+            setExistingBookings((prev) => {
+              const exists = prev.some((b) => {
+                const bTime = (b.time || b.batch_time || "").slice(0, 5);
+                const bDocId = b.assigned_doctor_id;
+                return bTime === timeClean && (!resolvedDoctorId || !bDocId || String(bDocId) === String(resolvedDoctorId));
+              });
+              return exists ? prev : [...prev, conflictRecord];
+            });
+            const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
+            throw new Error(`The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`);
+          } else if (!holdRes.success && (holdRes.code === "ERR_SCHEDULE_CONFIG" || holdRes.message?.includes("ERR_SCHEDULE_CONFIG") || holdRes.message?.includes("appointment interval"))) {
+            throw new Error(holdRes.message || "This doctor's consultation schedule has not been configured with appointment intervals by the clinic. Please select another available doctor or contact the clinic.");
+          } else {
+            if (holdRes.message) creationFailureMessage = holdRes.message;
+            const fallbackRes = await executeAppointmentCreation();
+            if (fallbackRes.success && fallbackRes.appointmentId) {
+              insertedApptId = fallbackRes.appointmentId;
+              creationFailureMessage = "";
+            } else if (fallbackRes.error) {
+              creationFailureMessage = fallbackRes.error;
+            }
+          }
+        } catch (holdErr: any) {
+          if (
+            holdErr?.message?.includes("reserved by another patient") ||
+            holdErr?.message?.includes("already reserved") ||
+            holdErr?.message?.includes("already booked") ||
+            holdErr?.message?.includes("ERR_SLOT_UNAVAILABLE") ||
+            holdErr?.message?.includes("ERR_DUPLICATE_SLOT") ||
+            holdErr?.message?.includes("ERR_SCHEDULE_CONFIG")
+          ) {
+            throw holdErr;
+          }
+          console.warn("[AppointmentPage] acquireAppointmentSlotHold fallback note:", holdErr?.message);
+          const fallbackRes = await executeAppointmentCreation();
+          if (fallbackRes.success && fallbackRes.appointmentId) {
+            insertedApptId = fallbackRes.appointmentId;
+            creationFailureMessage = "";
+          } else if (fallbackRes.error) {
+            creationFailureMessage = fallbackRes.error;
+          }
+        }
+      }
+
+      // Critical Guard: Ensure appointment was successfully created and persisted before starting PayMongo checkout
+      if (!insertedApptId) {
+        throw new Error(
+          creationFailureMessage || "Unable to save appointment reservation. Please verify your details and try again."
+        );
+      }
+
+      // Immediately track the acquired appointment slot hold ID for failure cleanup and cancellation
+      try {
+        sessionStorage.setItem("dermai_pending_appointment_id", insertedApptId);
+      } catch { }
 
       // 2. If PayMongo key is configured, process through PayMongo
       if (PAYMONGO_PUBLIC_KEY) {
@@ -2426,11 +3097,12 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             paymentMethod: chosenMethod,
             clinicId: selectedClinic?.id,
             clinicName: selectedClinic?.name,
-            doctorId: activeDutyDoctor?.id,
+            doctorId: resolvedDoctorId || activeDutyDoctor?.id,
             doctorName: activeDutyDoctor?.name,
             appointmentDate: formattedPreviewDate,
             appointmentTime: formattedPreviewTime,
             appointmentId: insertedApptId,
+            appointment_id: insertedApptId,
             patientName: payer,
             patientEmail: payerEmail,
             patientContact: userPhone,
@@ -2438,8 +3110,13 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         });
 
         if (intentError) {
-          console.warn("[AppointmentPage] PayMongo intent creation error:", intentError);
-          throw new Error(intentError.message || "Failed to initialize PayMongo booking checkout.");
+          const extracted = await extractEdgeFunctionError(intentError);
+          console.warn("[AppointmentPage] PayMongo intent creation error:", {
+            status: extracted.status,
+            message: extracted.message,
+            error: extracted.rawError,
+          });
+          throw new Error(extracted.message || "Failed to initialize PayMongo booking checkout.");
         }
 
         const { paymentIntentId, clientKey } = intentJson || {};
@@ -2490,11 +3167,25 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               },
             });
 
+            if (attachError) {
+              const extracted = await extractEdgeFunctionError(attachError);
+              console.warn("[AppointmentPage] PayMongo attach payment method error:", {
+                status: extracted.status,
+                message: extracted.message,
+                error: extracted.rawError,
+              });
+              throw new Error(extracted.message || "Failed to attach PayMongo payment method.");
+            }
+
             if (!attachError) {
               const status = attachData?.attributes?.status || attachData?.status;
               if (status === "awaiting_next_action") {
                 const redirectUrl = attachData.attributes?.next_action?.redirect?.url;
                 if (redirectUrl) {
+                  try {
+                    setCheckoutRedirectRecord(insertedApptId);
+                  } catch {}
+                  setShowDemoCheckoutModal(false);
                   window.location.href = redirectUrl;
                   return;
                 }
@@ -2508,6 +3199,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   },
                 });
 
+
                 setPaymentConfirmedDetails({
                   reference: paymentIntentId,
                   amount: apptFee,
@@ -2518,6 +3210,14 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   doctorName: activeDutyDoctor?.name || "Attending Dermatologist",
                   date: formattedPreviewDate,
                   time: formattedPreviewTime,
+                });
+
+
+                broadcastSlotChange(selectedClinic?.id, {
+                  date: selectedDate,
+                  doctorId: activeDutyDoctor?.id,
+                  slotTime: selectedTime,
+                  type: "payment_completed",
                 });
 
                 setSubmitted(true);
@@ -2537,59 +3237,150 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       throw new Error("Unable to initialize PayMongo checkout redirect. Please verify your details and try again.");
     } catch (err: any) {
       console.error("[AppointmentPage] Payment failure:", err);
+
+      // Clean up the temporary hold created for this failed checkout attempt before redirect occurred
+      const holdToRelease = insertedApptId || (typeof window !== "undefined" ? sessionStorage.getItem("dermai_pending_appointment_id") : null);
+      const timeClean = (selectedTime || "08:00").slice(0, 5);
+      const docKey = resolvedDoctorId || activeDutyDoctor?.id || "any";
+      const slotKey = `${selectedDate}_${docKey}_${timeClean}`;
+
+      if (holdToRelease) {
+        try {
+          clearCheckoutRedirectRecord(holdToRelease, "Checkout initialization failed");
+          await releaseAppointmentHoldSafely(holdToRelease, "Hold released after failed payment authorization.", {
+            clinicId: selectedClinic?.id,
+            date: selectedDate,
+            doctorId: resolvedDoctorId || activeDutyDoctor?.id,
+            slotTime: timeClean,
+          });
+        } catch (cleanupErr: any) {
+          console.warn("[AppointmentPage] Non-fatal hold cleanup error:", cleanupErr?.message);
+        }
+        try {
+          sessionStorage.removeItem("dermai_pending_appointment_id");
+          sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+        } catch { }
+      }
+
+      sessionConflictSlotsRef.current.delete(slotKey);
+      setExistingBookings((prev) =>
+        prev.filter((b) => {
+          const bTime = (b.time || b.batch_time || "").slice(0, 5);
+          const bDocId = b.assigned_doctor_id;
+          const matches = bTime === timeClean && (!resolvedDoctorId || !bDocId || String(bDocId) === String(resolvedDoctorId));
+          return !matches;
+        })
+      );
+      broadcastSlotChange(selectedClinic?.id, {
+        date: selectedDate,
+        doctorId: resolvedDoctorId || activeDutyDoctor?.id,
+        slotTime: timeClean,
+        type: "hold_released",
+      });
+      setRealtimeRefreshTick((t) => t + 1);
+
+      const isSchedErr =
+        err?.message?.includes("ERR_SCHEDULE_CONFIG") ||
+        err?.message?.includes("appointment interval") ||
+        err?.message?.includes("duty schedule");
+      const cleanErrMsg = isSchedErr
+        ? "This doctor's consultation schedule has not been configured with appointment intervals by the clinic. Please select another available doctor or contact the clinic."
+        : (err?.message || "Payment authorization failed. Please try again or select another payment method.");
+
       setDemoCheckoutData((prev) => prev ? {
         ...prev,
         outcome: "failed",
-        errorMessage: err?.message || "Payment authorization failed. Please try again or select another payment method."
+        errorMessage: cleanErrMsg
       } : null);
     } finally {
       setDemoSimulating(false);
     }
   };
 
-  const handleDemoCancelPayment = () => {
+  const handleDemoCancelPayment = async () => {
     const pendingApptId = sessionStorage.getItem("dermai_pending_appointment_id");
+    const timeClean = (selectedTime || "08:00").slice(0, 5);
+
     if (pendingApptId) {
-      supabase
-        .from("patient_appointment")
-        .update({
-          status: "cancelled",
-          payment_status: "cancelled",
-          clinic_note: "Reservation hold cancelled by patient.",
-        })
-        .eq("appointment_id", pendingApptId)
-        .eq("payment_status", "pending_hold")
-        .then(
-          () => {
-            sessionStorage.removeItem("dermai_pending_appointment_id");
-          },
-          () => {}
-        );
+      try {
+        await releaseAppointmentHoldSafely(pendingApptId, "Reservation hold cancelled by patient.", {
+          clinicId: selectedClinic?.id,
+          date: selectedDate,
+          doctorId: activeDutyDoctor?.id || selectedDoctorId,
+          slotTime: timeClean,
+        });
+      } catch (err: any) {
+        console.warn("[AppointmentPage] Cancel hold error:", err?.message);
+      }
+      try {
+        sessionStorage.removeItem("dermai_pending_appointment_id");
+        sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+      } catch { }
     }
+
+    for (const [k, v] of sessionConflictSlotsRef.current.entries()) {
+      if (v.date === selectedDate && (v.time || v.batch_time || "").slice(0, 5) === timeClean) {
+        sessionConflictSlotsRef.current.delete(k);
+      }
+    }
+    setExistingBookings((prev) =>
+      prev.filter((b) => {
+        const bTime = (b.time || b.batch_time || "").slice(0, 5);
+        return bTime !== timeClean;
+      })
+    );
+    broadcastSlotChange(selectedClinic?.id, {
+      date: selectedDate,
+      doctorId: activeDutyDoctor?.id || selectedDoctorId,
+      slotTime: timeClean,
+      type: "hold_released",
+    });
+    setRealtimeRefreshTick((t) => t + 1);
 
     setShowDemoCheckoutModal(false);
     setDemoCheckoutData(null);
   };
 
-  const handleDemoReturnToBooking = () => {
+  const handleDemoReturnToBooking = async () => {
     const pendingApptId = sessionStorage.getItem("dermai_pending_appointment_id");
+    clearCheckoutRedirectRecord(pendingApptId, "Modal closed / cancelled before redirect");
+    const timeClean = (selectedTime || "08:00").slice(0, 5);
+
     if (pendingApptId) {
-      supabase
-        .from("patient_appointment")
-        .update({
-          status: "cancelled",
-          payment_status: "cancelled",
-          clinic_note: "Reservation hold released on exit.",
-        })
-        .eq("appointment_id", pendingApptId)
-        .eq("payment_status", "pending_hold")
-        .then(
-          () => {
-            sessionStorage.removeItem("dermai_pending_appointment_id");
-          },
-          () => {}
-        );
+      try {
+        await releaseAppointmentHoldSafely(pendingApptId, "Reservation hold released on exit.", {
+          clinicId: selectedClinic?.id,
+          date: selectedDate,
+          doctorId: activeDutyDoctor?.id || selectedDoctorId,
+          slotTime: timeClean,
+        });
+      } catch (err: any) {
+        console.warn("[AppointmentPage] Release hold error:", err?.message);
+      }
+      try {
+        sessionStorage.removeItem("dermai_pending_appointment_id");
+        sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+      } catch { }
     }
+
+    for (const [k, v] of sessionConflictSlotsRef.current.entries()) {
+      if (v.date === selectedDate && (v.time || v.batch_time || "").slice(0, 5) === timeClean) {
+        sessionConflictSlotsRef.current.delete(k);
+      }
+    }
+    setExistingBookings((prev) =>
+      prev.filter((b) => {
+        const bTime = (b.time || b.batch_time || "").slice(0, 5);
+        return bTime !== timeClean;
+      })
+    );
+    broadcastSlotChange(selectedClinic?.id, {
+      date: selectedDate,
+      doctorId: activeDutyDoctor?.id || selectedDoctorId,
+      slotTime: timeClean,
+      type: "hold_released",
+    });
+    setRealtimeRefreshTick((t) => t + 1);
 
     setShowDemoCheckoutModal(false);
     setDemoCheckoutData(null);
@@ -2944,7 +3735,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2.5"
           >
             <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
-            <span className="flex-1">{submitError}</span>
+            <span className="flex-1">{formatUserFriendlyBookingError(submitError, selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : undefined))}</span>
             <button
               type="button"
               onClick={() => setSubmitError(null)}
@@ -3230,15 +4021,15 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                               key={scan.id}
                               onClick={() => setSelectedScanId(scan.id)}
                               className={`relative rounded-2xl border p-3.5 transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
-                                  ? "border-magenta-500 bg-magenta-50/30 ring-2 ring-magenta-500/20 shadow-xs"
-                                  : "border-gray-200 bg-white hover:border-gray-300 hover:bg-slate-50/50"
+                                ? "border-magenta-500 bg-magenta-50/30 ring-2 ring-magenta-500/20 shadow-xs"
+                                : "border-gray-200 bg-white hover:border-gray-300 hover:bg-slate-50/50"
                                 }`}
                             >
                               <div className="flex items-center gap-3 min-w-0">
                                 <div
                                   className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 transition-colors ${isSelected
-                                      ? "border-magenta-600 bg-magenta-600 text-white"
-                                      : "border-gray-300 bg-white"
+                                    ? "border-magenta-600 bg-magenta-600 text-white"
+                                    : "border-gray-300 bg-white"
                                     }`}
                                 >
                                   {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
@@ -3461,24 +4252,24 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                 }
                               }}
                               className={`min-h-[58px] sm:min-h-[64px] p-2 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${isSelected
-                                  ? "border-2 border-magenta-600 bg-magenta-50/70 ring-2 ring-magenta-500/20 shadow-xs"
-                                  : isDisabled
-                                    ? "border-gray-100 bg-slate-50/40 text-gray-300 cursor-not-allowed"
-                                    : isToday
-                                      ? "border-magenta-300 bg-pink-50/20 hover:border-magenta-400 hover:shadow-2xs cursor-pointer"
-                                      : "border-gray-200/80 bg-white hover:border-magenta-300 hover:bg-slate-50/40 hover:shadow-2xs cursor-pointer"
+                                ? "border-2 border-magenta-600 bg-magenta-50/70 ring-2 ring-magenta-500/20 shadow-xs"
+                                : isDisabled
+                                  ? "border-gray-100 bg-slate-50/40 text-gray-300 cursor-not-allowed"
+                                  : isToday
+                                    ? "border-magenta-300 bg-pink-50/20 hover:border-magenta-400 hover:shadow-2xs cursor-pointer"
+                                    : "border-gray-200/80 bg-white hover:border-magenta-300 hover:bg-slate-50/40 hover:shadow-2xs cursor-pointer"
                                 }`}
                             >
                               {/* Top row: Date Number & Today / Selected indicator */}
                               <div className="flex items-center justify-between w-full">
                                 <span
                                   className={`text-xs sm:text-sm font-bold leading-none ${isSelected
-                                      ? "text-magenta-800"
-                                      : isToday
-                                        ? "text-magenta-600"
-                                        : !cell.inCurrentMonth || cell.isPast
-                                          ? "text-gray-300"
-                                          : "text-gray-800"
+                                    ? "text-magenta-800"
+                                    : isToday
+                                      ? "text-magenta-600"
+                                      : !cell.inCurrentMonth || cell.isPast
+                                        ? "text-gray-300"
+                                        : "text-gray-800"
                                     }`}
                                 >
                                   {cell.dayNum}
@@ -3499,8 +4290,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                               <div className="w-full mt-1">
                                 {hasDoctors ? (
                                   <div className={`px-1.5 py-0.5 rounded-lg flex items-center justify-center gap-1 transition-all ${isSelected
-                                      ? "bg-magenta-600 text-white font-semibold"
-                                      : "bg-magenta-50 text-magenta-700 font-semibold border border-magenta-100/80"
+                                    ? "bg-magenta-600 text-white font-semibold"
+                                    : "bg-magenta-50 text-magenta-700 font-semibold border border-magenta-100/80"
                                     }`}>
                                     <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
                                     <span className="text-[9px] font-bold leading-none truncate">
@@ -3576,8 +4367,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                 type="button"
                                 onClick={() => setSelectedDoctorId(doc.id)}
                                 className={`w-full p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-center gap-3 relative group ${isDocSelected
-                                    ? "bg-magenta-50/90 border-magenta-500 ring-2 ring-magenta-500/20 shadow-xs"
-                                    : "bg-white border-gray-200 hover:border-magenta-300 hover:bg-slate-50/50"
+                                  ? "bg-magenta-50/90 border-magenta-500 ring-2 ring-magenta-500/20 shadow-xs"
+                                  : "bg-white border-gray-200 hover:border-magenta-300 hover:bg-slate-50/50"
                                   }`}
                               >
                                 <DoctorAvatar
@@ -3645,8 +4436,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                           <div className="flex items-center gap-1.5">
                             <span
                               className={`text-[10px] font-bold px-2.5 py-1 rounded-full border shadow-2xs ${isDailyCapacityReached
-                                  ? "bg-rose-50 text-rose-700 border-rose-200"
-                                  : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                ? "bg-rose-50 text-rose-700 border-rose-200"
+                                : "bg-emerald-50 text-emerald-700 border-emerald-200"
                                 }`}
                             >
                               {isDailyCapacityReached
@@ -3667,10 +4458,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                           }) ? (
                             <>
                               <p className="font-bold text-gray-800">
-                                Dr. {activeDutyDoctor.name} is not on duty on {dayOfWeekForSelectedDate}.
-                              </p>
-                              <p className="text-[11px] text-gray-500">
-                                Scheduled duty days: <strong className="text-magenta-700">{activeDutyDoctor.dutyDays?.join(", ") || "Mon–Fri"}</strong>
+                                {formatCleanDoctorTitle(activeDutyDoctor.name)} is not on duty on {dayOfWeekForSelectedDate}.
                               </p>
                               {onDutyDoctorsForDate.length > 0 && (
                                 <p className="text-[11px] text-magenta-700 font-semibold pt-1">
@@ -3684,13 +4472,26 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         </div>
                       ) : (
                         <div className="space-y-4 max-h-[320px] overflow-y-auto pr-1.5">
+                          {slotConflictWarning && (
+                            <div className="mb-3.5 p-3 sm:p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 text-xs sm:text-[13px] flex items-start gap-2.5 shadow-xs animate-in fade-in slide-in-from-top-1 duration-200">
+                              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                              <span className="flex-1 font-medium">{slotConflictWarning}</span>
+                              <button
+                                type="button"
+                                onClick={() => setSlotConflictWarning(null)}
+                                className="text-amber-700 hover:text-amber-900 font-bold text-xs cursor-pointer"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          )}
                           {dayShiftGroups.map((group) => {
                             return (
                               <div
                                 key={group.shift.id}
                                 className={`p-3.5 rounded-2xl border transition-all ${group.isCapacityReached
-                                    ? "bg-rose-50/30 border-rose-200"
-                                    : "bg-slate-50/40 border-gray-200/90"
+                                  ? "bg-rose-50/30 border-rose-200"
+                                  : "bg-slate-50/40 border-gray-200/90"
                                   }`}
                               >
                                 {/* Shift Header */}
@@ -3710,15 +4511,19 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                   <div className="flex items-center gap-2">
                                     <span
                                       className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${group.isCapacityReached
-                                          ? "bg-rose-100 text-rose-700 border-rose-200"
-                                          : group.remainingCapacity <= 2
-                                            ? "bg-amber-100 text-amber-700 border-amber-200"
-                                            : "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                        ? "bg-rose-100 text-rose-700 border-rose-200"
+                                        : group.remainingCapacity <= 2
+                                          ? "bg-amber-100 text-amber-700 border-amber-200"
+                                          : "bg-emerald-100 text-emerald-800 border-emerald-200"
                                         }`}
                                     >
                                       {group.isCapacityReached
                                         ? `Shift Full (${group.effectiveSettings.effectiveCapacity} slots)`
-                                        : `${group.totalBooked} / ${group.effectiveSettings.effectiveCapacity} Booked (${group.remainingCapacity} left)`}
+                                        : group.totalReserved > 0 && group.totalConfirmedBooked > 0
+                                          ? `${group.totalConfirmedBooked} Booked · ${group.totalReserved} Reserved (${group.remainingCapacity} left)`
+                                          : group.totalReserved > 0
+                                            ? `${group.totalReserved} Reserved (${group.remainingCapacity} left)`
+                                            : `${group.totalBooked} / ${group.effectiveSettings.effectiveCapacity} Booked (${group.remainingCapacity} left)`}
                                     </span>
                                   </div>
                                 </div>
@@ -3752,25 +4557,46 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                           onClick={() => {
                                             if (isAvailable) {
                                               setSelectedTime(slot.slotTime);
+                                              setSlotConflictWarning(null);
                                             }
                                           }}
-                                          className={`py-2.5 sm:py-3 px-3 rounded-2xl border text-left transition-all relative flex items-center justify-between gap-1.5 ${!isAvailable
+                                          className={`py-2.5 sm:py-3 px-3 rounded-2xl border text-left transition-all relative flex items-center justify-between gap-1.5 ${
+                                            slot.isReserved
+                                              ? "bg-amber-50/70 border-amber-300 text-amber-900 cursor-not-allowed opacity-80"
+                                              : slot.isBooked
+                                              ? "bg-rose-50/50 border-rose-200 text-rose-900 cursor-not-allowed opacity-70"
+                                              : !isAvailable
                                               ? "bg-slate-50/70 border-gray-200 text-gray-400 cursor-not-allowed opacity-60"
                                               : isSlotSelected
-                                                ? "bg-magenta-50/90 border-2 border-magenta-600 text-magenta-950 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer font-bold"
-                                                : "bg-white border-gray-200 text-gray-800 hover:border-magenta-300 hover:bg-magenta-50/30 cursor-pointer shadow-2xs"
-                                            }`}
+                                              ? "bg-magenta-50/90 border-2 border-magenta-600 text-magenta-950 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer font-bold"
+                                              : "bg-white border-gray-200 text-gray-800 hover:border-magenta-300 hover:bg-magenta-50/30 cursor-pointer shadow-2xs"
+                                          }`}
+                                          title={
+                                            slot.isReserved
+                                              ? "Temporarily reserved by another patient for checkout"
+                                              : slot.isBooked
+                                              ? "Already booked by another patient"
+                                              : slot.isPast
+                                              ? "Time slot has passed"
+                                              : slot.isCapacityFull
+                                              ? "Shift capacity full"
+                                              : `${slot.timeRange} (Available)`
+                                          }
                                         >
                                           <span className={`text-xs sm:text-[13px] font-bold leading-tight ${isSlotSelected
-                                              ? "text-magenta-950 font-extrabold"
-                                              : !isAvailable
-                                                ? "text-gray-400"
-                                                : "text-gray-900"
+                                            ? "text-magenta-950 font-extrabold"
+                                            : !isAvailable
+                                              ? "text-gray-400"
+                                              : "text-gray-900"
                                             }`}>
                                             {slot.label}
                                           </span>
 
-                                          {slot.isBooked ? (
+                                          {slot.isReserved ? (
+                                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 uppercase tracking-wide shrink-0">
+                                              Reserved
+                                            </span>
+                                          ) : slot.isBooked ? (
                                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200 uppercase tracking-wide shrink-0">
                                               Booked
                                             </span>
@@ -3945,359 +4771,362 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 exit={{ opacity: 0, scale: 0.95 }}
                 className="relative z-[9999] w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
               >
-              <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-gray-100">
-                <div className="flex items-center gap-3">
-                  {selectedClinic.logo ? (
-                    <img src={selectedClinic.logo} alt={selectedClinic.name} className="w-10 h-10 rounded-xl object-cover border border-gray-200" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-xl bg-magenta-50 border border-magenta-100 text-magenta-600 flex items-center justify-center font-bold">
-                      {selectedClinic.name.charAt(0)}
+                <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-gray-100">
+                  <div className="flex items-center gap-3">
+                    {selectedClinic.logo ? (
+                      <img src={selectedClinic.logo} alt={selectedClinic.name} className="w-10 h-10 rounded-xl object-cover border border-gray-200" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-xl bg-magenta-50 border border-magenta-100 text-magenta-600 flex items-center justify-center font-bold">
+                        {selectedClinic.name.charAt(0)}
+                      </div>
+                    )}
+                    <div>
+                      <h3 className="font-bold text-gray-900 text-base flex items-center gap-1.5">
+                        {selectedClinic.name}
+                        {selectedClinic.verified && <VerifiedBadge size={16} className="w-4 h-4" />}
+                      </h3>
+                      <p className="text-xs text-gray-500">{selectedClinic.address}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowClinicDetailsModal(false)}
+                    className="p-1.5 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="p-6 overflow-y-auto space-y-4 text-xs">
+                  {selectedClinic.photos && selectedClinic.photos.length > 0 && (
+                    <div>
+                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-2">Clinic Photos</span>
+                      <div className="flex gap-2 overflow-x-auto pb-1">
+                        {selectedClinic.photos.map((p, idx) => (
+                          <img
+                            key={idx}
+                            src={p}
+                            alt="Clinic facility"
+                            onClick={() => setLightboxPhoto(p)}
+                            className="w-24 h-16 rounded-xl object-cover border border-gray-200 shrink-0 cursor-pointer hover:opacity-90"
+                          />
+                        ))}
+                      </div>
                     </div>
                   )}
-                  <div>
-                    <h3 className="font-bold text-gray-900 text-base flex items-center gap-1.5">
-                      {selectedClinic.name}
-                      {selectedClinic.verified && <VerifiedBadge size={16} className="w-4 h-4" />}
-                    </h3>
-                    <p className="text-xs text-gray-500">{selectedClinic.address}</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowClinicDetailsModal(false)}
-                  className="p-1.5 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
 
-              <div className="p-6 overflow-y-auto space-y-4 text-xs">
-                {selectedClinic.photos && selectedClinic.photos.length > 0 && (
                   <div>
-                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-2">Clinic Photos</span>
-                    <div className="flex gap-2 overflow-x-auto pb-1">
-                      {selectedClinic.photos.map((p, idx) => (
-                        <img
-                          key={idx}
-                          src={p}
-                          alt="Clinic facility"
-                          onClick={() => setLightboxPhoto(p)}
-                          className="w-24 h-16 rounded-xl object-cover border border-gray-200 shrink-0 cursor-pointer hover:opacity-90"
-                        />
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">About</span>
+                    <p className="text-gray-700 leading-relaxed">{selectedClinic.description || "Verified dermatology clinic in Cebu providing comprehensive skin care and medical consultations."}</p>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Attending Doctors</span>
+                    <div className="space-y-1.5">
+                      {selectedClinic.doctors.map((d) => (
+                        <div key={d.id} className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 flex items-center gap-2.5">
+                          <DoctorAvatar
+                            doctorId={d.id}
+                            doctor={d}
+                            name={d.name}
+                            className="w-8 h-8 rounded-full border border-magenta-200/60 shrink-0 text-xs font-bold"
+                          />
+                          <div>
+                            <p className="font-bold text-gray-900">{d.name}</p>
+                            <p className="text-[10px] text-magenta-700 font-semibold">{d.specialization}</p>
+                            <p className="text-[10px] text-gray-400">
+                              Duty: {d.dutyDays.map((x) => x.slice(0, 3)).join(", ")}{" "}
+                              {d.dutySchedule && Object.keys(d.dutySchedule).length > 0
+                                ? "• Flexible Shifts"
+                                : `(${formatTime12h(d.dutyStartTime)} – ${formatTime12h(d.dutyEndTime)})`}
+                            </p>
+                          </div>
+                        </div>
                       ))}
                     </div>
                   </div>
-                )}
-
-                <div>
-                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">About</span>
-                  <p className="text-gray-700 leading-relaxed">{selectedClinic.description || "Verified dermatology clinic in Cebu providing comprehensive skin care and medical consultations."}</p>
                 </div>
 
-                <div>
-                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Attending Doctors</span>
-                  <div className="space-y-1.5">
-                    {selectedClinic.doctors.map((d) => (
-                      <div key={d.id} className="p-2.5 rounded-xl bg-slate-50 border border-gray-100 flex items-center gap-2.5">
-                        <DoctorAvatar
-                          doctorId={d.id}
-                          doctor={d}
-                          name={d.name}
-                          className="w-8 h-8 rounded-full border border-magenta-200/60 shrink-0 text-xs font-bold"
-                        />
-                        <div>
-                          <p className="font-bold text-gray-900">{d.name}</p>
-                          <p className="text-[10px] text-magenta-700 font-semibold">{d.specialization}</p>
-                          <p className="text-[10px] text-gray-400">
-                            Duty: {d.dutyDays.map((x) => x.slice(0, 3)).join(", ")}{" "}
-                            {d.dutySchedule && Object.keys(d.dutySchedule).length > 0
-                              ? "• Flexible Shifts"
-                              : `(${formatTime12h(d.dutyStartTime)} – ${formatTime12h(d.dutyEndTime)})`}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                <div className="px-6 py-3.5 bg-gray-50/80 border-t border-gray-100 text-right">
+                  <button
+                    type="button"
+                    onClick={() => setShowClinicDetailsModal(false)}
+                    className="px-4 py-2 rounded-xl bg-magenta-600 text-white font-semibold text-xs hover:bg-magenta-700 transition-colors"
+                  >
+                    Close
+                  </button>
                 </div>
-              </div>
-
-              <div className="px-6 py-3.5 bg-gray-50/80 border-t border-gray-100 text-right">
-                <button
-                  type="button"
-                  onClick={() => setShowClinicDetailsModal(false)}
-                  className="px-4 py-2 rounded-xl bg-magenta-600 text-white font-semibold text-xs hover:bg-magenta-700 transition-colors"
-                >
-                  Close
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </ModalPortal>
 
       {/* Online Consultation Payment Modal (PayMongo) */}
       <ModalPortal isOpen={Boolean(showDemoCheckoutModal && demoCheckoutData)}>
         <AnimatePresence>
           {showDemoCheckoutModal && demoCheckoutData && (
-            <div className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div
+              onClick={!demoSimulating ? handleDemoReturnToBooking : undefined}
+              className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+            >
               <motion.div
+                onClick={(e) => e.stopPropagation()}
                 initial={{ opacity: 0, scale: 0.95, y: 12 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 12 }}
-                className="relative z-[9999] w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 flex flex-col text-left"
+                className="relative z-[9999] w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 flex flex-col text-left cursor-default"
               >
-              {/* Header */}
-              <div className="px-6 pt-5 pb-4 bg-gradient-to-r from-magenta-50/80 via-pink-50/50 to-white border-b border-gray-100 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-magenta-600 text-white flex items-center justify-center shadow-sm">
-                    <CreditCard className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-bold text-gray-900 text-sm">
-                        Online Consultation Payment
-                      </h3>
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full border border-emerald-200">
-                        <ShieldCheck className="w-3 h-3" />
-                        Secure Checkout
-                      </span>
+                {/* Header */}
+                <div className="px-6 pt-5 pb-4 bg-gradient-to-r from-magenta-50/80 via-pink-50/50 to-white border-b border-gray-100 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-magenta-600 text-white flex items-center justify-center shadow-sm">
+                      <CreditCard className="w-5 h-5" />
                     </div>
-                    <p className="text-[11px] text-gray-500 mt-0.5">Fast &amp; secure payment via E-Wallet</p>
-                  </div>
-                </div>
-                {!demoSimulating && (
-                  <button
-                    type="button"
-                    onClick={handleDemoReturnToBooking}
-                    className="p-1.5 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
-                    title="Close"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
-
-              {/* Body */}
-              <div className="p-6 space-y-4 text-xs overflow-y-auto max-h-[80vh]">
-                <div className="space-y-4">
-                  {/* Inline Error Message if previous payment attempt failed */}
-                  {demoCheckoutData.errorMessage && (
-                    <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 flex items-start gap-3 shadow-2xs">
-                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                      <div className="text-xs space-y-0.5 flex-1">
-                        <p className="font-bold text-rose-800">Payment Authorization Failed</p>
-                        <p className="text-rose-700 text-[11px] leading-relaxed">{demoCheckoutData.errorMessage}</p>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-bold text-gray-900 text-sm">
+                          Consultation Payment
+                        </h3>
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full border border-emerald-200">
+                          <ShieldCheck className="w-3 h-3" />
+                          Secure Checkout
+                        </span>
                       </div>
                     </div>
+                  </div>
+                  {!demoSimulating && (
+                    <button
+                      type="button"
+                      onClick={handleDemoReturnToBooking}
+                      className="p-1.5 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                      title="Close"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
                   )}
+                </div>
 
-                  {/* Payment Information Form Card */}
-                  <div className="bg-white rounded-2xl border border-gray-100 p-4 sm:p-5 space-y-3.5 shadow-xs">
-                    <div>
-                      <h4 className="text-base font-bold text-gray-900 tracking-tight">Payment Information</h4>
-                      <p className="text-[11px] text-gray-500 mt-0.5">Secure payment processing via PayMongo</p>
-                    </div>
-
-                    {/* Full Name */}
-                    <div>
-                      <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                        Full Name <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Maria Santos"
-                        value={demoCheckoutData.payerName ?? patientName}
-                        onChange={(e) =>
-                          setDemoCheckoutData((prev) => (prev ? { ...prev, payerName: e.target.value } : null))
-                        }
-                        className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
-                      />
-                    </div>
-
-                    {/* Email & Billing Address */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                          Email Address <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          type="email"
-                          placeholder="patient@example.com"
-                          value={demoCheckoutData.payerEmail ?? patientEmail}
-                          onChange={(e) =>
-                            setDemoCheckoutData((prev) => (prev ? { ...prev, payerEmail: e.target.value } : null))
-                          }
-                          className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
-                        />
+                {/* Body */}
+                <div className="p-6 space-y-4 text-xs overflow-y-auto max-h-[80vh]">
+                  <div className="space-y-4">
+                    {/* Inline Error Message if previous payment attempt failed */}
+                    {demoCheckoutData.errorMessage && (
+                      <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 flex items-start gap-3 shadow-2xs">
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                        <div className="text-xs space-y-0.5 flex-1">
+                          <p className="font-bold text-rose-800">Payment Authorization Failed</p>
+                          <p className="text-rose-700 text-[11px] leading-relaxed">{demoCheckoutData.errorMessage}</p>
+                        </div>
                       </div>
+                    )}
+
+                    {/* Payment Information Form Card */}
+                    <div className="bg-white rounded-2xl border border-gray-100 p-4 sm:p-5 space-y-3.5 shadow-xs">
+                      <div>
+                        <h4 className="text-base font-bold text-gray-900 tracking-tight">Payment Information</h4>
+                        <p className="text-[11px] text-gray-500 mt-0.5">Secure payment processing via PayMongo</p>
+                      </div>
+
+                      {/* Full Name */}
                       <div>
                         <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                          Billing Address <span className="text-red-500">*</span>
+                          Full Name <span className="text-red-500">*</span>
                         </label>
                         <input
                           type="text"
-                          placeholder="Barangay, City, Province"
-                          value={demoCheckoutData.payerAddress ?? patientAddress}
+                          placeholder="e.g. Maria Santos"
+                          value={demoCheckoutData.payerName ?? patientName}
                           onChange={(e) =>
-                            setDemoCheckoutData((prev) => (prev ? { ...prev, payerAddress: e.target.value } : null))
+                            setDemoCheckoutData((prev) => (prev ? { ...prev, payerName: e.target.value } : null))
                           }
                           className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
                         />
                       </div>
-                    </div>
 
-                    {/* Select E-Wallet with GCash & Maya Logos */}
-                    <div className="pt-1">
-                      <label className="block text-[11px] font-semibold text-gray-700 mb-2">
-                        Select E-Wallet <span className="text-red-500">*</span>
-                      </label>
-                      <div className="grid grid-cols-2 gap-3">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setDemoCheckoutData((prev) => (prev ? { ...prev, paymentMethod: "gcash" } : null))
-                          }
-                          className={cn(
-                            "flex items-center justify-center h-14 px-4 rounded-2xl border transition-all cursor-pointer",
-                            demoCheckoutData.paymentMethod === "gcash"
-                              ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-500/20 shadow-xs"
-                              : "border-gray-200 bg-white hover:bg-gray-50/60"
-                          )}
-                          aria-label="Pay with GCash"
-                        >
-                          <img
-                            src={gcashLogo}
-                            alt="GCash"
-                            className="h-6 w-auto object-contain"
+                      {/* Email & Billing Address */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                            Email Address <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="email"
+                            placeholder="patient@example.com"
+                            value={demoCheckoutData.payerEmail ?? patientEmail}
+                            onChange={(e) =>
+                              setDemoCheckoutData((prev) => (prev ? { ...prev, payerEmail: e.target.value } : null))
+                            }
+                            className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
                           />
-                        </button>
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                            Billing Address <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Barangay, City, Province"
+                            value={demoCheckoutData.payerAddress ?? patientAddress}
+                            onChange={(e) =>
+                              setDemoCheckoutData((prev) => (prev ? { ...prev, payerAddress: e.target.value } : null))
+                            }
+                            className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all"
+                          />
+                        </div>
+                      </div>
 
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setDemoCheckoutData((prev) => (prev ? { ...prev, paymentMethod: "maya" } : null))
-                          }
-                          className={cn(
-                            "flex items-center justify-center h-14 px-4 rounded-2xl border transition-all cursor-pointer",
-                            demoCheckoutData.paymentMethod === "maya"
-                              ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-500/20 shadow-xs"
-                              : "border-gray-200 bg-white hover:bg-gray-50/60"
-                          )}
-                          aria-label="Pay with Maya"
-                        >
-                          <img
-                            src={mayaLogo}
-                            alt="Maya"
-                            className="h-6 w-auto object-contain"
-                          />
-                        </button>
+                      {/* Select E-Wallet with GCash & Maya Logos */}
+                      <div className="pt-1">
+                        <label className="block text-[11px] font-semibold text-gray-700 mb-2">
+                          Select E-Wallet <span className="text-red-500">*</span>
+                        </label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDemoCheckoutData((prev) => (prev ? { ...prev, paymentMethod: "gcash" } : null))
+                            }
+                            className={cn(
+                              "flex items-center justify-center h-14 px-4 rounded-2xl border transition-all cursor-pointer",
+                              demoCheckoutData.paymentMethod === "gcash"
+                                ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-500/20 shadow-xs"
+                                : "border-gray-200 bg-white hover:bg-gray-50/60"
+                            )}
+                            aria-label="Pay with GCash"
+                          >
+                            <img
+                              src={gcashLogo}
+                              alt="GCash"
+                              className="h-6 w-auto object-contain"
+                            />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDemoCheckoutData((prev) => (prev ? { ...prev, paymentMethod: "maya" } : null))
+                            }
+                            className={cn(
+                              "flex items-center justify-center h-14 px-4 rounded-2xl border transition-all cursor-pointer",
+                              demoCheckoutData.paymentMethod === "maya"
+                                ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-500/20 shadow-xs"
+                                : "border-gray-200 bg-white hover:bg-gray-50/60"
+                            )}
+                            aria-label="Pay with Maya"
+                          >
+                            <img
+                              src={mayaLogo}
+                              alt="Maya"
+                              className="h-6 w-auto object-contain"
+                            />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Dynamic Mobile Number Field */}
+                      <div>
+                        <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                          {demoCheckoutData.paymentMethod === "gcash" ? "GCash" : "Maya"} Mobile Number <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="tel"
+                          inputMode="numeric"
+                          placeholder="09999999999"
+                          maxLength={11}
+                          value={demoCheckoutData.mobileNumber || ""}
+                          onChange={(e) => {
+                            const cleaned = e.target.value.replace(/\D/g, "").slice(0, 11);
+                            setDemoCheckoutData((prev) => (prev ? { ...prev, mobileNumber: cleaned } : null));
+                          }}
+                          className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all font-mono tracking-wide"
+                        />
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          Enter the 11-digit number linked to your {demoCheckoutData.paymentMethod === "gcash" ? "GCash" : "Maya"} account.
+                        </p>
                       </div>
                     </div>
 
-                    {/* Dynamic Mobile Number Field */}
-                    <div>
-                      <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                        {demoCheckoutData.paymentMethod === "gcash" ? "GCash" : "Maya"} Mobile Number <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="tel"
-                        inputMode="numeric"
-                        placeholder="09999999999"
-                        maxLength={11}
-                        value={demoCheckoutData.mobileNumber || ""}
-                        onChange={(e) => {
-                          const cleaned = e.target.value.replace(/\D/g, "").slice(0, 11);
-                          setDemoCheckoutData((prev) => (prev ? { ...prev, mobileNumber: cleaned } : null));
-                        }}
-                        className="w-full bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-magenta-500/20 focus:border-magenta-500 transition-all font-mono tracking-wide"
-                      />
-                      <p className="text-[10px] text-gray-400 mt-1">
-                        Enter the 11-digit number linked to your {demoCheckoutData.paymentMethod === "gcash" ? "GCash" : "Maya"} account.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Summary of Consultation Selection */}
-                  <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-gray-100 space-y-2 text-[11px]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-500">Clinic:</span>
-                      <span className="font-bold text-gray-900">{demoCheckoutData.clinicName}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-500">Attending Doctor:</span>
-                      <span className="font-bold text-gray-900">{demoCheckoutData.doctorName}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-500">Appointment Date &amp; Time:</span>
-                      <span className="font-semibold text-gray-800">
-                        {demoCheckoutData.date} at {demoCheckoutData.time}
-                      </span>
-                    </div>
-                    {demoCheckoutData.conditionName && (
+                    {/* Summary of Consultation Selection */}
+                    <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-gray-100 space-y-2 text-[11px]">
                       <div className="flex items-center justify-between">
-                        <span className="text-gray-500">Selected Condition:</span>
-                        <span className="font-semibold text-magenta-700">
-                          {demoCheckoutData.conditionName}
-                          {demoCheckoutData.confidenceScore !== null && demoCheckoutData.confidenceScore !== undefined && (
-                            <span className="text-gray-400 font-normal ml-1">
-                              ({formatConfidencePercent(demoCheckoutData.confidenceScore)} match)
-                            </span>
-                          )}
+                        <span className="text-gray-500">Clinic:</span>
+                        <span className="font-bold text-gray-900">{demoCheckoutData.clinicName}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Attending Doctor:</span>
+                        <span className="font-bold text-gray-900">{demoCheckoutData.doctorName}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Appointment Date &amp; Time:</span>
+                        <span className="font-semibold text-gray-800">
+                          {demoCheckoutData.date} at {demoCheckoutData.time}
                         </span>
                       </div>
-                    )}
-                    <div className="flex items-center justify-between pt-1.5 border-t border-gray-200">
-                      <span className="font-bold text-gray-700">Consultation Fee:</span>
-                      <span className="font-extrabold text-magenta-700 text-sm">
-                        ₱{demoCheckoutData.consultationFee.toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Submit Button */}
-                  <div className="space-y-2.5 pt-1">
-                    <button
-                      type="button"
-                      disabled={demoSimulating}
-                      onClick={handleDemoSimulateSuccess}
-                      className="w-full py-3.5 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-bold text-xs uppercase tracking-wider shadow-sm transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      {demoSimulating ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          <span>Processing Payment...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Lock className="w-3.5 h-3.5" />
-                          <span>Pay &amp; Confirm (₱{demoCheckoutData.consultationFee.toFixed(2)})</span>
-                        </>
+                      {demoCheckoutData.conditionName && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">Selected Condition:</span>
+                          <span className="font-semibold text-magenta-700">
+                            {demoCheckoutData.conditionName}
+                            {demoCheckoutData.confidenceScore !== null && demoCheckoutData.confidenceScore !== undefined && (
+                              <span className="text-gray-400 font-normal ml-1">
+                                ({formatConfidencePercent(demoCheckoutData.confidenceScore)} match)
+                              </span>
+                            )}
+                          </span>
+                        </div>
                       )}
-                    </button>
+                      <div className="flex items-center justify-between pt-1.5 border-t border-gray-200">
+                        <span className="font-bold text-gray-700">Consultation Fee:</span>
+                        <span className="font-extrabold text-magenta-700 text-sm">
+                          ₱{demoCheckoutData.consultationFee.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
 
-                    <div className="text-center pt-1">
+                    {/* Submit Button */}
+                    <div className="space-y-2.5 pt-1">
                       <button
                         type="button"
                         disabled={demoSimulating}
-                        onClick={handleDemoCancelPayment}
-                        className="text-xs text-gray-500 hover:text-gray-700 font-medium hover:underline cursor-pointer disabled:opacity-50"
+                        onClick={handleDemoSimulateSuccess}
+                        className="w-full py-3.5 bg-magenta-600 hover:bg-magenta-700 text-white rounded-full font-bold text-xs uppercase tracking-wider shadow-sm transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait flex items-center justify-center gap-2 cursor-pointer"
                       >
-                        Cancel and return to booking
+                        {demoSimulating ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Processing Payment...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>Pay &amp; Confirm (₱{demoCheckoutData.consultationFee.toFixed(2)})</span>
+                          </>
+                        )}
                       </button>
+
+                      <div className="text-center pt-1">
+                        <button
+                          type="button"
+                          disabled={demoSimulating}
+                          onClick={handleDemoCancelPayment}
+                          className="text-xs text-gray-500 hover:text-gray-700 font-medium hover:underline cursor-pointer disabled:opacity-50"
+                        >
+                          Cancel and return to booking
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-center gap-1.5 text-[11px] text-gray-400 pt-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>256-bit SSL encrypted • Instant clinic appointment confirmation</span>
                     </div>
                   </div>
-
-                  <div className="flex items-center justify-center gap-1.5 text-[11px] text-gray-400 pt-1">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>256-bit SSL encrypted • Instant clinic appointment confirmation</span>
-                  </div>
                 </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </ModalPortal>
 
       {/* Lightbox for Photos */}

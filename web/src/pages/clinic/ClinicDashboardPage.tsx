@@ -1,10 +1,13 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { fetchAllClinicAppointments } from "@/lib/clinicAppointmentPagination";
 import { Link } from "react-router-dom";
 import {
   CheckCircle2,
   ArrowUpRight,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  Info,
   AlertTriangle,
   XCircle,
   FileText,
@@ -27,7 +30,13 @@ import {
   normalizeDayName,
   isClinicCurrentlyOpen,
   isDoctorCurrentlyOnDuty,
+  getManilaNowParts,
 } from "@/lib/schedulingService";
+import {
+  calculateClinicAnnualRevenue,
+  getAvailableRevenueYears,
+  REFUND_EXTERNAL_DISCLAIMER,
+} from "@/lib/clinicRevenueService";
 
 /* ── Types ─────────────────────────────────────────────────── */
 type AppointmentRecord = {
@@ -58,6 +67,8 @@ type AppointmentRecord = {
   checkInStatus?: "scheduled" | "arrived" | "in-consultation" | "completed" | "no-show";
   paymentStatus?: string;
   paymentAmount?: number;
+  paymentReference?: string;
+  paidAt?: string;
 };
 
 type ClinicDoctorInfo = {
@@ -259,6 +270,17 @@ export default function ClinicDashboardPage() {
   }, []);
 
   const { status: verificationStatus, clinicName, clinicId, loading } = useClinicVerification();
+  const [activeClinicId, setActiveClinicId] = useState<string | number | null | undefined>(clinicId);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [isDataIncomplete, setIsDataIncomplete] = useState<boolean>(false);
+  const [reloadTrigger, setReloadTrigger] = useState<number>(0);
+  const reloadAppointments = useCallback(() => {
+    setReloadTrigger((prev) => prev + 1);
+  }, []);
+
+  useEffect(() => {
+    if (clinicId) setActiveClinicId(clinicId);
+  }, [clinicId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -280,6 +302,10 @@ export default function ClinicDashboardPage() {
       }
 
       // 2. Check active Supabase session
+      if (resolvedClinicId && !cancelled) {
+        setActiveClinicId(resolvedClinicId);
+      }
+
       if (!resolvedClinicId) {
         try {
           const { data: { session } } = await supabase.auth.getSession();
@@ -382,36 +408,29 @@ export default function ClinicDashboardPage() {
             });
           }
         } catch { }
+        const paginationResult = await fetchAllClinicAppointments(
+          supabase,
+          resolvedClinicId,
+          {
+            pageSize: 1000,
+            isCancelled: () => cancelled,
+          }
+        );
 
-        const { data, error } = await supabase
-          .from("patient_appointment")
-          .select(`
-            appointment_id,
-            clinic_id,
-            date,
-            status,
-            notes,
-            clinic_note,
-            assigned_doctor_id,
-            doctor_status,
-            doctor_note,
-            doctor_reviewed_at,
-            patient_name,
-            patient_email,
-            patient_contact,
-            patient_address,
-            skin_photo_url,
-            ai_condition_name,
-            ai_confidence,
-            created_at,
-            user:user_id ( full_name, avatar_url )
-          `)
-          .eq("clinic_id", resolvedClinicId)
-          .order("created_at", { ascending: false });
+        if (cancelled) return;
 
-        if (!error && data) {
-          dbList = data;
+        if (paginationResult.error || !paginationResult.isComplete) {
+          console.error("Failed to load complete appointment history from Supabase:", paginationResult.error);
+          setFetchError(paginationResult.error?.message || "Failed to retrieve complete appointment records");
+          setIsDataIncomplete(true);
+          // Do not silently calculate revenue from partial records
+          return;
         }
+
+        // On complete successful fetch:
+        setFetchError(null);
+        setIsDataIncomplete(false);
+        dbList = paginationResult.data;
       }
 
       // Merge doctor names and duty schedules from local cache if missing
@@ -477,28 +496,12 @@ export default function ClinicDashboardPage() {
         const parsedDate = parseDateStringSafe(a.date);
         const assignedDocName = a.assigned_doctor_id ? docMap.get(a.assigned_doctor_id) : undefined;
 
-        const isPaidOnline = Boolean(
-          a.clinic_note &&
-          /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(a.clinic_note)
-        );
-        const isExplicitPaid =
-          a.payment_status === "paid" ||
-          a.status === "completed" ||
-          a.check_in_status === "completed" ||
-          a.status === "confirmed" ||
-          a.status === "accepted" ||
-          a.doctor_status === "approved" ||
-          isPaidOnline;
+        const resolvedPaymentStatus = a.payment_status || undefined;
 
-        let extractedAmount: number | undefined;
-        if (a.payment_amount) {
-          extractedAmount = Number(a.payment_amount);
-        } else if (a.clinic_note) {
-          const match = a.clinic_note.match(/(?:amount|fee|paid):\s*(?:₱|PHP)?\s*([\d,]+(?:\.\d+)?)/i);
-          if (match) {
-            extractedAmount = parseFloat(match[1].replace(/,/g, ""));
-          }
-        }
+        const resolvedPaymentAmount =
+          a.payment_amount !== null && a.payment_amount !== undefined && a.payment_amount !== ""
+            ? Number(a.payment_amount)
+            : undefined;
 
         return {
           id: a.appointment_id,
@@ -524,8 +527,10 @@ export default function ClinicDashboardPage() {
           patientAvatar: userAvatar,
           skinPhotoUrl: a.skin_photo_url || undefined,
           checkInStatus: a.check_in_status || undefined,
-          paymentStatus: a.payment_status || (isExplicitPaid ? "paid" : undefined),
-          paymentAmount: extractedAmount,
+          paymentStatus: resolvedPaymentStatus,
+          paymentAmount: resolvedPaymentAmount,
+          paymentReference: a.payment_reference || undefined,
+          paidAt: a.paid_at || undefined,
         };
       });
 
@@ -551,25 +556,17 @@ export default function ClinicDashboardPage() {
                   );
                   const parsedDate = parseDateStringSafe(localItem.date);
 
-                  const isPaidOnline = Boolean(
-                    localItem.clinicNote &&
-                    /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(localItem.clinicNote)
-                  );
-                  const isExplicitPaid =
-                    localItem.paymentStatus === "paid" ||
-                    localItem.status === "completed" ||
-                    localItem.status === "confirmed" ||
-                    localItem.status === "accepted" ||
-                    localItem.doctorStatus === "approved" ||
-                    isPaidOnline;
+                  const localPayStatus =
+                    localItem.paymentStatus ||
+                    localItem.payment_status ||
+                    undefined;
 
-                  let extractedAmount: number | undefined = localItem.paymentAmount ? Number(localItem.paymentAmount) : undefined;
-                  if (!extractedAmount && localItem.clinicNote) {
-                    const match = localItem.clinicNote.match(/(?:amount|fee|paid):\s*(?:₱|PHP)?\s*([\d,]+(?:\.\d+)?)/i);
-                    if (match) {
-                      extractedAmount = parseFloat(match[1].replace(/,/g, ""));
-                    }
-                  }
+                  const localPayAmount =
+                    localItem.paymentAmount !== null && localItem.paymentAmount !== undefined && localItem.paymentAmount !== ""
+                      ? Number(localItem.paymentAmount)
+                      : localItem.payment_amount !== null && localItem.payment_amount !== undefined && localItem.payment_amount !== ""
+                        ? Number(localItem.payment_amount)
+                        : undefined;
 
                   mapped.push({
                     id: localItem.id,
@@ -594,8 +591,10 @@ export default function ClinicDashboardPage() {
                     patientAvatar: localUserAvatar,
                     skinPhotoUrl: localItem.skinPhotoUrl || undefined,
                     checkInStatus: localItem.checkInStatus || localItem.check_in_status || undefined,
-                    paymentStatus: localItem.paymentStatus || (isExplicitPaid ? "paid" : undefined),
-                    paymentAmount: extractedAmount,
+                    paymentStatus: localPayStatus,
+                    paymentAmount: localPayAmount,
+                    paymentReference: localItem.paymentReference || localItem.payment_reference || undefined,
+                    paidAt: localItem.paidAt || localItem.paid_at || undefined,
                   });
                 }
               }
@@ -672,7 +671,7 @@ export default function ClinicDashboardPage() {
       window.removeEventListener("storage", handleSync);
       window.removeEventListener("focus", handleSync);
     };
-  }, [clinicId, clinicName]);
+  }, [clinicId, clinicName, reloadTrigger]);
 
   // 1. Total unique patients registered from appointment records
   const uniquePatientCount = useMemo(() => {
@@ -701,43 +700,36 @@ export default function ClinicDashboardPage() {
       });
   }, [appointments]);
 
-  // 3. Total revenue from completed/paid consultations for active clinic
+  // 3. Current Manila calendar year and state for annual revenue
+  const currentManilaYear = useMemo(() => getManilaNowParts().year, []);
+  const [selectedRevenueYear, setSelectedRevenueYear] = useState<number>(() => getManilaNowParts().year);
+
+  // Available revenue years from clinic appointments + current calendar year
+  const availableRevenueYears = useMemo(
+    () => getAvailableRevenueYears(appointments, currentManilaYear),
+    [appointments, currentManilaYear]
+  );
+
+  const effectiveClinicId = activeClinicId || clinicId || (appointments[0]?.clinicId ?? 0);
+
+  // Total annual revenue for active clinic in the selected calendar year
   const { paidAppointmentsCount, formattedRevenue } = useMemo(() => {
-    let revenue = 0;
-    let count = 0;
-
-    appointments.forEach((a) => {
-      const isPaidOnline = Boolean(
-        a.clinicNote &&
-        /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(a.clinicNote)
-      );
-
-      const isCompletedOrActive =
-        a.status === "completed" ||
-        a.checkInStatus === "completed" ||
-        a.status === "scheduled" ||
-        a.status === "accepted" ||
-        a.doctorStatus === "approved";
-
-      const isPaid =
-        a.paymentStatus === "paid" ||
-        isPaidOnline ||
-        (isCompletedOrActive && a.status !== "rejected" && a.doctorStatus !== "rejected");
-
-      if (isPaid) {
-        count += 1;
-        const fee = a.paymentAmount && a.paymentAmount > 0 ? a.paymentAmount : clinicFee;
-        revenue += fee;
-      }
+    if (isDataIncomplete) {
+      return {
+        paidAppointmentsCount: 0,
+        formattedRevenue: "—",
+        totalRevenue: 0,
+        eligibleAppointments: [],
+        excludedRecords: [],
+      };
+    }
+    return calculateClinicAnnualRevenue({
+      appointments,
+      clinicId: effectiveClinicId,
+      year: selectedRevenueYear,
+      clinicFee,
     });
-
-    const formatted = `₱${revenue.toLocaleString("en-PH", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`;
-
-    return { totalRevenue: revenue, paidAppointmentsCount: count, formattedRevenue: formatted };
-  }, [appointments, clinicFee]);
+  }, [appointments, effectiveClinicId, selectedRevenueYear, clinicFee, isDataIncomplete]);
 
   // 4. Configured or average consultation slot time (minutes)
   const avgTimeMinutes = useMemo(() => {
@@ -1190,17 +1182,22 @@ export default function ClinicDashboardPage() {
       link: "/clinic/appointments",
     },
     {
-      label: "Total Revenue",
-      value: formattedRevenue,
+      label:
+        selectedRevenueYear === currentManilaYear
+          ? "Total Revenue This Year"
+          : `Total Revenue (${selectedRevenueYear})`,
+      value: isDataIncomplete ? "—" : formattedRevenue,
       unit: undefined,
-      sub:
-        paidAppointmentsCount > 0
+      sub: isDataIncomplete
+        ? "Sync paused: Incomplete historical data"
+        : paidAppointmentsCount > 0
           ? paidAppointmentsCount === 1
-            ? "From 1 paid consultation"
-            : `From ${paidAppointmentsCount} paid consultations`
-          : "All-time clinic earnings",
+            ? `From 1 paid consultation in ${selectedRevenueYear}`
+            : `From ${paidAppointmentsCount} paid consultations in ${selectedRevenueYear}`
+          : `₱0.00 earned in ${selectedRevenueYear}`,
       highlight: false,
       link: "/clinic/patients",
+      isRevenueCard: true,
     },
     {
       label: "Avg. Time per Appointment",
@@ -1289,6 +1286,29 @@ export default function ClinicDashboardPage() {
         </div>
       )}
 
+      {/* ── Data Sync Incomplete Banner ──────────────────────── */}
+      {isDataIncomplete && (
+        <div className="flex items-start justify-between gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-amber-800">Historical Records Sync Incomplete</p>
+              <p className="text-xs text-amber-700 mt-0.5">
+                {fetchError ? `Error: ${fetchError}. ` : ""}
+                Unable to retrieve all historical appointments from the server. Revenue and consultation metrics are paused to avoid displaying inaccurate financial totals.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={reloadAppointments}
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-600 text-white hover:bg-amber-700 transition shrink-0 cursor-pointer shadow-xs"
+          >
+            Retry Sync
+          </button>
+        </div>
+      )}
+
       {/* ── Header ───────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="min-w-0">
@@ -1334,19 +1354,61 @@ export default function ClinicDashboardPage() {
                       )}
 
                       <div className="relative flex items-start justify-between gap-2">
-                        <p className={cn("text-xs font-semibold leading-snug", card.highlight ? "text-white" : "text-gray-600")}>
-                          {card.label}
-                        </p>
-                        <span
-                          className={cn(
-                            "w-8 h-8 rounded-full border flex items-center justify-center shrink-0 transition-all",
-                            card.highlight
-                              ? "border-white/60 text-white group-hover:bg-white/10"
-                              : "border-gray-200 text-gray-800 bg-white group-hover:border-gray-300"
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <p className={cn("text-xs font-semibold leading-snug", card.highlight ? "text-white" : "text-gray-600")}>
+                            {card.label}
+                          </p>
+                          {(card as any).isRevenueCard && (
+                            <span
+                              title={REFUND_EXTERNAL_DISCLAIMER}
+                              className="text-gray-400 hover:text-gray-600 cursor-help"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }}
+                            >
+                              <Info className="w-3.5 h-3.5 shrink-0" />
+                            </span>
                           )}
-                        >
-                          <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                        </span>
+                        </div>
+                        {(card as any).isRevenueCard ? (
+                          <div
+                            className="relative shrink-0 z-10"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }}
+                          >
+                            <select
+                              aria-label="Select Revenue Year"
+                              value={selectedRevenueYear}
+                              onChange={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setSelectedRevenueYear(Number(e.target.value));
+                              }}
+                              className="appearance-none bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 text-[11px] font-bold rounded-lg pl-2 pr-5 py-0.5 cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-[#801336] transition-colors"
+                            >
+                              {availableRevenueYears.map((yr) => (
+                                <option key={yr} value={yr}>
+                                  {yr}
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown className="w-3 h-3 text-gray-500 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                          </div>
+                        ) : (
+                          <span
+                            className={cn(
+                              "w-8 h-8 rounded-full border flex items-center justify-center shrink-0 transition-all",
+                              card.highlight
+                                ? "border-white/60 text-white group-hover:bg-white/10"
+                                : "border-gray-200 text-gray-800 bg-white group-hover:border-gray-300"
+                            )}
+                          >
+                            <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                          </span>
+                        )}
                       </div>
 
                       <div className="relative mt-3">

@@ -306,11 +306,16 @@ Deno.serve(async (req: Request) => {
         clinicName: metadata.clinic_name,
       });
 
+      const currency = paymentAttributes?.currency ?? "PHP";
+      if (currency && currency.toUpperCase() !== "PHP") {
+        throw new Error(`Unsupported payment currency: ${currency}. Only PHP is accepted for consultation bookings.`);
+      }
+
       const amountInCentavos = paymentAttributes?.amount;
       if (typeof amountInCentavos !== "number" || amountInCentavos <= 0) {
         throw new Error("PayMongo payment amount is missing or invalid for booking");
       }
-      const amount = amountInCentavos / 100;
+      const amount = Math.round(amountInCentavos) / 100;
       const paymentDateIso = new Date().toISOString();
       const paymentMethodType: string =
         paymentAttributes?.source?.type ||
@@ -328,128 +333,143 @@ Deno.serve(async (req: Request) => {
       const appointmentId = metadata.appointment_id || null;
       const userId = metadata.user_id || null;
 
-      // 1. Check for existing payment to prevent duplicate records
-      const { data: existingPayment } = await supabase
-        .from("user_payment")
-        .select("payment_id")
-        .eq("paymongo_payment_id", paymongoPaymentId)
-        .maybeSingle();
-
-      if (!existingPayment && userId) {
-        const { error: paymentInsertError } = await supabase
-          .from("user_payment")
-          .insert({
-            amount,
-            payment_date: paymentDateIso,
-            method: paymentMethodType,
-            status: "success",
-            user_id: userId,
-            plan_id: null,
-            billing_cycle: null,
-            reference_number: paymongoPaymentId,
-            paymongo_payment_id: paymongoPaymentId,
-            paymongo_payment_intent_id: paymentIntentId,
-            appointment_id: appointmentId,
-            clinic_id: metadata?.clinic_id || null,
-            payment_type: "appointment_consultation",
-          });
-
-        if (paymentInsertError) {
-          console.error("[webhook] user_payment insert error for booking:", paymentInsertError);
-        } else {
-          console.log("[webhook] Successful booking payment recorded in user_payment:", paymongoPaymentId);
+      // 1. Authoritative Atomic Payment Fulfillment via Database RPC (Single Authoritative Path)
+      const { data: rpcResult, error: rpcError } = await supabase.rpc(
+        "fulfill_appointment_payment_atomic",
+        {
+          p_paymongo_payment_id: paymongoPaymentId,
+          p_payment_intent_id: paymentIntentId,
+          p_appointment_id: appointmentId,
+          p_user_id: userId,
+          p_amount: amount,
+          p_payment_method: paymentMethodLabel,
+          p_currency: currency,
         }
+      );
+
+      if (rpcError) {
+        throw new Error(`Database error executing atomic payment fulfillment: ${rpcError.message}`);
       }
 
-      // 2. Update patient_appointment table if appointmentId is present
-      if (appointmentId) {
-        const paySummary = `Paid Online (${paymentMethodLabel} Ref: ${paymongoPaymentId})`;
-        const { data: currentAppt } = await supabase
-          .from("patient_appointment")
-          .select("clinic_note, user_id, payment_status, payment_amount")
-          .eq("appointment_id", appointmentId)
-          .maybeSingle();
+      if (!rpcResult || !rpcResult.success) {
+        throw new Error(rpcResult?.message || "Payment fulfillment rejected by database.");
+      }
 
-        if (currentAppt) {
-          if (userId && currentAppt.user_id && currentAppt.user_id !== userId) {
-            console.warn(`[webhook] User ID mismatch for appointment ${appointmentId}: expected ${userId}, got ${currentAppt.user_id}`);
-          } else {
-            const existingNote = currentAppt.clinic_note || "";
-            const updatedNote = existingNote.includes("Paid Online")
-              ? existingNote
-              : existingNote ? `${existingNote} | ${paySummary}` : paySummary;
+      if (rpcResult.is_overpayment) {
+        console.warn(
+          `[webhook] Overpayment detected on appointment ${appointmentId}: excess ${rpcResult.overpayment_amount}`
+        );
+      }
 
-            const { error: apptUpdateError } = await supabase
-              .from("patient_appointment")
-              .update({
-                payment_status: "paid",
-                payment_reference: paymongoPaymentId,
-                payment_amount: amount,
-                paid_at: paymentDateIso,
-                clinic_note: updatedNote,
-                check_in_status: "scheduled",
-              })
-              .eq("appointment_id", appointmentId);
+      const isReconciliation = rpcResult.action === "reconciliation_required";
+      const reconciliationReason = rpcResult.status || "cancelled";
 
-            if (apptUpdateError) {
-              console.warn("[webhook] patient_appointment update note:", apptUpdateError.message);
-            } else {
-              console.log("[webhook] patient_appointment marked paid for booking:", appointmentId);
+      // 2. Resolve recipient email and send consultation booking receipt with Dedicated Outbox
+      if (!isReconciliation && (rpcResult.action === "marked_paid" || rpcResult.action === "idempotent_skip")) {
+        let recipientEmail = metadata.patient_email || null;
+        if (!recipientEmail && userId) {
+          try {
+            const { data: authUser } = await supabase.auth.admin.getUserById(userId);
+            recipientEmail = authUser?.user?.email || null;
+          } catch {
+            /* ignore error fetching user */
+          }
+        }
+
+        if (recipientEmail) {
+          const idempotencyKey = `appointment_receipt:${paymongoPaymentId}`;
+
+          const { data: claimResult, error: claimErr } = await supabase.rpc(
+            "claim_email_outbox",
+            {
+              p_idempotency_key: idempotencyKey,
+              p_email_type: "appointment_receipt",
+              p_recipient_email: recipientEmail,
+              p_user_id: userId,
+              p_appointment_id: appointmentId,
+              p_payload: {
+                patientEmail: recipientEmail,
+                patientName: rpcResult.patient_name || metadata?.patient_name || "Patient",
+                clinicName: rpcResult.clinic_name || metadata?.clinic_name || "Skin Clinic",
+                doctorName: rpcResult.doctor_name || metadata?.doctor_name || "Attending Dermatologist",
+                appointmentDate: rpcResult.appointment_date || metadata?.appointment_date || "Scheduled Date",
+                appointmentTime: rpcResult.appointment_time || metadata?.appointment_time || "Scheduled Time",
+                paymentMethod: paymentMethodLabel,
+                amount,
+                paymongoPaymentId,
+              },
+              p_lease_seconds: 120,
             }
+          );
+
+          if (claimErr) {
+            console.error("[webhook] Failed to claim email outbox:", claimErr);
+          } else if (claimResult?.claim_acquired) {
+            const outboxId = claimResult.outbox_id;
+            try {
+              const dispatchResult = await sendBookingReceiptEmail({
+                patientEmail: recipientEmail,
+                patientName: rpcResult.patient_name || metadata?.patient_name || "Patient",
+                clinicName: rpcResult.clinic_name || metadata?.clinic_name || "Skin Clinic",
+                doctorName: rpcResult.doctor_name || metadata?.doctor_name || "Attending Dermatologist",
+                appointmentDate: rpcResult.appointment_date || metadata?.appointment_date || "Scheduled Date",
+                appointmentTime: rpcResult.appointment_time || metadata?.appointment_time || "Scheduled Time",
+                paymentMethod: paymentMethodLabel,
+                amount,
+                paymentDate: paymentDateIso,
+                paymongoPaymentId,
+              });
+
+              if (dispatchResult.success) {
+                await supabase.rpc("finalize_email_outbox", {
+                  p_outbox_id: outboxId,
+                  p_success: true,
+                });
+
+                await recordAuditLog({
+                  userId,
+                  action: "Consultation Receipt Email Sent",
+                  target: recipientEmail,
+                  details: `Consultation receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${amount.toFixed(2)}).`,
+                  metadata: {
+                    amount,
+                    transactionId: paymongoPaymentId,
+                    appointmentId,
+                  },
+                });
+              } else {
+                await supabase.rpc("finalize_email_outbox", {
+                  p_outbox_id: outboxId,
+                  p_success: false,
+                  p_error: dispatchResult.error || "Failed to dispatch email",
+                });
+              }
+            } catch (mailErr: any) {
+              const errText = mailErr instanceof Error ? mailErr.message : String(mailErr);
+              console.warn("[webhook] Booking receipt email dispatch warning:", errText);
+              await supabase.rpc("finalize_email_outbox", {
+                p_outbox_id: outboxId,
+                p_success: false,
+                p_error: errText,
+              });
+            }
+          } else {
+            console.log(`[webhook] Email outbox claim skipped (status: ${claimResult?.status})`);
           }
         }
       }
 
-      // 3. Resolve recipient email and send consultation booking receipt
-      let recipientEmail = metadata.patient_email || null;
-      if (!recipientEmail && userId) {
-        try {
-          const { data: authUser } = await supabase.auth.admin.getUserById(userId);
-          recipientEmail = authUser?.user?.email || null;
-        } catch {
-          /* ignore error fetching user */
-        }
+      if (isReconciliation) {
+        console.warn(`[webhook] Payment ${paymongoPaymentId} processed for ${reconciliationReason} appointment ${appointmentId}. Routed to reconciliation.`);
+        return jsonResponse({
+          received: true,
+          reconciliationRequired: true,
+          appointmentStatus: reconciliationReason,
+          message: `Payment captured for ${reconciliationReason} appointment. Appointment was not reactivated. Marked for manual reconciliation.`,
+          paymongoPaymentId,
+          appointmentId,
+        });
       }
-
-      if (recipientEmail) {
-        try {
-          await sendBookingReceiptEmail({
-            patientEmail: recipientEmail,
-            patientName: metadata.patient_name || "Patient",
-            clinicName: metadata.clinic_name || "Skin Clinic",
-            doctorName: metadata.doctor_name || "Attending Dermatologist",
-            appointmentDate: metadata.appointment_date || "Scheduled Date",
-            appointmentTime: metadata.appointment_time || "Scheduled Time",
-            paymentMethod: paymentMethodLabel,
-            amount,
-            paymentDate: paymentDateIso,
-            paymongoPaymentId,
-          });
-
-          await recordAuditLog({
-            userId,
-            action: "Consultation Receipt Email Sent",
-            target: recipientEmail,
-            details: `Consultation receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${amount.toFixed(2)}).`,
-            metadata: {
-              amount,
-              transactionId: paymongoPaymentId,
-              appointmentId,
-            },
-          });
-        } catch (mailErr) {
-          console.warn("[webhook] Booking receipt email dispatch warning:", mailErr);
-        }
-      }
-
-      // 4. Mark webhook event processed
-      await supabase
-        .from("paymongo_webhook_event")
-        .update({
-          status: "processed",
-          processed_at: new Date().toISOString(),
-        })
-        .eq("event_id", eventId);
 
       return jsonResponse({
         received: true,

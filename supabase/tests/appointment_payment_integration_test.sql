@@ -199,7 +199,225 @@ begin
     raise exception 'TEST FAILED: release_expired_appointment_holds must return { success: true }';
   end if;
 
-  \echo '9. Teardown: Clean up test appointment records...';
+  \echo '9. Testing protection of paid appointments from hold cancellation...';
+  -- Set auth context to test user
+  perform set_config('request.jwt.claim.sub', v_test_user_id::text, true);
+  v_comp_res := cancel_appointment_hold(v_appt_id);
+  if (v_comp_res->>'success')::boolean is true then
+    raise exception 'TEST FAILED: cancel_appointment_hold must fail on paid appointment!';
+  end if;
+  if v_comp_res->>'code' <> 'ERR_ALREADY_PAID' then
+    raise exception 'TEST FAILED: Expected ERR_ALREADY_PAID, got %', v_comp_res->>'code';
+  end if;
+
+  \echo '10. Testing stale webhook conditional update zero-row detection...';
+  -- Create a second hold that will be cancelled prior to webhook update
+  v_hold_res := acquire_appointment_slot_hold(
+    p_clinic_id := v_test_clinic_id,
+    p_doctor_id := v_test_doctor_id,
+    p_date := now() + interval '4 days',
+    p_time := '14:00:00',
+    p_patient_name := 'Stale Test Patient',
+    p_hold_duration_minutes := 10,
+    p_user_id := v_test_user_id
+  );
+  declare
+    v_stale_appt_id uuid := (v_hold_res->>'appointment_id')::uuid;
+    v_stale_cancel_res jsonb;
+    v_rows_affected integer := 0;
+  begin
+    -- Patient cancels hold before webhook executes
+    v_stale_cancel_res := cancel_appointment_hold(v_stale_appt_id);
+    if (v_stale_cancel_res->>'success')::boolean is not true then
+      raise exception 'TEST FAILED: cancel_appointment_hold failed for stale test: %', v_stale_cancel_res;
+    end if;
+
+    -- Webhook attempts atomic conditional update
+    update patient_appointment
+    set payment_status = 'paid',
+        payment_reference = 'pay_stale_test_999'
+    where appointment_id = v_stale_appt_id
+      and payment_status in ('pending_hold', 'failed');
+    get diagnostics v_rows_affected = row_count;
+
+    if v_rows_affected <> 0 then
+      raise exception 'TEST FAILED: Conditional update must affect 0 rows on cancelled appointment, got %', v_rows_affected;
+    end if;
+
+    -- Verify appointment status remains cancelled (never reactivated)
+    select * into v_row from patient_appointment where appointment_id = v_stale_appt_id;
+    if v_row.payment_status <> 'cancelled' then
+      raise exception 'TEST FAILED: Stale appointment payment_status was modified! Expected cancelled, got %', v_row.payment_status;
+    end if;
+
+    -- Clean up stale test record
+    delete from patient_appointment where appointment_id = v_stale_appt_id;
+  end;
+
+  \echo '11. Testing user_payment reconciliation_required status and unique idempotency...';
+  declare
+    v_recon_pay_id uuid;
+    v_dup_error boolean := false;
+  begin
+    insert into user_payment (
+      amount, payment_date, method, status, user_id,
+      paymongo_payment_id, payment_type
+    ) values (
+      650.00, now(), 'gcash', 'reconciliation_required', v_test_user_id,
+      'pay_recon_uniq_test_123', 'appointment_consultation'
+    ) returning payment_id into v_recon_pay_id;
+
+    -- Test duplicate insert must violate unique constraint
+    begin
+      insert into user_payment (
+        amount, payment_date, method, status, user_id,
+        paymongo_payment_id, payment_type
+      ) values (
+        650.00, now(), 'gcash', 'success', v_test_user_id,
+        'pay_recon_uniq_test_123', 'appointment_consultation'
+      );
+    exception when unique_violation then
+      v_dup_error := true;
+    end;
+
+    if not v_dup_error then
+      raise exception 'TEST FAILED: Unique constraint on user_payment(paymongo_payment_id) failed to block duplicate!';
+    end if;
+
+    -- Clean up reconciliation test payment
+    delete from user_payment where payment_id = v_recon_pay_id;
+  end;
+
+  \echo '13. Testing fulfill_appointment_payment_atomic currency validation (reject non-PHP)...';
+  declare
+    v_curr_res jsonb;
+  begin
+    perform set_config('request.jwt.claim.role', 'service_role', true);
+    v_curr_res := fulfill_appointment_payment_atomic(
+      p_paymongo_payment_id := 'pay_test_curr_1',
+      p_payment_intent_id := 'pi_test_curr_1',
+      p_appointment_id := v_appt_id,
+      p_user_id := v_test_user_id,
+      p_amount := 650.00,
+      p_payment_method := 'gcash',
+      p_currency := 'USD'
+    );
+    if (v_curr_res->>'success')::boolean is not false or v_curr_res->>'code' <> 'ERR_INVALID_CURRENCY' then
+      raise exception 'TEST FAILED: Non-PHP currency must be rejected with ERR_INVALID_CURRENCY, got %', v_curr_res;
+    end if;
+  end;
+
+  \echo '14. Testing fulfill_appointment_payment_atomic underpayment rejection...';
+  declare
+    v_underpay_res jsonb;
+  begin
+    perform set_config('request.jwt.claim.role', 'service_role', true);
+    v_underpay_res := fulfill_appointment_payment_atomic(
+      p_paymongo_payment_id := 'pay_test_underpay_1',
+      p_payment_intent_id := 'pi_test_underpay_1',
+      p_appointment_id := v_appt_id,
+      p_user_id := v_test_user_id,
+      p_amount := 1.00,
+      p_payment_method := 'gcash',
+      p_currency := 'PHP'
+    );
+    if (v_underpay_res->>'success')::boolean is not false or v_underpay_res->>'code' <> 'ERR_INSUFFICIENT_AMOUNT' then
+      raise exception 'TEST FAILED: Underpayment must be rejected with ERR_INSUFFICIENT_AMOUNT, got %', v_underpay_res;
+    end if;
+  end;
+
+  \echo '15. Testing fulfill_appointment_payment_atomic explicit overpayment tracking...';
+  declare
+    v_overpay_appt_id uuid;
+    v_overpay_res jsonb;
+    v_overpay_row record;
+  begin
+    -- Create fresh hold for overpayment test
+    perform set_config('request.jwt.claim.sub', v_test_user_id::text, true);
+    v_hold_res := acquire_appointment_slot_hold(
+      p_clinic_id := v_test_clinic_id,
+      p_doctor_id := v_test_doctor_id,
+      p_date := now() + interval '5 days',
+      p_time := '11:00:00',
+      p_patient_name := 'Overpay Patient',
+      p_hold_duration_minutes := 10,
+      p_user_id := v_test_user_id
+    );
+    v_overpay_appt_id := (v_hold_res->>'appointment_id')::uuid;
+
+    perform set_config('request.jwt.claim.role', 'service_role', true);
+    v_overpay_res := fulfill_appointment_payment_atomic(
+      p_paymongo_payment_id := 'pay_test_overpay_1',
+      p_payment_intent_id := 'pi_test_overpay_1',
+      p_appointment_id := v_overpay_appt_id,
+      p_user_id := v_test_user_id,
+      p_amount := 800.00,
+      p_payment_method := 'gcash',
+      p_currency := 'PHP'
+    );
+    if (v_overpay_res->>'success')::boolean is not true or (v_overpay_res->>'is_overpayment')::boolean is not true then
+      raise exception 'TEST FAILED: Overpayment must succeed with is_overpayment = true, got %', v_overpay_res;
+    end if;
+
+    select * into v_overpay_row from patient_appointment where appointment_id = v_overpay_appt_id;
+    if v_overpay_row.clinic_note not like '%OVERPAYMENT DETECTED%' then
+      raise exception 'TEST FAILED: Overpayment note missing in clinic_note: %', v_overpay_row.clinic_note;
+    end if;
+
+    -- Cleanup overpayment test
+    delete from user_payment where appointment_id = v_overpay_appt_id;
+    delete from patient_appointment where appointment_id = v_overpay_appt_id;
+  end;
+
+  \echo '16. Testing claim_email_outbox and finalize_email_outbox lifecycle...';
+  declare
+    v_claim_res jsonb;
+    v_dupe_claim jsonb;
+    v_fin_res jsonb;
+    v_outbox_id uuid;
+  begin
+    perform set_config('request.jwt.claim.role', 'service_role', true);
+    v_claim_res := claim_email_outbox(
+      p_idempotency_key := 'appointment_receipt:pay_test_outbox_1',
+      p_email_type := 'appointment_receipt',
+      p_recipient_email := 'test_patient@example.com',
+      p_user_id := v_test_user_id,
+      p_appointment_id := v_appt_id,
+      p_payload := '{"amount": 650}'::jsonb,
+      p_lease_seconds := 120
+    );
+    if (v_claim_res->>'success')::boolean is not true or (v_claim_res->>'claim_acquired')::boolean is not true then
+      raise exception 'TEST FAILED: Initial claim_email_outbox must succeed, got %', v_claim_res;
+    end if;
+    v_outbox_id := (v_claim_res->>'outbox_id')::uuid;
+
+    -- Concurrent claim while lease is active must be denied
+    v_dupe_claim := claim_email_outbox(
+      p_idempotency_key := 'appointment_receipt:pay_test_outbox_1',
+      p_email_type := 'appointment_receipt',
+      p_recipient_email := 'test_patient@example.com',
+      p_user_id := v_test_user_id,
+      p_appointment_id := v_appt_id,
+      p_payload := '{"amount": 650}'::jsonb
+    );
+    if (v_dupe_claim->>'claim_acquired')::boolean is not false then
+      raise exception 'TEST FAILED: Duplicate claim within lease must be denied, got %', v_dupe_claim;
+    end if;
+
+    -- Finalize outbox
+    v_fin_res := finalize_email_outbox(
+      p_outbox_id := v_outbox_id,
+      p_success := true
+    );
+    if (v_fin_res->>'success')::boolean is not true then
+      raise exception 'TEST FAILED: finalize_email_outbox failed, got %', v_fin_res;
+    end if;
+
+    -- Cleanup outbox test
+    delete from email_outbox where outbox_id = v_outbox_id;
+  end;
+
+  \echo '17. Teardown: Clean up test appointment records...';
   delete from user_payment where appointment_id = v_appt_id;
   delete from patient_appointment where appointment_id = v_appt_id;
 

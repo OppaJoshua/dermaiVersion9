@@ -764,10 +764,10 @@ export default function PatientSkinHistory() {
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.97, opacity: 0 }}
                 transition={{ duration: 0.15, ease: "easeOut" }}
-                className="relative z-[9999] bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-gray-100"
+                className="relative z-[9999] bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-gray-100 text-center"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-500 mb-4">
+                <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-500 mb-4 mx-auto">
                   <Trash2 className="w-6 h-6" />
                 </div>
 
@@ -779,13 +779,13 @@ export default function PatientSkinHistory() {
                 </p>
 
                 {deleteError && (
-                  <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-100 text-xs text-rose-600 flex items-start gap-2">
+                  <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-100 text-xs text-rose-600 flex items-center justify-center gap-2 text-center">
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-500" />
                     <span>{deleteError}</span>
                   </div>
                 )}
 
-                <div className="flex items-center justify-end gap-3">
+                <div className="flex items-center gap-3 w-full">
                   <button
                     type="button"
                     disabled={isDeleting}
@@ -793,7 +793,7 @@ export default function PatientSkinHistory() {
                       setDeleteTarget(null);
                       setDeleteError(null);
                     }}
-                    className="px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
+                    className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -801,7 +801,7 @@ export default function PatientSkinHistory() {
                     type="button"
                     disabled={isDeleting}
                     onClick={confirmDelete}
-                    className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold transition-colors shadow-sm disabled:opacity-60 flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                    className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold transition-colors shadow-sm disabled:opacity-60 flex items-center justify-center gap-2 cursor-pointer active:scale-95"
                   >
                     {isDeleting ? (
                       <>
@@ -1109,8 +1109,18 @@ export default function PatientSkinHistory() {
                                   ? "We noticed a mismatch in your results"
                                   : "Assessment Context"}
                             </p>
-                            <p>{selectedItem.comparison.summary}</p>
-                            <p className="font-semibold mt-1.5">{selectedItem.comparison.recommendation}</p>
+                            <p>
+                              {selectedItem.comparison.summary?.includes("increases the accuracy")
+                                ? "The AI noticed signs in your photo that match the symptoms you selected in the questionnaire. This supports the result."
+                                : selectedItem.comparison.summary?.includes("provide limited specific support")
+                                  ? `Your photo looks like it might be ${selectedItem.condition || "this condition"}, but this doesn't fully match the symptoms you selected in the questionnaire.`
+                                  : selectedItem.comparison.summary}
+                            </p>
+                            <p className="font-semibold mt-1.5">
+                              {selectedItem.comparison.recommendation?.includes("Image-based predictions may capture")
+                                ? "Photos can sometimes be misleading on their own. Please consult a dermatologist to review your symptoms in person."
+                                : selectedItem.comparison.recommendation}
+                            </p>
                           </div>
                         </div>
                       )}

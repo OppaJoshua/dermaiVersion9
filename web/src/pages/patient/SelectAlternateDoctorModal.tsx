@@ -1,10 +1,31 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
-import { X, Loader2, Check, Clock, CalendarDays, MapPin, Stethoscope, Info, Building2 } from "lucide-react";
+import { X, Loader2, Check, Clock, CalendarDays, MapPin, Stethoscope, Info, Building2, AlertCircle } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
-import { formatTime12h, normalizeDayName, timeToMinutes, minutesToTime } from "@/lib/schedulingService";
+import {
+  formatTime12h,
+  normalizeDayName,
+  timeToMinutes,
+  parseDoctorSchedule,
+  isDoctorOnDutyOnDay,
+  generateDaySlotsForDoctor,
+  getManilaNowParts,
+  getManilaCalendarDate,
+} from "@/lib/schedulingService";
+import {
+  useSlotAvailabilityRealtime,
+  broadcastSlotChange,
+  fetchAuthoritativeOccupiedSlots,
+  type OccupiedSlotRecord,
+  type BroadcastSlotChangePayload,
+} from "@/lib/slotAvailabilityRealtime";
+import type {
+  ConsultationSlot,
+  DayShiftSlotsGroup,
+  DoctorWeeklySchedule,
+} from "@/lib/schedulingService";
 
 export interface ModalAppointmentDetails {
   id: string;
@@ -43,6 +64,17 @@ export interface SelectAlternateDoctorModalProps {
   onSuccess?: (newDoctorName: string) => void;
 }
 
+interface AvailableDateOption {
+  dateStr: string;
+  displayDay: string;
+  displayDate: string;
+  weekday: string;
+  isAvailable: boolean;
+  reason?: string;
+  availableCount: number;
+  slots: ConsultationSlot[];
+}
+
 interface DoctorRow {
   doctor_id: string;
   clinic_id: string;
@@ -60,6 +92,7 @@ interface DoctorRow {
   specialization?: string | null;
   user?: { avatar_url?: string | null } | null;
   avatar_url?: string | null;
+  weekly_schedule?: DoctorWeeklySchedule;
 }
 
 interface ClinicRow {
@@ -106,36 +139,7 @@ function isDoctorDutyValid(doc: DoctorRow): boolean {
   return true;
 }
 
-// Helper: Verify if doctor's active duty days and hours cover the consultation date and time slot
-function doctorCoversAppointmentSlot(doc: DoctorRow, apptDate?: string, apptTime?: string): boolean {
-  if (!isDoctorDutyValid(doc)) return false;
 
-  const dutyDays = getDoctorDutyDays(doc);
-  if (dutyDays.length === 0) return false;
-
-  if (!apptDate || apptDate === "Date pending") return true;
-
-  const parsed = new Date(apptDate);
-  if (isNaN(parsed.getTime())) return true;
-
-  const weekday = parsed.toLocaleDateString("en-US", { weekday: "long" });
-  const coversDay = dutyDays.includes(weekday);
-  if (!coversDay) return false;
-
-  if (apptTime && apptTime !== "Time pending" && doc.duty_start_time && doc.duty_end_time) {
-    const startMin = timeToMinutes(doc.duty_start_time);
-    let endMin = timeToMinutes(doc.duty_end_time);
-    if (endMin <= startMin) endMin = startMin + 8 * 60;
-
-    const timeClean = apptTime.replace(/:\d{2}$/, "");
-    const apptMin = timeToMinutes(timeClean);
-    if (apptMin < startMin || apptMin >= endMin) {
-      return false;
-    }
-  }
-
-  return true;
-}
 
 export function SelectAlternateDoctorModal({
   isOpen,
@@ -151,16 +155,110 @@ export function SelectAlternateDoctorModal({
 
   // Dynamic authentic data fetched from Supabase
   const [clinicData, setClinicData] = useState<ClinicRow | null>(null);
-  const [clinicOperatingHours, setClinicOperatingHours] = useState<{ day_of_week: string; open_time: string; close_time: string }[]>([]);
   const [paymentAmount, setPaymentAmount] = useState<number | null>(null);
   const [aiCondition, setAiCondition] = useState<string>("");
   const [previousDoctor, setPreviousDoctor] = useState<{ id: string; name: string; note: string } | null>(null);
   const [availableDoctors, setAvailableDoctors] = useState<DoctorRow[]>([]);
 
+  // Real clinic operating settings & schedule defaults
+  const [clinicSettings, setClinicSettings] = useState<{
+    openTime: string;
+    closeTime: string;
+    operatingDays?: string;
+    slotIntervalMinutes: number;
+  }>({
+    openTime: "08:00",
+    closeTime: "17:00",
+    operatingDays: "Monday - Saturday",
+    slotIntervalMinutes: 30,
+  });
+
+  // Real-time occupied bookings & holds for target clinic
+  const [existingBookings, setExistingBookings] = useState<any[]>([]);
+  const [bookingsRefreshKey, setBookingsRefreshKey] = useState(0);
+
+  // Stale polling race condition guard & active session conflict cache
+  const fetchBookingsSeqRef = useRef<number>(0);
+  const sessionConflictSlotsRef = useRef<Map<string, OccupiedSlotRecord>>(new Map());
+
   // Selection states
   const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [selectedTime, setSelectedTime] = useState<string>("");
+  const [slotConflictWarning, setSlotConflictWarning] = useState<string | null>(null);
+
+  // Clear slot conflict warning when modal closes, date changes, or doctor changes
+  useEffect(() => {
+    setSlotConflictWarning(null);
+  }, [isOpen, selectedDate, selectedDoctorId]);
+
+  // Supabase Realtime multi-patient slot availability synchronization & active polling
+  useSlotAvailabilityRealtime({
+    clinicId: propClinicId ? String(propClinicId) : (appointment?.clinicId ? String(appointment.clinicId) : null),
+    selectedDate,
+    doctorId: selectedDoctorId,
+    enabled: isOpen && !!(propClinicId || appointment?.clinicId),
+    pollingIntervalMs: 5000,
+    onRefresh: (payload?: BroadcastSlotChangePayload) => {
+      if (payload && payload.slotTime && payload.date) {
+        const payloadDate = getManilaCalendarDate(payload.date);
+        const timeClean = payload.slotTime.slice(0, 5);
+        const docKey = payload.doctorId || "any";
+        const slotKey = `${payloadDate}_${docKey}_${timeClean}`;
+
+        if (payload.changeType === "hold_acquired") {
+          sessionConflictSlotsRef.current.set(slotKey, {
+            date: payloadDate,
+            time: timeClean,
+            batch_time: timeClean,
+            assigned_doctor_id: payload.doctorId || null,
+            clinic_id: propClinicId ? String(propClinicId) : (appointment?.clinicId ? String(appointment.clinicId) : undefined),
+            status: "pending",
+            doctor_status: "approved",
+            payment_status: "pending_hold",
+            occupancy_type: "reserved",
+            payment_hold_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+          });
+
+          if (
+            selectedDate === payloadDate &&
+            selectedTime === timeClean &&
+            (!payload.doctorId || !selectedDoctorId || String(payload.doctorId) === String(selectedDoctorId))
+          ) {
+            setSelectedTime("");
+            const timeLabel = formatTime12h(timeClean);
+            setSlotConflictWarning(`The ${timeLabel} consultation slot was just reserved by another patient. Please select another available time.`);
+          }
+        } else if (payload.changeType === "payment_completed") {
+          sessionConflictSlotsRef.current.set(slotKey, {
+            date: payloadDate,
+            time: timeClean,
+            batch_time: timeClean,
+            assigned_doctor_id: payload.doctorId || null,
+            clinic_id: propClinicId ? String(propClinicId) : (appointment?.clinicId ? String(appointment.clinicId) : undefined),
+            status: "scheduled",
+            doctor_status: "approved",
+            payment_status: "paid",
+            occupancy_type: "booked",
+          });
+
+          if (
+            selectedDate === payloadDate &&
+            selectedTime === timeClean &&
+            (!payload.doctorId || !selectedDoctorId || String(payload.doctorId) === String(selectedDoctorId))
+          ) {
+            setSelectedTime("");
+            const timeLabel = formatTime12h(timeClean);
+            setSlotConflictWarning(`The ${timeLabel} consultation slot was just booked by another patient. Please select another available time.`);
+          }
+        } else if (payload.changeType === "hold_released" || payload.changeType === "cancelled") {
+          sessionConflictSlotsRef.current.delete(slotKey);
+        }
+      }
+
+      setBookingsRefreshKey((k) => k + 1);
+    },
+  });
 
   // Live timer tick every 10 seconds for countdown
   const [now, setNow] = useState(Date.now());
@@ -194,8 +292,11 @@ export function SelectAlternateDoctorModal({
         let targetClinicId = propClinicId ? String(propClinicId) : (appointment?.clinicId ? String(appointment.clinicId) : null);
         let prevDocId = appointment?.previousDoctorId || appointment?.assignedDoctorId;
         let authenticDoctorNote = appointment?.doctorNote || "";
-        let apptDate = appointment?.date;
-        let apptTime = appointment?.time;
+        let clinicOpen = "08:00";
+        let clinicClose = "17:00";
+        let clinicDays = "Monday - Saturday";
+        let slotInterval = 30;
+        
 
         // 1. Fetch fresh appointment record directly from Supabase to ensure authentic clinic_id, decline note & timestamp
         if (apptId) {
@@ -228,12 +329,7 @@ export function SelectAlternateDoctorModal({
             if (freshAppt.doctor_note) {
               authenticDoctorNote = freshAppt.doctor_note;
             }
-            if (freshAppt.date) {
-              apptDate = freshAppt.date;
-            }
-            if (freshAppt.time) {
-              apptTime = freshAppt.time;
-            }
+            
             if (freshAppt.payment_amount !== null && freshAppt.payment_amount !== undefined) {
               setPaymentAmount(Number(freshAppt.payment_amount));
             }
@@ -260,8 +356,38 @@ export function SelectAlternateDoctorModal({
           if (cRow && isMounted) {
             setClinicData(cRow);
           }
-          if (Array.isArray(opHours) && isMounted) {
-            setClinicOperatingHours(opHours);
+
+          // Resolve clinic operating settings
+          clinicOpen = "08:00";
+          clinicClose = "17:00";
+          clinicDays = "Monday - Saturday";
+          slotInterval = 30;
+
+          try {
+            const rawSett = localStorage.getItem("dermai_clinic_settings");
+            if (rawSett) {
+              const s = JSON.parse(rawSett);
+              if (s.openTime) clinicOpen = s.openTime;
+              if (s.closeTime) clinicClose = s.closeTime;
+              if (s.operatingDays) clinicDays = s.operatingDays;
+              if (s.slotIntervalMinutes) slotInterval = Number(s.slotIntervalMinutes);
+            }
+          } catch {}
+
+          if (Array.isArray(opHours) && opHours.length > 0) {
+            const h0 = opHours[0];
+            if (h0.open_time) clinicOpen = String(h0.open_time).slice(0, 5);
+            if (h0.close_time) clinicClose = String(h0.close_time).slice(0, 5);
+            if (h0.day_of_week) clinicDays = h0.day_of_week;
+          }
+
+          if (isMounted) {
+            setClinicSettings({
+              openTime: clinicOpen,
+              closeTime: clinicClose,
+              operatingDays: clinicDays,
+              slotIntervalMinutes: slotInterval,
+            });
           }
         }
 
@@ -321,39 +447,73 @@ export function SelectAlternateDoctorModal({
           }
         }
 
-        // 5. Active & Availability Constraints:
-        // - Clinic Filtering: strictly clinic_id = targetClinicId (DO NOT show doctors from other clinics!)
+        // 5. Fallback to localStorage if no doctors found in database
+        if (doctorList.length === 0) {
+          try {
+            const rawDocs = localStorage.getItem("dermai_clinic_doctors");
+            if (rawDocs) {
+              const parsedDocs = JSON.parse(rawDocs);
+              if (Array.isArray(parsedDocs)) {
+                doctorList = parsedDocs.filter((d: any) => {
+                  const matchClinic = !d.clinic_id || String(d.clinic_id) === String(targetClinicId);
+                  const isNotDeclined = !prevDocId || String(d.doctor_id || d.id) !== String(prevDocId);
+                  return matchClinic && isNotDeclined;
+                }).map((d: any) => ({
+                  doctor_id: String(d.doctor_id || d.id),
+                  clinic_id: String(d.clinic_id || targetClinicId),
+                  user_id: d.user_id || null,
+                  doctor_name: d.doctor_name || d.name || "Specialist",
+                  prc_license: d.prc_license || d.prcLicense || null,
+                  specialization: d.specialization || "Dermatology Specialist",
+                  photo_url: d.photo_url || d.photo || null,
+                  duty_days: d.duty_days || d.dutyDays || null,
+                  duty_start_time: d.duty_start_time || d.dutyStartTime || null,
+                  duty_end_time: d.duty_end_time || d.dutyEndTime || null,
+                  duty_schedule: d.duty_schedule || d.dutySchedule || null,
+                  status: d.status || "active",
+                }));
+              }
+            }
+          } catch {}
+        }
+
+        // 6. Active & Availability Constraints:
+        // - Clinic Filtering: strictly clinic_id = targetClinicId
         // - Exclude originally assigned doctor who declined (doctor_id != prevDocId)
         // - Doctor is active & verified: status = 'active' and is_active !== false
-        // - Verify that the doctor's active duty days and hours cover consultation availability
-        let filtered = doctorList.filter((d) => {
-          // Strict clinic check
-          if (String(d.clinic_id) !== String(targetClinicId)) return false;
+        // - Doctor must have valid duty schedule / days
 
-          // Exclude declined doctor
-          if (prevDocId && String(d.doctor_id) === String(prevDocId)) return false;
+        let filtered: DoctorRow[] = doctorList
+          .filter((d) => {
+            // Strict clinic check
+            if (String(d.clinic_id) !== String(targetClinicId)) return false;
 
-          // Must be active & verified
-          const isActive = String(d.status || "active").toLowerCase() === "active" && (d as any).is_active !== false;
-          if (!isActive) return false;
+            // Exclude declined doctor
+            if (prevDocId && String(d.doctor_id) === String(prevDocId)) return false;
 
-          // Active duty days and hours validation
-          const dutyDays = getDoctorDutyDays(d);
-          const hasDutyDays = dutyDays.length > 0;
-          const hasValidHours = isDoctorDutyValid(d);
-          return hasDutyDays && hasValidHours;
-        });
+            // Must be active & verified
+            const isActive = String(d.status || "active").toLowerCase() === "active" && (d as any).is_active !== false;
+            if (!isActive) return false;
 
-        // If the appointment already has a scheduled/requested consultation date and time slot,
-        // verify which doctors cover that date and time slot.
-        if (apptDate && apptTime && apptDate !== "Date pending" && apptTime !== "Time pending") {
-          const matchingSlotDocs = filtered.filter((d) =>
-            doctorCoversAppointmentSlot(d, apptDate, apptTime)
-          );
-          if (matchingSlotDocs.length > 0) {
-            filtered = matchingSlotDocs;
-          }
-        }
+            // Active duty days and hours validation
+            const dutyDays = getDoctorDutyDays(d);
+            const hasDutyDays = dutyDays.length > 0;
+            const hasValidHours = isDoctorDutyValid(d);
+            return hasDutyDays && hasValidHours;
+          })
+          .map((d) => {
+            const rawSchedObj = d.duty_schedule;
+            const parsedSchedule = parseDoctorSchedule(
+              rawSchedObj,
+              d.duty_days,
+              d.duty_start_time || clinicOpen,
+              d.duty_end_time || clinicClose
+            );
+            return {
+              ...d,
+              weekly_schedule: parsedSchedule,
+            };
+          });
 
         if (isMounted) {
           setAvailableDoctors(filtered);
@@ -376,6 +536,125 @@ export function SelectAlternateDoctorModal({
       isMounted = false;
     };
   }, [isOpen, appointment, propClinicId, propAppointmentId]);
+
+  // Fetch real-time active bookings for the clinic to enforce double-booking prevention & holds
+  useEffect(() => {
+    if (!isOpen) return;
+    const targetClinicId = propClinicId ? String(propClinicId) : (appointment?.clinicId ? String(appointment.clinicId) : null);
+    if (!targetClinicId) return;
+
+    let cancelled = false;
+    const currentSeq = ++fetchBookingsSeqRef.current;
+
+    async function fetchBookings() {
+      try {
+        let bookingsList: any[] = [];
+
+        // 1. Fetch appointments from Supabase for this clinic
+        const { data: apptRows, error: apptErr } = await supabase
+          .from("patient_appointment")
+          .select("appointment_id, date, time, batch_time, queue_number, status, doctor_status, assigned_doctor_id, clinic_id, payment_status, payment_hold_expires_at")
+          .eq("clinic_id", targetClinicId)
+          .neq("status", "cancelled")
+          .neq("status", "rejected");
+
+        if (!apptErr && Array.isArray(apptRows)) {
+          bookingsList = apptRows;
+        }
+
+        // Fetch authoritative occupied slots via RPC for selectedDate if chosen
+        if (targetClinicId && selectedDate) {
+          try {
+            const rpcData = await fetchAuthoritativeOccupiedSlots({
+              clinicId: targetClinicId,
+              date: selectedDate,
+              doctorId: selectedDoctorId,
+            });
+            for (const s of rpcData) {
+              const exists = bookingsList.some((b) => {
+                const bTime = (b.time || b.batch_time || "").slice(0, 5);
+                const bDate = getManilaCalendarDate(b.date);
+                return bTime === s.time && bDate === selectedDate && (!b.assigned_doctor_id || !s.assigned_doctor_id || String(b.assigned_doctor_id) === String(s.assigned_doctor_id));
+              });
+              if (!exists) {
+                bookingsList.push(s);
+              }
+            }
+          } catch {}
+        }
+
+        // 2. Also check localStorage dermai_clinic_appointments cache
+        try {
+          const rawLocal = localStorage.getItem("dermai_clinic_appointments");
+          if (rawLocal) {
+            const parsed = JSON.parse(rawLocal);
+            if (Array.isArray(parsed)) {
+              for (const loc of parsed) {
+                const locClinicId = String(loc.clinic_id || loc.clinicId || "");
+                if (locClinicId === String(targetClinicId)) {
+                  const existingIdx = bookingsList.findIndex(
+                    (b) => String(b.appointment_id || b.id) === String(loc.appointment_id || loc.id)
+                  );
+                  if (existingIdx === -1) {
+                    bookingsList.push({
+                      appointment_id: loc.appointment_id || loc.id,
+                      date: loc.date,
+                      time: loc.time,
+                      batch_time: loc.batchTime || loc.time,
+                      assigned_doctor_id: loc.assigned_doctor_id || loc.assignedDoctorId,
+                      status: loc.status,
+                      doctor_status: loc.doctor_status || loc.doctorStatus,
+                      payment_status: loc.payment_status || loc.paymentStatus,
+                      payment_hold_expires_at: loc.payment_hold_expires_at || loc.paymentHoldExpiresAt,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+
+        // Filter out current appointment being rescheduled so it does not block itself
+        const currentApptId = propAppointmentId || appointment?.id;
+        const filteredBookings = bookingsList.filter((b) => String(b.appointment_id || b.id) !== String(currentApptId));
+
+        // Merge active non-expired session conflicts to guarantee polling never wipes out known reservations
+        const nowMs = Date.now();
+        sessionConflictSlotsRef.current.forEach((cachedRec: OccupiedSlotRecord, key: string) => {
+          if (cachedRec.date === selectedDate) {
+            if (cachedRec.payment_hold_expires_at) {
+              const expTime = new Date(cachedRec.payment_hold_expires_at).getTime();
+              if (!isNaN(expTime) && expTime <= nowMs) {
+                sessionConflictSlotsRef.current.delete(key);
+                return;
+              }
+            }
+            const cTime = (cachedRec.time || cachedRec.batch_time || "").slice(0, 5);
+            const cDocId = cachedRec.assigned_doctor_id;
+            const alreadyInList = filteredBookings.some((b: any) => {
+              const bTime = (b.time || b.batch_time || "").slice(0, 5);
+              const bDocId = b.assigned_doctor_id;
+              return bTime === cTime && (!cDocId || !bDocId || String(bDocId) === String(cDocId));
+            });
+            if (!alreadyInList) {
+              filteredBookings.push(cachedRec);
+            }
+          }
+        });
+
+        if (!cancelled && currentSeq === fetchBookingsSeqRef.current) {
+          setExistingBookings(filteredBookings);
+        }
+      } catch (err) {
+        console.warn("[SelectAlternateDoctorModal] Failed to fetch active bookings:", err);
+      }
+    }
+
+    fetchBookings();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, propClinicId, appointment?.clinicId, appointment?.id, propAppointmentId, bookingsRefreshKey, selectedDate, selectedDoctorId]);
 
   // Dynamic 24-Hour Countdown calculation from declined_at
   const { isExpired, hoursRemaining, minutesRemaining } = useMemo(() => {
@@ -414,7 +693,10 @@ export function SelectAlternateDoctorModal({
   const formatDutyDays = (doc: DoctorRow): string => {
     const days = getDoctorDutyDays(doc);
     if (days.length > 0) {
-      return days.map((d) => d.slice(0, 3)).join(", ");
+      if (days.length === 7) return "Mon – Sun (All week)";
+      const dayOrder = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+      const sorted = [...days].sort((a, b) => dayOrder.indexOf(a) - dayOrder.indexOf(b));
+      return sorted.map((d) => d.slice(0, 3)).join(", ");
     }
     return "Schedule upon request";
   };
@@ -430,76 +712,177 @@ export function SelectAlternateDoctorModal({
     return "Clinic Operating Hours";
   };
 
-  // Available consultation dates for the selected doctor (next 14 days)
-  const availableUpcomingDates = useMemo(() => {
+  // Dynamically compute upcoming consultation dates for the selected doctor with real slot availability
+  const availableUpcomingDates = useMemo<AvailableDateOption[]>(() => {
     if (!selectedDoctor) return [];
 
-    const dutyDaysList = getDoctorDutyDays(selectedDoctor);
+    const manilaNow = getManilaNowParts();
+    const baseYear = manilaNow.year;
+    const baseMonth = manilaNow.month;
+    const baseDay = manilaNow.day;
+    const currentMinutesNow = manilaNow.totalMinutes;
+    const todayDateStr = manilaNow.dateKey;
 
-    const dates: { dateStr: string; displayDay: string; displayDate: string; weekday: string }[] = [];
-    const base = new Date();
-    base.setHours(0, 0, 0, 0);
+    const clinicSchedule = {
+      openTime: clinicSettings.openTime,
+      closeTime: clinicSettings.closeTime,
+      operatingDays: clinicSettings.operatingDays,
+    };
 
-    for (let i = 1; i <= 14; i++) {
-      const d = new Date(base);
-      d.setDate(base.getDate() + i);
-      const dayName = d.toLocaleDateString("en-US", { weekday: "long" });
+    const clinicDefaults = {
+      defaultSlotIntervalMinutes: clinicSettings.slotIntervalMinutes || 30,
+      openTime: clinicSettings.openTime,
+      closeTime: clinicSettings.closeTime,
+      operatingDays: clinicSettings.operatingDays,
+    };
 
-      if (dutyDaysList.includes(dayName)) {
-        const dateStr = d.toISOString().split("T")[0];
-        const displayDay = d.toLocaleDateString("en-US", { weekday: "short" });
-        const displayDate = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-        dates.push({ dateStr, displayDay, displayDate, weekday: dayName });
+    const docSchedule =
+      selectedDoctor.weekly_schedule ||
+      parseDoctorSchedule(
+        selectedDoctor.duty_schedule,
+        selectedDoctor.duty_days,
+        selectedDoctor.duty_start_time || clinicSettings.openTime,
+        selectedDoctor.duty_end_time || clinicSettings.closeTime
+      );
+
+    const dates: AvailableDateOption[] = [];
+
+    // Horizon: 14 upcoming days (day 0 through 14)
+    for (let i = 0; i <= 14; i++) {
+      const dt = new Date(Date.UTC(baseYear, baseMonth - 1, baseDay + i, 12, 0, 0));
+      const y = dt.getUTCFullYear();
+      const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
+      const d = String(dt.getUTCDate()).padStart(2, "0");
+      const dateStr = `${y}-${m}-${d}`;
+
+      const weekday = dt.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
+      const displayDay = dt.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
+      const displayDate = dt.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+
+      const isToday = dateStr === todayDateStr;
+
+      // 1. Verify doctor is on duty and clinic is open on this day of week
+      const onDuty = isDoctorOnDutyOnDay(selectedDoctor, weekday, clinicSchedule);
+      if (!onDuty) {
+        dates.push({
+          dateStr,
+          displayDay,
+          displayDate,
+          weekday,
+          isAvailable: false,
+          reason: "Off Duty",
+          availableCount: 0,
+          slots: [],
+        });
+        continue;
+      }
+
+      // 2. Filter existing bookings for this doctor and date
+      const bookingsForDate = existingBookings.filter((b) => {
+        if (!b.date) return false;
+        const bDateStr = getManilaCalendarDate(b.date);
+        return bDateStr === dateStr;
+      });
+
+      // 3. Generate slots using unified generateDaySlotsForDoctor
+      const dayGroups: DayShiftSlotsGroup[] = generateDaySlotsForDoctor({
+        doctorSchedule: docSchedule,
+        dayOfWeek: weekday,
+        doctorId: selectedDoctor.doctor_id,
+        clinicDefaults,
+        existingAppointments: bookingsForDate,
+        isToday,
+        currentMinutesNow,
+      });
+
+      const daySlots = dayGroups.flatMap((g) => g.slots);
+      const availableSlots = daySlots.filter((s) => s.isAvailable);
+
+      if (availableSlots.length === 0) {
+        dates.push({
+          dateStr,
+          displayDay,
+          displayDate,
+          weekday,
+          isAvailable: false,
+          reason: isToday ? "Passed" : "Fully Booked",
+          availableCount: 0,
+          slots: daySlots,
+        });
+      } else {
+        dates.push({
+          dateStr,
+          displayDay,
+          displayDate,
+          weekday,
+          isAvailable: true,
+          availableCount: availableSlots.length,
+          slots: daySlots,
+        });
       }
     }
 
     return dates;
-  }, [selectedDoctor]);
+  }, [selectedDoctor, clinicSettings, existingBookings]);
 
-  // Auto-select first available date
+  // Auto-select earliest available date
   useEffect(() => {
-    if (availableUpcomingDates.length > 0 && (!selectedDate || !availableUpcomingDates.some((d) => d.dateStr === selectedDate))) {
-      setSelectedDate(availableUpcomingDates[0].dateStr);
+    if (availableUpcomingDates.length === 0) {
+      if (selectedDate !== "") setSelectedDate("");
+      return;
+    }
+
+    // Keep current selectedDate if it is still available
+    const currentValid = availableUpcomingDates.some((d) => d.dateStr === selectedDate && d.isAvailable);
+    if (!currentValid) {
+      const firstAvail = availableUpcomingDates.find((d) => d.isAvailable);
+      if (firstAvail) {
+        setSelectedDate(firstAvail.dateStr);
+      } else {
+        setSelectedDate(availableUpcomingDates[0].dateStr);
+      }
     }
   }, [availableUpcomingDates, selectedDate]);
 
-  // Consultation time slots for the selected doctor
-  const availableTimeSlots = useMemo(() => {
-    if (!selectedDoctor) return [];
-    let start = selectedDoctor.duty_start_time;
-    let end = selectedDoctor.duty_end_time;
+  // Consultation time slots for the selected date
+  const selectedDateRecord = useMemo(() => {
+    return availableUpcomingDates.find((d) => d.dateStr === selectedDate) || null;
+  }, [availableUpcomingDates, selectedDate]);
 
-    if (!start || !end) {
-      const selectedDayName = selectedDate ? new Date(selectedDate).toLocaleDateString("en-US", { weekday: "long" }) : "";
-      const matchOp = clinicOperatingHours.find(
-        (o) => normalizeDayName(o.day_of_week) === normalizeDayName(selectedDayName)
-      );
-      if (matchOp) {
-        start = matchOp.open_time.slice(0, 5);
-        end = matchOp.close_time.slice(0, 5);
-      } else {
-        start = start || "09:00";
-        end = end || "17:00";
-      }
-    }
+  const availableTimeSlots = useMemo<ConsultationSlot[]>(() => {
+    return selectedDateRecord?.slots || [];
+  }, [selectedDateRecord]);
 
-    const startMinutes = timeToMinutes(start);
-    let endMinutes = timeToMinutes(end);
-    if (endMinutes <= startMinutes) endMinutes = startMinutes + 8 * 60;
-
-    const slots: string[] = [];
-    for (let m = startMinutes; m < endMinutes; m += 30) {
-      slots.push(minutesToTime(m));
-    }
-    return slots;
-  }, [selectedDoctor, selectedDate, clinicOperatingHours]);
-
-  // Auto-select first time slot
+  // Detect if currently selectedTime was just occupied by another patient
   useEffect(() => {
-    if (availableTimeSlots.length > 0 && (!selectedTime || !availableTimeSlots.includes(selectedTime))) {
-      setSelectedTime(availableTimeSlots[0]);
+    if (!selectedTime || availableTimeSlots.length === 0) return;
+    const currentSlot = availableTimeSlots.find((s) => s.slotTime === selectedTime);
+    if (currentSlot && !currentSlot.isAvailable) {
+      const timeLabel = currentSlot.label || formatTime12h(selectedTime);
+      const conflictMsg = currentSlot.isReserved
+        ? `The ${timeLabel} consultation slot was just reserved by another patient. Please select another available time.`
+        : `The ${timeLabel} consultation slot was just booked by another patient. Please select another available time.`;
+      // Immediately clear the selected time and remove selection styling
+      setSelectedTime("");
+      setSlotConflictWarning(conflictMsg);
     }
   }, [availableTimeSlots, selectedTime]);
+
+  // Auto-select first available time slot if none selected and no active conflict warning
+  useEffect(() => {
+    if (slotConflictWarning) return;
+    if (availableTimeSlots.length > 0) {
+      const currentValid = availableTimeSlots.some((s) => s.slotTime === selectedTime && s.isAvailable);
+      if (!currentValid && !selectedTime) {
+        const firstAvail = availableTimeSlots.find((s) => s.isAvailable);
+        if (firstAvail) {
+          setSelectedTime(firstAvail.slotTime);
+        }
+      }
+    } else {
+      setSelectedTime("");
+    }
+  }, [availableTimeSlots, selectedTime, slotConflictWarning]);
 
   // Submission handler
   const handleConfirmAssign = async () => {
@@ -517,6 +900,56 @@ export function SelectAlternateDoctorModal({
     setErrorMsg(null);
 
     try {
+      const targetClinicId = propClinicId ? String(propClinicId) : (appointment?.clinicId ? String(appointment.clinicId) : null);
+
+      // Pre-confirmation double-booking guard: verify slot is still available authoritatively in real-time
+      if (targetClinicId && selectedDoctor) {
+        try {
+          const authoritativeSlots = await fetchAuthoritativeOccupiedSlots({
+            clinicId: targetClinicId,
+            date: selectedDate,
+            doctorId: selectedDoctor.doctor_id,
+          });
+
+          const currentApptId = propAppointmentId || appointment?.id;
+          const isDoubleBooked = authoritativeSlots.some((s) => {
+            if (s.appointment_id && String(s.appointment_id) === String(currentApptId)) return false;
+            const sDate = getManilaCalendarDate(s.date);
+            const sTime = (s.time || s.batch_time || "").slice(0, 5);
+            return sDate === selectedDate && sTime === selectedTime;
+          });
+
+          if (isDoubleBooked) {
+            const conflictRec: OccupiedSlotRecord = {
+              date: selectedDate,
+              time: selectedTime,
+              batch_time: selectedTime,
+              assigned_doctor_id: selectedDoctor.doctor_id,
+              clinic_id: targetClinicId,
+              status: "scheduled",
+              doctor_status: "approved",
+              payment_status: "paid",
+              occupancy_type: "booked",
+              payment_hold_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+            };
+            const docKey = selectedDoctor.doctor_id || "any";
+            sessionConflictSlotsRef.current.set(`${selectedDate}_${docKey}_${selectedTime}`, conflictRec);
+            broadcastSlotChange(targetClinicId, {
+              date: selectedDate,
+              doctorId: selectedDoctor.doctor_id,
+              slotTime: selectedTime,
+              type: "hold_acquired",
+            });
+            setErrorMsg("This time slot was just booked by another patient. Please select another available schedule.");
+            setBookingsRefreshKey((prev) => prev + 1);
+            setSubmitting(false);
+            return;
+          }
+        } catch (chkErr) {
+          console.warn("[SelectAlternateDoctorModal] Pre-confirmation slot check warning:", chkErr);
+        }
+      }
+
       const scheduledDateTimeIso = `${selectedDate}T${selectedTime}:00`;
       const currentQa = appointment.questionnaireAnswers;
       const baseQa: Record<string, any> =
@@ -570,6 +1003,15 @@ export function SelectAlternateDoctorModal({
 
       if (updateError) {
         throw new Error(updateError.message || "Failed to update appointment record.");
+      }
+
+      if (targetClinicId) {
+        broadcastSlotChange(targetClinicId, {
+          date: selectedDate,
+          doctorId: selectedDoctor.doctor_id,
+          slotTime: selectedTime,
+          type: "payment_completed",
+        });
       }
 
       // 2. Deliver to Doctor Portal: Send notification to public.user_notification for the newly selected doctor
@@ -987,7 +1429,7 @@ export function SelectAlternateDoctorModal({
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-3">
                 {availableDoctors.map((doc) => {
                   const isSelected = selectedDoctorId === doc.doctor_id;
                   const dutyDaysStr = formatDutyDays(doc);
@@ -997,55 +1439,70 @@ export function SelectAlternateDoctorModal({
                     <button
                       key={doc.doctor_id}
                       type="button"
-                      onClick={() => setSelectedDoctorId(doc.doctor_id)}
-                      className={`relative text-left p-4 rounded-xl border transition-colors cursor-pointer flex flex-col justify-between focus:outline-none focus-visible:ring-2 focus-visible:ring-magenta-500 focus-visible:ring-offset-2 ${
+                      onClick={() => {
+                        setSelectedDoctorId(doc.doctor_id);
+                        setSlotConflictWarning(null);
+                      }}
+                      className={`w-full p-4 sm:p-5 rounded-2xl border text-left transition-all cursor-pointer relative group flex flex-col sm:flex-row sm:items-center justify-between gap-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-magenta-500 ${
                         isSelected
-                          ? "border-magenta-600 bg-magenta-50/40 ring-1 ring-magenta-600"
-                          : "border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50"
+                          ? "border-magenta-600 bg-magenta-50/50 shadow-xs ring-1 ring-magenta-600"
+                          : "border-gray-200 bg-white hover:border-magenta-300 hover:bg-gray-50/60"
                       }`}
                     >
-                      <div>
-                        <div className="flex items-center gap-3">
-                          <DoctorAvatar
-                            doctorId={doc.doctor_id}
-                            userId={doc.user_id || undefined}
-                            doctor={doc}
-                            name={doc.doctor_name}
-                            className="w-11 h-11 rounded-full border border-gray-200 shrink-0 text-sm font-semibold"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-semibold text-gray-900 truncate">
+                      {/* Left Side: Avatar + Doctor Info */}
+                      <div className="flex items-center gap-3.5 sm:gap-4 min-w-0 flex-1">
+                        <DoctorAvatar
+                          doctorId={doc.doctor_id}
+                          userId={doc.user_id || undefined}
+                          doctor={doc}
+                          name={doc.doctor_name}
+                          className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl border border-magenta-200/80 shrink-0 text-base font-bold shadow-2xs"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm sm:text-base font-bold text-gray-900 truncate group-hover:text-magenta-800 transition-colors">
                               Dr. {doc.doctor_name.replace(/^dr\.\s*/i, "")}
-                            </p>
-                            <p className="text-xs text-gray-500 mt-0.5">
-                              {doc.prc_license ? `PRC #${doc.prc_license}` : "PRC licensed specialist"}
-                            </p>
+                            </h4>
+                            <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md border border-gray-200/70 shrink-0">
+                              {doc.prc_license ? `PRC #${doc.prc_license}` : "PRC Licensed"}
+                            </span>
                           </div>
-                          <span
-                            className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
-                              isSelected
-                                ? "bg-magenta-600 border-magenta-600 text-white"
-                                : "border-gray-300 bg-white text-transparent"
-                            }`}
-                            aria-hidden="true"
-                          >
-                            <Check className="w-3 h-3" strokeWidth={3} />
-                          </span>
-                        </div>
 
-                        <dl className="mt-4 pt-3 border-t border-gray-100 text-xs space-y-1.5">
-                          <div className="flex items-center justify-between gap-2">
-                            <dt className="text-gray-500">Duty days</dt>
-                            <dd className="font-medium text-gray-900 text-right">{dutyDaysStr}</dd>
+                          <p className="text-xs text-magenta-700 font-medium truncate mt-0.5">
+                            {doc.specialization || "Dermatology Specialist"}
+                          </p>
+
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-gray-600">
+                            <span className="flex items-center gap-1.5 font-medium">
+                              <CalendarDays className="w-3.5 h-3.5 text-magenta-500 shrink-0" />
+                              <span className="text-gray-500">Duty days:</span>
+                              <strong className="text-gray-800 font-semibold">{dutyDaysStr}</strong>
+                            </span>
+                            <span className="flex items-center gap-1.5 font-medium">
+                              <Clock className="w-3.5 h-3.5 text-magenta-500 shrink-0" />
+                              <span className="text-gray-500">Duty hours:</span>
+                              <strong className="text-gray-800 font-semibold">{dutyHoursStr}</strong>
+                            </span>
                           </div>
-                          <div className="flex items-center justify-between gap-2">
-                            <dt className="text-gray-500">Duty hours</dt>
-                            <dd className="font-medium text-gray-900 text-right">{dutyHoursStr}</dd>
-                          </div>
-                        </dl>
+                        </div>
                       </div>
 
-                      <p className="mt-3 text-xs font-medium text-emerald-700">No extra charge</p>
+                      {/* Right Side: Selection Checkmark + No Extra Charge Badge */}
+                      <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 shrink-0 pt-2.5 sm:pt-0 border-t sm:border-t-0 border-gray-100">
+                        <span
+                          className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 transition-all ${
+                            isSelected
+                              ? "bg-magenta-600 border-magenta-600 text-white shadow-2xs"
+                              : "border-gray-300 bg-white text-transparent group-hover:border-magenta-400"
+                          }`}
+                          aria-hidden="true"
+                        >
+                          <Check className="w-3.5 h-3.5" strokeWidth={3} />
+                        </span>
+                        <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 shrink-0">
+                          No extra charge
+                        </span>
+                      </div>
                     </button>
                   );
                 })}
@@ -1071,31 +1528,61 @@ export function SelectAlternateDoctorModal({
               <div className="rounded-xl border border-gray-200 p-5 space-y-5">
                 {/* Date selection */}
                 <div>
-                  <label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2.5">
-                    <CalendarDays className="w-3.5 h-3.5" />
-                    Consultation date
-                  </label>
+                  <div className="flex items-center justify-between gap-2 mb-2.5">
+                    <label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500">
+                      <CalendarDays className="w-3.5 h-3.5 text-magenta-600" />
+                      Consultation date
+                    </label>
+                    {selectedDateRecord && (
+                      <span className="text-[11px] font-medium text-gray-500">
+                        {selectedDateRecord.isAvailable
+                          ? `${selectedDateRecord.availableCount} slot${selectedDateRecord.availableCount === 1 ? "" : "s"} available`
+                          : (selectedDateRecord.reason || "Unavailable")}
+                      </span>
+                    )}
+                  </div>
+
                   {availableUpcomingDates.length === 0 ? (
-                    <p className="text-sm text-gray-600 italic">No available dates in the next 14 days.</p>
+                    <p className="text-sm text-gray-600 italic">No consultation dates available in the next 14 days.</p>
                   ) : (
                     <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-thin">
                       {availableUpcomingDates.map((d) => {
                         const isDateSelected = selectedDate === d.dateStr;
+                        const isAvail = d.isAvailable;
+
                         return (
                           <button
                             key={d.dateStr}
                             type="button"
-                            onClick={() => setSelectedDate(d.dateStr)}
-                            className={`px-3 py-2 rounded-lg border text-center transition-colors cursor-pointer shrink-0 min-w-[76px] focus:outline-none focus-visible:ring-2 focus-visible:ring-magenta-500 focus-visible:ring-offset-1 ${
-                              isDateSelected
-                                ? "bg-magenta-600 text-white border-magenta-600"
-                                : "bg-white text-gray-900 border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                            disabled={!isAvail}
+                            onClick={() => {
+                              if (isAvail) {
+                                setSelectedDate(d.dateStr);
+                                setSlotConflictWarning(null);
+                              }
+                            }}
+                            className={`px-3 py-2 rounded-xl border text-center transition-all shrink-0 min-w-[78px] focus:outline-none focus-visible:ring-2 focus-visible:ring-magenta-500 focus-visible:ring-offset-1 ${
+                              !isAvail
+                                ? "bg-gray-50 border-gray-200 text-gray-400 opacity-50 cursor-not-allowed"
+                                : isDateSelected
+                                ? "bg-magenta-600 text-white border-magenta-600 shadow-sm font-semibold cursor-pointer"
+                                : "bg-white text-gray-900 border-gray-200 hover:border-magenta-300 hover:bg-magenta-50/20 cursor-pointer shadow-2xs"
                             }`}
+                            title={!isAvail ? (d.reason || "Unavailable") : `${d.availableCount} slots available`}
                           >
-                            <p className={`text-[10px] font-semibold uppercase tracking-wider ${isDateSelected ? "text-white/80" : "text-gray-500"}`}>
+                            <p
+                              className={`text-[10px] font-bold uppercase tracking-wider ${
+                                !isAvail ? "text-gray-400" : isDateSelected ? "text-white/80" : "text-gray-500"
+                              }`}
+                            >
                               {d.displayDay}
                             </p>
-                            <p className="text-sm font-semibold mt-0.5">{d.displayDate}</p>
+                            <p className="text-sm font-bold mt-0.5">{d.displayDate}</p>
+                            {!isAvail && (
+                              <span className="block text-[9px] font-medium text-gray-400 mt-0.5 truncate">
+                                {d.reason || "Off"}
+                              </span>
+                            )}
                           </button>
                         );
                       })}
@@ -1107,28 +1594,116 @@ export function SelectAlternateDoctorModal({
 
                 {/* Time slot selection */}
                 <div>
-                  <label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2.5">
-                    <Clock className="w-3.5 h-3.5" />
-                    Time slot
-                  </label>
+                  <div className="flex items-center justify-between gap-2 mb-2.5">
+                    <label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500">
+                      <Clock className="w-3.5 h-3.5 text-magenta-600" />
+                      Time slot
+                    </label>
+                    <span className="text-[11px] text-gray-500">
+                      {clinicSettings.slotIntervalMinutes}m intervals
+                    </span>
+                  </div>
+
+                  {slotConflictWarning && (
+                    <div className="mb-3.5 p-3 sm:p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs sm:text-[13px] flex items-start gap-2.5 shadow-xs animate-in fade-in slide-in-from-top-1 duration-200">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span className="flex-1 font-medium">{slotConflictWarning}</span>
+                      <button
+                        type="button"
+                        onClick={() => setSlotConflictWarning(null)}
+                        className="text-amber-700 hover:text-amber-900 font-bold text-xs cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+
                   {availableTimeSlots.length === 0 ? (
-                    <p className="text-sm text-gray-600 italic">No available consultation slots for this doctor.</p>
+                    <div className="p-4 rounded-xl border border-dashed border-gray-200 bg-gray-50/60 text-center">
+                      <p className="text-xs text-gray-600 font-medium">
+                        No consultation slots available for this doctor on the selected date.
+                      </p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        Please pick another highlighted date from the schedule above.
+                      </p>
+                    </div>
                   ) : (
-                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-40 overflow-y-auto pr-1">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-48 overflow-y-auto pr-1 scrollbar-thin">
                       {availableTimeSlots.map((slot) => {
-                        const isTimeSelected = selectedTime === slot;
+                        const isTimeSelected = selectedTime === slot.slotTime;
+                        const isAvail = slot.isAvailable;
+
                         return (
                           <button
-                            key={slot}
+                            key={slot.slotTime}
                             type="button"
-                            onClick={() => setSelectedTime(slot)}
-                            className={`py-2 rounded-lg text-xs font-medium tabular-nums transition-colors cursor-pointer border focus:outline-none focus-visible:ring-2 focus-visible:ring-magenta-500 focus-visible:ring-offset-1 ${
-                              isTimeSelected
-                                ? "bg-magenta-600 text-white border-magenta-600"
-                                : "bg-white text-gray-900 border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                            disabled={!isAvail}
+                            onClick={() => {
+                              if (isAvail) {
+                                setSelectedTime(slot.slotTime);
+                                setSlotConflictWarning(null);
+                              }
+                            }}
+                            className={`py-2.5 px-3 rounded-xl border text-left transition-all relative flex items-center justify-between gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-magenta-500 focus-visible:ring-offset-1 ${
+                              slot.isReserved
+                                ? "bg-amber-50/70 border-amber-300 text-amber-900 cursor-not-allowed opacity-80"
+                                : slot.isBooked
+                                ? "bg-rose-50/50 border-rose-200 text-rose-900 cursor-not-allowed opacity-70"
+                                : !isAvail
+                                ? "bg-slate-50/70 border-gray-200 text-gray-400 cursor-not-allowed opacity-60"
+                                : isTimeSelected
+                                ? "bg-magenta-600 border-magenta-600 text-white font-bold shadow-xs cursor-pointer"
+                                : "bg-white border-gray-200 text-gray-800 hover:border-magenta-300 hover:bg-magenta-50/30 cursor-pointer shadow-2xs"
                             }`}
+                            title={
+                              slot.isReserved
+                                ? "Temporarily reserved by another patient for checkout"
+                                : slot.isBooked
+                                ? "Already booked by another patient"
+                                : !isAvail
+                                ? slot.isPast
+                                  ? "Time slot has passed"
+                                  : slot.isCapacityFull
+                                  ? "Shift capacity full"
+                                  : "Unavailable"
+                                : `${slot.timeRange} (Available)`
+                            }
                           >
-                            {formatTime12h(slot)}
+                            <span
+                              className={`text-xs font-bold leading-tight tabular-nums ${
+                                isTimeSelected
+                                  ? "text-white"
+                                  : !isAvail
+                                  ? "text-gray-400"
+                                  : "text-gray-900"
+                              }`}
+                            >
+                              {slot.label || formatTime12h(slot.slotTime)}
+                            </span>
+
+                            {slot.isReserved ? (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 uppercase tracking-wide shrink-0">
+                                Reserved
+                              </span>
+                            ) : slot.isBooked ? (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200 uppercase tracking-wide shrink-0">
+                                Booked
+                              </span>
+                            ) : slot.isPast ? (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200 uppercase tracking-wide shrink-0">
+                                Passed
+                              </span>
+                            ) : slot.isCapacityFull ? (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 uppercase tracking-wide shrink-0">
+                                Full
+                              </span>
+                            ) : isTimeSelected ? (
+                              <span className="w-4 h-4 rounded-full bg-white text-magenta-700 flex items-center justify-center text-[10px] shrink-0 font-black shadow-2xs">
+                                ✓
+                              </span>
+                            ) : (
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" title="Available" />
+                            )}
                           </button>
                         );
                       })}

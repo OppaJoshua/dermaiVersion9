@@ -27,6 +27,7 @@ export interface DemoCheckoutData {
   outcome: DemoOutcome;
   mockReference: string;
   mockQueueNumber: number;
+  appointmentId?: string;
   simulatedAt?: string;
   errorMessage?: string;
 }

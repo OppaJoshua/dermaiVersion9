@@ -35,6 +35,7 @@ export interface PatientNotificationPayload {
   type:
     | "appointment-scheduled"
     | "appointment-rejected"
+    | "appointment-cancelled"
     | "appointment-completed"
     | "appointment-reschedule-needed"
     | "appointment-reschedule-declined"
@@ -254,8 +255,8 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           });
         }
 
-        // B. Rejected / Cancelled Appointment
-        if (appt.status === "cancelled" || appt.doctor_status === "rejected") {
+        // B1. Doctor-Initiated Decline (Only when doctor declined and not patient cancelled)
+        if (appt.doctor_status === "rejected" && appt.status !== "cancelled") {
           const notifId = `appt-rejected-${appt.appointment_id}`;
           const noteText = appt.doctor_note ? ` Note: "${appt.doctor_note}".` : "";
           const rejectMsg = `Your appointment request at ${clinicName} on ${dateStr} was declined.${noteText} You can select another available doctor within 24 hours. If no selection is made within 24 hours, the clinic will automatically assign an available doctor to your booking.`;
@@ -277,6 +278,28 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
               declined_at: appt.doctor_reviewed_at || appt.created_at || new Date().toISOString(),
               expires_at: new Date(new Date(appt.doctor_reviewed_at || appt.created_at || Date.now()).getTime() + 24 * 3600 * 1000).toISOString(),
             },
+          });
+        }
+
+        // B2. Patient-Initiated or Administrative Cancellation
+        if (appt.status === "cancelled") {
+          const notifId = `appt-cancelled-${appt.appointment_id}`;
+          const noteText = appt.clinic_note ? ` Note: "${appt.clinic_note}".` : "";
+          const cancelMsg = `Your consultation request with ${clinicName} on ${dateStr} was cancelled.${noteText}`;
+
+          items.push({
+            id: notifId,
+            type: "appointment-cancelled",
+            category: "appointment",
+            title: `Appointment Cancelled`,
+            message: cancelMsg,
+            senderName: clinicName,
+            senderType: "clinic",
+            senderAvatar: clinicLogo,
+            link: "/dashboard/appointment-status",
+            timestamp: appt.created_at || new Date().toISOString(),
+            isRead: readSet.has(notifId),
+            metadata: { appointment_id: appt.appointment_id },
           });
         }
 

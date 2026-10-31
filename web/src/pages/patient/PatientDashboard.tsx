@@ -8,7 +8,7 @@ import {
   TrendingUp,
   Shield,
   ArrowUpRight,
-  Stethoscope,
+  Bell,
 } from "lucide-react";
 import { cn, formatConfidencePercent } from "@/lib/utils";
 import { motion } from "framer-motion";
@@ -437,7 +437,7 @@ export default function PatientDashboard() {
                 className={cn(
                   "lg:col-span-3 relative overflow-hidden rounded-3xl p-5 min-h-36 flex flex-col justify-between",
                   featured
-                    ? "bg-gradient-to-br from-[#8a1553] via-[#b02a72] to-[#db6597] text-white shadow-lg shadow-[#8a1553]/20"
+                    ? "bg-gradient-to-br from-magenta-700 via-magenta-600 to-magenta-500 text-white shadow-lg shadow-magenta-900/20"
                     : "bg-white border border-gray-100 text-gray-900 shadow-2xs"
                 )}
               >
@@ -486,7 +486,7 @@ export default function PatientDashboard() {
                 <h2 className="font-display font-bold text-gray-900 text-lg">Recent Analyses</h2>
                 <Link
                   to="/dashboard/history"
-                  className="text-xs text-[#c0166a] font-semibold flex items-center gap-1 hover:text-[#a01258] transition-colors"
+                  className="text-xs text-magenta-600 font-semibold flex items-center gap-1 hover:text-magenta-700 transition-colors"
                 >
                   View All <ChevronRight className="w-3 h-3" />
                 </Link>
@@ -509,7 +509,7 @@ export default function PatientDashboard() {
                             cy="18"
                             r="15.9155"
                             fill="none"
-                            stroke="#faeaf2"
+                            stroke="#fce7f0"
                             strokeWidth="3"
                           />
                           <circle
@@ -517,7 +517,7 @@ export default function PatientDashboard() {
                             cy="18"
                             r="15.9155"
                             fill="none"
-                            stroke="#c95a8c"
+                            stroke="#A0195A"
                             strokeWidth="3"
                             strokeLinecap="round"
                             strokeDasharray={`${Math.min(Math.max(analysis.confidence, 0), 100)}, 100`}
@@ -553,7 +553,7 @@ export default function PatientDashboard() {
                     <p className="text-gray-400 text-sm">No analysis history yet.</p>
                     <Link
                       to="/dashboard/scan"
-                      className="text-[#c0166a] text-xs font-semibold mt-2 inline-block hover:underline"
+                      className="text-magenta-600 text-xs font-semibold mt-2 inline-block hover:underline"
                     >
                       Start your first scan
                     </Link>
@@ -573,9 +573,9 @@ export default function PatientDashboard() {
                 <h2 className="font-display font-bold text-gray-900 text-lg">My Appointments</h2>
                 <Link
                   to="/dashboard/appointment-status"
-                  className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 text-gray-700 hover:border-magenta-400 hover:text-[#c0166a] transition-colors text-xs font-semibold px-3.5 py-1.5"
+                  className="text-xs text-magenta-600 font-semibold flex items-center gap-1 hover:text-magenta-700 transition-colors"
                 >
-                  Manage
+                  Manage <ChevronRight className="w-3 h-3" />
                 </Link>
               </div>
               <div className="space-y-2.5">
@@ -623,11 +623,11 @@ export default function PatientDashboard() {
                       </div>
                       <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-x-3 gap-y-1 flex-wrap">
                         <span className="inline-flex items-center gap-1">
-                          <MapPin className="w-3 h-3 text-[#c0166a]" />
+                          <MapPin className="w-3 h-3 text-magenta-600" />
                           Face-to-face
                         </span>
                         <span className="inline-flex items-center gap-1">
-                          <Calendar className="w-3 h-3 text-[#c0166a]" /> {item.date || "Schedule pending"}{" "}
+                          <Calendar className="w-3 h-3 text-magenta-600" /> {item.date || "Schedule pending"}{" "}
                           {item.time ? `· ${item.time}` : ""}
                         </span>
                       </div>
@@ -639,7 +639,7 @@ export default function PatientDashboard() {
                     <p className="text-xs text-gray-400">No appointment requests yet.</p>
                     <Link
                       to="/dashboard/clinics"
-                      className="text-xs text-[#c0166a] font-semibold mt-1.5 inline-block hover:underline"
+                      className="text-xs text-magenta-600 font-semibold mt-1.5 inline-block hover:underline"
                     >
                       Find a clinic &amp; book an appointment
                     </Link>
@@ -656,7 +656,7 @@ export default function PatientDashboard() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1 }}
-              className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#8a1553] via-[#b02a72] to-[#db6597] p-6 text-white shadow-lg shadow-[#8a1553]/20"
+              className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-magenta-700 via-magenta-600 to-magenta-500 p-6 text-white shadow-lg shadow-magenta-900/20"
             >
               <div className="absolute -top-16 -right-14 w-48 h-48 rounded-full bg-white/10 pointer-events-none" />
               <p className="relative text-sm font-semibold text-white/80">Skin Scan</p>
@@ -664,9 +664,9 @@ export default function PatientDashboard() {
               <p className="relative text-white/85 text-sm mt-1.5">AI-powered analysis in seconds</p>
               <Link
                 to="/dashboard/scan"
-                className="group relative mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white text-[#881337] hover:bg-magenta-50 transition-colors py-3 text-sm font-bold shadow-xs"
+                className="group relative mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white text-magenta-700 hover:bg-magenta-50 transition-colors py-3 text-sm font-bold shadow-xs"
               >
-                <Camera className="w-4 h-4 text-[#881337]" /> Start Scan
+                <Camera className="w-4 h-4 text-magenta-700" /> Start Scan
                 <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
               </Link>
             </motion.div>
@@ -683,13 +683,13 @@ export default function PatientDashboard() {
                 className="group flex items-center gap-4 rounded-2xl p-3 hover:bg-gray-50 transition-colors"
               >
                 <div className="w-11 h-11 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <MapPin className="w-5 h-5 text-[#c0166a]" />
+                  <MapPin className="w-5 h-5 text-magenta-600" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="font-display font-bold text-gray-900 text-sm">Find a Clinic</h3>
                   <p className="text-gray-500 text-xs">Verified dermatologists near you</p>
                 </div>
-                <ArrowUpRight className="w-4 h-4 text-magenta-300 group-hover:text-[#c0166a] transition-colors" />
+                <ArrowUpRight className="w-4 h-4 text-magenta-300 group-hover:text-magenta-600 transition-colors" />
               </Link>
               <div className="mx-3 border-t border-gray-100" />
               <Link
@@ -697,13 +697,13 @@ export default function PatientDashboard() {
                 className="group flex items-center gap-4 rounded-2xl p-3 hover:bg-gray-50 transition-colors"
               >
                 <div className="w-11 h-11 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <Calendar className="w-5 h-5 text-[#c0166a]" />
+                  <Calendar className="w-5 h-5 text-magenta-600" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="font-display font-bold text-gray-900 text-sm">Book Appointment</h3>
                   <p className="text-gray-500 text-xs">Find verified clinic and schedule</p>
                 </div>
-                <ArrowUpRight className="w-4 h-4 text-magenta-300 group-hover:text-[#c0166a] transition-colors" />
+                <ArrowUpRight className="w-4 h-4 text-magenta-300 group-hover:text-magenta-600 transition-colors" />
               </Link>
             </motion.div>
 
@@ -722,7 +722,7 @@ export default function PatientDashboard() {
                     className="flex items-start gap-4 rounded-2xl border border-gray-100 p-3.5 hover:border-gray-200 transition-colors"
                   >
                     <div className="w-11 h-11 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center shrink-0">
-                      <tip.icon className="w-5 h-5 text-[#c0166a]" />
+                      <tip.icon className="w-5 h-5 text-magenta-600" />
                     </div>
                     <div className="min-w-0">
                       <h4 className="text-sm font-semibold text-gray-900 mb-0.5">{tip.title}</h4>
@@ -738,15 +738,16 @@ export default function PatientDashboard() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 }}
-              className="relative overflow-hidden rounded-3xl bg-magenta-50/70 border border-magenta-200 p-5 sm:p-6"
+              className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-magenta-50 via-pink-50/40 to-white border border-magenta-200/70 p-5 sm:p-6 shadow-xs"
             >
-              <div className="flex items-center gap-3 mb-2.5">
-                <div className="w-10 h-10 rounded-full bg-white border border-magenta-200/80 flex items-center justify-center shrink-0">
-                  <Stethoscope className="w-5 h-5 text-magenta-700" />
+              <div className="absolute -right-8 -top-8 w-32 h-32 rounded-full bg-magenta-100/40 blur-2xl pointer-events-none" />
+              <div className="relative flex items-center gap-3.5 mb-2.5">
+                <div className="w-11 h-11 rounded-full bg-magenta-100/80 border border-magenta-200/70 flex items-center justify-center shrink-0 shadow-2xs">
+                  <Bell className="w-5 h-5 text-magenta-600" />
                 </div>
-                <h3 className="font-display font-bold text-lg text-magenta-900">Reminder</h3>
+                <h3 className="font-display font-bold text-base sm:text-lg text-gray-900 tracking-tight">Reminder</h3>
               </div>
-              <p className="text-sm text-gray-600 leading-relaxed">
+              <p className="relative text-xs sm:text-sm text-gray-600 leading-relaxed">
                 DERMAI provides AI-assisted analysis only. Always consult a licensed dermatologist for proper diagnosis and treatment.
               </p>
             </motion.div>

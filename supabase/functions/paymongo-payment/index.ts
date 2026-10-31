@@ -415,38 +415,21 @@ async function fulfillBookingPaymentAndSendEmail({
   paymentIntentId,
   amountInCentavos,
   paymentMethodType,
+  currency = "PHP",
   metadata,
   userAuthEmail,
 }: {
   paymongoPaymentId: string;
-  paymentIntentId: string | null;
+  paymentIntentId: string;
   amountInCentavos: number;
   paymentMethodType: string;
-  // deno-lint-ignore no-explicit-any
-  metadata: Record<string, any>;
+  currency?: string;
+  metadata?: Record<string, any>;
   userAuthEmail?: string | null;
 }) {
-  console.log("[fulfillBookingPayment] Initiating fulfillment for booking payment:", {
-    paymongoPaymentId,
-    paymentIntentId,
-    amountInCentavos,
-    paymentMethodType,
-    userId: metadata?.user_id,
-    appointmentId: metadata?.appointment_id,
-  });
-
-  const userId = metadata?.user_id;
-  const appointmentId = metadata?.appointment_id;
-
-  if (!userId) {
-    throw new Error("Booking payment metadata is missing user_id");
-  }
-  if (!Number.isFinite(amountInCentavos) || amountInCentavos <= 0) {
-    throw new Error("PayMongo payment amount is missing or invalid");
-  }
-
-  const grossAmount = amountInCentavos / 100;
-  const paymentDateIso = new Date().toISOString();
+  const grossAmount = Math.round(amountInCentavos) / 100;
+  const appointmentId = metadata?.appointment_id || null;
+  const userId = metadata?.user_id || null;
 
   const paymentMethodLabel =
     paymentMethodType === "paymaya" || paymentMethodType === "maya"
@@ -460,148 +443,161 @@ async function fulfillBookingPaymentAndSendEmail({
   if (!recipientEmail && userAuthEmail) {
     recipientEmail = userAuthEmail;
   }
-    if (!recipientEmail) {
-      try {
-        const { data: authUserData } = await adminSupabase.auth.admin.getUserById(userId);
-        recipientEmail = authUserData?.user?.email || null;
-      } catch {
-        /* ignore error fetching user email */
-      }
+  if (!recipientEmail && userId) {
+    try {
+      const { data: authUserData } = await adminSupabase.auth.admin.getUserById(userId);
+      recipientEmail = authUserData?.user?.email || null;
+    } catch {
+      /* ignore error fetching user email */
     }
-    if (!recipientEmail) {
-      try {
-        const { data: userRow } = await adminSupabase
-          .from("user")
-          .select("email")
-          .eq("user_id", userId)
-          .maybeSingle();
-        recipientEmail = userRow?.email || null;
-      } catch {
-        /* ignore error fetching user row email */
-      }
-    }
-
-  // 2. Check for existing payment record to avoid duplication
-  const { data: existingPayment } = await adminSupabase
-    .from("user_payment")
-    .select("payment_id")
-    .eq("paymongo_payment_id", paymongoPaymentId)
-    .maybeSingle();
-
-  if (!existingPayment) {
-    const { error: insertErr } = await adminSupabase
-      .from("user_payment")
-      .insert({
-        amount: grossAmount,
-        payment_date: paymentDateIso,
-        method: paymentMethodType,
-        status: "success",
-        user_id: userId,
-        plan_id: null,
-        billing_cycle: null,
-        reference_number: paymongoPaymentId,
-        paymongo_payment_id: paymongoPaymentId,
-        paymongo_payment_intent_id: paymentIntentId,
-        appointment_id: appointmentId,
-        clinic_id: metadata?.clinic_id || null,
-        payment_type: "appointment_consultation",
-      });
-
-    if (insertErr) {
-      console.error("[fulfillBookingPayment] user_payment insert error:", insertErr);
-    } else {
-      console.log("[fulfillBookingPayment] user_payment recorded for booking:", paymongoPaymentId);
+  }
+  if (!recipientEmail && userId) {
+    try {
+      const { data: userRow } = await adminSupabase
+        .from("user")
+        .select("email")
+        .eq("user_id", userId)
+        .maybeSingle();
+      recipientEmail = userRow?.email || null;
+    } catch {
+      /* ignore error fetching user row email */
     }
   }
 
-  // 3. Update appointment record if appointmentId is provided
-  if (appointmentId) {
-    const paySummary = `Paid Online (${paymentMethodLabel} Ref: ${paymongoPaymentId})`;
-    const { data: currentAppt } = await adminSupabase
-      .from("patient_appointment")
-      .select("clinic_note, user_id, payment_status, payment_amount")
-      .eq("appointment_id", appointmentId)
-      .maybeSingle();
-
-    if (currentAppt) {
-      if (userId && currentAppt.user_id && currentAppt.user_id !== userId) {
-        console.warn(`[fulfillBookingPayment] User ID mismatch for appointment ${appointmentId}: expected ${userId}, got ${currentAppt.user_id}`);
-      } else {
-        const existingNote = currentAppt?.clinic_note || "";
-        const updatedNote = existingNote.includes("Paid Online")
-          ? existingNote
-          : existingNote ? `${existingNote} | ${paySummary}` : paySummary;
-
-        const { error: apptErr } = await adminSupabase
-          .from("patient_appointment")
-          .update({
-            payment_status: "paid",
-            payment_reference: paymongoPaymentId,
-            payment_amount: grossAmount,
-            paid_at: paymentDateIso,
-            clinic_note: updatedNote,
-            check_in_status: "scheduled",
-          })
-          .eq("appointment_id", appointmentId);
-
-        if (apptErr) {
-          console.warn("[fulfillBookingPayment] patient_appointment update note:", apptErr.message);
-        } else {
-          console.log("[fulfillBookingPayment] patient_appointment marked paid for booking:", appointmentId);
-        }
-      }
+  // 2. Authoritative Atomic Payment Fulfillment via Database RPC (Single Authoritative Path)
+  const { data: rpcResult, error: rpcError } = await adminSupabase.rpc(
+    "fulfill_appointment_payment_atomic",
+    {
+      p_paymongo_payment_id: paymongoPaymentId,
+      p_payment_intent_id: paymentIntentId,
+      p_appointment_id: appointmentId,
+      p_user_id: userId,
+      p_amount: grossAmount,
+      p_payment_method: paymentMethodLabel,
+      p_currency: currency,
     }
+  );
+
+  if (rpcError) {
+    throw new Error(`Database error executing atomic payment fulfillment: ${rpcError.message}`);
   }
 
-  // 4. Send Receipt Email (Idempotent: check system_audit_log for prior delivery)
+  if (!rpcResult || !rpcResult.success) {
+    throw new Error(rpcResult?.message || "Payment fulfillment rejected by database.");
+  }
+
+  // Log overpayment advisory if detected
+  if (rpcResult.is_overpayment) {
+    console.warn(
+      `[fulfillBookingPayment] Overpayment detected on appointment ${appointmentId}: excess ${rpcResult.overpayment_amount}`
+    );
+  }
+
+  // 3. Handle reconciliation outcome (Never reactivate cancelled/expired slot, Never send receipt email)
+  if (rpcResult.action === "reconciliation_required") {
+    console.warn(`[fulfillBookingPayment] Payment captured for ${rpcResult.status} appointment ${appointmentId}. Flagged for reconciliation.`);
+    return {
+      fulfilled: false,
+      reconciliationRequired: true,
+      paymentType: "appointment_booking",
+      appointmentId,
+      appointmentStatus: rpcResult.status,
+      message: `Payment captured but appointment slot hold was ${rpcResult.status}. Appointment was not reactivated. Marked for administrative reconciliation.`,
+      recipientEmail,
+      amount: grossAmount,
+      emailDispatched: false,
+    };
+  }
+
+  // 4. Send Receipt Email with Dedicated Outbox (Idempotency Key & Lease Locking)
+  // Ensures outbox entry is claimed & delivered even if payment fulfillment was idempotently skipped
   let emailDispatched = false;
   let emailErrorMsg: string | null = null;
 
-  if (recipientEmail) {
-    const { data: alreadySentLog } = await adminSupabase
-      .from("system_audit_log")
-      .select("log_id")
-      .eq("action", "Consultation Receipt Email Sent")
-      .ilike("details", `%${paymongoPaymentId}%`)
-      .maybeSingle();
+  if (recipientEmail && (rpcResult.action === "marked_paid" || rpcResult.action === "idempotent_skip")) {
+    const idempotencyKey = `appointment_receipt:${paymongoPaymentId}`;
 
-    if (alreadySentLog) {
-      console.log("[fulfillBookingPayment] Consultation receipt email already sent previously:", paymongoPaymentId);
-      emailDispatched = true;
-    } else {
+    const { data: claimResult, error: claimErr } = await adminSupabase.rpc(
+      "claim_email_outbox",
+      {
+        p_idempotency_key: idempotencyKey,
+        p_email_type: "appointment_receipt",
+        p_recipient_email: recipientEmail,
+        p_user_id: userId,
+        p_appointment_id: appointmentId,
+        p_payload: {
+          patientEmail: recipientEmail,
+          patientName: rpcResult.patient_name || metadata?.patient_name || "Patient",
+          clinicName: rpcResult.clinic_name || metadata?.clinic_name || "Skin Clinic",
+          doctorName: rpcResult.doctor_name || metadata?.doctor_name || "Attending Dermatologist",
+          appointmentDate: rpcResult.appointment_date || metadata?.appointment_date || "Scheduled Date",
+          appointmentTime: rpcResult.appointment_time || metadata?.appointment_time || "Scheduled Time",
+          paymentMethod: paymentMethodLabel,
+          amount: grossAmount,
+          paymongoPaymentId,
+        },
+        p_lease_seconds: 120,
+      }
+    );
+
+    if (claimErr) {
+      console.error("[fulfillBookingPayment] Failed to claim email outbox:", claimErr);
+    } else if (claimResult?.claim_acquired) {
+      const outboxId = claimResult.outbox_id;
       try {
         const dispatchResult = await sendBookingReceiptEmail({
           patientEmail: recipientEmail,
-          patientName: metadata?.patient_name || "Patient",
-          clinicName: metadata?.clinic_name || "Skin Clinic",
-          doctorName: metadata?.doctor_name || "Attending Dermatologist",
-          appointmentDate: metadata?.appointment_date || "Scheduled Date",
-          appointmentTime: metadata?.appointment_time || "Scheduled Time",
+          patientName: rpcResult.patient_name || metadata?.patient_name || "Patient",
+          clinicName: rpcResult.clinic_name || metadata?.clinic_name || "Skin Clinic",
+          doctorName: rpcResult.doctor_name || metadata?.doctor_name || "Attending Dermatologist",
+          appointmentDate: rpcResult.appointment_date || metadata?.appointment_date || "Scheduled Date",
+          appointmentTime: rpcResult.appointment_time || metadata?.appointment_time || "Scheduled Time",
           paymentMethod: paymentMethodLabel,
           amount: grossAmount,
-          paymentDate: paymentDateIso,
+          paymentDate: new Date().toISOString(),
           paymongoPaymentId,
         });
 
-        emailDispatched = dispatchResult.success;
+        if (dispatchResult.success) {
+          emailDispatched = true;
+          await adminSupabase.rpc("finalize_email_outbox", {
+            p_outbox_id: outboxId,
+            p_success: true,
+          });
 
-        await recordAuditLog({
-          userId,
-          action: "Consultation Receipt Email Sent",
-          target: recipientEmail,
-          details: `Consultation receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${grossAmount.toFixed(2)}).`,
-          metadata: {
-            provider: dispatchResult.provider,
-            messageId: dispatchResult.messageId,
-            amount: grossAmount,
-            transactionId: paymongoPaymentId,
-            appointmentId,
-          },
-        });
-      } catch (mailErr) {
+          await recordAuditLog({
+            userId,
+            action: "Consultation Receipt Email Sent",
+            target: recipientEmail,
+            details: `Consultation receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${grossAmount.toFixed(2)}).`,
+            metadata: {
+              provider: dispatchResult.provider,
+              messageId: dispatchResult.messageId,
+              amount: grossAmount,
+              transactionId: paymongoPaymentId,
+              appointmentId,
+            },
+          });
+        } else {
+          emailErrorMsg = dispatchResult.error || "Failed to dispatch email";
+          await adminSupabase.rpc("finalize_email_outbox", {
+            p_outbox_id: outboxId,
+            p_success: false,
+            p_error: emailErrorMsg,
+          });
+        }
+      } catch (mailErr: any) {
         emailErrorMsg = mailErr instanceof Error ? mailErr.message : String(mailErr);
         console.warn("[fulfillBookingPayment] Consultation receipt email warning:", emailErrorMsg);
+        await adminSupabase.rpc("finalize_email_outbox", {
+          p_outbox_id: outboxId,
+          p_success: false,
+          p_error: emailErrorMsg,
+        });
       }
+    } else {
+      console.log(`[fulfillBookingPayment] Email outbox claim skipped (status: ${claimResult?.status})`);
+      emailDispatched = claimResult?.status === "sent";
     }
   }
 
@@ -612,6 +608,7 @@ async function fulfillBookingPaymentAndSendEmail({
     emailError: emailErrorMsg,
     recipientEmail,
     amount: grossAmount,
+    action: rpcResult.action,
   };
 }
 
@@ -878,10 +875,19 @@ Deno.serve(async (req: Request) => {
         appointmentDate,
         appointmentTime,
         appointmentId,
+        appointment_id,
         patientName,
         patientEmail,
         patientContact,
       } = body;
+
+      const effectiveAppointmentId = (appointmentId || appointment_id || "").trim();
+      if (!effectiveAppointmentId) {
+        return jsonResponse(
+          { error: "Save the appointment before starting checkout" },
+          400
+        );
+      }
 
       const userId = user.id;
       if (!paymentMethod) {
@@ -894,13 +900,52 @@ Deno.serve(async (req: Request) => {
         throw new Error("Clinic ID is required");
       }
 
-      const rawAmount = Number(amount ?? consultationFee ?? 0);
-      if (isNaN(rawAmount) || rawAmount <= 0) {
+      // Security Check: Look up trusted appointment record to ensure:
+      // 1. Appointment exists and belongs to this user
+      // 2. Consultation fee is taken authoritatively from database (patient cannot alter fee)
+      // 3. Appointment is in a valid temporary hold state (not already paid or cancelled/expired)
+      const { data: dbAppt, error: apptErr } = await adminSupabase
+        .from("patient_appointment")
+        .select("appointment_id, user_id, clinic_id, payment_amount, payment_status, status, payment_hold_expires_at")
+        .eq("appointment_id", effectiveAppointmentId)
+        .maybeSingle();
+
+      if (apptErr || !dbAppt) {
+        return jsonResponse(
+          { error: "Appointment reservation not found" },
+          404
+        );
+      }
+
+      if (dbAppt.user_id && dbAppt.user_id !== userId) {
+        return jsonResponse(
+          { error: "Unauthorized access to appointment reservation" },
+          403
+        );
+      }
+
+      if (dbAppt.payment_status === "paid") {
+        return jsonResponse(
+          { error: "Appointment is already paid" },
+          400
+        );
+      }
+
+      const holdExpiry = dbAppt.payment_hold_expires_at ? new Date(dbAppt.payment_hold_expires_at).getTime() : 0;
+      if (dbAppt.payment_status === "cancelled" || (holdExpiry > 0 && holdExpiry <= Date.now())) {
+        return jsonResponse(
+          { error: "Appointment reservation hold has expired or was cancelled. Please re-select a slot." },
+          400
+        );
+      }
+
+      const trustedAmount = Number(dbAppt.payment_amount ?? amount ?? consultationFee ?? 0);
+      if (isNaN(trustedAmount) || trustedAmount <= 0) {
         throw new Error("Valid consultation fee amount is required");
       }
 
-      // Consultation fee is VAT inclusive (gross amount)
-      const grossAmount = Math.round(rawAmount * 100) / 100;
+      // Consultation fee is VAT inclusive (gross amount) - strictly from trusted record
+      const grossAmount = Math.round(trustedAmount * 100) / 100;
       const basePrice = Math.round((grossAmount / (1 + VAT_RATE)) * 100) / 100;
       const vatAmount = Math.round((grossAmount - basePrice) * 100) / 100;
       const amountInCentavos = Math.round(grossAmount * 100);
@@ -928,7 +973,7 @@ Deno.serve(async (req: Request) => {
                 doctor_name: doctorName || "Attending Dermatologist",
                 appointment_date: appointmentDate || "",
                 appointment_time: appointmentTime || "",
-                appointment_id: appointmentId || "",
+                appointment_id: effectiveAppointmentId,
                 payment_method: paymentMethod,
                 patient_name: patientName || "Patient",
                 patient_email: resolvedEmail,
