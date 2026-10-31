@@ -20,6 +20,7 @@ import featureScanImg from "@/assets/feature-scan.jpg";
 import featureAiImg from "@/assets/feature-ai.jpg";
 import featureClinicImg from "@/assets/feature-clinic.jpg";
 import appDownloadImg from "@/assets/app-download-hands.jpg";
+import UserGuideSection from "./UserGuideSection";
 
 const fadeUp = {
   initial: { opacity: 0, y: 30 },
@@ -219,11 +220,6 @@ function FeatureCarousel() {
 }
 
 /* Simple store badge glyphs (inline so we don't rely on brand icons) */
-const AppleGlyph = () => (
-  <svg viewBox="0 0 24 24" className="w-6 h-6" fill="currentColor" aria-hidden="true">
-    <path d="M16.37 12.6c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.47.83-.72 0-1.82-.81-2.99-.79-1.54.02-2.96.9-3.75 2.27-1.6 2.78-.41 6.88 1.15 9.13.76 1.1 1.67 2.34 2.86 2.3 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.77.74 2.98.72 1.23-.02 2.01-1.12 2.76-2.23.87-1.28 1.23-2.52 1.25-2.58-.03-.01-2.38-.91-2.4-3.65zM14.1 5.86c.63-.77 1.06-1.83.94-2.89-.91.04-2.02.61-2.67 1.37-.58.67-1.1 1.76-.96 2.8 1.02.08 2.06-.52 2.69-1.28z" />
-  </svg>
-);
 
 const PlayGlyph = () => (
   <svg viewBox="0 0 24 24" className="w-6 h-6" aria-hidden="true">
@@ -262,19 +258,7 @@ function AppDownloadSection() {
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4">
-              <a
-                id="download-app-store"
-                href="#"
-                className="group inline-flex items-center gap-3 px-6 py-3 rounded-2xl bg-magenta-900 text-white hover:bg-black transition-all shadow-lg hover:-translate-y-0.5 active:scale-[0.97]"
-              >
-                <AppleGlyph />
-                <span className="flex flex-col leading-tight text-left">
-                  <span className="text-[10px] uppercase tracking-wider text-white/70">
-                    Download on the
-                  </span>
-                  <span className="text-base font-semibold">App Store</span>
-                </span>
-              </a>
+              {/* Android only */}
               <a
                 id="download-google-play"
                 href="#"
@@ -418,6 +402,8 @@ export default function HomePage() {
       </section>
       {/* Features Section */}
       <FeatureCarousel />
+      {/* User Guide Section */}
+      <UserGuideSection />
       {/* Download App Section */}
       <AppDownloadSection />
       {/* Clinic CTA Section (pink) */}
