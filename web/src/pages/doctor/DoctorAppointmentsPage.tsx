@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { skinConditions } from "@/pages/public/SkinLibrary";
-import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
+import { useDoctorAppointments, isAppointmentNoShow, isAppointmentArrived, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { ZoomableSkinPhoto } from "@/components/common/ZoomableSkinPhoto";
 import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
@@ -185,6 +185,7 @@ export default function DoctorAppointmentsPage() {
           appointment.status !== "rejected" &&
           appointment.status !== "cancelled" &&
           appointment.status !== "completed" &&
+          !isAppointmentNoShow(appointment) &&
           appointment.doctorStatus !== "rejected" &&
           appointment.doctorStatus !== "approved"
       ),
@@ -199,7 +200,8 @@ export default function DoctorAppointmentsPage() {
           appointment.doctorStatus === "rejected" ||
           appointment.status === "rejected" ||
           appointment.status === "cancelled" ||
-          appointment.status === "completed"
+          appointment.status === "completed" ||
+          isAppointmentNoShow(appointment)
       ),
     [allAppointments]
   );
@@ -447,6 +449,8 @@ export default function DoctorAppointmentsPage() {
           ) : (
             filteredList.map((appt) => {
               const urgency = tab === "pending" ? getPendingAppointmentUrgency(appt, now) : null;
+              const isNoShow = isAppointmentNoShow(appt);
+              const isArrived = isAppointmentArrived(appt);
 
               const isCompleted =
                 appt.status === "completed" || appt.doctorDone;
@@ -546,7 +550,17 @@ export default function DoctorAppointmentsPage() {
 
                   {/* Status */}
                   <td className="py-4 px-3 sm:px-4">
-                    {isCompleted ? (
+                    {isNoShow ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-semibold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                        No-Show
+                      </span>
+                    ) : isArrived ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse" />
+                        Arrived
+                      </span>
+                    ) : isCompleted ? (
                       <span className="inline-flex px-3 py-1 rounded-full text-sm font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
                         Completed
                       </span>
@@ -1022,18 +1036,26 @@ export default function DoctorAppointmentsPage() {
                           </span>
                           <span
                             className={`text-xs font-bold px-3 py-1 rounded-full border ${
-                              reviewModal.appointment.doctorStatus === "approved" ||
-                              reviewModal.appointment.status === "scheduled" ||
-                              reviewModal.appointment.status === "confirmed" ||
-                              reviewModal.appointment.status === "completed"
+                              isAppointmentNoShow(reviewModal.appointment)
+                                ? "bg-rose-50 text-rose-700 border-rose-200"
+                                : isAppointmentArrived(reviewModal.appointment)
+                                ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                : reviewModal.appointment.doctorStatus === "approved" ||
+                                  reviewModal.appointment.status === "scheduled" ||
+                                  reviewModal.appointment.status === "confirmed" ||
+                                  reviewModal.appointment.status === "completed"
                                 ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                                 : "bg-red-50 text-red-700 border-red-200"
                             }`}
                           >
-                            {reviewModal.appointment.doctorStatus === "approved" ||
-                            reviewModal.appointment.status === "scheduled" ||
-                            reviewModal.appointment.status === "confirmed" ||
-                            reviewModal.appointment.status === "completed"
+                            {isAppointmentNoShow(reviewModal.appointment)
+                              ? "Marked as No-Show"
+                              : isAppointmentArrived(reviewModal.appointment)
+                              ? "Accepted • Patient Arrived"
+                              : reviewModal.appointment.doctorStatus === "approved" ||
+                              reviewModal.appointment.status === "scheduled" ||
+                              reviewModal.appointment.status === "confirmed" ||
+                              reviewModal.appointment.status === "completed"
                               ? "Accepted & Finalized"
                               : "Declined"}
                           </span>

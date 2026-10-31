@@ -34,7 +34,7 @@ export type DoctorAppointmentRecord = {
   time: string;
   notes: string;
   clinicNote?: string;
-  status: "pending" | "confirmed" | "scheduled" | "rejected" | "completed" | "cancelled";
+  status: "pending" | "confirmed" | "scheduled" | "rejected" | "completed" | "cancelled" | "no-show" | "no_show" | "arrived";
   assignedDoctorId?: string;
   assignedDoctorName?: string;
   isAssignedToMe?: boolean;
@@ -64,6 +64,24 @@ export type DoctorAppointmentRecord = {
   patientId?: string;
   appointmentHistory?: AppointmentHistoryEntry[];
 };
+
+export function isAppointmentNoShow(
+  appt?: Partial<DoctorAppointmentRecord> | { status?: string | null; check_in_status?: string | null; checkInStatus?: string | null } | null
+): boolean {
+  if (!appt) return false;
+  const s = String(appt.status || "").toLowerCase().replace(/_/g, "-");
+  const c = String((appt as any)?.checkInStatus || (appt as any)?.check_in_status || "").toLowerCase().replace(/_/g, "-");
+  return s === "no-show" || c === "no-show";
+}
+
+export function isAppointmentArrived(
+  appt?: Partial<DoctorAppointmentRecord> | { status?: string | null; check_in_status?: string | null; checkInStatus?: string | null } | null
+): boolean {
+  if (!appt) return false;
+  const s = String(appt.status || "").toLowerCase().replace(/_/g, "-");
+  const c = String((appt as any)?.checkInStatus || (appt as any)?.check_in_status || "").toLowerCase().replace(/_/g, "-");
+  return s === "arrived" || c === "arrived";
+}
 
 function calculateAgeFromBirthdate(birthdateStr?: string | null): number | undefined {
   if (!birthdateStr) return undefined;
@@ -353,6 +371,26 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
               (rowClinicId ? clinicNameMap.get(rowClinicId) : undefined) ||
               "Clinic Branch";
 
+            const rawCheckIn = String(row.check_in_status || "").toLowerCase().replace(/_/g, "-");
+            const rawStatus = String(row.status || "").toLowerCase().replace(/_/g, "-");
+
+            const isNoShowStatus = rawCheckIn === "no-show" || rawStatus === "no-show";
+            const isArrivedStatus = rawCheckIn === "arrived" || rawStatus === "arrived";
+
+            const resolvedStatus = isNoShowStatus
+              ? "no-show"
+              : row.status === "completed"
+                ? "completed"
+                : row.status === "confirmed" || row.status === "accepted" || row.status === "scheduled" || isArrivedStatus
+                  ? "scheduled"
+                  : row.status || "pending";
+
+            const resolvedCheckInStatus = isNoShowStatus
+              ? "no-show"
+              : isArrivedStatus
+                ? "arrived"
+                : row.check_in_status || undefined;
+
             const apptId = String(row.appointment_id);
             apptMap.set(apptId, {
               id: apptId,
@@ -375,11 +413,7 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
               time: timeStr,
               notes: row.notes || "",
               clinicNote: row.clinic_note || "",
-              status: row.status === "completed"
-                ? "completed"
-                : row.status === "confirmed" || row.status === "accepted"
-                  ? "scheduled"
-                  : row.status || "pending",
+              status: resolvedStatus,
               assignedDoctorId: row.assigned_doctor_id || undefined,
               assignedDoctorName: assignedDocName,
               isAssignedToMe: Boolean(isDirectDocMatch),
@@ -410,7 +444,7 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
               aiConfidence: row.ai_confidence ? Number(row.ai_confidence) : undefined,
               queueNumber: row.queue_number ?? undefined,
               batchTime: row.batch_time || undefined,
-              checkInStatus: row.check_in_status || undefined,
+              checkInStatus: resolvedCheckInStatus,
               isWalkIn: Boolean(row.is_walk_in),
               appointmentHistory: Array.isArray(row.appointment_history)
                 ? row.appointment_history
@@ -464,7 +498,45 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "patient_appointment" },
-        () => {
+        (payload) => {
+          // Immediately apply in-memory updates for No-Show, Arrived, or status changes so UI reflects instantly
+          if (payload.new && typeof payload.new === "object") {
+            const row = payload.new as Record<string, any>;
+            const targetId = String(row.appointment_id || "");
+            const rawStatus = String(row.status || "").toLowerCase().replace(/_/g, "-");
+            const rawCheckIn = String(row.check_in_status || "").toLowerCase().replace(/_/g, "-");
+            const isNoShow = rawStatus === "no-show" || rawCheckIn === "no-show";
+            const isArrived = rawStatus === "arrived" || rawCheckIn === "arrived";
+
+            if (targetId) {
+              if (isNoShow) {
+                setAppointments((prev) =>
+                  prev.map((appt) =>
+                    appt.id === targetId
+                      ? {
+                          ...appt,
+                          status: "no-show",
+                          checkInStatus: "no-show",
+                          clinicNote: row.clinic_note || appt.clinicNote,
+                        }
+                      : appt
+                  )
+                );
+              } else if (isArrived) {
+                setAppointments((prev) =>
+                  prev.map((appt) =>
+                    appt.id === targetId
+                      ? {
+                          ...appt,
+                          checkInStatus: "arrived",
+                          clinicNote: row.clinic_note || appt.clinicNote,
+                        }
+                      : appt
+                  )
+                );
+              }
+            }
+          }
           fetchAppointments();
         }
       )

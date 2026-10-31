@@ -3,6 +3,7 @@ import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { fetchDoctorDutySchedule } from "@/lib/doctorDutySchedule";
 import type { DoctorWeeklySchedule } from "@/lib/schedulingService";
+import type { DoctorAffiliatedClinic } from "@/lib/doctorBranches";
 
 export function useDoctorDutySchedule(doctorId: string | null, clinicId: string | null) {
   const { user } = useAuth();
@@ -50,4 +51,103 @@ export function useDoctorDutySchedule(doctorId: string | null, clinicId: string 
     loading: current?.loading ?? Boolean(userId && doctorId && clinicId),
     error: current?.error || false,
   };
+}
+
+export interface BranchScheduleEntry {
+  affiliation: DoctorAffiliatedClinic;
+  schedule: DoctorWeeklySchedule | null;
+  loading: boolean;
+  error: boolean;
+}
+
+/**
+ * Fetches duty schedules for ALL of the doctor's affiliated clinic branches in
+ * parallel. Used by the "All Clinics (Consolidated)" view in DoctorSettingsPage.
+ */
+export function useAllBranchesDutySchedules(
+  affiliations: DoctorAffiliatedClinic[]
+): BranchScheduleEntry[] {
+  const { user } = useAuth();
+  const userId = user?.id || "";
+
+  const [entries, setEntries] = useState<BranchScheduleEntry[]>(() =>
+    affiliations.map((aff) => ({
+      affiliation: aff,
+      schedule: null,
+      loading: Boolean(userId && aff.doctor_id && aff.clinic_id),
+      error: false,
+    }))
+  );
+
+  useEffect(() => {
+    if (!userId || !affiliations.length) {
+      setEntries(
+        affiliations.map((aff) => ({
+          affiliation: aff,
+          schedule: null,
+          loading: false,
+          error: false,
+        }))
+      );
+      return;
+    }
+
+    let disposed = false;
+
+    // Initialise loading state for each branch
+    setEntries(
+      affiliations.map((aff) => ({
+        affiliation: aff,
+        schedule: null,
+        loading: true,
+        error: false,
+      }))
+    );
+
+    const fetchAll = async () => {
+      await Promise.all(
+        affiliations.map(async (aff, idx) => {
+          try {
+            const schedule = await fetchDoctorDutySchedule(
+              supabase,
+              aff.doctor_id,
+              aff.clinic_id,
+              userId
+            );
+            if (!disposed) {
+              setEntries((prev) => {
+                const next = [...prev];
+                next[idx] = { affiliation: aff, schedule, loading: false, error: false };
+                return next;
+              });
+            }
+          } catch {
+            if (!disposed) {
+              setEntries((prev) => {
+                const next = [...prev];
+                next[idx] = { affiliation: aff, schedule: null, loading: false, error: true };
+                return next;
+              });
+            }
+          }
+        })
+      );
+    };
+
+    void fetchAll();
+
+    const handleRefresh = () => { if (!disposed) void fetchAll(); };
+    window.addEventListener("focus", handleRefresh);
+    window.addEventListener("dermai_doctor_profile_updated", handleRefresh);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", handleRefresh);
+      window.removeEventListener("dermai_doctor_profile_updated", handleRefresh);
+    };
+    // affiliations reference is stable from context; userId rarely changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, affiliations.map((a) => `${a.clinic_id}:${a.doctor_id}`).join(",")]);
+
+  return entries;
 }

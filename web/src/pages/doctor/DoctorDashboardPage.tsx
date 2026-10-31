@@ -18,7 +18,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
+import { useDoctorAppointments, isAppointmentNoShow, isAppointmentArrived, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { isAppointmentExcludedFromIncomingQueue } from "@/lib/schedulingService";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
@@ -778,6 +778,8 @@ export default function DoctorDashboardPage() {
             ) : (
               <div className="space-y-2 mt-2.5 max-h-48 overflow-y-auto pr-1 no-scrollbar">
                 {selectedDayAppointments.map((a) => {
+                  const isNoShow = isAppointmentNoShow(a);
+                  const isArrived = isAppointmentArrived(a);
                   const isDone = a.status === "completed" || a.doctorDone;
                   return (
                     <div
@@ -794,7 +796,19 @@ export default function DoctorDashboardPage() {
                         </p>
                       </div>
 
-                      {isDone ? (
+                      {isNoShow ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openConsultation(a);
+                          }}
+                          className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200/80 transition-all cursor-pointer shadow-2xs shrink-0 hover:scale-102 active:scale-98"
+                          title="Click to view no-show record"
+                        >
+                          No-Show
+                        </button>
+                      ) : isDone ? (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -805,6 +819,18 @@ export default function DoctorDashboardPage() {
                           title="Click to view consultation result & details"
                         >
                           Completed
+                        </button>
+                      ) : isArrived ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openConsultation(a);
+                          }}
+                          className="text-sm font-bold px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200 ring-2 ring-emerald-500/20 transition-all cursor-pointer shadow-2xs shrink-0 hover:scale-102 active:scale-98"
+                          title="Patient has arrived. Click to start consultation"
+                        >
+                          Start Consult (Arrived)
                         </button>
                       ) : (
                         <button
@@ -891,12 +917,20 @@ export default function DoctorDashboardPage() {
                       </p>
                       <span
                         className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
-                          consultingAppt.status === "completed" || consultingAppt.doctorDone
+                          isAppointmentNoShow(consultingAppt)
+                            ? "bg-rose-50 text-rose-700 border border-rose-200"
+                            : isAppointmentArrived(consultingAppt)
+                            ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                            : consultingAppt.status === "completed" || consultingAppt.doctorDone
                             ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                             : "bg-blue-50 text-blue-700 border border-blue-200"
                         }`}
                       >
-                        {consultingAppt.status === "completed" || consultingAppt.doctorDone
+                        {isAppointmentNoShow(consultingAppt)
+                          ? "No-Show"
+                          : isAppointmentArrived(consultingAppt)
+                          ? "Patient Arrived"
+                          : consultingAppt.status === "completed" || consultingAppt.doctorDone
                           ? "Completed"
                           : "Scheduled"}
                       </span>
@@ -956,7 +990,7 @@ export default function DoctorDashboardPage() {
                     </label>
                     <input
                       type="text"
-                      disabled={consultingAppt.status === "completed" || consultingAppt.doctorDone}
+                      disabled={consultingAppt.status === "completed" || consultingAppt.doctorDone || isAppointmentNoShow(consultingAppt)}
                       value={clinicalDiagnosis}
                       onChange={(e) => setClinicalDiagnosis(e.target.value)}
                       placeholder="Enter final clinical diagnosis..."
@@ -970,7 +1004,7 @@ export default function DoctorDashboardPage() {
                     </label>
                     <textarea
                       rows={3}
-                      disabled={consultingAppt.status === "completed" || consultingAppt.doctorDone}
+                      disabled={consultingAppt.status === "completed" || consultingAppt.doctorDone || isAppointmentNoShow(consultingAppt)}
                       value={consultationNotes}
                       onChange={(e) => setConsultationNotes(e.target.value)}
                       placeholder="Enter prescription recommendations, topical medication, lifestyle care, and follow-up advice..."
@@ -991,7 +1025,11 @@ export default function DoctorDashboardPage() {
                 </Link>
 
                 <div className="flex items-center justify-end gap-2 w-full sm:w-auto">
-                  {consultingAppt.status === "completed" || consultingAppt.doctorDone ? (
+                  {isAppointmentNoShow(consultingAppt) ? (
+                    <div className="inline-flex items-center px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
+                      Appointment Finalized as No-Show
+                    </div>
+                  ) : consultingAppt.status === "completed" || consultingAppt.doctorDone ? (
                     <div className="inline-flex items-center px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold">
                       Consultation Completed &amp; Saved
                     </div>

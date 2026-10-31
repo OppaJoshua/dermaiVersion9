@@ -312,7 +312,15 @@ export default function DoctorPatientHistoryPage() {
                         )}
                       </td>
                       <td className="px-4 py-3.5 whitespace-nowrap">
-                        {isCompleted ? (
+                        {appt.checkInStatus === "no-show" || appt.status === "no-show" ? (
+                          <span className="text-sm font-semibold text-rose-700">
+                            No-Show
+                          </span>
+                        ) : appt.checkInStatus === "arrived" || appt.status === "arrived" ? (
+                          <span className="text-sm font-semibold text-emerald-800">
+                            Arrived
+                          </span>
+                        ) : isCompleted ? (
                           <span className="text-sm font-semibold text-emerald-700">
                             Completed
                           </span>

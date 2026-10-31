@@ -199,8 +199,10 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
             let actionLabel = "View Consultation";
             if (isMaintenance) {
               actionLabel = "View System Status";
+            } else if (item.type === "appointment-confirmed") {
+              actionLabel = "View Scheduled Appointment";
             } else if (isAppointmentRequest) {
-              actionLabel = item.metadata?.branch_name ? "Review Patient Request" : "View Patient Details";
+              actionLabel = item.metadata?.branch_name ? "Review Patient Request" : "Review Request";
             }
 
             return (

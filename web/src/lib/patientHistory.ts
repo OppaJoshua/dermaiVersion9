@@ -8,13 +8,15 @@ export type PatientHistory = {
 };
 
 export function historyStatus(a: DoctorAppointmentRecord): Exclude<HistoryTab, 'all'> {
-  if (a.status === 'completed' || a.doctorDone) return 'completed';
+  if (a.status === 'completed' || a.doctorDone || a.checkInStatus === 'completed' || a.checkInStatus === 'no-show' || a.status === 'no-show') return 'completed';
   if (a.status === 'rejected' || a.status === 'cancelled' || a.doctorStatus === 'rejected') return 'rejected';
   if (a.doctorStatus === 'approved' || a.status === 'confirmed' || a.status === 'scheduled') return 'approved';
   return 'pending';
 }
 
 export function historyStatusLabel(a: DoctorAppointmentRecord): string {
+  if (a.checkInStatus === 'no-show' || a.status === 'no-show') return 'No-Show';
+  if (a.checkInStatus === 'arrived' || a.status === 'arrived') return 'Arrived';
   if (a.status === 'cancelled' && historyStatus(a) === 'rejected') return 'Cancelled';
   return { completed: 'Completed', approved: 'Approved', pending: 'Pending Review', rejected: 'Declined' }[historyStatus(a)];
 }

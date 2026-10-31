@@ -17,7 +17,7 @@ import { createHelpdeskTicketAsync } from "@/lib/store";
 import { DoctorAvatar } from "@/components/common/DoctorAvatar";
 import { updateDoctorAvatar, removeDoctorAvatar } from "@/lib/doctorAvatarService";
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
-import { DoctorDutyScheduleCard } from "@/components/common/DoctorDutyScheduleCard";
+import { DoctorDutyScheduleCard, ConsolidatedDutyScheduleCard } from "@/components/common/DoctorDutyScheduleCard";
 import { MySupportTickets } from "@/components/support/MySupportTickets";
 
 function CaduceusIcon({ className = "w-7 h-7 text-[#5B6B82]" }: { className?: string }) {
@@ -106,7 +106,7 @@ const FAQS = [
 ];
 
 export default function DoctorSettingsPage() {
-  const { activeClinicId, activeAffiliation } = useDoctorClinicContext();
+  const { activeClinicId, activeAffiliation, affiliations } = useDoctorClinicContext();
   const selectedClinicName = activeAffiliation?.clinic?.name || "No clinic assignments found";
   const [profile, setProfile] = useState<DoctorProfile>(() => {
     try {
@@ -419,9 +419,261 @@ export default function DoctorSettingsPage() {
   };
 
   if (activeClinicId === "all") return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-6">
-      <h1 className="text-xl font-bold text-slate-900">Clinic Profile &amp; Settings</h1>
-      <p className="mt-2 text-sm text-slate-600">Select a clinic in the branch switcher to view its doctor profile, duty schedule, and support settings.</p>
+    <div className="max-w-7xl space-y-6 pb-12">
+      {/* Header */}
+      <div className="pb-2 border-b border-slate-200/80">
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Help &amp; Clinical Support</h1>
+        <p className="text-base text-slate-500 mt-1">
+          Consolidated view across all your affiliated clinic branches.
+        </p>
+      </div>
+
+      {/* Doctor banner — read from localStorage / active profile */}
+      <div className="bg-white rounded-2xl border border-sky-100/80 p-5 sm:p-6 md:p-7 shadow-xs relative overflow-hidden min-w-0">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute right-0 top-0 bottom-0 w-80 bg-gradient-to-l from-[#E8F3FD] via-[#F2F8FD]/80 to-transparent opacity-90 hidden sm:block"
+          style={{ clipPath: "polygon(30% 0%, 100% 0%, 100% 100%, 0% 100%)" }}
+        />
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+          {/* Left: Doctor Photo & Name */}
+          <div className="flex flex-col sm:flex-row items-center sm:items-start text-center sm:text-left gap-4 sm:gap-6 min-w-0 flex-1">
+            <div className="relative group shrink-0">
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="cursor-pointer hover:opacity-95 transition-opacity"
+                title="Click to change photo"
+              >
+                <DoctorAvatar
+                  doctorId={profile.id}
+                  doctor={{ photo_url: profile.photo, name: profile.fullName }}
+                  name={profile.fullName}
+                  className="w-24 h-24 sm:w-28 sm:h-28 !rounded-2xl border border-slate-200/80 shadow-xs text-3xl font-bold"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="absolute -bottom-1 -right-1 p-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-xs transition-all cursor-pointer"
+                title="Update photo"
+              >
+                <Camera className="w-3.5 h-3.5" />
+              </button>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handlePhotoUpload}
+                accept="image/*"
+                className="hidden"
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-xl sm:text-2xl md:text-[26px] font-bold text-slate-900 tracking-tight">
+                {profile.fullName || "Doctor"}
+              </h2>
+              <p className="text-sm font-medium text-[#64748B] flex items-center justify-center sm:justify-start gap-2 mt-2">
+                <Stethoscope className="w-4 h-4 text-[#64748B] shrink-0" />
+                <span>{affiliations.length} Affiliated Clinic{affiliations.length !== 1 ? "s" : ""}</span>
+              </p>
+              {/* Clinic branch pills */}
+              {affiliations.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {affiliations.map((aff) => (
+                    <span
+                      key={aff.clinic_id}
+                      className="inline-flex items-center gap-1 rounded-full bg-sky-50 border border-sky-200 px-2.5 py-0.5 text-xs font-medium text-sky-700"
+                    >
+                      {aff.clinic?.name || "Clinic"}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {profile.photo && (
+                <button
+                  type="button"
+                  onClick={handleRemovePhoto}
+                  className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-semibold text-rose-500 hover:text-rose-600 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                  <span>Remove Profile Photo</span>
+                </button>
+              )}
+              {photoSaved && (
+                <span className="mt-2 inline-flex items-center gap-1 text-xs text-emerald-700 font-semibold bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Avatar updated!
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Specialization */}
+          <div className="flex items-start gap-3.5 sm:gap-4 md:pl-8 lg:pl-10 md:border-l md:border-slate-200/80 pt-4 md:pt-0 border-t border-slate-100 md:border-t-0 md:max-w-md lg:max-w-lg min-w-0 shrink-0">
+            <CaduceusIcon className="w-7 h-7 text-[#5B6B82] shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] sm:text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 mb-0.5">
+                SPECIALIZATION
+              </p>
+              <p className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight leading-snug break-words">
+                {profile.specializations && profile.specializations.length > 0
+                  ? profile.specializations.join(", ")
+                  : "Not assigned"}
+              </p>
+              <p className="text-xs text-[#94A3B8] mt-0.5">Assigned by clinic admin</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* PRC / Email / Phone */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-5 min-w-0">
+        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4">
+          <IdCardIcon className="w-6 h-6 text-[#1D4ED8] shrink-0" />
+          <div className="min-w-0 flex-1">
+            <span className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">PRC LICENSE ID</span>
+            <p className="font-bold text-slate-900 text-lg sm:text-xl tracking-tight truncate">
+              {profile.prcLicense ? (profile.prcLicense.startsWith("#") ? profile.prcLicense : `#${profile.prcLicense}`) : "Not provided"}
+            </p>
+            <p className="text-sm text-[#94A3B8] mt-0.5">PRC license number on file</p>
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4">
+          <Mail className="w-7 h-6 text-[#1D4ED8] shrink-0" />
+          <div className="min-w-0 flex-1">
+            <span className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">CLINICAL EMAIL</span>
+            <p className="font-bold text-slate-900 text-sm sm:text-[15px] tracking-tight break-all sm:break-normal leading-snug" title={profile.email}>
+              {profile.email || "—"}
+            </p>
+            <p className="text-sm text-[#94A3B8] mt-0.5">Roster login address</p>
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4 sm:col-span-2 xl:col-span-1">
+          <Phone className="w-6 h-6 text-[#1D4ED8] shrink-0" />
+          <div className="min-w-0 flex-1">
+            <span className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">CONTACT NUMBER</span>
+            <p className="font-bold text-slate-900 text-base sm:text-lg tracking-tight truncate">
+              {profile.phone || "Not provided"}
+            </p>
+            <p className="text-sm text-[#94A3B8] mt-0.5">Official clinic mobile</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Consolidated Duty Schedules — all branches with clinic badges */}
+      <ConsolidatedDutyScheduleCard affiliations={affiliations} />
+
+      {/* Disclaimer */}
+      <div className="pt-4 border-t border-slate-200/60">
+        <p className="text-[12px] text-slate-400 italic">
+          * Medical provider credentials, roster assignments, and clinic affiliations are managed by your clinic administration.
+        </p>
+      </div>
+
+      {/* Support channels */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex items-start gap-3.5">
+          <Mail className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-[14px] font-bold text-slate-400 uppercase tracking-wider">Clinical Support Email</p>
+            <p className="font-bold text-slate-900 text-sm mt-0.5">support@dermai.ph</p>
+            <p className="text-[12px] text-slate-500 mt-0.5">Direct response within 24 hours on business days</p>
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex items-start gap-3.5">
+          <Phone className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-[14px] font-bold text-slate-400 uppercase tracking-wider">Direct Hotline</p>
+            <p className="font-bold text-slate-900 text-sm mt-0.5">(032) 888-3472</p>
+            <p className="text-[12px] text-slate-500 mt-0.5">Monday – Friday, 8:00 AM – 5:00 PM PHT</p>
+          </div>
+        </div>
+      </div>
+
+      {/* FAQs */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
+        <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+          <LifeBuoy className="w-4 h-4 text-slate-700" />
+          <h2 className="text-base font-bold text-slate-900 uppercase tracking-wider">Doctor Help &amp; FAQs</h2>
+        </div>
+        <div className="space-y-2">
+          {FAQS.map((faq, i) => (
+            <div key={i} className="border border-slate-200/80 rounded-xl overflow-hidden bg-white">
+              <button
+                type="button"
+                onClick={() => setOpenFaq(openFaq === i ? null : i)}
+                className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <span>{faq.question}</span>
+                {openFaq === i ? (
+                  <ChevronUp className="w-3.5 h-3.5 text-slate-400 shrink-0 ml-2" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0 ml-2" />
+                )}
+              </button>
+              {openFaq === i && (
+                <div className="px-4 pb-3.5 text-sm text-slate-600 leading-relaxed bg-slate-50/50 border-t border-slate-100">
+                  {faq.answer}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Support Ticket */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
+        <div className="border-b border-slate-100 pb-3">
+          <h2 className="text-base font-bold text-slate-900 uppercase tracking-wider">Submit Doctor Support Ticket</h2>
+          <p className="text-sm text-slate-500 mt-0.5">Need technical help or have questions regarding patient triage data?</p>
+        </div>
+        <form onSubmit={handleSendTicket} className="space-y-3.5 text-xs">
+          <div>
+            <label className="block text-[14px] font-bold text-slate-400 uppercase tracking-wider mb-1">Subject</label>
+            <input
+              type="text"
+              value={ticketSubject}
+              onChange={(e) => { setTicketSubject(e.target.value); setTicketError(null); }}
+              placeholder="e.g. Question regarding patient appointment diagnosis"
+              className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-200 text-slate-900 outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400"
+            />
+          </div>
+          <div>
+            <label className="block text-[14px] font-bold text-slate-400 uppercase tracking-wider mb-1">Message Details</label>
+            <textarea
+              rows={3}
+              value={ticketMessage}
+              onChange={(e) => { setTicketMessage(e.target.value); setTicketError(null); }}
+              placeholder="Describe your inquiry, ticket details, or issue..."
+              className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 text-slate-900 outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400 resize-none"
+            />
+          </div>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
+            <button
+              type="submit"
+              disabled={ticketSubmitting || !ticketSubject.trim() || !ticketMessage.trim()}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer shadow-xs w-full sm:w-auto"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>{ticketSubmitting ? "Submitting..." : "Send Inquiry"}</span>
+            </button>
+            {ticketSent && (
+              <span className="text-sm text-emerald-700 font-semibold inline-flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Inquiry submitted successfully!
+              </span>
+            )}
+            {ticketError && (
+              <span role="alert" className="text-sm text-red-600">{ticketError}</span>
+            )}
+          </div>
+        </form>
+      </div>
+
+      {/* Submitted tickets */}
+      <MySupportTickets
+        userId={profile.id}
+        portalTheme="doctor"
+        title="My support tickets"
+        hideWhenEmpty={false}
+      />
     </div>
   );
 

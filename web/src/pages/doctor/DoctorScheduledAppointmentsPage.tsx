@@ -12,9 +12,10 @@ import {
   FileCheck,
   FileText,
   Building2,
+  AlertTriangle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useDoctorAppointments, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
+import { useDoctorAppointments, isAppointmentNoShow, isAppointmentArrived, type DoctorAppointmentRecord } from "@/hooks/useDoctorAppointments";
 import { ZoomableSkinPhoto } from "@/components/common/ZoomableSkinPhoto";
 import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
@@ -161,13 +162,13 @@ export default function DoctorScheduledAppointmentsPage() {
         !a.doctorDone &&
         a.status !== "completed" &&
         a.checkInStatus !== "completed" &&
-        a.checkInStatus !== "no-show" &&
+        !isAppointmentNoShow(a) &&
         !!a.date
     );
   }, [appointments]);
 
   const completedList = useMemo(() => {
-    return appointments.filter((a) => a.status === "completed" || a.doctorDone || a.checkInStatus === "completed" || a.checkInStatus === "no-show");
+    return appointments.filter((a) => a.status === "completed" || a.doctorDone || a.checkInStatus === "completed" || isAppointmentNoShow(a));
   }, [appointments]);
 
   // Counts for the tabs are derived only from real appointment data
@@ -177,9 +178,9 @@ export default function DoctorScheduledAppointmentsPage() {
   // Active appointments according to selected tab
   const activeTabAppointments = useMemo(() => {
     if (tab === "completed") {
-      return approvedAppointments.filter((a) => a.status === "completed" || a.doctorDone || a.checkInStatus === "completed" || a.checkInStatus === "no-show");
+      return approvedAppointments.filter((a) => a.status === "completed" || a.doctorDone || a.checkInStatus === "completed" || isAppointmentNoShow(a));
     }
-    return approvedAppointments.filter((a) => a.status !== "completed" && !a.doctorDone && a.checkInStatus !== "completed" && a.checkInStatus !== "no-show");
+    return approvedAppointments.filter((a) => a.status !== "completed" && !a.doctorDone && a.checkInStatus !== "completed" && !isAppointmentNoShow(a));
   }, [approvedAppointments, tab]);
 
   // Map of counts per date (YYYY-MM-DD -> count)
@@ -632,6 +633,10 @@ export default function DoctorScheduledAppointmentsPage() {
             ) : (
               <div className="divide-y divide-slate-100 mt-2">
                 {selectedDateAppointments.map((appt) => {
+                  const isNoShow = isAppointmentNoShow(appt);
+                  const isArrived = isAppointmentArrived(appt);
+                  const isCompleted = appt.status === "completed" || appt.doctorDone;
+
                   return (
                     <div
                       key={appt.id}
@@ -647,9 +652,29 @@ export default function DoctorScheduledAppointmentsPage() {
                           className="shrink-0 shadow-2xs"
                         />
                         <div className="min-w-0">
-                          <h3 className="font-bold text-slate-900 text-sm md:text-base leading-snug truncate">
-                            {appt.patientName}
-                          </h3>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="font-bold text-slate-900 text-sm md:text-base leading-snug truncate">
+                              {appt.patientName}
+                            </h3>
+                            {isNoShow && (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full shrink-0">
+                                <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                                No-Show
+                              </span>
+                            )}
+                            {!isNoShow && isArrived && !isCompleted && (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200/90 px-2.5 py-0.5 rounded-full shrink-0">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-ping" />
+                                Patient Arrived
+                              </span>
+                            )}
+                            {!isNoShow && !isArrived && isCompleted && (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0">
+                                <FileCheck className="w-3 h-3 text-emerald-500 shrink-0" />
+                                Completed
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium mt-0.5">
                             {appt.patientGender && <span>{appt.patientGender}</span>}
                             {appt.patientGender && (appt.patientAge || appt.patientBirthdate) && <span>&bull;</span>}
@@ -699,14 +724,28 @@ export default function DoctorScheduledAppointmentsPage() {
                         <button
                           type="button"
                           onClick={() => openApptModal(appt)}
-                          className="h-10 px-4.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-xs shrink-0 cursor-pointer w-full sm:w-auto"
+                          className={`h-10 px-4.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-xs shrink-0 cursor-pointer w-full sm:w-auto ${
+                            isNoShow
+                              ? "bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200"
+                              : isArrived && !isCompleted
+                              ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200 ring-2 ring-emerald-500/20 font-bold"
+                              : "bg-blue-600 hover:bg-blue-700 text-white"
+                          }`}
                         >
-                          <ClipboardList className="w-3.5 h-3.5" />
+                          {isNoShow ? (
+                            <ClipboardList className="w-3.5 h-3.5" />
+                          ) : isArrived && !isCompleted ? (
+                            <Stethoscope className="w-3.5 h-3.5" />
+                          ) : (
+                            <ClipboardList className="w-3.5 h-3.5" />
+                          )}
                           <span>
-                            {appt.checkInStatus === "no-show"
+                            {isNoShow
                               ? "View No-Show Record"
-                              : tab === "completed" || appt.doctorDone || appt.status === "completed"
+                              : tab === "completed" || isCompleted
                               ? "View Result"
+                              : isArrived
+                              ? "Start Consult (Arrived)"
                               : "Conduct Visit"}
                           </span>
                         </button>
@@ -936,7 +975,7 @@ export default function DoctorScheduledAppointmentsPage() {
                     </label>
                     <input
                       type="text"
-                      disabled={viewingAppt.doctorDone || viewingAppt.checkInStatus === "no-show" || viewingAppt.status === "completed"}
+                      disabled={viewingAppt.doctorDone || isAppointmentNoShow(viewingAppt) || viewingAppt.status === "completed"}
                       value={clinicalDiagnosis}
                       onChange={(e) => setClinicalDiagnosis(e.target.value)}
                       placeholder="Enter final clinical diagnosis..."
@@ -950,7 +989,7 @@ export default function DoctorScheduledAppointmentsPage() {
                     </label>
                     <textarea
                       rows={3}
-                      disabled={viewingAppt.doctorDone || viewingAppt.checkInStatus === "no-show" || viewingAppt.status === "completed"}
+                      disabled={viewingAppt.doctorDone || isAppointmentNoShow(viewingAppt) || viewingAppt.status === "completed"}
                       value={consultationNotes}
                       onChange={(e) => setConsultationNotes(e.target.value)}
                       placeholder="Enter prescription recommendations, topical medication, lifestyle care, and follow-up advice..."
@@ -962,7 +1001,7 @@ export default function DoctorScheduledAppointmentsPage() {
 
               {/* Footer */}
               <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-t border-slate-100 flex flex-col sm:flex-row gap-2.5 sm:gap-3 shrink-0 bg-white">
-                {viewingAppt.checkInStatus === "no-show" ? (
+                {isAppointmentNoShow(viewingAppt) ? (
                   <div className="flex-1 flex items-center justify-center py-2.5 sm:py-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold text-center">
                     Appointment Finalized as No-Show (Patient Did Not Attend)
                   </div>
