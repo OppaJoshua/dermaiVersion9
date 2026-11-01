@@ -1,15 +1,13 @@
 import { supabase } from "./supabaseClient";
 
-export const PREF_EMAIL_ALERTS_NEW_CLINIC = "email_alerts_new_clinic_applications";
-
 /**
- * Fetch the admin notification preference from Supabase system_setting table,
+ * Fetch an admin preference or configuration from the Supabase system_setting table,
  * with fallbacks to user_metadata and localStorage.
  */
-export async function getAdminNotificationPreference(
-  key: string = PREF_EMAIL_ALERTS_NEW_CLINIC,
-  defaultValue: boolean = true
-): Promise<boolean> {
+export async function getAdminSetting<T = any>(
+  key: string,
+  defaultValue: T
+): Promise<T> {
   // 1. Try querying the database system_setting table
   try {
     const { data, error } = await supabase
@@ -19,11 +17,7 @@ export async function getAdminNotificationPreference(
       .maybeSingle();
 
     if (!error && data !== null && data !== undefined) {
-      if (typeof data.value === "boolean") return data.value;
-      if (typeof data.value === "string") return data.value === "true";
-      if (typeof data.value === "object" && data.value !== null) {
-        return Boolean(data.value);
-      }
+      return data.value as T;
     }
   } catch (err) {
     console.warn(`[settingsService] DB lookup for ${key} failed, falling back:`, err);
@@ -33,7 +27,7 @@ export async function getAdminNotificationPreference(
   try {
     const { data: { session } } = await supabase.auth.getSession();
     const metaVal = session?.user?.user_metadata?.[key];
-    if (typeof metaVal === "boolean") return metaVal;
+    if (metaVal !== undefined) return metaVal as T;
   } catch {}
 
   // 3. Fallback to localStorage
@@ -41,11 +35,8 @@ export async function getAdminNotificationPreference(
     const raw = localStorage.getItem("dermai_admin_platform_settings");
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (typeof parsed?.emailAlerts === "boolean" && key === PREF_EMAIL_ALERTS_NEW_CLINIC) {
-        return parsed.emailAlerts;
-      }
-      if (typeof parsed?.[key] === "boolean") {
-        return parsed[key];
+      if (parsed?.[key] !== undefined) {
+        return parsed[key] as T;
       }
     }
   } catch {}
@@ -54,12 +45,12 @@ export async function getAdminNotificationPreference(
 }
 
 /**
- * Update the admin notification preference in Supabase system_setting table,
+ * Update an admin setting in the Supabase system_setting table,
  * syncs to user_metadata and localStorage, and broadcasts an event.
  */
-export async function updateAdminNotificationPreference(
-  key: string = PREF_EMAIL_ALERTS_NEW_CLINIC,
-  enabled: boolean
+export async function updateAdminSetting<T = any>(
+  key: string,
+  value: T
 ): Promise<{ success: boolean; error?: string }> {
   // 1. Upsert into system_setting table
   try {
@@ -68,7 +59,7 @@ export async function updateAdminNotificationPreference(
       .upsert(
         {
           key,
-          value: enabled,
+          value,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "key" }
@@ -87,7 +78,7 @@ export async function updateAdminNotificationPreference(
     if (session?.user?.id) {
       await supabase.auth.updateUser({
         data: {
-          [key]: enabled,
+          [key]: value,
         },
       });
     }
@@ -99,10 +90,7 @@ export async function updateAdminNotificationPreference(
   try {
     const raw = localStorage.getItem("dermai_admin_platform_settings");
     const settings = raw ? JSON.parse(raw) : {};
-    if (key === PREF_EMAIL_ALERTS_NEW_CLINIC) {
-      settings.emailAlerts = enabled;
-    }
-    settings[key] = enabled;
+    settings[key] = value;
     localStorage.setItem("dermai_admin_platform_settings", JSON.stringify(settings));
 
     window.dispatchEvent(
@@ -114,44 +102,4 @@ export async function updateAdminNotificationPreference(
   }
 
   return { success: true };
-}
-
-export interface ClinicApplicationAlertPayload {
-  clinicId: string;
-  clinicName: string;
-  clinicEmail: string;
-  clinicPhone?: string;
-  specialization?: string;
-  address?: string;
-  submittedAt?: string;
-}
-
-/**
- * Trigger the backend alert for a new clinic application.
- * The backend Edge Function checks the admin preference guard before sending an email.
- */
-export async function triggerNewClinicApplicationAlert(
-  payload: ClinicApplicationAlertPayload
-): Promise<{ success: boolean; skipped?: boolean; error?: string }> {
-  try {
-    const { data, error } = await supabase.functions.invoke(
-      "notify-admin-clinic-application",
-      {
-        body: payload,
-      }
-    );
-
-    if (error) {
-      console.warn("[settingsService] Edge function invoke error:", error.message);
-      return { success: false, error: error.message };
-    }
-
-    return {
-      success: true,
-      skipped: data?.skipped === true,
-    };
-  } catch (err: any) {
-    console.warn("[settingsService] Exception invoking clinic alert function:", err);
-    return { success: false, error: err?.message || "Unknown error" };
-  }
 }

@@ -1,14 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
-import { AlertTriangle, UserCircle, Loader2, ShieldAlert, CheckCircle2, AlertCircle, X } from "lucide-react";
+import { AlertTriangle, UserCircle, Loader2, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
 import { dispatchSystemMaintenanceAlert } from "@/lib/notificationService";
-import {
-  getAdminNotificationPreference,
-  updateAdminNotificationPreference,
-  PREF_EMAIL_ALERTS_NEW_CLINIC,
-} from "@/lib/settingsService";
 
 const districts = [
   "Cebu City",
@@ -27,14 +22,12 @@ interface PlatformSettings {
   siteName: string;
   contactEmail: string;
   maintenanceMode: boolean;
-  emailAlerts: boolean;
 }
 
 const DEFAULT_PLATFORM_SETTINGS: PlatformSettings = {
   siteName: "DERMAI",
   contactEmail: "support@dermai.ph",
   maintenanceMode: false,
-  emailAlerts: true,
 };
 
 function getSavedPlatformSettings(): PlatformSettings {
@@ -131,79 +124,6 @@ export default function AdminSystemSettingsPage() {
   const [saved, setSaved] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Notification Preference Async Sync State
-  const [isPrefLoading, setIsPrefLoading] = useState(true);
-  const [isPrefUpdating, setIsPrefUpdating] = useState(false);
-  const [prefToast, setPrefToast] = useState<{
-    type: "success" | "error";
-    message: string;
-  } | null>(null);
-
-  // Auto-dismiss feedback toast
-  useEffect(() => {
-    if (!prefToast) return;
-    const timer = setTimeout(() => setPrefToast(null), 3500);
-    return () => clearTimeout(timer);
-  }, [prefToast]);
-
-  // Initial fetch of email alert preference from database & auth metadata
-  useEffect(() => {
-    let isMounted = true;
-    async function syncInitialPreference() {
-      setIsPrefLoading(true);
-      try {
-        const enabled = await getAdminNotificationPreference(PREF_EMAIL_ALERTS_NEW_CLINIC, true);
-        if (isMounted) {
-          setPlatformSettings((prev) => ({ ...prev, emailAlerts: enabled }));
-        }
-      } catch (err) {
-        console.warn("[AdminSystemSettings] Failed to fetch initial notification preference:", err);
-      } finally {
-        if (isMounted) setIsPrefLoading(false);
-      }
-    }
-    syncInitialPreference();
-    return () => {
-      isMounted = false;
-    };
-  }, [user]);
-
-  const handleToggleClinicEmailAlerts = async () => {
-    if (isPrefUpdating || isPrefLoading) return;
-
-    const nextValue = !platformSettings.emailAlerts;
-    // Optimistic UI update
-    setPlatformSettings((prev) => ({ ...prev, emailAlerts: nextValue }));
-    setIsPrefUpdating(true);
-
-    try {
-      const res = await updateAdminNotificationPreference(PREF_EMAIL_ALERTS_NEW_CLINIC, nextValue);
-      if (res.success) {
-        setPrefToast({
-          type: "success",
-          message: nextValue
-            ? "Notification preferences updated: Email alerts for new clinic applications are now ENABLED."
-            : "Notification preferences updated: Email alerts for new clinic applications are now DISABLED.",
-        });
-      } else {
-        // Revert on failure
-        setPlatformSettings((prev) => ({ ...prev, emailAlerts: !nextValue }));
-        setPrefToast({
-          type: "error",
-          message: "Failed to update notification preference. Please try again.",
-        });
-      }
-    } catch {
-      setPlatformSettings((prev) => ({ ...prev, emailAlerts: !nextValue }));
-      setPrefToast({
-        type: "error",
-        message: "An unexpected error occurred while saving your preference.",
-      });
-    } finally {
-      setIsPrefUpdating(false);
-    }
-  };
 
   // System Maintenance Notification State
   const [maintenanceWindow, setMaintenanceWindow] = useState("Tonight from 11:00 PM to 1:00 AM PHT");
@@ -378,12 +298,6 @@ export default function AdminSystemSettingsPage() {
     try {
       localStorage.setItem("dermai_admin_platform_settings", JSON.stringify(platformSettings));
       window.dispatchEvent(new CustomEvent("dermai_platform_settings_changed", { detail: platformSettings }));
-
-      // Synchronize preference to DB system_setting & user_metadata
-      await updateAdminNotificationPreference(
-        PREF_EMAIL_ALERTS_NEW_CLINIC,
-        platformSettings.emailAlerts
-      );
 
       const wasActive = prevMaintenanceRef.current;
       const isActive = platformSettings.maintenanceMode;
@@ -684,73 +598,6 @@ export default function AdminSystemSettingsPage() {
         </div>
       </Section>
 
-      {/* Notification Settings */}
-      <Section
-        title="Notification settings"
-        description="Configure admin alert preferences."
-      >
-        <div className="space-y-3">
-          {/* Toast Notification Banner */}
-          {prefToast && (
-            <div
-              className={cn(
-                "px-4 py-3 rounded-lg border text-sm flex items-center justify-between gap-3 transition-all",
-                prefToast.type === "success"
-                  ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-                  : "bg-rose-50 border-rose-200 text-rose-800"
-              )}
-            >
-              <div className="flex items-center gap-2">
-                {prefToast.type === "success" ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                ) : (
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                )}
-                <span className="font-medium text-xs sm:text-sm">{prefToast.message}</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPrefToast(null)}
-                className="text-gray-400 hover:text-gray-600 cursor-pointer p-0.5"
-                aria-label="Dismiss feedback"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
-          <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-200">
-            <div className="flex items-center justify-between gap-6 px-7 py-5">
-              <div>
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-semibold text-black">
-                    Email Alerts for New Clinic Applications
-                  </p>
-                  {isPrefLoading && (
-                    <span className="text-[11px] font-medium text-gray-400 flex items-center gap-1">
-                      <Loader2 className="w-3 h-3 animate-spin" /> Fetching...
-                    </span>
-                  )}
-                  {isPrefUpdating && (
-                    <span className="text-[11px] font-medium text-magenta-600 flex items-center gap-1">
-                      <Loader2 className="w-3 h-3 animate-spin" /> Updating...
-                    </span>
-                  )}
-                </div>
-                <p className="text-sm text-gray-600 mt-0.5">
-                  Get notified when a new clinic applies for verification
-                </p>
-              </div>
-              <Toggle
-                on={platformSettings.emailAlerts}
-                onClick={handleToggleClinicEmailAlerts}
-                disabled={isPrefLoading || isPrefUpdating}
-                loading={isPrefUpdating}
-              />
-            </div>
-          </div>
-        </div>
-      </Section>
 
       {/* Save Settings Button */}
       <div className="flex items-center gap-4 pt-6 border-t border-gray-200">

@@ -31,7 +31,6 @@ create policy "Authenticated users can update system settings"
 -- Seed default preference values if they don't already exist
 insert into public.system_setting (key, value, description)
 values
-  ('email_alerts_new_clinic_applications', 'true'::jsonb, 'Send email notifications to admin when a new clinic registers'),
   ('platform_contact_email', '"dermaisupport@gmail.com"'::jsonb, 'Administrator destination email for platform alerts')
 on conflict (key) do nothing;
 
