@@ -109,6 +109,13 @@ export default function ScanScreen() {
   const [scansUsed, setScansUsed] = useState(0);
   const [isPremium, setIsPremium] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const questionScrollRef = useRef<ScrollView>(null);
+  const reviewScrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    questionScrollRef.current?.scrollTo({ y: 0, animated: false });
+    reviewScrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [qIndex, isReviewing, step]);
 
   useFocusEffect(
     useCallback(() => {
@@ -539,7 +546,7 @@ export default function ScanScreen() {
         <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
           <View style={styles.container}>
             <StepIndicator currentStep={1} />
-            <ScrollView contentContainerStyle={styles.pageContainer} showsVerticalScrollIndicator={false}>
+            <ScrollView ref={reviewScrollRef} contentContainerStyle={styles.pageContainer} showsVerticalScrollIndicator={false}>
               <View style={styles.card}>
                 <View style={styles.reviewHeaderRow}>
                   <View style={{ flex: 1 }}>
@@ -685,7 +692,7 @@ export default function ScanScreen() {
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <View style={styles.container}>
           <StepIndicator currentStep={1} />
-          <ScrollView contentContainerStyle={styles.pageContainer} showsVerticalScrollIndicator={false}>
+          <ScrollView ref={questionScrollRef} key={`q_${qIndex}`} contentContainerStyle={styles.pageContainer} showsVerticalScrollIndicator={false}>
             <View style={styles.card}>
 
               {/* Progress & counter badge */}
@@ -1354,7 +1361,7 @@ function ResultScreen({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#fff' },
-  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  container: { flex: 1, backgroundColor: '#ffffff' },
 
   header: {
     flexDirection: 'row',
@@ -1368,7 +1375,7 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1409,7 +1416,7 @@ const styles = StyleSheet.create({
   welcomeContainer: { paddingBottom: 32 },
   welcomeIconCircle: {
     width: 68, height: 68, borderRadius: 20,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center', justifyContent: 'center',
     alignSelf: 'center', marginBottom: 14,
   },
@@ -1452,8 +1459,8 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   qCounterBadge: {
-    backgroundColor: '#fdf2f8',
-    borderColor: '#fce7f3',
+    backgroundColor: '#fdf2f7',
+    borderColor: '#fce7f0',
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 10,
@@ -1537,7 +1544,7 @@ const styles = StyleSheet.create({
   },
   qOptionBtnSelected: {
     borderColor: COLORS.primary,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
   },
   qRadioIndicator: {
     width: 20,
@@ -1581,7 +1588,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   qOptionLabelEnSelected: {
-    color: '#831843',
+    color: '#85134a',
   },
   qOptionLabelTl: {
     fontSize: 12,
@@ -1590,7 +1597,7 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   qOptionLabelTlSelected: {
-    color: '#9d174d',
+    color: '#6b0f3c',
   },
   optWarningTag: {
     flexDirection: 'row',
@@ -1759,7 +1766,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
   },
   reviewEditBtnTxt: {
     fontSize: 11,
@@ -1912,12 +1919,12 @@ const styles = StyleSheet.create({
     color: '#059669',
   },
   slotRequiredBadge: {
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#fce7f3',
+    borderColor: '#fce7f0',
     flexShrink: 0,
     marginTop: 1,
   },
@@ -1940,7 +1947,7 @@ const styles = StyleSheet.create({
     width: 46,
     height: 46,
     borderRadius: 23,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 8,
@@ -2058,7 +2065,7 @@ const styles = StyleSheet.create({
   quotaBannerDanger: { backgroundColor: COLORS.danger + '12' },
   quotaBannerPremium: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#fce7f3', borderRadius: 16,
+    backgroundColor: '#fce7f0', borderRadius: 16,
     padding: 12, marginVertical: 14,
   },
   quotaTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text },
@@ -2089,13 +2096,13 @@ const styles = StyleSheet.create({
   analyzingContainer: { flex: 1, justifyContent: 'center', paddingBottom: 60 },
   analyzingIconCircle: {
     width: 68, height: 68, borderRadius: 20,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center', justifyContent: 'center',
     alignSelf: 'center', marginBottom: 16,
   },
   analyzingTitle: { fontSize: 19, fontWeight: '700', color: COLORS.text, textAlign: 'center', marginBottom: 8 },
   analyzingSub: { fontSize: 13, color: COLORS.primary, textAlign: 'center', marginBottom: 20 },
-  analyzeBarBg: { height: 6, backgroundColor: '#fce7f3', borderRadius: 3, overflow: 'hidden' },
+  analyzeBarBg: { height: 6, backgroundColor: '#fce7f0', borderRadius: 3, overflow: 'hidden' },
   analysisErrorBanner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -2151,7 +2158,7 @@ const styles = StyleSheet.create({
   resultLocalName: { fontSize: 13, color: COLORS.primary, marginBottom: 16 },
   resultSectionTitle: { fontSize: 15, fontWeight: '700', color: COLORS.text, marginBottom: 10 },
   confRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
-  confBarBg: { flex: 1, height: 8, backgroundColor: '#fce7f3', borderRadius: 4, overflow: 'hidden' },
+  confBarBg: { flex: 1, height: 8, backgroundColor: '#fce7f0', borderRadius: 4, overflow: 'hidden' },
   confBarFill: { height: 8, borderRadius: 4 },
   confPct: { fontSize: 16, fontWeight: '800', minWidth: 40, textAlign: 'right' },
   metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#EDEFF3', paddingTop: 10 },
@@ -2249,12 +2256,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: '#fbcfe1',
   },
   webAiPillTxt: {
     fontSize: 11.5,
@@ -2544,12 +2551,12 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   webCalloutBox: {
-    backgroundColor: '#FDF2F8',
+    backgroundColor: '#fdf2f7',
     borderRadius: 14,
     padding: 14,
     marginVertical: 12,
     borderWidth: 1,
-    borderColor: '#FCE7F3',
+    borderColor: '#fce7f0',
   },
   webCalloutHeaderRow: {
     flexDirection: 'row',
@@ -2564,7 +2571,7 @@ const styles = StyleSheet.create({
   },
   webCalloutBody: {
     fontSize: 12.5,
-    color: '#831843',
+    color: '#85134a',
     lineHeight: 18,
   },
   webCareTipRow: {

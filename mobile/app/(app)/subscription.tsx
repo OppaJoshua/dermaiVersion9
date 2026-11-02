@@ -11,6 +11,7 @@ import {
   Platform,
   Modal,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
@@ -21,10 +22,14 @@ import {
   getUserSubscription,
   setUserSubscription,
   pushAdminNotification,
-  addPlatformTransaction,
   updatePlatformUserPlan,
+  addAppNotification,
 } from '@/lib/store';
 import type { PatientAccount, SubscriptionRecord } from '@/lib/store';
+import { processPayMongoSubscriptionPayment } from '@/lib/paymongo';
+
+const GCASH_LOGO = require('@/assets/images/gcash.png');
+const MAYA_LOGO = require('@/assets/images/maya.png');
 
 export default function SubscriptionScreen() {
   const router = useRouter();
@@ -108,7 +113,7 @@ export default function SubscriptionScreen() {
                 scansUsed: sub?.scansUsed ?? 0,
               };
               await setUserSubscription(user.id, freeSub);
-              await updatePlatformUserPlan(user.email, 'free');
+              await updatePlatformUserPlan(user.id, 'free');
               setSub(freeSub);
               Alert.alert('Subscription Cancelled', 'Your account has been switched to the Free Plan.');
             } catch (err: any) {
@@ -120,61 +125,6 @@ export default function SubscriptionScreen() {
         },
       ]
     );
-  }
-
-  async function processPayment(cardLast4: string, cardExpiry: string) {
-    if (!user) return;
-    setLoading(true);
-    try {
-      const now = new Date();
-      const end = new Date(now);
-      if (billingCycle === 'monthly') end.setMonth(end.getMonth() + 1);
-      else end.setFullYear(end.getFullYear() + 1);
-
-      const txnId = `txn_${Date.now()}`;
-      const newSub: SubscriptionRecord = {
-        userId: user.id,
-        email: user.email,
-        plan: 'premium',
-        billingCycle,
-        startDate: now.toISOString(),
-        endDate: end.toISOString(),
-        transactionId: txnId,
-        scansUsed: 0,
-        cardLast4,
-        cardExpiry,
-      };
-
-      await setUserSubscription(user.id, newSub);
-      await updatePlatformUserPlan(user.email, 'premium');
-      await addPlatformTransaction({
-        id: txnId,
-        userId: user.id,
-        userEmail: user.email,
-        userName: user.fullName,
-        plan: 'Premium',
-        amount: price,
-        date: now.toISOString(),
-        method: 'Credit / Debit Card',
-        billingCycle,
-        status: 'paid',
-      });
-      await pushAdminNotification({
-        type: 'new-subscription',
-        title: 'New Premium Subscription',
-        message: `${user.fullName} (${user.email}) subscribed to Premium — ${billingCycle} — ₱${price.toLocaleString()}`,
-      });
-      setSub(newSub);
-      setShowPayment(false);
-      Alert.alert(
-        '🎉 Welcome to DermAI Premium!',
-        'You now have unlimited skin anomaly scans and priority clinical features.'
-      );
-    } catch (err: any) {
-      Alert.alert('Payment Failed', err?.message ?? 'Could not complete subscription.');
-    } finally {
-      setLoading(false);
-    }
   }
 
   const FEATURES = [
@@ -234,14 +184,12 @@ export default function SubscriptionScreen() {
               ) : null}
             </View>
 
-            {sub?.cardLast4 ? (
-              <View style={styles.cardEndingRow}>
-                <Ionicons name="card-outline" size={14} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.cardEndingTxt}>
-                  Paid via card ending in •••• {sub.cardLast4} (Exp: {sub.cardExpiry || '12/28'})
-                </Text>
-              </View>
-            ) : null}
+            <View style={styles.cardEndingRow}>
+              <Ionicons name="wallet-outline" size={14} color="rgba(255,255,255,0.85)" />
+              <Text style={styles.cardEndingTxt}>
+                Paid via {sub?.paymentMethod || 'GCash / Maya E-Wallet'} (PayMongo Verified)
+              </Text>
+            </View>
 
             <TouchableOpacity
               style={styles.cancelPlanBtn}
@@ -341,7 +289,7 @@ export default function SubscriptionScreen() {
               <Text style={styles.priceMain}>{billingCycle === 'monthly' ? '199' : '1,999'}</Text>
               <Text style={styles.pricePer}>{billingCycle === 'monthly' ? '/ month' : '/ year'}</Text>
             </View>
-            <Text style={styles.priceDisclaimer}>Cancel anytime • 12% PH VAT included</Text>
+            <Text style={styles.priceDisclaimer}>Cancel anytime • GCash &amp; Maya accepted</Text>
 
             <TouchableOpacity
               style={[styles.upgradeBtn, loading && styles.upgradeBtnDisabled]}
@@ -361,7 +309,7 @@ export default function SubscriptionScreen() {
 
             <View style={styles.securityRow}>
               <Ionicons name="lock-closed" size={12} color="#059669" />
-              <Text style={styles.securityTxt}>Instant activation with 256-bit encrypted checkout</Text>
+              <Text style={styles.securityTxt}>Instant activation via PayMongo E-Wallet Checkout</Text>
             </View>
           </View>
         )}
@@ -392,14 +340,16 @@ export default function SubscriptionScreen() {
 
       </ScrollView>
 
-      {/* Payment Form Modal */}
+      {/* PayMongo E-Wallet Payment Modal */}
       <PaymentModal
         visible={showPayment}
         billingCycle={billingCycle}
         price={price}
-        loading={loading}
         user={user}
-        onSubmit={(last4, expiry) => processPayment(last4, expiry)}
+        onCompleted={async () => {
+          await loadData();
+          setShowPayment(false);
+        }}
         onClose={() => setShowPayment(false)}
       />
     </SafeAreaView>
@@ -410,225 +360,382 @@ function PaymentModal({
   visible,
   billingCycle,
   price,
-  loading,
   user,
-  onSubmit,
+  onCompleted,
   onClose,
 }: {
   visible: boolean;
-  billingCycle: string;
+  billingCycle: 'monthly' | 'yearly';
   price: number;
-  loading: boolean;
   user: PatientAccount | null;
-  onSubmit: (cardLast4: string, cardExpiry: string) => void;
+  onCompleted: () => void;
   onClose: () => void;
 }) {
+  const [paymentMethod, setPaymentMethod] = useState<'gcash' | 'maya'>('gcash');
   const [fullName, setFullName] = useState(user?.fullName ?? '');
-  const [country, setCountry] = useState('Philippines');
-  const [tin, setTin] = useState('');
-  const [address, setAddress] = useState(user?.address ?? '');
-  const [cardNumber, setCardNumber] = useState('');
-  const [expiry, setExpiry] = useState('');
-  const [cvc, setCvc] = useState('');
+  const [email, setEmail] = useState(user?.email ?? '');
+  const [address, setAddress] = useState(user?.address || user?.location || 'Cebu City');
+  const [mobileNumber, setMobileNumber] = useState(user?.phone ?? '');
+  const [processing, setProcessing] = useState(false);
+  const [receipt, setReceipt] = useState<{
+    reference: string;
+    amount: number;
+    method: 'gcash' | 'maya';
+    mobileNumber: string;
+    billingCycle: 'monthly' | 'yearly';
+    date: string;
+  } | null>(null);
 
-  const tax = Math.round(price * 0.12 * 100) / 100;
-  const total = Math.round((price + tax) * 100) / 100;
-
-  function handleCardNumberChange(val: string) {
-    const digitsOnly = val.replace(/\D/g, '').slice(0, 16);
-    const formatted = digitsOnly.match(/.{1,4}/g)?.join(' ') || digitsOnly;
-    setCardNumber(formatted);
-  }
-
-  function handleExpiryChange(val: string) {
-    const clean = val.replace(/\D/g, '').slice(0, 4);
-    if (clean.length >= 3) {
-      setExpiry(`${clean.slice(0, 2)}/${clean.slice(2)}`);
-    } else {
-      setExpiry(clean);
+  useEffect(() => {
+    if (visible) {
+      setReceipt(null);
+      setProcessing(false);
+      if (user) {
+        setFullName(user.fullName || '');
+        setEmail(user.email || '');
+        setAddress(user.address || user.location || 'Cebu City');
+        setMobileNumber(user.phone || '');
+      }
     }
-  }
+  }, [visible, user]);
 
-  function handleSubmit() {
+  async function handlePayWithPayMongo() {
+    if (!user) return;
     if (!fullName.trim()) {
-      Alert.alert('Missing Field', 'Please enter your full cardholder name.');
+      Alert.alert('Missing Field', 'Please enter your full name.');
       return;
     }
-    const rawCard = cardNumber.replace(/\s/g, '');
-    if (rawCard.length < 16) {
-      Alert.alert('Invalid Card', 'Please enter a valid 16-digit card number.');
+    if (!email.trim() || !email.includes('@')) {
+      Alert.alert('Invalid Email', 'Please enter a valid email address for your receipt.');
       return;
     }
-    if (!/^\d{2}\/\d{2}$/.test(expiry)) {
-      Alert.alert('Invalid Expiry', 'Enter expiry in MM/YY format.');
+    const cleanedMobile = mobileNumber.replace(/\D/g, '');
+    if (cleanedMobile.length !== 11 || !cleanedMobile.startsWith('09')) {
+      Alert.alert(
+        'Invalid Mobile Number',
+        `Please enter a valid 11-digit Philippine mobile number starting with 09 for your ${paymentMethod === 'gcash' ? 'GCash' : 'Maya'} account.`
+      );
       return;
     }
-    if (cvc.length < 3) {
-      Alert.alert('Invalid CVC', 'Enter a 3-digit security code.');
-      return;
+
+    setProcessing(true);
+    try {
+      // Launch PayMongo Test Checkout (create_intent -> payment_methods -> attach_payment_method -> WebBrowser redirect -> verify_payment_intent)
+      const result = await processPayMongoSubscriptionPayment({
+        userId: user.id,
+        billingCycle,
+        paymentMethod,
+        fullName: fullName.trim(),
+        email: email.trim(),
+        address: address.trim() || 'Cebu City',
+        mobileNumber: cleanedMobile,
+      });
+
+      const now = new Date();
+      const end = new Date(now);
+      if (billingCycle === 'monthly') end.setMonth(end.getMonth() + 1);
+      else end.setFullYear(end.getFullYear() + 1);
+
+      const newSub: SubscriptionRecord = {
+        userId: user.id,
+        email: user.email,
+        plan: 'premium',
+        billingCycle,
+        startDate: now.toISOString(),
+        endDate: end.toISOString(),
+        transactionId: result.paymongoPaymentId,
+        scansUsed: 0,
+        paymentMethod: paymentMethod === 'maya' ? 'Maya' : 'GCash',
+        mobileNumber: cleanedMobile,
+      };
+
+      // Edge Function already fulfilled `user_plan_subscription` and `user_payment`,
+      // and we also sync local state & notifications for immediate UI update.
+      await setUserSubscription(user.id, newSub);
+      await addAppNotification(user.id, {
+        type: 'subscription',
+        title: 'DermAI Pro Plan Activated',
+        message: `Your ${billingCycle === 'yearly' ? 'Annual' : 'Monthly'} Pro subscription (₱${price.toLocaleString()}) via ${paymentMethod === 'gcash' ? 'GCash' : 'Maya'} is now active. Ref: ${result.paymongoPaymentId}`,
+        userId: user.id,
+      });
+      await pushAdminNotification({
+        type: 'new-subscription',
+        title: 'New Premium Subscription',
+        message: `${fullName.trim()} (${email.trim()}) subscribed to Premium (${billingCycle}) via ${paymentMethod === 'gcash' ? 'GCash' : 'Maya'} — ₱${price.toLocaleString()} (Ref: ${result.paymongoPaymentId})`,
+      });
+
+      setReceipt({
+        reference: result.paymongoPaymentId,
+        amount: price,
+        method: paymentMethod,
+        mobileNumber: cleanedMobile,
+        billingCycle,
+        date: now.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        }),
+      });
+    } catch (err: any) {
+      Alert.alert('Payment Notice', err?.message ?? 'Could not complete subscription payment.');
+    } finally {
+      setProcessing(false);
     }
-    onSubmit(rawCard.slice(-4), expiry);
   }
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <SafeAreaView style={payStyles.safe}>
           <View style={payStyles.header}>
-            <TouchableOpacity onPress={onClose} style={payStyles.backBtn}>
-              <Ionicons name="chevron-back" size={18} color={COLORS.text} />
-              <Text style={payStyles.backBtnTxt}>Cancel</Text>
+            <TouchableOpacity
+              onPress={() => {
+                if (receipt) {
+                  setReceipt(null);
+                  onCompleted();
+                } else {
+                  onClose();
+                }
+              }}
+              style={payStyles.backBtn}
+              disabled={processing}
+            >
+              <Ionicons name={receipt ? 'close' : 'chevron-back'} size={18} color={COLORS.text} />
+              <Text style={payStyles.backBtnTxt}>{receipt ? 'Close' : 'Cancel'}</Text>
             </TouchableOpacity>
-            <Text style={payStyles.title}>Order &amp; Payment</Text>
+            <Text style={payStyles.title}>
+              {receipt ? 'Subscription Receipt' : 'E-Wallet Checkout'}
+            </Text>
             <View style={{ width: 50 }} />
           </View>
 
           <ScrollView contentContainerStyle={payStyles.content} keyboardShouldPersistTaps="handled">
-            {/* Order Summary Card */}
-            <View style={payStyles.summaryCard}>
-              <View style={payStyles.planHeader}>
-                <View style={payStyles.planIconBox}>
-                  <Ionicons name="star" size={20} color={COLORS.primary} />
+            {receipt ? (
+              <View style={payStyles.receiptWrap}>
+                <View style={payStyles.receiptSuccessCircle}>
+                  <Ionicons name="checkmark-circle" size={46} color="#059669" />
                 </View>
-                <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={payStyles.planName}>DermAI Premium Plan</Text>
-                  <Text style={payStyles.planSubName}>
-                    {billingCycle === 'monthly' ? 'Monthly Subscription' : 'Annual Subscription'}
+                <Text style={payStyles.receiptTitle}>Subscription Activated!</Text>
+                <Text style={payStyles.receiptSub}>
+                  Your payment was verified via PayMongo and your DermAI Pro Plan is now active.
+                </Text>
+
+                <View style={payStyles.summaryCard}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <View>
+                      <Text style={payStyles.planName}>Official Subscription Receipt</Text>
+                      <Text style={{ fontSize: 11, color: COLORS.primary, fontWeight: '700', marginTop: 2 }}>
+                        {receipt.reference}
+                      </Text>
+                    </View>
+                    <View style={payStyles.paidPill}>
+                      <Text style={payStyles.paidPillTxt}>PAID</Text>
+                    </View>
+                  </View>
+
+                  <View style={payStyles.divider} />
+
+                  <View style={payStyles.summaryRow}>
+                    <Text style={payStyles.summaryLabel}>Plan</Text>
+                    <Text style={payStyles.summaryValue}>
+                      DermAI Pro ({receipt.billingCycle === 'yearly' ? 'Annual' : 'Monthly'})
+                    </Text>
+                  </View>
+                  <View style={payStyles.summaryRow}>
+                    <Text style={payStyles.summaryLabel}>Payment Method</Text>
+                    <Text style={payStyles.summaryValue}>
+                      {receipt.method === 'gcash' ? 'GCash' : 'Maya'} ({receipt.mobileNumber})
+                    </Text>
+                  </View>
+                  <View style={payStyles.summaryRow}>
+                    <Text style={payStyles.summaryLabel}>Date</Text>
+                    <Text style={payStyles.summaryValue}>{receipt.date}</Text>
+                  </View>
+
+                  <View style={payStyles.divider} />
+
+                  <View style={payStyles.summaryRow}>
+                    <Text style={payStyles.totalLabel}>Amount Paid</Text>
+                    <Text style={payStyles.totalValue}>₱{receipt.amount.toLocaleString()}.00</Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={payStyles.payBtn}
+                  onPress={() => {
+                    setReceipt(null);
+                    onCompleted();
+                  }}
+                >
+                  <Text style={payStyles.payBtnTxt}>Done &amp; Return to Subscription</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                {/* Order Summary Card */}
+                <View style={payStyles.summaryCard}>
+                  <View style={payStyles.planHeader}>
+                    <View style={payStyles.planIconBox}>
+                      <Ionicons name="star" size={20} color={COLORS.primary} />
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={payStyles.planName}>DermAI Premium Plan</Text>
+                      <Text style={payStyles.planSubName}>
+                        {billingCycle === 'monthly' ? 'Monthly Subscription' : 'Annual Subscription'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={payStyles.divider} />
+
+                  <View style={payStyles.summaryRow}>
+                    <Text style={payStyles.summaryLabel}>Plan Price</Text>
+                    <Text style={payStyles.summaryValue}>₱{price.toLocaleString()}.00</Text>
+                  </View>
+                  <View style={payStyles.summaryRow}>
+                    <Text style={payStyles.summaryLabel}>Processing Fee</Text>
+                    <Text style={[payStyles.summaryValue, { color: '#059669' }]}>₱0.00 (Waived)</Text>
+                  </View>
+
+                  <View style={payStyles.divider} />
+
+                  <View style={payStyles.summaryRow}>
+                    <Text style={payStyles.totalLabel}>Total Due Today</Text>
+                    <Text style={payStyles.totalValue}>₱{price.toLocaleString()}.00</Text>
+                  </View>
+                </View>
+
+                {/* E-Wallet Selection & Payer Details */}
+                <View style={payStyles.paymentCard}>
+                  <Text style={payStyles.cardTitle}>1. Select E-Wallet (PayMongo Checkout)</Text>
+
+                  <View style={payStyles.walletRow}>
+                    <TouchableOpacity
+                      style={[
+                        payStyles.walletOption,
+                        paymentMethod === 'gcash' && payStyles.walletOptionGCashActive,
+                      ]}
+                      onPress={() => setPaymentMethod('gcash')}
+                      activeOpacity={0.8}
+                    >
+                      <Image source={GCASH_LOGO} style={payStyles.walletLogo} resizeMode="contain" />
+                      <Text
+                        style={[
+                          payStyles.walletName,
+                          paymentMethod === 'gcash' && { color: '#007DFE', fontWeight: '800' },
+                        ]}
+                      >
+                        GCash
+                      </Text>
+                      {paymentMethod === 'gcash' && (
+                        <Ionicons name="checkmark-circle" size={16} color="#007DFE" />
+                      )}
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        payStyles.walletOption,
+                        paymentMethod === 'maya' && payStyles.walletOptionMayaActive,
+                      ]}
+                      onPress={() => setPaymentMethod('maya')}
+                      activeOpacity={0.8}
+                    >
+                      <Image source={MAYA_LOGO} style={payStyles.walletLogo} resizeMode="contain" />
+                      <Text
+                        style={[
+                          payStyles.walletName,
+                          paymentMethod === 'maya' && { color: '#00D632', fontWeight: '800' },
+                        ]}
+                      >
+                        Maya
+                      </Text>
+                      {paymentMethod === 'maya' && (
+                        <Ionicons name="checkmark-circle" size={16} color="#00D632" />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+
+                  <Text style={[payStyles.cardTitle, { marginTop: 6 }]}>2. Account &amp; Billing Details</Text>
+
+                  <View style={payStyles.field}>
+                    <Text style={payStyles.fieldLabel}>Full Name *</Text>
+                    <TextInput
+                      style={payStyles.input}
+                      placeholder="e.g. Maria Santos"
+                      placeholderTextColor={COLORS.textLight}
+                      value={fullName}
+                      onChangeText={setFullName}
+                      autoCapitalize="words"
+                    />
+                  </View>
+
+                  <View style={payStyles.field}>
+                    <Text style={payStyles.fieldLabel}>Email Address *</Text>
+                    <TextInput
+                      style={payStyles.input}
+                      placeholder="patient@example.com"
+                      placeholderTextColor={COLORS.textLight}
+                      value={email}
+                      onChangeText={setEmail}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                  </View>
+
+                  <View style={payStyles.field}>
+                    <Text style={payStyles.fieldLabel}>
+                      {paymentMethod === 'gcash' ? 'GCash' : 'Maya'} Registered Mobile Number *
+                    </Text>
+                    <TextInput
+                      style={payStyles.input}
+                      placeholder="09XXXXXXXXX (11 digits)"
+                      placeholderTextColor={COLORS.textLight}
+                      value={mobileNumber}
+                      onChangeText={(val) => setMobileNumber(val.replace(/\D/g, '').slice(0, 11))}
+                      keyboardType="phone-pad"
+                      maxLength={11}
+                    />
+                  </View>
+
+                  <View style={payStyles.field}>
+                    <Text style={payStyles.fieldLabel}>Billing Address *</Text>
+                    <TextInput
+                      style={payStyles.input}
+                      placeholder="Street address, city"
+                      placeholderTextColor={COLORS.textLight}
+                      value={address}
+                      onChangeText={setAddress}
+                    />
+                  </View>
+
+                  <TouchableOpacity
+                    style={[payStyles.payBtn, processing && { opacity: 0.7 }]}
+                    onPress={handlePayWithPayMongo}
+                    disabled={processing}
+                  >
+                    {processing ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <ActivityIndicator color="#fff" size="small" />
+                        <Text style={payStyles.payBtnTxt}>
+                          Opening {paymentMethod === 'gcash' ? 'GCash' : 'Maya'} Checkout...
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Ionicons name="lock-closed" size={15} color="#fff" />
+                        <Text style={payStyles.payBtnTxt}>
+                          Pay ₱{price.toLocaleString()}.00 via {paymentMethod === 'gcash' ? 'GCash' : 'Maya'}
+                        </Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+
+                  <Text style={payStyles.disclaimerTxt}>
+                    You will be directed to the PayMongo Test Checkout page to authorize your {paymentMethod === 'gcash' ? 'GCash' : 'Maya'} payment.
                   </Text>
                 </View>
-              </View>
-
-              <View style={payStyles.divider} />
-
-              <View style={payStyles.summaryRow}>
-                <Text style={payStyles.summaryLabel}>Subtotal</Text>
-                <Text style={payStyles.summaryValue}>₱{price.toLocaleString()}</Text>
-              </View>
-              <View style={payStyles.summaryRow}>
-                <Text style={payStyles.summaryLabel}>Philippine VAT (12%)</Text>
-                <Text style={payStyles.summaryValue}>₱{tax.toFixed(2)}</Text>
-              </View>
-
-              <View style={payStyles.divider} />
-
-              <View style={payStyles.summaryRow}>
-                <Text style={payStyles.totalLabel}>Total Due Today</Text>
-                <Text style={payStyles.totalValue}>₱{total.toFixed(2)}</Text>
-              </View>
-            </View>
-
-            {/* Payment Fields */}
-            <View style={payStyles.paymentCard}>
-              <Text style={payStyles.cardTitle}>Payment Information</Text>
-
-              <View style={payStyles.field}>
-                <Text style={payStyles.fieldLabel}>Cardholder Full Name</Text>
-                <TextInput
-                  style={payStyles.input}
-                  placeholder="Full name on card"
-                  placeholderTextColor={COLORS.textLight}
-                  value={fullName}
-                  onChangeText={setFullName}
-                  autoCapitalize="words"
-                />
-              </View>
-
-              <View style={payStyles.field}>
-                <Text style={payStyles.fieldLabel}>Card Number</Text>
-                <View style={payStyles.cardInputWrap}>
-                  <Ionicons name="card-outline" size={18} color={COLORS.primary} />
-                  <TextInput
-                    style={payStyles.cardInput}
-                    placeholder="1234 5678 9012 3456"
-                    placeholderTextColor={COLORS.textLight}
-                    value={cardNumber}
-                    onChangeText={handleCardNumberChange}
-                    keyboardType="number-pad"
-                    maxLength={19}
-                  />
-                </View>
-              </View>
-
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                <View style={[payStyles.field, { flex: 1 }]}>
-                  <Text style={payStyles.fieldLabel}>Expiry Date</Text>
-                  <TextInput
-                    style={payStyles.input}
-                    placeholder="MM/YY"
-                    placeholderTextColor={COLORS.textLight}
-                    value={expiry}
-                    onChangeText={handleExpiryChange}
-                    keyboardType="number-pad"
-                    maxLength={5}
-                  />
-                </View>
-                <View style={[payStyles.field, { flex: 1 }]}>
-                  <Text style={payStyles.fieldLabel}>Security CVC</Text>
-                  <TextInput
-                    style={payStyles.input}
-                    placeholder="123"
-                    placeholderTextColor={COLORS.textLight}
-                    value={cvc}
-                    onChangeText={(val) => setCvc(val.replace(/\D/g, '').slice(0, 4))}
-                    keyboardType="number-pad"
-                    maxLength={4}
-                    secureTextEntry
-                  />
-                </View>
-              </View>
-
-              <View style={payStyles.field}>
-                <Text style={payStyles.fieldLabel}>Billing Address</Text>
-                <TextInput
-                  style={payStyles.input}
-                  placeholder="Street address, city"
-                  placeholderTextColor={COLORS.textLight}
-                  value={address}
-                  onChangeText={setAddress}
-                />
-              </View>
-
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                <View style={[payStyles.field, { flex: 1 }]}>
-                  <Text style={payStyles.fieldLabel}>Country</Text>
-                  <TextInput
-                    style={payStyles.input}
-                    value={country}
-                    onChangeText={setCountry}
-                  />
-                </View>
-                <View style={[payStyles.field, { flex: 1 }]}>
-                  <Text style={payStyles.fieldLabel}>PH TIN (Optional)</Text>
-                  <TextInput
-                    style={payStyles.input}
-                    placeholder="XXX-XXX-XXX"
-                    placeholderTextColor={COLORS.textLight}
-                    value={tin}
-                    onChangeText={setTin}
-                    keyboardType="number-pad"
-                  />
-                </View>
-              </View>
-
-              <TouchableOpacity
-                style={[payStyles.payBtn, loading && { opacity: 0.7 }]}
-                onPress={handleSubmit}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Ionicons name="lock-closed" size={15} color="#fff" />
-                    <Text style={payStyles.payBtnTxt}>Pay ₱{total.toFixed(2)} &amp; Activate</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <Text style={payStyles.disclaimerTxt}>
-                Simulated demo checkout for DermAI medical verification.
-              </Text>
-            </View>
+              </>
+            )}
           </ScrollView>
         </SafeAreaView>
       </KeyboardAvoidingView>
@@ -637,7 +744,7 @@ function PaymentModal({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F8FAFC' },
+  safe: { flex: 1, backgroundColor: '#ffffff' },
 
   header: {
     flexDirection: 'row',
@@ -666,7 +773,7 @@ const styles = StyleSheet.create({
 
   // Active Premium Banner
   activePremiumCard: {
-    backgroundColor: '#be185d',
+    backgroundColor: '#85134a',
     borderRadius: 20,
     padding: 20,
     marginBottom: 16,
@@ -737,7 +844,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -803,7 +910,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     padding: 20,
     borderWidth: 2,
-    borderColor: '#fbcfe8',
+    borderColor: '#fbcfe1',
     marginBottom: 20,
     shadowColor: COLORS.primary,
     shadowOpacity: 0.08,
@@ -816,7 +923,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
@@ -907,7 +1014,7 @@ const payStyles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 12,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -927,7 +1034,43 @@ const payStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#f1f5f9',
   },
-  cardTitle: { fontSize: 14, fontWeight: '800', color: '#334155', marginBottom: 14 },
+  cardTitle: { fontSize: 14, fontWeight: '800', color: '#334155', marginBottom: 12 },
+  walletRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 14,
+  },
+  walletOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  walletOptionGCashActive: {
+    borderColor: '#007DFE',
+    backgroundColor: '#eff6ff',
+  },
+  walletOptionMayaActive: {
+    borderColor: '#00D632',
+    backgroundColor: '#f0fdf4',
+  },
+  walletLogo: {
+    width: 26,
+    height: 26,
+    borderRadius: 6,
+  },
+  walletName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#334155',
+  },
   field: { marginBottom: 12 },
   fieldLabel: { fontSize: 12, fontWeight: '700', color: '#475569', marginBottom: 6 },
   input: {
@@ -940,17 +1083,6 @@ const payStyles = StyleSheet.create({
     fontSize: 14,
     color: '#0f172a',
   },
-  cardInputWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    paddingHorizontal: 14,
-  },
-  cardInput: { flex: 1, paddingVertical: 12, fontSize: 14, color: '#0f172a' },
   payBtn: {
     backgroundColor: COLORS.primary,
     borderRadius: 14,
@@ -964,5 +1096,45 @@ const payStyles = StyleSheet.create({
     elevation: 3,
   },
   payBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 15 },
-  disclaimerTxt: { fontSize: 11, color: '#94a3b8', textAlign: 'center', marginTop: 10 },
+  disclaimerTxt: { fontSize: 11, color: '#94a3b8', textAlign: 'center', marginTop: 10, lineHeight: 16 },
+  receiptWrap: {
+    paddingVertical: 12,
+  },
+  receiptSuccessCircle: {
+    alignSelf: 'center',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#ecfdf5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  receiptTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0f172a',
+    textAlign: 'center',
+  },
+  receiptSub: {
+    fontSize: 13,
+    color: '#64748b',
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 20,
+    lineHeight: 18,
+  },
+  paidPill: {
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  paidPillTxt: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#059669',
+  },
 });

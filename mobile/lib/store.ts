@@ -115,6 +115,8 @@ export interface SubscriptionRecord {
   status?: string;
   cardLast4?: string;
   cardExpiry?: string;
+  paymentMethod?: 'gcash' | 'maya' | string;
+  mobileNumber?: string;
 }
 
 export interface PlatformUser {
@@ -242,6 +244,7 @@ export async function getCurrentUserEmail(): Promise<string | null> {
 }
 
 export async function clearCurrentUser(): Promise<void> {
+  _cachedUser = null;
   try {
     await supabase.auth.signOut();
   } catch (err: any) {
@@ -250,10 +253,24 @@ export async function clearCurrentUser(): Promise<void> {
   }
 }
 
-export async function getCurrentUser(): Promise<PatientAccount | null> {
+let _cachedUser: { user: PatientAccount; ts: number } | null = null;
+
+export async function getCurrentUser(forceRefresh = false): Promise<PatientAccount | null> {
   try {
-    const { data: { user }, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !user) return null;
+    const { data: { session } } = await supabase.auth.getSession();
+    let user = session?.user ?? null;
+    if (!user) {
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !authData?.user) {
+        _cachedUser = null;
+        return null;
+      }
+      user = authData.user;
+    }
+
+    if (!forceRefresh && _cachedUser && _cachedUser.user.id === user.id && Date.now() - _cachedUser.ts < 15000) {
+      return _cachedUser.user;
+    }
 
     const meta = user.user_metadata || {};
     const avatarFallback = (meta.avatar_url as string) || (meta.picture as string) || undefined;
@@ -281,7 +298,7 @@ export async function getCurrentUser(): Promise<PatientAccount | null> {
       };
     }
 
-    return {
+    const resultUser: PatientAccount = {
       id: data.user_id,
       fullName: data.full_name || nameFallback || '',
       email: data.email || user.email || '',
@@ -294,6 +311,8 @@ export async function getCurrentUser(): Promise<PatientAccount | null> {
       createdAt: data.created_at,
       freeScansUsed: data.free_scans_used ?? 0,
     };
+    _cachedUser = { user: resultUser, ts: Date.now() };
+    return resultUser;
   } catch (err) {
     console.warn('[Store] getCurrentUser exception:', err);
     return null;
@@ -301,6 +320,7 @@ export async function getCurrentUser(): Promise<PatientAccount | null> {
 }
 
 export async function savePatientAccount(account: PatientAccount): Promise<void> {
+  _cachedUser = null;
   try {
     // 1. Fetch existing user row and auth metadata so we never wipe out fields when logging in
     const { data: existing } = await supabase
@@ -473,6 +493,7 @@ export async function updatePlatformUserPlan(userId: string, _plan: 'free' | 'pr
 }
 
 // ─── Skin History ─────────────────────────────────────────────────────────────
+const _signedUrlCache = new Map<string, { url: string; exp: number }>();
 export async function getSkinHistory(userId: string): Promise<ScanResult[]> {
   try {
     const { data, error } = await supabase
@@ -503,28 +524,48 @@ export async function getSkinHistory(userId: string): Promise<ScanResult[]> {
 
     if (error || !data) return [];
 
-    const results: ScanResult[] = await Promise.all(
-      data.map(async (s: any) => {
+    // Batch sign storage paths with in-memory cache so we don't fire N*2 HTTP requests
+    const nowTs = Date.now();
+    const pathsToSign = new Set<string>();
+    const needsSigning = (u?: string) =>
+      Boolean(u && !u.startsWith('http') && !u.startsWith('file:') && !u.startsWith('data:'));
+
+    for (const s of data) {
+      if (needsSigning(s.photo_url)) {
+        const cached = _signedUrlCache.get(s.photo_url);
+        if (!cached || nowTs >= cached.exp) pathsToSign.add(s.photo_url);
+      }
+      if (needsSigning(s.photo_url_wide)) {
+        const cached = _signedUrlCache.get(s.photo_url_wide);
+        if (!cached || nowTs >= cached.exp) pathsToSign.add(s.photo_url_wide);
+      }
+    }
+
+    if (pathsToSign.size > 0) {
+      try {
+        const { data: signedBatch } = await supabase.storage
+          .from('scan-uploads')
+          .createSignedUrls([...pathsToSign], 3600);
+        if (Array.isArray(signedBatch)) {
+          for (const item of signedBatch) {
+            if (item.path && item.signedUrl) {
+              _signedUrlCache.set(item.path, { url: item.signedUrl, exp: nowTs + 45 * 60 * 1000 });
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const results: ScanResult[] = data.map((s: any) => {
         const condObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
         let imageUrl = s.photo_url || undefined;
         let wideImageUrl = s.photo_url_wide || undefined;
 
-        if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('file:') && !imageUrl.startsWith('data:')) {
-          try {
-            const { data: signed } = await supabase.storage
-              .from('scan-uploads')
-              .createSignedUrl(imageUrl, 3600);
-            if (signed?.signedUrl) imageUrl = signed.signedUrl;
-          } catch {}
+        if (imageUrl && needsSigning(imageUrl)) {
+          imageUrl = _signedUrlCache.get(imageUrl)?.url || imageUrl;
         }
-
-        if (wideImageUrl && !wideImageUrl.startsWith('http') && !wideImageUrl.startsWith('file:') && !wideImageUrl.startsWith('data:')) {
-          try {
-            const { data: signedWide } = await supabase.storage
-              .from('scan-uploads')
-              .createSignedUrl(wideImageUrl, 3600);
-            if (signedWide?.signedUrl) wideImageUrl = signedWide.signedUrl;
-          } catch {}
+        if (wideImageUrl && needsSigning(wideImageUrl)) {
+          wideImageUrl = _signedUrlCache.get(wideImageUrl)?.url || wideImageUrl;
         }
 
         const careTipsList: string[] = (condObj?.skin_condition_care_tip || [])
@@ -582,8 +623,7 @@ export async function getSkinHistory(userId: string): Promise<ScanResult[]> {
           localName: resolvedLocalName,
           status: (s.status || 'completed') as any,
         };
-      })
-    );
+      });
     return results;
   } catch (err) {
     console.warn('[Store] getSkinHistory error:', err);
@@ -821,6 +861,7 @@ export async function getUserSubscription(userId: string): Promise<SubscriptionR
       status: data.status,
       scansUsed: u?.free_scans_used ?? 0,
       scanLimit: isProOrPremium ? -1 : (planObj?.scan_limit ?? 3),
+      paymentMethod: data.payment_method || undefined,
     };
   } catch (err) {
     console.warn('[Store] getUserSubscription error:', err);
@@ -888,7 +929,7 @@ export async function setUserSubscription(userId: string, record: SubscriptionRe
         current_period_start: now.toISOString(),
         current_period_end: periodEnd.toISOString(),
         renews_at: periodEnd.toISOString(),
-        payment_method: 'Credit / Debit Card',
+        payment_method: record.paymentMethod || 'GCash',
         updated_at: now.toISOString(),
       };
 
@@ -1210,13 +1251,48 @@ export async function getAppNotifications(userId: string): Promise<AppNotificati
   const items: AppNotification[] = [];
 
   try {
-    // 1. Direct user_notification records for this patient
-    const { data: dbNotifs } = await supabase
-      .from('user_notification')
-      .select('notif_id, type, subtype, title, body, is_read, created_at')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(40);
+    // Run all 4 notification queries in parallel instead of sequentially
+    const [
+      { data: dbNotifs },
+      { data: broadcasts },
+      { data: appointments },
+      { data: tickets },
+    ] = await Promise.all([
+      supabase
+        .from('user_notification')
+        .select('notif_id, type, subtype, title, body, is_read, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(40),
+      supabase
+        .from('admin_broadcast')
+        .select('broadcast_id, title, message, audience, sent_at')
+        .in('audience', ['all', 'patients', 'patient'])
+        .order('sent_at', { ascending: false })
+        .limit(10),
+      supabase
+        .from('patient_appointment')
+        .select(`
+          appointment_id,
+          date,
+          time,
+          status,
+          doctor_status,
+          doctor_note,
+          clinic_note,
+          created_at,
+          clinic:clinic_id (name, logo_url)
+        `)
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(20),
+      supabase
+        .from('user_support_ticket')
+        .select('ticket_id, subject, response, status, updated_at, created_at')
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false })
+        .limit(10),
+    ]);
 
     if (dbNotifs) {
       dbNotifs.forEach((n: any) => {
@@ -1257,13 +1333,6 @@ export async function getAppNotifications(userId: string): Promise<AppNotificati
     }
 
     // 2. Broadcast announcements sent by administrator
-    const { data: broadcasts } = await supabase
-      .from('admin_broadcast')
-      .select('broadcast_id, title, message, audience, sent_at')
-      .in('audience', ['all', 'patients', 'patient'])
-      .order('sent_at', { ascending: false })
-      .limit(10);
-
     if (broadcasts) {
       broadcasts.forEach((b: any) => {
         const notifId = `broadcast-${b.broadcast_id}`;
@@ -1285,23 +1354,6 @@ export async function getAppNotifications(userId: string): Promise<AppNotificati
     }
 
     // 3. Live patient appointments from patient_appointment
-    const { data: appointments } = await supabase
-      .from('patient_appointment')
-      .select(`
-        appointment_id,
-        date,
-        time,
-        status,
-        doctor_status,
-        doctor_note,
-        clinic_note,
-        created_at,
-        clinic:clinic_id (name, logo_url)
-      `)
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(20);
-
     if (appointments) {
       appointments.forEach((appt: any) => {
         const clinicObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
@@ -1376,13 +1428,6 @@ export async function getAppNotifications(userId: string): Promise<AppNotificati
     }
 
     // 4. Support Ticket updates
-    const { data: tickets } = await supabase
-      .from('user_support_ticket')
-      .select('ticket_id, subject, response, status, updated_at, created_at')
-      .eq('user_id', userId)
-      .order('updated_at', { ascending: false })
-      .limit(10);
-
     if (tickets) {
       tickets.forEach((ticket: any) => {
         if (ticket.response || (ticket.status !== 'open' && ticket.status !== 'pending' && ticket.status !== 'submitted')) {

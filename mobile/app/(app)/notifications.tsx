@@ -339,7 +339,7 @@ function timeAgo(isoString: string): string {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#ffffff' },
-  container: { flex: 1, backgroundColor: '#f8fafc' },
+  container: { flex: 1, backgroundColor: '#ffffff' },
 
   // ── Header ──
   header: {
@@ -356,11 +356,11 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: '#fbcfe1',
   },
   headerTitleRow: {
     flexDirection: 'row',
@@ -386,10 +386,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 10,
     paddingVertical: 6,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: '#fbcfe1',
   },
   markBtnText: { color: COLORS.primary, fontWeight: '700', fontSize: 11 },
 
@@ -452,12 +452,12 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: '#fbcfe1',
   },
   emptyTitle: { fontSize: 17, fontWeight: '800', color: COLORS.text, marginBottom: 6 },
   emptySub: {
@@ -484,7 +484,7 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   cardUnread: {
-    borderColor: '#fbcfe8',
+    borderColor: '#fbcfe1',
     backgroundColor: '#ffffff',
     shadowColor: COLORS.primary,
     shadowOpacity: 0.08,

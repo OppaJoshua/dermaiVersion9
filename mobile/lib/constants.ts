@@ -1,18 +1,18 @@
 import { Platform } from 'react-native';
 
 export const COLORS = {
-  primary: '#be185d',
-  primaryDark: '#9d174d',
-  primaryLight: '#fce7f3',
-  primaryXLight: '#fdf2f8',
-  secondary: '#f472b6',
-  background: '#fdf2f8',
+  primary: '#85134a',
+  primaryDark: '#6b0f3c',
+  primaryLight: '#fce7f0',
+  primaryXLight: '#fdf2f7',
+  secondary: '#A0195A',
+  background: '#ffffff',
   surface: '#ffffff',
-  text: '#1f2937',
+  text: '#111827',
   textSecondary: '#6b7280',
   textLight: '#9ca3af',
-  border: '#f3e8ee',
-  borderDark: '#fbcfe8',
+  border: '#f1f5f9',
+  borderDark: '#fbcfe1',
   success: '#16a34a',
   successLight: '#dcfce7',
   warning: '#d97706',
@@ -21,7 +21,7 @@ export const COLORS = {
   dangerLight: '#fee2e2',
   info: '#2563eb',
   infoLight: '#dbeafe',
-  shadow: 'rgba(190, 24, 93, 0.15)',
+  shadow: 'rgba(133, 19, 74, 0.15)',
   overlay: 'rgba(0, 0, 0, 0.5)',
 };
 
@@ -52,7 +52,7 @@ export const STATUS_COLORS: Record<string, { bg: string; text: string; label: st
   'in-progress': { bg: '#dbeafe', text: '#2563eb', label: 'In Progress' },
   resolved: { bg: '#dcfce7', text: '#16a34a', label: 'Resolved' },
   free: { bg: '#f3f4f6', text: '#6b7280', label: 'Free' },
-  premium: { bg: '#fce7f3', text: '#be185d', label: 'Premium' },
+  premium: { bg: '#fce7f0', text: '#85134a', label: 'Premium' },
 };
 
 // Sample clinics for Cebu — mirrors web FindClinicsPage/AppointmentPage exactly

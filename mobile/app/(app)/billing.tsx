@@ -178,14 +178,16 @@ export default function BillingScreen() {
           <Text style={styles.sectionLabel}>PAYMENT METHOD</Text>
           <View style={styles.payRow}>
             <View style={styles.payIconBox}>
-              <Ionicons name="card-outline" size={18} color={COLORS.textSecondary} />
+              <Ionicons name="wallet-outline" size={18} color={COLORS.primary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.payNumber}>{'●●●● ●●●● ●●●● '}{sub?.cardLast4 ?? '----'}</Text>
-              <Text style={styles.payExpiry}>{'Expires '}{sub?.cardExpiry ?? '--/--'}</Text>
+              <Text style={styles.payNumber}>
+                {sub?.paymentMethod ? `${sub.paymentMethod} E-Wallet` : 'GCash / Maya E-Wallet'}
+              </Text>
+              <Text style={styles.payExpiry}>PayMongo Verified Checkout</Text>
             </View>
-            <TouchableOpacity onPress={() => setShowUpdateCard(true)}>
-              <Text style={styles.payUpdate}>Update</Text>
+            <TouchableOpacity onPress={() => router.push('/(app)/subscription')}>
+              <Text style={styles.payUpdate}>Manage</Text>
             </TouchableOpacity>
           </View>
         </View>

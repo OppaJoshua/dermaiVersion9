@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,30 +8,34 @@ import {
   RefreshControl,
   Image,
   Platform,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons, Feather } from '@expo/vector-icons';
-import Svg, { Circle, Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
+import Svg, { Circle } from 'react-native-svg';
 import { COLORS, FONTS } from '@/lib/constants';
 import {
   getCurrentUser,
   getSkinHistory,
   getAppointments,
-  saveAppointment,
   getAppNotifications,
   getSavedClinics,
   syncAppointmentNotifications,
-  addAppNotification,
 } from '@/lib/store';
 import type { PatientAccount, Appointment, ScanResult } from '@/lib/store';
+
+const WEB_MAGENTA = '#85134a';
+const WEB_MAGENTA_MID = '#A0195A';
+const WEB_MAGENTA_LIGHT = '#fce7f0';
+const WEB_PATIENT_BG = '#f8f5f6';
 
 function RadialProgressBar({
   progress,
   size = 56,
   strokeWidth = 5,
-  color = COLORS.primary,
-  bgColor = COLORS.primaryLight,
+  color = WEB_MAGENTA_MID,
+  bgColor = WEB_MAGENTA_LIGHT,
 }: {
   progress: number;
   size?: number;
@@ -40,7 +44,7 @@ function RadialProgressBar({
   bgColor?: string;
 }) {
   const safeProgress = Math.min(Math.max(isNaN(progress) ? 0 : progress, 0), 100);
-  const strokeColor = color || COLORS.primary;
+  const strokeColor = color || WEB_MAGENTA_MID;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (circumference * safeProgress) / 100;
@@ -71,9 +75,9 @@ function RadialProgressBar({
       <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
         <Text
           style={{
-            fontSize: size * 0.24,
+            fontSize: size * 0.23,
             fontWeight: '800',
-            color: COLORS.primary,
+            color: '#111827',
             fontFamily: FONTS.bold,
           }}
         >
@@ -84,6 +88,37 @@ function RadialProgressBar({
   );
 }
 
+function DashboardSectionSkeleton({ pulseAnim }: { pulseAnim: Animated.Value }) {
+  return (
+    <Animated.View style={[styles.skeletonCard, { opacity: pulseAnim }]}>
+      <View style={styles.skelPillSm} />
+      <View style={styles.skelHeaderRow}>
+        <View style={styles.skelTitleBlock} />
+        <View style={styles.skelBadgePill} />
+      </View>
+
+      <View style={styles.skelTwoColRow}>
+        <View style={styles.skelMiniBox}>
+          <View style={[styles.skelPillSm, { width: 52, marginBottom: 8 }]} />
+          <View style={[styles.skelValueBar, { width: 72 }]} />
+        </View>
+        <View style={styles.skelMiniBox}>
+          <View style={[styles.skelPillSm, { width: 64, marginBottom: 8 }]} />
+          <View style={[styles.skelValueBar, { width: 84 }]} />
+        </View>
+      </View>
+
+      <View style={[styles.skelPillSm, { width: 105, height: 13, marginBottom: 10 }]} />
+      <View style={styles.skelDashedRow}>
+        <View style={styles.skelAvatarBox} />
+        <View style={{ flex: 1, gap: 7 }}>
+          <View style={[styles.skelLineBar, { width: '62%' }]} />
+          <View style={[styles.skelLineBar, { width: '84%', height: 10 }]} />
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -95,59 +130,89 @@ export default function HomeScreen() {
   const [nextAppt, setNextAppt] = useState<Appointment | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [clinicsSavedCount, setClinicsSavedCount] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const hasLoadedRef = useRef(false);
 
-  async function loadData() {
-    const u = await getCurrentUser();
-    setUser(u);
-    if (!u) return;
+  const pulseAnim = useRef(new Animated.Value(0.55)).current;
 
-    const history = await getSkinHistory(u.id);
-    setScanCount(history.length);
-    setRecentScans(history.slice(0, 3));
-
-    const uniqueConditions = new Set(history.map((h) => h.condition));
-    setConditionsFound(uniqueConditions.size);
-
-    if (history.length > 0) {
-      const diff = Date.now() - new Date(history[0].date).getTime();
-      const mins = Math.floor(diff / 60000);
-      if (mins < 60) setLastScanLabel(`${mins}m ago`);
-      else if (mins < 1440) setLastScanLabel(`${Math.floor(mins / 60)}h ago`);
-      else setLastScanLabel(`${Math.floor(mins / 1440)}d ago`);
-    } else {
-      setLastScanLabel('Never');
-    }
-
-    const appts = await getAppointments(u.id);
-    await syncAppointmentNotifications(u.id, appts);
-
-    const activeAppts = appts.filter(
-      (a) => a.status === 'pending' || a.status === 'scheduled' || a.status === 'confirmed'
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 750,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0.48,
+          duration: 750,
+          useNativeDriver: true,
+        }),
+      ])
     );
-    activeAppts.sort((a, b) => {
-      const aTime = a.date ? new Date(a.date).getTime() : Infinity;
-      const bTime = b.date ? new Date(b.date).getTime() : Infinity;
-      return aTime - bTime;
-    });
-    setNextAppt(activeAppts[0] ?? null);
+    loop.start();
+    return () => loop.stop();
+  }, [pulseAnim]);
 
-    const notifs = await getAppNotifications(u.id);
-    setUnreadCount(notifs.filter((n) => !n.read).length);
+  async function loadData(isPullRefresh = false) {
+    if (!isPullRefresh && !hasLoadedRef.current) setLoading(true);
+    try {
+      const u = await getCurrentUser();
+      setUser(u);
+      if (!u) return;
 
-    const saved = await getSavedClinics(u.id);
-    setClinicsSavedCount(saved.length);
+      // Fetch all dashboard sections in parallel instead of sequentially
+      const [history, appts, notifs, saved] = await Promise.all([
+        getSkinHistory(u.id),
+        getAppointments(u.id),
+        getAppNotifications(u.id),
+        getSavedClinics(u.id),
+      ]);
+
+      setScanCount(history.length);
+      setRecentScans(history.slice(0, 3));
+
+      const uniqueConditions = new Set(history.map((h) => h.condition));
+      setConditionsFound(uniqueConditions.size);
+
+      if (history.length > 0) {
+        const diff = Date.now() - new Date(history[0].date).getTime();
+        const mins = Math.floor(diff / 60000);
+        if (mins < 60) setLastScanLabel(`${Math.max(1, mins)}m ago`);
+        else if (mins < 1440) setLastScanLabel(`${Math.floor(mins / 60)}h ago`);
+        else setLastScanLabel(`${Math.floor(mins / 1440)}d ago`);
+      } else {
+        setLastScanLabel('Never');
+      }
+
+      const activeAppts = appts.filter(
+        (a) => a.status === 'pending' || a.status === 'scheduled' || a.status === 'confirmed'
+      );
+      activeAppts.sort((a, b) => {
+        const aTime = a.date ? new Date(a.date).getTime() : Infinity;
+        const bTime = b.date ? new Date(b.date).getTime() : Infinity;
+        return aTime - bTime;
+      });
+      setNextAppt(activeAppts[0] ?? null);
+
+      setUnreadCount(notifs.filter((n) => !n.read).length);
+      setClinicsSavedCount(saved.length);
+      hasLoadedRef.current = true;
+    } finally {
+      setLoading(false);
+    }
   }
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
+      loadData(false);
     }, [])
   );
 
   async function onRefresh() {
     setRefreshing(true);
-    await loadData();
+    await loadData(true);
     setRefreshing(false);
   }
 
@@ -159,9 +224,8 @@ export default function HomeScreen() {
         style={styles.container}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 16 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={WEB_MAGENTA} />}
       >
-
         {/* ── Header ── */}
         <View style={styles.header}>
           <TouchableOpacity
@@ -172,7 +236,7 @@ export default function HomeScreen() {
             {user?.profileImage ? (
               <Image source={{ uri: user.profileImage }} style={styles.avatarImg} />
             ) : (
-              <Ionicons name="person" size={20} color={COLORS.primary} />
+              <Ionicons name="person" size={20} color={WEB_MAGENTA} />
             )}
           </TouchableOpacity>
           <View style={{ flex: 1, marginLeft: 10 }}>
@@ -192,24 +256,23 @@ export default function HomeScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.iconBtn, { marginLeft: 8 }]}
-            onPress={() => router.push('/(app)/settings')}
+            onPress={() => router.push('/(app)/profile')}
           >
-            <Ionicons name="settings-outline" size={20} color={COLORS.text} />
+            <Ionicons name="person-outline" size={20} color={COLORS.text} />
           </TouchableOpacity>
         </View>
 
         {/* ── Hero Banner (text left, doctor icon right) ── */}
         <TouchableOpacity style={styles.heroBanner} activeOpacity={0.92} onPress={() => router.push('/(app)/clinics')}>
-          {/* Left: text + CTA */}
+          <View pointerEvents="none" style={styles.heroDecorCircle} />
           <View style={styles.heroLeft}>
             <Text style={styles.heroTitle}>Looking for a{'\n'}Derma Clinic?</Text>
             <View style={styles.heroBtn}>
-              <Ionicons name="search-outline" size={13} color={COLORS.primary} style={{ marginRight: 5 }} />
+              <Ionicons name="search-outline" size={13} color={WEB_MAGENTA} style={{ marginRight: 5 }} />
               <Text style={styles.heroBtnText} numberOfLines={1}>Search for Clinic</Text>
             </View>
           </View>
 
-          {/* Right: doctor photo */}
           <View style={styles.heroRight}>
             <Image
               source={require('../../assets/images/heroDoctor.png')}
@@ -219,77 +282,93 @@ export default function HomeScreen() {
           </View>
         </TouchableOpacity>
 
-        {/* ── 1. Your Overview (Smaller Compact 2×2 Colorful Cards) ── */}
+        {/* ── 1. Your Overview ── */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Your Overview</Text>
         </View>
 
         <View style={styles.overviewGrid}>
           {/* Card 1 — Total Scans */}
-          <View style={styles.overviewCard}>
+          <View style={[styles.overviewCard, styles.overviewCardFeatured]}>
             <View pointerEvents="none" style={styles.overviewDecorCircle} />
             <View style={styles.overviewTopRow}>
-              <Text style={styles.overviewLabel} numberOfLines={1}>
+              <Text style={styles.overviewLabelFeatured} numberOfLines={1}>
                 Total Scans
               </Text>
-              <View style={styles.overviewArrowBtn}>
+              <View style={styles.overviewArrowBtnFeatured}>
                 <Feather name="arrow-up-right" size={13} color="#fff" />
               </View>
             </View>
-            <Text style={styles.overviewValue}>{scanCount}</Text>
+            {loading ? (
+              <Animated.View style={[styles.statSkelFeatured, { opacity: pulseAnim }]} />
+            ) : (
+              <Text style={styles.overviewValueFeatured}>{scanCount}</Text>
+            )}
           </View>
 
           {/* Card 2 — Conditions Found */}
-          <View style={styles.overviewCard}>
+          <View style={[styles.overviewCard, styles.overviewCardFeatured]}>
             <View pointerEvents="none" style={styles.overviewDecorCircle} />
             <View style={styles.overviewTopRow}>
-              <Text style={styles.overviewLabel} numberOfLines={1}>
+              <Text style={styles.overviewLabelFeatured} numberOfLines={1}>
                 Conditions Found
               </Text>
-              <View style={styles.overviewArrowBtn}>
+              <View style={styles.overviewArrowBtnFeatured}>
                 <Feather name="arrow-up-right" size={13} color="#fff" />
               </View>
             </View>
-            <Text style={styles.overviewValue}>{conditionsFound}</Text>
+            {loading ? (
+              <Animated.View style={[styles.statSkelFeatured, { opacity: pulseAnim }]} />
+            ) : (
+              <Text style={styles.overviewValueFeatured}>{conditionsFound}</Text>
+            )}
           </View>
 
           {/* Card 3 — Clinics Saved */}
-          <View style={styles.overviewCard}>
+          <View style={[styles.overviewCard, styles.overviewCardFeatured]}>
             <View pointerEvents="none" style={styles.overviewDecorCircle} />
             <View style={styles.overviewTopRow}>
-              <Text style={styles.overviewLabel} numberOfLines={1}>
+              <Text style={styles.overviewLabelFeatured} numberOfLines={1}>
                 Clinics Saved
               </Text>
-              <View style={styles.overviewArrowBtn}>
+              <View style={styles.overviewArrowBtnFeatured}>
                 <Feather name="arrow-up-right" size={13} color="#fff" />
               </View>
             </View>
-            <Text style={styles.overviewValue}>{clinicsSavedCount}</Text>
+            {loading ? (
+              <Animated.View style={[styles.statSkelFeatured, { opacity: pulseAnim }]} />
+            ) : (
+              <Text style={styles.overviewValueFeatured}>{clinicsSavedCount}</Text>
+            )}
           </View>
 
           {/* Card 4 — Last Scan */}
-          <View style={styles.overviewCard}>
+          <View style={[styles.overviewCard, styles.overviewCardFeatured]}>
             <View pointerEvents="none" style={styles.overviewDecorCircle} />
             <View style={styles.overviewTopRow}>
-              <Text style={styles.overviewLabel} numberOfLines={1}>
+              <Text style={styles.overviewLabelFeatured} numberOfLines={1}>
                 Last Scan
               </Text>
-              <View style={styles.overviewArrowBtn}>
+              <View style={styles.overviewArrowBtnFeatured}>
                 <Feather name="arrow-up-right" size={13} color="#fff" />
               </View>
             </View>
-            <Text
-              style={[
-                styles.overviewValue,
-                { fontSize: lastScanLabel.length > 5 ? 16 : 22 },
-              ]}
-            >
-              {lastScanLabel}
-            </Text>
+            {loading ? (
+              <Animated.View style={[styles.statSkelFeatured, { opacity: pulseAnim }]} />
+            ) : (
+              <Text
+                style={[
+                  styles.overviewValueFeatured,
+                  { fontSize: lastScanLabel.length > 5 ? 17 : 22 },
+                ]}
+              >
+                {lastScanLabel}
+              </Text>
+            )}
           </View>
         </View>
 
-        {/* ── 2. Recent Analyses (Placed directly after Overview with Radial Progress Bar, NO moderate/severe) ── */}
+        {/* ── 2. Recent Analyses ── */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Recent Analyses</Text>
           <TouchableOpacity onPress={() => router.push('/(app)/history')}>
@@ -297,7 +376,9 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {recentScans.length > 0 ? (
+        {loading ? (
+          <DashboardSectionSkeleton pulseAnim={pulseAnim} />
+        ) : recentScans.length > 0 ? (
           <View style={styles.listContainer}>
             {recentScans.map((scan) => (
               <TouchableOpacity
@@ -310,8 +391,8 @@ export default function HomeScreen() {
                   progress={scan.confidence}
                   size={56}
                   strokeWidth={5}
-                  color={COLORS.primary}
-                  bgColor={COLORS.primaryLight}
+                  color={WEB_MAGENTA_MID}
+                  bgColor={WEB_MAGENTA_LIGHT}
                 />
                 <View style={styles.analysisBody}>
                   <Text style={styles.analysisTitle} numberOfLines={1}>
@@ -324,9 +405,9 @@ export default function HomeScreen() {
                         {new Date(scan.date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
                       </Text>
                     </View>
-                    <View style={styles.metaBadge}>
-                      <Ionicons name="sparkles" size={11} color={COLORS.primary} />
-                      <Text style={[styles.metaBadgeText, { color: COLORS.primary, fontWeight: '600' }]}>
+                    <View style={[styles.metaBadge, { backgroundColor: '#fdf2f7' }]}>
+                      <Ionicons name="sparkles" size={11} color={WEB_MAGENTA} />
+                      <Text style={[styles.metaBadgeText, { color: WEB_MAGENTA, fontWeight: '700' }]}>
                         AI Analysis
                       </Text>
                     </View>
@@ -346,8 +427,8 @@ export default function HomeScreen() {
               progress={0}
               size={52}
               strokeWidth={4.5}
-              color={COLORS.primary}
-              bgColor={COLORS.primaryLight}
+              color={WEB_MAGENTA_MID}
+              bgColor={WEB_MAGENTA_LIGHT}
             />
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={styles.emptyAnalysisTitle}>No Skin Analysis Yet</Text>
@@ -360,8 +441,7 @@ export default function HomeScreen() {
           </TouchableOpacity>
         )}
 
-
-        {/* ── 3. Upcoming Appointment (Redesigned) ── */}
+        {/* ── 3. Upcoming Appointment ── */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Upcoming Appointment</Text>
           {nextAppt && (
@@ -371,15 +451,23 @@ export default function HomeScreen() {
           )}
         </View>
 
-        {nextAppt ? (
+        {loading ? (
+          <Animated.View style={[styles.skeletonCard, { opacity: pulseAnim, marginBottom: 20 }]}>
+            <View style={styles.skelDashedRow}>
+              <View style={styles.skelAvatarBox} />
+              <View style={{ flex: 1, gap: 7 }}>
+                <View style={[styles.skelLineBar, { width: '55%' }]} />
+                <View style={[styles.skelLineBar, { width: '78%', height: 10 }]} />
+              </View>
+            </View>
+          </Animated.View>
+        ) : nextAppt ? (
           <TouchableOpacity
             style={styles.redesignedApptCard}
             activeOpacity={0.88}
             onPress={() => router.push('/(app)/appointments')}
           >
-            {/* Top Doctor Profile Row */}
             <View style={styles.apptDoctorRow}>
-              {/* Doctor Avatar with synced Supabase photo */}
               <View style={styles.apptDoctorAvatarWrap}>
                 {nextAppt.doctorPhotoUrl ? (
                   <Image
@@ -392,11 +480,9 @@ export default function HomeScreen() {
                     <Ionicons name="medical" size={22} color="#ffffff" />
                   </View>
                 )}
-                {/* Active indicator dot */}
                 <View style={styles.apptDoctorOnlineDot} />
               </View>
 
-              {/* Doctor Info & Status */}
               <View style={styles.apptDoctorInfo}>
                 <View style={styles.apptDoctorHeaderRow}>
                   <Text style={styles.apptDoctorName} numberOfLines={1}>
@@ -417,14 +503,12 @@ export default function HomeScreen() {
                   </View>
                 </View>
 
-                {/* Clinic Name */}
                 <Text style={styles.apptClinicSubtitle} numberOfLines={1}>
                   {nextAppt.clinicName}
                 </Text>
               </View>
             </View>
 
-            {/* Clean Schedule Row */}
             <View style={styles.apptScheduleBox}>
               <View style={styles.apptScheduleItem}>
                 <Ionicons name="calendar-outline" size={14} color="#ffffff" />
@@ -454,7 +538,7 @@ export default function HomeScreen() {
             onPress={() => router.push('/(app)/clinics')}
           >
             <View style={styles.emptyApptIconWrap}>
-              <Ionicons name="calendar-outline" size={22} color="#2563eb" />
+              <Ionicons name="calendar-outline" size={22} color={WEB_MAGENTA} />
             </View>
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={styles.emptyApptTitle}>No Upcoming Consultations</Text>
@@ -469,16 +553,16 @@ export default function HomeScreen() {
 
         {/* ── Skin Tips ── */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Skin Tips</Text>
+          <Text style={styles.sectionTitle}>Skin Care Tips</Text>
         </View>
         <View style={styles.listContainer}>
           {[
-            { icon: 'sunny-outline' as const, color: '#f59e0b', title: 'Daily Sunscreen', text: 'Apply SPF 30+ daily, even on cloudy days. Reapply every 2 hours when outdoors.' },
-            { icon: 'water-outline' as const, color: '#0ea5e9', title: 'Stay Hydrated', text: 'Drink 8+ glasses of water daily. Hydration helps maintain skin elasticity and health.' },
-            { icon: 'moon-outline' as const, color: '#7c3aed', title: 'Night Routine', text: 'Cleanse and moisturize before bed. Let your skin repair itself overnight.' },
+            { icon: 'shield-checkmark-outline' as const, color: WEB_MAGENTA, title: 'Daily Sunscreen', text: 'Apply SPF 30+ daily, even on cloudy days in Cebu. Reapply every 2 hours when outdoors.' },
+            { icon: 'water-outline' as const, color: WEB_MAGENTA, title: 'Stay Hydrated', text: 'Drink 8+ glasses of water daily for healthy skin elasticity and barrier repair.' },
+            { icon: 'moon-outline' as const, color: WEB_MAGENTA, title: 'Night Routine', text: 'Cleanse gently and moisturize before bed. Let your skin repair itself overnight.' },
           ].map((tip) => (
             <View key={tip.title} style={styles.listCard}>
-              <View style={[styles.listIconWrap, { backgroundColor: tip.color + '18' }]}>
+              <View style={[styles.listIconWrap, { backgroundColor: '#fdf2f7', borderWidth: 1, borderColor: '#fce7f0' }]}>
                 <Ionicons name={tip.icon} size={20} color={tip.color} />
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
@@ -489,20 +573,18 @@ export default function HomeScreen() {
           ))}
         </View>
 
-        {/* ── About DermAI ── */}
+        {/* ── Reminder (Matches Web PatientDashboard Reminder Box) ── */}
         <View style={styles.infoCard}>
           <View style={styles.infoIconRow}>
-            <Ionicons name="information-circle" size={18} color={COLORS.primary} />
-            <Text style={styles.infoTitle}>About DermAI</Text>
+            <View style={styles.reminderIconCircle}>
+              <Ionicons name="notifications-outline" size={17} color={WEB_MAGENTA} />
+            </View>
+            <Text style={styles.infoTitle}>Reminder</Text>
           </View>
           <Text style={styles.infoText}>
-            DermAI uses artificial intelligence to analyze skin conditions, provide preliminary
-            assessments, and help you connect with licensed dermatologists near you.
-            Always consult a medical professional for diagnosis and treatment.
+            DERMAI provides AI-assisted analysis only. Always consult a licensed dermatologist for proper diagnosis and treatment.
           </Text>
         </View>
-
-
       </ScrollView>
     </SafeAreaView>
   );
@@ -510,7 +592,7 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#fff' },
-  container: { flex: 1, backgroundColor: '#F7F8FA' },
+  container: { flex: 1, backgroundColor: '#fff' },
 
   // ── Header ──
   header: {
@@ -520,12 +602,14 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 14,
     backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3e8ee',
   },
   avatarCircle: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
@@ -536,15 +620,17 @@ const styles = StyleSheet.create({
     borderRadius: 22,
   },
   headerWelcome: { fontSize: 11, color: COLORS.textSecondary, letterSpacing: 0.2 },
-  headerName: { fontSize: 17, fontWeight: '700', color: COLORS.text },
+  headerName: { fontSize: 18, fontWeight: '800', color: '#111827' },
   iconBtn: {
     width: 40,
     height: 40,
-    backgroundColor: '#F5F6FA',
+    backgroundColor: '#f8f5f6',
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
+    borderWidth: 1,
+    borderColor: '#f3e8ee',
   },
   badge: {
     position: 'absolute',
@@ -563,17 +649,37 @@ const styles = StyleSheet.create({
   // ── Hero Banner ──
   heroBanner: {
     flexDirection: 'row',
-    backgroundColor: COLORS.primary,
+    backgroundColor: WEB_MAGENTA,
+    ...(Platform.OS === 'web'
+      ? ({
+          backgroundImage: 'linear-gradient(135deg, #6b0f3c 0%, #85134a 50%, #A0195A 100%)',
+        } as any)
+      : {}),
     marginHorizontal: 20,
-    marginTop: 6,
+    marginTop: 14,
     marginBottom: 20,
-    borderRadius: 22,
+    borderRadius: 24,
     minHeight: 150,
     overflow: 'hidden',
+    position: 'relative',
+    shadowColor: '#520b2e',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  heroDecorCircle: {
+    position: 'absolute',
+    top: -36,
+    right: -28,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
   },
   heroLeft: {
     flex: 1,
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     paddingVertical: 18,
     justifyContent: 'center',
   },
@@ -588,14 +694,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
     alignSelf: 'flex-start',
     flexShrink: 0,
   },
   heroBtnText: {
-    color: COLORS.primary,
+    color: WEB_MAGENTA,
     fontWeight: '700',
     fontSize: 12,
     flexShrink: 0,
@@ -608,7 +714,7 @@ const styles = StyleSheet.create({
   heroDoctorImage: {
     width: 130,
     height: 150,
-    borderBottomRightRadius: 22,
+    borderBottomRightRadius: 24,
   },
 
   // ── Section header ──
@@ -621,12 +727,12 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.text,
+    fontWeight: '800',
+    color: '#111827',
   },
-  seeAll: { fontSize: 13, color: COLORS.primary, fontWeight: '600' },
+  seeAll: { fontSize: 12.5, color: WEB_MAGENTA, fontWeight: '700' },
 
-  // ── 1. Your Overview (Berry Cards) ──
+  // ── 1. Your Overview (Web Bento Grid Style: 1 Featured Magenta + 3 Clean White Cards) ──
   overviewGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -637,25 +743,36 @@ const styles = StyleSheet.create({
   },
   overviewCard: {
     width: '48.5%',
-    borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 13,
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
     overflow: 'hidden',
     position: 'relative',
-    minHeight: 82,
+    minHeight: 92,
     justifyContent: 'space-between',
-    backgroundColor: '#be185d',
+  },
+  overviewCardFeatured: {
+    backgroundColor: WEB_MAGENTA,
     ...(Platform.OS === 'web'
       ? ({
-          backgroundImage: 'linear-gradient(135deg, #c21a62 0%, #be185d 40%, #9d174d 100%)',
-          cursor: 'default', userSelect: 'none',
+          backgroundImage: 'linear-gradient(135deg, #6b0f3c 0%, #85134a 50%, #A0195A 100%)',
         } as any)
       : {}),
-    shadowColor: '#be185d',
+    shadowColor: '#520b2e',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.16,
+    shadowOpacity: 0.18,
     shadowRadius: 8,
     elevation: 3,
+  },
+  overviewCardLight: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 1,
   },
   overviewDecorCircle: {
     position: 'absolute',
@@ -664,53 +781,166 @@ const styles = StyleSheet.create({
     width: 110,
     height: 110,
     borderRadius: 55,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    pointerEvents: 'none',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
   },
   overviewTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 6,
-    pointerEvents: 'none',
+    marginBottom: 8,
   },
-  overviewArrowBtn: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+  overviewArrowBtnFeatured: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.6)',
     backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  overviewLabel: {
-    color: 'rgba(255,255,255,0.92)',
-    fontSize: 11.5,
+  overviewArrowBtnLight: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  overviewLabelFeatured: {
+    color: '#ffffff',
+    fontSize: 12,
     fontWeight: '600',
     flex: 1,
     marginRight: 6,
   },
-  overviewValue: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '800',
-    lineHeight: 26,
-    pointerEvents: 'none',
+  overviewLabelLight: {
+    color: '#4b5563',
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
+    marginRight: 6,
   },
+  overviewValueFeatured: {
+    color: '#ffffff',
+    fontSize: 26,
+    fontWeight: '800',
+    lineHeight: 30,
+  },
+  overviewValueLight: {
+    color: '#111827',
+    fontSize: 26,
+    fontWeight: '800',
+    lineHeight: 30,
+  },
+  statSkelFeatured: {
+    width: 42,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.28)',
+  },
+  statSkelLight: {
+    width: 42,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: '#e5e7eb',
+  },
+
+  // ── Skeleton Card (Matches Uploaded Screenshot Design) ──
+  skeletonCard: {
+    backgroundColor: '#ffffff',
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 24,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#f3f4f6',
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  skelPillSm: {
+    height: 11,
+    width: 68,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 6,
+    marginBottom: 8,
+  },
+  skelHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 18,
+  },
+  skelTitleBlock: {
+    height: 30,
+    width: 100,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 10,
+  },
+  skelBadgePill: {
+    height: 22,
+    width: 66,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 999,
+  },
+  skelTwoColRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 18,
+  },
+  skelMiniBox: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  skelValueBar: {
+    height: 18,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 6,
+  },
+  skelDashedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#e2e8f0',
+  },
+  skelAvatarBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#f1f5f9',
+  },
+  skelLineBar: {
+    height: 12,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 6,
+  },
+
   // ── 2. Recent Analysis (Radial Progress & Clean Metadata) ──
   recentAnalysisCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
-    borderRadius: 16,
-    paddingVertical: 12,
+    borderRadius: 18,
+    paddingVertical: 13,
     paddingHorizontal: 14,
     shadowColor: '#000',
-    shadowOpacity: 0.04,
+    shadowOpacity: 0.03,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    elevation: 1,
     borderWidth: 1,
     borderColor: '#f1f5f9',
   },
@@ -719,9 +949,9 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   analysisTitle: {
-    fontSize: 14,
+    fontSize: 14.5,
     fontWeight: '700',
-    color: COLORS.text,
+    color: '#111827',
     marginBottom: 4,
   },
   analysisMetaRow: {
@@ -749,7 +979,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#fff',
     marginHorizontal: 20,
-    borderRadius: 16,
+    borderRadius: 18,
     padding: 14,
     borderWidth: 1,
     borderColor: '#e2e8f0',
@@ -759,7 +989,7 @@ const styles = StyleSheet.create({
   emptyAnalysisTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: COLORS.text,
+    color: '#111827',
   },
   emptyAnalysisSub: {
     fontSize: 11,
@@ -770,7 +1000,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: COLORS.primary,
+    backgroundColor: WEB_MAGENTA,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 10,
@@ -781,15 +1011,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-
-  // ── 3. Upcoming Appointment (Redesigned with Synced Doctor Profile) ──
+  // ── 3. Upcoming Appointment ──
   redesignedApptCard: {
-    backgroundColor: '#be185d',
+    backgroundColor: WEB_MAGENTA,
     marginHorizontal: 20,
-    borderRadius: 18,
-    padding: 15,
-    shadowColor: '#be185d',
-    shadowOpacity: 0.28,
+    borderRadius: 20,
+    padding: 16,
+    shadowColor: '#520b2e',
+    shadowOpacity: 0.22,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 4,
@@ -800,32 +1029,32 @@ const styles = StyleSheet.create({
   apptDoctorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.18)',
+    marginBottom: 10,
   },
   apptDoctorAvatarWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
     position: 'relative',
     marginRight: 12,
   },
   apptDoctorAvatar: {
     width: 48,
     height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 14,
     borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.7)',
+    borderColor: '#ffffff',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
   },
   apptDoctorAvatarFallback: {
     width: 48,
     height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
     borderWidth: 1.5,
     borderColor: 'rgba(255, 255, 255, 0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   apptDoctorOnlineDot: {
     position: 'absolute',
@@ -836,7 +1065,7 @@ const styles = StyleSheet.create({
     borderRadius: 6.5,
     backgroundColor: '#10b981',
     borderWidth: 2,
-    borderColor: '#be185d',
+    borderColor: WEB_MAGENTA,
   },
   apptDoctorInfo: {
     flex: 1,
@@ -895,7 +1124,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#fff',
     marginHorizontal: 20,
-    borderRadius: 16,
+    borderRadius: 18,
     padding: 14,
     borderWidth: 1,
     borderColor: '#e2e8f0',
@@ -906,14 +1135,16 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: '#eff6ff',
+    backgroundColor: '#fdf2f7',
+    borderWidth: 1,
+    borderColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
   },
   emptyApptTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: COLORS.text,
+    color: '#111827',
   },
   emptyApptSub: {
     fontSize: 11,
@@ -924,7 +1155,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#2563eb',
+    backgroundColor: WEB_MAGENTA,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 10,
@@ -945,34 +1176,47 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
-    borderRadius: 16,
+    borderRadius: 18,
     padding: 14,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
     shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
+    shadowOpacity: 0.02,
+    shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
     elevation: 1,
   },
   listIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  listCardTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 3 },
-  listCardSub: { fontSize: 11, color: COLORS.textSecondary, lineHeight: 16 },
+  listCardTitle: { fontSize: 13.5, fontWeight: '700', color: '#111827', marginBottom: 3 },
+  listCardSub: { fontSize: 11.5, color: '#6b7280', lineHeight: 16 },
 
-  // ── Info card ──
+  // ── Reminder card (Matches Web PatientDashboard Reminder) ──
   infoCard: {
-    backgroundColor: COLORS.primaryLight ?? '#e6f4ea',
+    backgroundColor: '#fdf2f7',
     marginHorizontal: 20,
-    borderRadius: 16,
+    borderRadius: 22,
     padding: 16,
     borderWidth: 1,
-    borderColor: COLORS.primary + '25',
+    borderColor: '#fbcfe1',
+    marginBottom: 14,
   },
-  infoIconRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  infoTitle: { fontSize: 14, fontWeight: '700', color: COLORS.primary },
-  infoText: { fontSize: 12, color: COLORS.text, lineHeight: 19 },
+  infoIconRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  reminderIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#fce7f0',
+    borderWidth: 1,
+    borderColor: '#fbcfe1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  infoTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
+  infoText: { fontSize: 12, color: '#4b5563', lineHeight: 18 },
 });

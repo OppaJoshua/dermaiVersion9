@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   Alert, ActivityIndicator, KeyboardAvoidingView,
-  Platform, Image, ScrollView,
+  Platform, Image, ScrollView, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -17,6 +17,33 @@ import { supabase } from '@/lib/supabase';
 import { savePatientAccount } from '@/lib/store';
 
 WebBrowser.maybeCompleteAuthSession();
+
+const USER_AGREEMENT_SECTIONS = [
+  {
+    title: '1. Acceptance of User Agreement',
+    body: 'By creating an account or signing in to DERMAI, you acknowledge that you have read, understood, and agree to be bound by this User Agreement, our Terms of Service, and our Data Privacy Policy.',
+  },
+  {
+    title: '2. Preliminary AI Skin Assessment Disclaimer',
+    body: "DERMAI's AI skin analysis provides preliminary, educational assessments only. It is NOT a substitute for professional medical diagnosis, advice, or treatment. Always consult a licensed dermatologist regarding any skin condition.",
+  },
+  {
+    title: '3. Data Privacy & Consent (RA 10173)',
+    body: 'In compliance with the Philippine Data Privacy Act of 2012 (Republic Act No. 10173), you consent to the secure collection and processing of your personal profile information, skin scan photos, and symptom responses solely for AI skin analysis and dermatology clinic consultations.',
+  },
+  {
+    title: '4. Account Responsibilities',
+    body: 'You are responsible for providing accurate personal information and maintaining the security of your account credentials. You must be at least 18 years old or have parental/guardian consent to use the platform.',
+  },
+  {
+    title: '5. Clinic Consultations & Payments',
+    body: "Appointments booked through DERMAI are subject to the participating dermatology clinic's policies and schedules. Online consultation payments processed via PayMongo (GCash / Maya) are recorded with official transaction references.",
+  },
+  {
+    title: '6. Emergency Medical Situations',
+    body: 'DERMAI is not an emergency medical service. If you experience severe symptoms such as difficulty breathing, rapidly spreading rashes, or high fever, seek immediate emergency medical care or call the DOH Hotline 1555.',
+  },
+];
 
 function GoogleIcon({ size = 20 }: { size?: number }) {
   return (
@@ -80,6 +107,11 @@ export default function LoginScreen() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  // User Agreement & Privacy Consent state
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [showAgreementModal, setShowAgreementModal] = useState(false);
+  const [pendingAuthAction, setPendingAuthAction] = useState<'email' | 'google' | null>(null);
+
   async function onAuthSuccess(user: any) {
     console.log('[Google Auth] Successfully authenticated user:', user.email);
     try {
@@ -134,7 +166,6 @@ export default function LoginScreen() {
   }
 
   useEffect(() => {
-    // 1. Listen for deep link events while the app is in the background or foreground
     const sub = Linking.addEventListener('url', async (event) => {
       console.log('[Google Auth] Deep link event received:', event.url);
       if (event.url && (event.url.includes('code=') || event.url.includes('access_token='))) {
@@ -142,7 +173,6 @@ export default function LoginScreen() {
       }
     });
 
-    // 2. Also check if the app was launched or resumed via deep link URL
     Linking.getInitialURL().then(async (url) => {
       if (url && (url.includes('code=') || url.includes('access_token='))) {
         console.log('[Google Auth] Initial deep link found:', url);
@@ -150,7 +180,6 @@ export default function LoginScreen() {
       }
     });
 
-    // 3. On Web: check window.location for tokens/code
     if (typeof window !== 'undefined' && window.location) {
       const href = window.location.href;
       if (href.includes('code=') || href.includes('access_token=')) {
@@ -182,7 +211,7 @@ export default function LoginScreen() {
     return valid;
   }
 
-  async function handleGoogleAuth() {
+  async function executeGoogleAuth() {
     setGoogleLoading(true);
     try {
       if (Platform.OS === 'web') {
@@ -199,8 +228,6 @@ export default function LoginScreen() {
         return;
       }
 
-      // In Expo Go, the phone OS only recognizes the exp:// scheme owned by Expo Go.
-      // In a development build or standalone APK, the OS recognizes dermaimobile://.
       const isExpoGo =
         Constants.appOwnership === 'expo' ||
         Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -229,8 +256,6 @@ export default function LoginScreen() {
         if (authResult.type === 'success' && authResult.url) {
           await processAuthUrl(authResult.url);
         } else {
-          // On Android, Custom Tabs often closes with type 'dismiss' when handling an intent:
-          // Check if session was already set or check initial deep link
           setTimeout(async () => {
             const initial = await Linking.getInitialURL();
             if (initial && (initial.includes('code=') || initial.includes('access_token='))) {
@@ -255,8 +280,16 @@ export default function LoginScreen() {
     }
   }
 
-  async function handleEmailAuth() {
-    if (!validateFields()) return;
+  async function handleGoogleAuth() {
+    if (!agreedToTerms) {
+      setPendingAuthAction('google');
+      setShowAgreementModal(true);
+      return;
+    }
+    await executeGoogleAuth();
+  }
+
+  async function executeEmailAuth() {
     setLoading(true);
     try {
       const trimmedEmail = email.trim();
@@ -274,6 +307,8 @@ export default function LoginScreen() {
             data: {
               role: 'patient',
               full_name: '',
+              terms_accepted: true,
+              terms_accepted_at: new Date().toISOString(),
             },
           },
         });
@@ -305,6 +340,29 @@ export default function LoginScreen() {
       }
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleEmailAuth() {
+    if (!validateFields()) return;
+    if (!agreedToTerms) {
+      setPendingAuthAction('email');
+      setShowAgreementModal(true);
+      return;
+    }
+    await executeEmailAuth();
+  }
+
+  async function handleAcceptAgreementModal() {
+    setAgreedToTerms(true);
+    setShowAgreementModal(false);
+    const action = pendingAuthAction;
+    setPendingAuthAction(null);
+
+    if (action === 'google') {
+      await executeGoogleAuth();
+    } else if (action === 'email') {
+      await executeEmailAuth();
     }
   }
 
@@ -439,6 +497,36 @@ export default function LoginScreen() {
               </TouchableOpacity>
             )}
 
+            {/* ── User Agreement & Data Privacy Checkbox ── */}
+            <View style={styles.agreementCard}>
+              <TouchableOpacity
+                onPress={() => setAgreedToTerms((prev) => !prev)}
+                activeOpacity={0.75}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={[styles.checkboxBox, agreedToTerms && styles.checkboxBoxChecked]}
+              >
+                {agreedToTerms && <Ionicons name="checkmark" size={13} color="#ffffff" />}
+              </TouchableOpacity>
+
+              <Text style={styles.agreementText}>
+                I have read and agree to the{' '}
+                <Text
+                  style={styles.agreementLink}
+                  onPress={() => setShowAgreementModal(true)}
+                >
+                  User Agreement &amp; Medical Disclaimer
+                </Text>{' '}
+                and{' '}
+                <Text
+                  style={styles.agreementLink}
+                  onPress={() => setShowAgreementModal(true)}
+                >
+                  Data Privacy Policy (RA 10173)
+                </Text>
+                .
+              </Text>
+            </View>
+
             <TouchableOpacity
               style={[styles.submitBtn, loading && styles.btnDisabled]}
               onPress={handleEmailAuth}
@@ -472,6 +560,89 @@ export default function LoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* ── User Agreement & Medical Disclaimer Modal ── */}
+      <Modal
+        visible={showAgreementModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowAgreementModal(false);
+          setPendingAuthAction(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            {/* Modal Header */}
+            <View style={styles.modalHeader}>
+              <View style={styles.modalHeaderLeft}>
+                <View style={styles.modalShieldBadge}>
+                  <Ionicons name="shield-checkmark" size={18} color="#ffffff" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modalTitle}>DermAI User Agreement</Text>
+                  <Text style={styles.modalSubtitle}>
+                    Terms of Use, Medical Disclaimer &amp; Privacy
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowAgreementModal(false);
+                  setPendingAuthAction(null);
+                }}
+                style={styles.modalCloseBtn}
+              >
+                <Ionicons name="close" size={18} color="#ffffff" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Modal Scrollable Terms */}
+            <ScrollView
+              style={styles.modalBody}
+              contentContainerStyle={{ paddingBottom: 16 }}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.modalIntroBanner}>
+                <Ionicons name="document-text-outline" size={18} color={COLORS.primary} />
+                <Text style={styles.modalIntroTxt}>
+                  Please review and accept our User Agreement before creating or accessing your DermAI account.
+                </Text>
+              </View>
+
+              {USER_AGREEMENT_SECTIONS.map((sec) => (
+                <View key={sec.title} style={styles.modalSection}>
+                  <Text style={styles.modalSectionTitle}>{sec.title}</Text>
+                  <Text style={styles.modalSectionBody}>{sec.body}</Text>
+                </View>
+              ))}
+            </ScrollView>
+
+            {/* Modal Footer */}
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={styles.declineBtn}
+                onPress={() => {
+                  setShowAgreementModal(false);
+                  setPendingAuthAction(null);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.declineBtnTxt}>Decline</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.acceptBtn}
+                onPress={handleAcceptAgreementModal}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="checkmark-circle" size={17} color="#ffffff" />
+                <Text style={styles.acceptBtnTxt}>I Agree &amp; Continue</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -590,13 +761,52 @@ const styles = StyleSheet.create({
 
   forgotTxt: { fontSize: 13, color: COLORS.primary, fontWeight: '600' },
 
+  // ── User Agreement Checkbox Card ──
+  agreementCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 18,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: '#fdf2f7',
+    borderWidth: 1,
+    borderColor: '#fce7f0',
+  },
+  checkboxBox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 1.8,
+    borderColor: COLORS.primary,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  checkboxBoxChecked: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  agreementText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#4b5563',
+  },
+  agreementLink: {
+    color: COLORS.primary,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+  },
+
   submitBtn: {
     width: '100%',
     backgroundColor: COLORS.primary,
     borderRadius: 16,
     paddingVertical: 16,
     alignItems: 'center',
-    marginTop: 24,
+    marginTop: 18,
     shadowColor: COLORS.primary,
     shadowOpacity: 0.25,
     shadowRadius: 10,
@@ -608,4 +818,130 @@ const styles = StyleSheet.create({
 
   toggleText: { fontSize: 13, color: COLORS.textSecondary, textAlign: 'center' },
   toggleLink: { color: COLORS.primary, fontWeight: '700' },
+
+  // ── User Agreement Modal ──
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    maxHeight: '84%',
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  modalHeaderLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  modalShieldBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  modalSubtitle: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.82)',
+    marginTop: 1,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalBody: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+  },
+  modalIntroBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: '#fdf2f7',
+    borderWidth: 1,
+    borderColor: '#fce7f0',
+    marginBottom: 14,
+  },
+  modalIntroTxt: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#374151',
+    fontWeight: '500',
+  },
+  modalSection: {
+    marginBottom: 14,
+  },
+  modalSectionTitle: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  modalSectionBody: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#4b5563',
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    backgroundColor: '#f8fafc',
+  },
+  declineBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 999,
+    backgroundColor: '#e2e8f0',
+  },
+  declineBtnTxt: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  acceptBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 999,
+    backgroundColor: COLORS.primary,
+  },
+  acceptBtnTxt: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
 });

@@ -2,7 +2,7 @@ import { Tabs } from 'expo-router';
 import { View, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS, FONTS } from '@/lib/constants';
+import { COLORS } from '@/lib/constants';
 
 function ScanIcon({ focused }: { focused: boolean }) {
   return (
@@ -11,7 +11,7 @@ function ScanIcon({ focused }: { focused: boolean }) {
         width: 54,
         height: 54,
         borderRadius: 27,
-        backgroundColor: COLORS.primary,
+        backgroundColor: focused ? COLORS.primaryDark : COLORS.primary,
         alignItems: 'center',
         justifyContent: 'center',
         top: Platform.OS === 'web' ? -12 : -14,
@@ -75,11 +75,11 @@ export default function AppLayout() {
         }}
       />
       <Tabs.Screen
-        name="history"
+        name="clinics"
         options={{
-          title: 'History',
+          title: 'Find Clinic',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'clipboard' : 'clipboard-outline'} size={24} color={color} />
+            <Ionicons name={focused ? 'location' : 'location-outline'} size={24} color={color} />
           ),
         }}
       />
@@ -100,16 +100,16 @@ export default function AppLayout() {
         }}
       />
       <Tabs.Screen
-        name="profile"
+        name="history"
         options={{
-          title: 'Profile',
+          title: 'History',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={24} color={color} />
+            <Ionicons name={focused ? 'clipboard' : 'clipboard-outline'} size={24} color={color} />
           ),
         }}
       />
       {/* Hidden from tab bar but accessible via navigation */}
-      <Tabs.Screen name="clinics" options={{ href: null }} />
+      <Tabs.Screen name="profile" options={{ href: null }} />
       <Tabs.Screen name="subscription" options={{ href: null }} />
       <Tabs.Screen name="notifications" options={{ href: null }} />
       <Tabs.Screen name="library" options={{ href: null }} />

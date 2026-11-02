@@ -13,11 +13,13 @@ import {
   Alert,
   PanResponder,
   Platform,
+  Animated,
+  Easing,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS, CEBU_DISTRICTS, SAMPLE_CLINICS } from '@/lib/constants';
+import { COLORS, CEBU_DISTRICTS } from '@/lib/constants';
 import {
   getClinics,
   getCurrentUser,
@@ -35,6 +37,100 @@ const CARTO_API_KEY = 'cb1_4rf0_1_52a456f79acb06df41f3abb6';
 
 // Default map center: Cebu City Capitol / Fuente area
 const DEFAULT_CENTER = { lat: 10.3157, lng: 123.8854 };
+
+// Approximate coordinates for Cebu districts if GPS is unavailable
+const DISTRICT_COORDS: Record<string, { lat: number; lng: number }> = {
+  'Cebu City': { lat: 10.3157, lng: 123.8854 },
+  'Mandaue City': { lat: 10.3236, lng: 123.9223 },
+  'Lapu-Lapu City': { lat: 10.3103, lng: 123.9494 },
+  'Talisay City': { lat: 10.2447, lng: 123.8494 },
+  'Consolacion': { lat: 10.3766, lng: 123.9568 },
+  'Liloan': { lat: 10.3995, lng: 123.9967 },
+  'Minglanilla': { lat: 10.2451, lng: 123.7963 },
+  'Naga City': { lat: 10.2085, lng: 123.7573 },
+};
+
+// Resolve accurate clinic coordinates from lat/lng or address/district keywords
+function resolveClinicCoords(clinic: ClinicRecord, index: number): { lat: number; lng: number } {
+  const rawLat = Number(clinic.lat);
+  const rawLng = Number(clinic.lng);
+  const isDefaultFallback =
+    !rawLat ||
+    !rawLng ||
+    isNaN(rawLat) ||
+    isNaN(rawLng) ||
+    (Math.abs(rawLat - DEFAULT_CENTER.lat) < 0.0001 &&
+      Math.abs(rawLng - DEFAULT_CENTER.lng) < 0.0001);
+
+  if (!isDefaultFallback) {
+    return { lat: rawLat, lng: rawLng };
+  }
+
+  const locText = `${clinic.address || ''} ${clinic.district || ''} ${clinic.name || ''}`.toLowerCase();
+  let base = { ...DEFAULT_CENTER };
+
+  if (locText.includes('sudtungan') || locText.includes('babag')) {
+    base = { lat: 10.2895, lng: 123.9428 };
+  } else if (locText.includes('lapu-lapu') || locText.includes('lapu lapu') || locText.includes('mactan')) {
+    base = { lat: 10.3103, lng: 123.9494 };
+  } else if (locText.includes('mandaue') || locText.includes('subangdaku') || locText.includes('as fortuna')) {
+    base = { lat: 10.3321, lng: 123.9352 };
+  } else if (locText.includes('banilad') || locText.includes('talamban')) {
+    base = { lat: 10.3525, lng: 123.9138 };
+  } else if (locText.includes('it park') || locText.includes('lahug') || locText.includes('apas')) {
+    base = { lat: 10.3307, lng: 123.9064 };
+  } else if (locText.includes('mabolo') || locText.includes('ayala')) {
+    base = { lat: 10.3182, lng: 123.9056 };
+  } else if (locText.includes('fuente') || locText.includes('osmeña') || locText.includes('capitol')) {
+    base = { lat: 10.3105, lng: 123.8915 };
+  } else if (locText.includes('guadalupe') || locText.includes('banawa')) {
+    base = { lat: 10.3208, lng: 123.8822 };
+  } else if (locText.includes('talisay')) {
+    base = { lat: 10.2447, lng: 123.8494 };
+  } else if (locText.includes('consolacion')) {
+    base = { lat: 10.3766, lng: 123.9568 };
+  } else if (locText.includes('liloan') || locText.includes('lilo-an')) {
+    base = { lat: 10.3995, lng: 123.9967 };
+  } else if (locText.includes('minglanilla')) {
+    base = { lat: 10.2451, lng: 123.7963 };
+  } else if (clinic.district && DISTRICT_COORDS[clinic.district]) {
+    base = { ...DISTRICT_COORDS[clinic.district] };
+  }
+
+  // Add a small deterministic spread when fallback coordinates are used so pins never stack identically
+  const angle = (index * 137.5 * Math.PI) / 180;
+  const radius = 0.0045 * ((index % 4) + 1);
+  return {
+    lat: Number((base.lat + Math.sin(angle) * radius).toFixed(6)),
+    lng: Number((base.lng + Math.cos(angle) * radius).toFixed(6)),
+  };
+}
+
+// Haversine distance in kilometers
+function calculateDistanceKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371; // Earth radius in km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function formatDistanceLabel(km: number): string {
+  if (!isFinite(km)) return '';
+  if (km < 1) return `${Math.max(100, Math.round(km * 1000))} m away`;
+  return `${km.toFixed(1)} km away`;
+}
 
 // Common Conditions matching Web FindClinicsPage
 const COMMON_CONDITIONS = [
@@ -105,16 +201,31 @@ export default function ClinicsScreen() {
   const [query, setQuery] = useState('');
   const [district, setDistrict] = useState('All');
   const [conditionFilter, setConditionFilter] = useState('All Conditions');
-  const [sortBy, setSortBy] = useState<'recommended' | 'fee_asc' | 'fee_desc' | 'name'>('recommended');
+  const [sortBy, setSortBy] = useState<'nearest' | 'recommended' | 'fee_asc' | 'fee_desc' | 'name'>('nearest');
   const [selectedClinic, setSelectedClinic] = useState<ClinicRecord | null>(null);
 
-  // Map state
-  const [zoom, setZoom] = useState(13);
+  // User location state for "Nearest Clinic" feature
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number }>(DEFAULT_CENTER);
+  const [locationLabel, setLocationLabel] = useState<string>('Cebu City');
+
+  // Map state (supports hand pinch-to-zoom, double-tap zoom, and drag-to-pan)
+  const [zoom, setZoom] = useState(14);
+  const zoomRef = useRef(14);
+  const [pinchScale, setPinchScale] = useState(1);
   const [mapCenter, setMapCenter] = useState(DEFAULT_CENTER);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const panStartRef = useRef({ x: 0, y: 0 });
   const currentPanRef = useRef({ x: 0, y: 0 });
+  const pinchStartDistRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef<number>(14);
+  const lastTapRef = useRef<number>(0);
   const [selectedMapClinicId, setSelectedMapClinicId] = useState<string | null>(null);
+  const [showMapSearchDropdown, setShowMapSearchDropdown] = useState(false);
+  const flyAnim = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
 
   useFocusEffect(
     useCallback(() => {
@@ -122,15 +233,46 @@ export default function ClinicsScreen() {
     }, [])
   );
 
-  async function loadInitialData() {
-    const clinicsData = await getClinics();
-    setAllClinics(clinicsData);
-    if (clinicsData.length > 0 && !selectedMapClinicId) {
-      setSelectedMapClinicId(clinicsData[0].id);
+  function detectUserLocation(patient?: PatientAccount | null) {
+    // 1. If patient has a saved district, use it as initial location
+    const patDistrict = (patient as any)?.district;
+    if (patDistrict && DISTRICT_COORDS[patDistrict]) {
+      setUserLocation(DISTRICT_COORDS[patDistrict]);
+      setLocationLabel(patDistrict);
     }
 
-    const currentUser = await getCurrentUser();
+    // 2. Request live GPS coordinates if available on device/browser
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          // Use GPS if within the Philippines/Cebu region, otherwise keep Cebu center so Cebu clinics remain reachable
+          if (latitude >= 9.4 && latitude <= 11.5 && longitude >= 123.0 && longitude <= 124.5) {
+            setUserLocation({ lat: latitude, lng: longitude });
+            setLocationLabel('Your Current Location');
+          }
+        },
+        () => {
+          // Silently keep Cebu district / default center fallback
+        },
+        { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
+      );
+    }
+  }
+
+  async function loadInitialData() {
+    const [clinicsData, currentUser] = await Promise.all([
+      getClinics(),
+      getCurrentUser(),
+    ]);
+    const normalizedClinics = clinicsData.map((c, idx) => {
+      const coords = resolveClinicCoords(c, idx);
+      return { ...c, lat: coords.lat, lng: coords.lng };
+    });
+    setAllClinics(normalizedClinics);
     setUser(currentUser);
+    detectUserLocation(currentUser);
+
     if (currentUser) {
       const saved = await getSavedClinics(currentUser.id);
       setSavedClinicIds(saved);
@@ -156,7 +298,18 @@ export default function ClinicsScreen() {
     }
   }
 
-  // Filtered & sorted clinics matching Web FindClinicsPage
+  // Distance map from userLocation to each clinic
+  const clinicDistancesKm = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const c of allClinics) {
+      const cLat = c.lat || DEFAULT_CENTER.lat;
+      const cLng = c.lng || DEFAULT_CENTER.lng;
+      map[c.id] = calculateDistanceKm(userLocation.lat, userLocation.lng, cLat, cLng);
+    }
+    return map;
+  }, [allClinics, userLocation]);
+
+  // Filtered & sorted clinics
   const clinics = useMemo(() => {
     const term = query.trim().toLowerCase();
     const filtered = allClinics.filter((clinic) => {
@@ -176,14 +329,48 @@ export default function ClinicsScreen() {
     });
 
     return filtered.sort((a, b) => {
+      if (sortBy === 'nearest') {
+        const distA = clinicDistancesKm[a.id] ?? 999;
+        const distB = clinicDistancesKm[b.id] ?? 999;
+        return distA - distB;
+      }
       const feeA = parseNumericFee(a.consultationFee);
       const feeB = parseNumericFee(b.consultationFee);
       if (sortBy === 'fee_asc') return feeA - feeB;
       if (sortBy === 'fee_desc') return feeB - feeA;
       if (sortBy === 'name') return a.name.localeCompare(b.name);
-      return 0; // 'recommended' default order
+      return 0; // 'recommended'
     });
-  }, [allClinics, query, district, conditionFilter, sortBy]);
+  }, [allClinics, query, district, conditionFilter, sortBy, clinicDistancesKm]);
+
+  // ID of the closest clinic among currently filtered clinics
+  const nearestClinicId = useMemo(() => {
+    if (clinics.length === 0) return null;
+    let bestId = clinics[0].id;
+    let bestDist = clinicDistancesKm[bestId] ?? Infinity;
+    for (const c of clinics) {
+      const d = clinicDistancesKm[c.id] ?? Infinity;
+      if (d < bestDist) {
+        bestDist = d;
+        bestId = c.id;
+      }
+    }
+    return bestId;
+  }, [clinics, clinicDistancesKm]);
+
+  // Auto-select nearest clinic and center the map on initial load
+  useEffect(() => {
+    if (clinics.length > 0 && !selectedMapClinicId) {
+      const targetId = nearestClinicId || clinics[0].id;
+      const targetClinic = clinics.find((c) => c.id === targetId) || clinics[0];
+      setSelectedMapClinicId(targetClinic.id);
+      if (targetClinic.lat && targetClinic.lng) {
+        setMapCenter({ lat: targetClinic.lat, lng: targetClinic.lng });
+        currentPanRef.current = { x: 0, y: 0 };
+        setPanOffset({ x: 0, y: 0 });
+      }
+    }
+  }, [clinics, nearestClinicId, selectedMapClinicId]);
 
   // Active clinic for the floating bottom card on Map view
   const activeMapClinic = useMemo(() => {
@@ -192,50 +379,131 @@ export default function ClinicsScreen() {
     return clinics.find((c) => c.id === selectedMapClinicId) || clinics[0];
   }, [clinics, selectedMapClinicId]);
 
-  // PanResponder for smooth interactive map dragging
+  // Focus & zoom onto the nearest clinic
+  function handleFocusNearestClinic() {
+    setSortBy('nearest');
+    detectUserLocation(user);
+    if (!nearestClinicId) return;
+    const nearest = allClinics.find((c) => c.id === nearestClinicId);
+    if (nearest) {
+      selectClinicOnMap(nearest, 15);
+    }
+  }
+
+  // Multi-touch PanResponder: 1 finger pans, 2 fingers pinch-to-zoom, double-tap zooms in
   const panResponder = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 3 || Math.abs(gesture.dy) > 3,
-        onPanResponderGrant: () => {
-          panStartRef.current = { ...currentPanRef.current };
+        onMoveShouldSetPanResponder: (_, gesture) =>
+          Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2 || gesture.numberActiveTouches >= 2,
+        onPanResponderGrant: (evt) => {
+          const touches = evt.nativeEvent.touches;
+          if (touches && touches.length >= 2) {
+            const dx = touches[0].pageX - touches[1].pageX;
+            const dy = touches[0].pageY - touches[1].pageY;
+            pinchStartDistRef.current = Math.hypot(dx, dy);
+            pinchStartZoomRef.current = zoomRef.current;
+          } else {
+            pinchStartDistRef.current = null;
+            panStartRef.current = { ...currentPanRef.current };
+
+            // Double-tap to zoom in with one hand
+            const now = Date.now();
+            if (now - lastTapRef.current < 280) {
+              setZoom((z) => (z < 16 ? z + 1 : 13));
+            }
+            lastTapRef.current = now;
+          }
         },
-        onPanResponderMove: (_, gesture) => {
-          const nextPan = {
-            x: panStartRef.current.x + gesture.dx,
-            y: panStartRef.current.y + gesture.dy,
-          };
-          currentPanRef.current = nextPan;
-          setPanOffset(nextPan);
+        onPanResponderMove: (evt, gesture) => {
+          const touches = evt.nativeEvent.touches;
+          if (touches && touches.length >= 2) {
+            const dx = touches[0].pageX - touches[1].pageX;
+            const dy = touches[0].pageY - touches[1].pageY;
+            const dist = Math.hypot(dx, dy);
+
+            if (!pinchStartDistRef.current || pinchStartDistRef.current < 10) {
+              pinchStartDistRef.current = dist;
+              pinchStartZoomRef.current = zoomRef.current;
+              return;
+            }
+
+            const ratio = dist / pinchStartDistRef.current;
+            // Smooth visual scale while pinching
+            const clampedVisualScale = Math.min(Math.max(ratio, 0.65), 1.65);
+            setPinchScale(clampedVisualScale);
+
+            // Step discrete tile zoom when pinch crosses threshold
+            const zoomDelta = Math.round(Math.log2(ratio) * 1.6);
+            const targetZoom = Math.min(16, Math.max(11, pinchStartZoomRef.current + zoomDelta));
+            if (targetZoom !== zoomRef.current) {
+              zoomRef.current = targetZoom;
+              setZoom(targetZoom);
+              pinchStartDistRef.current = dist;
+              pinchStartZoomRef.current = targetZoom;
+              setPinchScale(1);
+            }
+            return;
+          }
+
+          // Single-finger drag to pan when not pinching
+          if (pinchStartDistRef.current === null) {
+            const nextPan = {
+              x: panStartRef.current.x + gesture.dx,
+              y: panStartRef.current.y + gesture.dy,
+            };
+            currentPanRef.current = nextPan;
+            setPanOffset(nextPan);
+          }
         },
-        onPanResponderRelease: () => {},
+        onPanResponderRelease: () => {
+          pinchStartDistRef.current = null;
+          setPinchScale(1);
+        },
+        onPanResponderTerminate: () => {
+          pinchStartDistRef.current = null;
+          setPinchScale(1);
+        },
       }),
     []
   );
 
-  function recenterMap() {
-    setMapCenter(DEFAULT_CENTER);
+  function selectClinicOnMap(clinic: ClinicRecord, targetZoom?: number) {
+    setSelectedMapClinicId(clinic.id);
+    setShowMapSearchDropdown(false);
+
+    const targetLat = clinic.lat || DEFAULT_CENTER.lat;
+    const targetLng = clinic.lng || DEFAULT_CENTER.lng;
+    const nextZoom = targetZoom ?? Math.max(zoomRef.current, 14);
+
+    // Compute current screen pixel delta so the map smoothly glides to the clinic
+    const currentPinPos = projectLatLngToPixels(targetLat, targetLng);
+    const deltaX = currentPinPos.x - SCREEN_WIDTH / 2;
+    const deltaY = currentPinPos.y - SCREEN_HEIGHT / 2;
+
+    const clampedStartX = Math.max(-SCREEN_WIDTH * 0.85, Math.min(SCREEN_WIDTH * 0.85, deltaX));
+    const clampedStartY = Math.max(-SCREEN_HEIGHT * 0.75, Math.min(SCREEN_HEIGHT * 0.75, deltaY));
+
+    setMapCenter({ lat: targetLat, lng: targetLng });
     currentPanRef.current = { x: 0, y: 0 };
     setPanOffset({ x: 0, y: 0 });
-    setZoom(13);
-  }
-
-  function handleZoomIn() {
-    if (zoom < 16) setZoom((z) => z + 1);
-  }
-
-  function handleZoomOut() {
-    if (zoom > 11) setZoom((z) => z - 1);
-  }
-
-  function selectClinicOnMap(clinic: ClinicRecord) {
-    setSelectedMapClinicId(clinic.id);
-    if (clinic.lat && clinic.lng) {
-      setMapCenter({ lat: clinic.lat, lng: clinic.lng });
-      currentPanRef.current = { x: 0, y: 0 };
-      setPanOffset({ x: 0, y: 0 });
+    if (nextZoom !== zoomRef.current) {
+      zoomRef.current = nextZoom;
+      setZoom(nextZoom);
     }
+
+    flyAnim.stopAnimation();
+    flyAnim.setValue({
+      x: Math.abs(clampedStartX) > 4 ? clampedStartX : 0,
+      y: Math.abs(clampedStartY) > 4 ? clampedStartY : -18,
+    });
+    Animated.timing(flyAnim, {
+      toValue: { x: 0, y: 0 },
+      duration: 380,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: Platform.OS !== 'web',
+    }).start();
   }
 
   function nextMapClinic() {
@@ -244,12 +512,7 @@ export default function ClinicsScreen() {
     const nextIndex = (currentIndex + 1) % clinics.length;
     const target = clinics[nextIndex];
     if (target) {
-      setSelectedMapClinicId(target.id);
-      if (target.lat && target.lng) {
-        setMapCenter({ lat: target.lat, lng: target.lng });
-        currentPanRef.current = { x: 0, y: 0 };
-        setPanOffset({ x: 0, y: 0 });
-      }
+      selectClinicOnMap(target);
     }
   }
 
@@ -259,12 +522,7 @@ export default function ClinicsScreen() {
     const prevIndex = (currentIndex - 1 + clinics.length) % clinics.length;
     const target = clinics[prevIndex];
     if (target) {
-      setSelectedMapClinicId(target.id);
-      if (target.lat && target.lng) {
-        setMapCenter({ lat: target.lat, lng: target.lng });
-        currentPanRef.current = { x: 0, y: 0 };
-        setPanOffset({ x: 0, y: 0 });
-      }
+      selectClinicOnMap(target);
     }
   }
 
@@ -299,11 +557,8 @@ export default function ClinicsScreen() {
     return tiles;
   }, [mapCenter, zoom, panOffset]);
 
-  // Project clinic coordinates to screen pixels
-  function getClinicPinCoords(clinic: ClinicRecord) {
-    const clinicLat = clinic.lat || DEFAULT_CENTER.lat;
-    const clinicLng = clinic.lng || DEFAULT_CENTER.lng;
-
+  // Project any lat/lng coordinate to screen pixels
+  function projectLatLngToPixels(lat: number, lng: number) {
     const sinCenter = Math.sin((mapCenter.lat * Math.PI) / 180);
     const clampedSinCenter = Math.min(Math.max(sinCenter, -0.9999), 0.9999);
     const totalPixels = 256 * Math.pow(2, zoom);
@@ -311,26 +566,60 @@ export default function ClinicsScreen() {
     const centerX = totalPixels * ((mapCenter.lng + 180) / 360);
     const centerY = totalPixels * (0.5 - Math.log((1 + clampedSinCenter) / (1 - clampedSinCenter)) / (4 * Math.PI));
 
-    const sinClinic = Math.sin((clinicLat * Math.PI) / 180);
-    const clampedSinClinic = Math.min(Math.max(sinClinic, -0.9999), 0.9999);
-    const clinicX = totalPixels * ((clinicLng + 180) / 360);
-    const clinicY = totalPixels * (0.5 - Math.log((1 + clampedSinClinic) / (1 - clampedSinClinic)) / (4 * Math.PI));
+    const sinTarget = Math.sin((lat * Math.PI) / 180);
+    const clampedSinTarget = Math.min(Math.max(sinTarget, -0.9999), 0.9999);
+    const targetX = totalPixels * ((lng + 180) / 360);
+    const targetY = totalPixels * (0.5 - Math.log((1 + clampedSinTarget) / (1 - clampedSinTarget)) / (4 * Math.PI));
 
     return {
-      x: SCREEN_WIDTH / 2 + (clinicX - centerX) + panOffset.x,
-      y: SCREEN_HEIGHT / 2 + (clinicY - centerY) + panOffset.y,
+      x: SCREEN_WIDTH / 2 + (targetX - centerX) + panOffset.x,
+      y: SCREEN_HEIGHT / 2 + (targetY - centerY) + panOffset.y,
     };
   }
+
+  function getClinicPinCoords(clinic: ClinicRecord) {
+    return projectLatLngToPixels(
+      clinic.lat || DEFAULT_CENTER.lat,
+      clinic.lng || DEFAULT_CENTER.lng
+    );
+  }
+
+  const userPinCoords = projectLatLngToPixels(userLocation.lat, userLocation.lng);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {viewMode === 'map' ? (
         /* ══════════════════════════════════════════════════════════
-           MAP VIEW (Full background map with floating card)
+           MAP VIEW (Pinch-to-zoom + Nearest Clinic Detection)
            ══════════════════════════════════════════════════════════ */
-        <View style={styles.mapRootContainer}>
-          {/* ── Interactive Map Background Canvas ── */}
-          <View style={styles.mapCanvas} {...panResponder.panHandlers}>
+        <View
+          style={styles.mapRootContainer}
+          {...(Platform.OS === 'web'
+            ? {
+                onWheel: (e: any) => {
+                  if (e.deltaY < 0) {
+                    setZoom((z) => Math.min(16, z + 1));
+                  } else if (e.deltaY > 0) {
+                    setZoom((z) => Math.max(11, z - 1));
+                  }
+                },
+              }
+            : {})}
+        >
+          {/* ── Interactive Map Background Canvas (Pinch & Drag with Hands) ── */}
+          <Animated.View
+            style={[
+              styles.mapCanvas,
+              {
+                transform: [
+                  { translateX: flyAnim.x },
+                  { translateY: flyAnim.y },
+                  ...(pinchScale !== 1 ? [{ scale: pinchScale }] : []),
+                ],
+              },
+            ]}
+            {...panResponder.panHandlers}
+          >
             {mapTiles.map((tile) => (
               <Image
                 key={tile.key}
@@ -340,7 +629,7 @@ export default function ClinicsScreen() {
               />
             ))}
 
-            {/* Radar / Scanning area circle accent (from user mockup) */}
+            {/* Radar / Scanning area circle accent */}
             <View
               pointerEvents="none"
               style={[
@@ -352,10 +641,37 @@ export default function ClinicsScreen() {
               ]}
             />
 
-            {/* Clinic Pins on Map */}
+            {/* User Location Marker ("You") */}
+            <View
+              pointerEvents="none"
+              style={[
+                styles.userLocMarkerWrap,
+                { left: userPinCoords.x - 18, top: userPinCoords.y - 18 },
+              ]}
+            >
+              <View style={styles.userLocPulse} />
+              <View style={styles.userLocDot} />
+            </View>
+          </Animated.View>
+
+          {/* ── Clinic Pins Overlay (Sibling above mapCanvas so PanResponder never blocks pin clicks) ── */}
+          <Animated.View
+            pointerEvents="box-none"
+            style={[
+              styles.pinsOverlayLayer,
+              {
+                transform: [
+                  { translateX: flyAnim.x },
+                  { translateY: flyAnim.y },
+                ],
+              },
+            ]}
+          >
             {clinics.map((clinic, index) => {
               const coords = getClinicPinCoords(clinic);
               const isSelected = activeMapClinic?.id === clinic.id;
+              const isNearest = clinic.id === nearestClinicId;
+              const distKm = clinicDistancesKm[clinic.id];
 
               return (
                 <TouchableOpacity
@@ -363,29 +679,49 @@ export default function ClinicsScreen() {
                   activeOpacity={0.85}
                   style={[
                     styles.pinContainer,
-                    { left: coords.x - 22, top: coords.y - 44 },
+                    { left: coords.x - (isSelected ? 48 : 30), top: coords.y - (isNearest ? 60 : 44) },
                     isSelected && styles.pinContainerSelected,
                   ]}
-                  onPress={() => selectClinicOnMap(clinic)}
+                  onPress={() => selectClinicOnMap(clinic, 15)}
                 >
+                  {isNearest && (
+                    <View style={styles.nearestPinTag}>
+                      <Ionicons name="navigate" size={9} color="#fff" />
+                      <Text style={styles.nearestPinTagTxt}>Nearest</Text>
+                    </View>
+                  )}
                   <View style={[styles.pinBadge, isSelected && styles.pinBadgeSelected]}>
                     <Ionicons
-                      name={isSelected ? 'shield-checkmark' : 'business'}
-                      size={15}
+                      name={isSelected ? 'location' : 'business'}
+                      size={14}
                       color="#fff"
                     />
-                    <Text style={styles.pinNumber}>{index + 1}</Text>
+                    <Text style={styles.pinNumber} numberOfLines={1}>
+                      {isSelected
+                        ? `${clinic.name.split(' ')[0]} · ${distKm !== undefined ? `${distKm.toFixed(1)}km` : ''}`
+                        : distKm !== undefined
+                        ? `${distKm.toFixed(1)}km`
+                        : index + 1}
+                    </Text>
                   </View>
                   <View style={[styles.pinPoint, isSelected && styles.pinPointSelected]} />
                 </TouchableOpacity>
               );
             })}
-          </View>
+          </Animated.View>
 
           {/* ── Top Floating Header & Controls ── */}
           <View style={styles.topFloatingSection}>
             <View style={styles.topTitleRow}>
               <Text style={styles.topTitle}>Clinics</Text>
+              <TouchableOpacity
+                style={styles.nearMeHeaderPill}
+                onPress={handleFocusNearestClinic}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="navigate" size={12} color="#fff" />
+                <Text style={styles.nearMeHeaderPillTxt}>Find Nearest to Me</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Search Pill + Map/List Mode Switcher Toggle */}
@@ -394,14 +730,31 @@ export default function ClinicsScreen() {
                 <Ionicons name="search" size={17} color={COLORS.primary} />
                 <TextInput
                   value={query}
-                  onChangeText={setQuery}
+                  onChangeText={(txt) => {
+                    setQuery(txt);
+                    setShowMapSearchDropdown(txt.trim().length > 0);
+                  }}
+                  onFocus={() => {
+                    if (query.trim().length > 0) setShowMapSearchDropdown(true);
+                  }}
                   placeholder="Search clinic, doctor, or condition..."
                   placeholderTextColor="#94a3b8"
                   style={styles.searchPillInput}
                   returnKeyType="search"
+                  onSubmitEditing={() => {
+                    if (clinics.length > 0) {
+                      selectClinicOnMap(clinics[0], 15);
+                    }
+                  }}
                 />
                 {query.length > 0 && (
-                  <TouchableOpacity onPress={() => setQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setQuery('');
+                      setShowMapSearchDropdown(false);
+                    }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
                     <Ionicons name="close-circle" size={16} color="#94a3b8" />
                   </TouchableOpacity>
                 )}
@@ -425,6 +778,44 @@ export default function ClinicsScreen() {
                 </TouchableOpacity>
               </View>
             </View>
+
+            {/* Quick Search Results Dropdown on Map (Click a clinic to move map directly to it) */}
+            {showMapSearchDropdown && query.trim().length > 0 && (
+              <View style={styles.mapSearchDropdown}>
+                {clinics.length === 0 ? (
+                  <View style={styles.mapSearchEmptyRow}>
+                    <Text style={styles.mapSearchEmptyTxt}>No matching clinics found</Text>
+                  </View>
+                ) : (
+                  clinics.slice(0, 4).map((c) => {
+                    const dKm = clinicDistancesKm[c.id];
+                    return (
+                      <TouchableOpacity
+                        key={c.id}
+                        style={styles.mapSearchItem}
+                        activeOpacity={0.75}
+                        onPress={() => selectClinicOnMap(c, 15)}
+                      >
+                        <View style={styles.mapSearchItemIcon}>
+                          <Ionicons name="location" size={15} color={COLORS.primary} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.mapSearchItemTitle} numberOfLines={1}>
+                            {c.name}
+                          </Text>
+                          <Text style={styles.mapSearchItemSub} numberOfLines={1}>
+                            {c.address || c.district || 'Cebu City'}
+                          </Text>
+                        </View>
+                        {dKm !== undefined && (
+                          <Text style={styles.mapSearchItemDist}>{dKm.toFixed(1)} km</Text>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
+              </View>
+            )}
 
             {/* Horizontal Filter Chips Carousel */}
             <ScrollView
@@ -451,26 +842,13 @@ export default function ClinicsScreen() {
             </ScrollView>
           </View>
 
-          {/* ── Right Floating Map Action Controls ── */}
-          <View style={styles.floatingMapControls}>
-            <TouchableOpacity style={styles.mapControlBtn} onPress={recenterMap} activeOpacity={0.7}>
-              <Ionicons name="locate" size={18} color={COLORS.primary} />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.mapControlBtn} onPress={handleZoomIn} activeOpacity={0.7}>
-              <Ionicons name="add" size={18} color={COLORS.text} />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.mapControlBtn} onPress={handleZoomOut} activeOpacity={0.7}>
-              <Ionicons name="remove" size={18} color={COLORS.text} />
-            </TouchableOpacity>
-          </View>
-
           {/* ── Bottom Floating Selected Clinic Card (Over the Map) ── */}
           {activeMapClinic && (
             <View style={styles.bottomFloatingCardContainer}>
               <TouchableOpacity
                 style={styles.floatingCard}
                 activeOpacity={0.9}
-                onPress={() => setSelectedClinic(activeMapClinic)}
+                onPress={() => selectClinicOnMap(activeMapClinic, 15)}
               >
                 {/* Logo / Avatar */}
                 <View style={styles.floatingCardLogoWrap}>
@@ -490,17 +868,36 @@ export default function ClinicsScreen() {
 
                 {/* Info Text */}
                 <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={styles.floatingCardTitle} numberOfLines={1}>
-                    {activeMapClinic.name}
-                  </Text>
+                  <View style={styles.floatingTitleBadgeRow}>
+                    <Text style={styles.floatingCardTitle} numberOfLines={1}>
+                      {activeMapClinic.name}
+                    </Text>
+                  </View>
+
                   <Text style={styles.floatingCardSubtitle} numberOfLines={1}>
                     {activeMapClinic.district || activeMapClinic.address || 'Cebu City'}
                   </Text>
 
                   <View style={styles.floatingCardMetaRow}>
+                    {activeMapClinic.id === nearestClinicId ? (
+                      <View style={styles.nearestBadgePill}>
+                        <Ionicons name="navigate" size={10} color="#fff" />
+                        <Text style={styles.nearestBadgePillTxt}>
+                          NEAREST · {formatDistanceLabel(clinicDistancesKm[activeMapClinic.id])}
+                        </Text>
+                      </View>
+                    ) : clinicDistancesKm[activeMapClinic.id] !== undefined ? (
+                      <View style={styles.distanceBadgePill}>
+                        <Ionicons name="location" size={10} color={COLORS.primary} />
+                        <Text style={styles.distanceBadgePillTxt}>
+                          {formatDistanceLabel(clinicDistancesKm[activeMapClinic.id])}
+                        </Text>
+                      </View>
+                    ) : null}
+
                     <View style={styles.openDot} />
                     <Text style={styles.floatingCardHours} numberOfLines={1}>
-                      Open Today · ₱{activeMapClinic.consultationFee || '500'}
+                      ₱{activeMapClinic.consultationFee || '500'}
                     </Text>
                   </View>
                 </View>
@@ -521,7 +918,7 @@ export default function ClinicsScreen() {
                     <Ionicons name="chevron-back" size={14} color={COLORS.text} />
                   </TouchableOpacity>
                   <Text style={styles.cardStepperText}>
-                    {(clinics.findIndex((c) => c.id === activeMapClinic.id) + 1)} of {clinics.length}
+                    {clinics.findIndex((c) => c.id === activeMapClinic.id) + 1} of {clinics.length} · Pinch to zoom
                   </Text>
                   <TouchableOpacity style={styles.cardStepperBtn} onPress={nextMapClinic}>
                     <Ionicons name="chevron-forward" size={14} color={COLORS.text} />
@@ -533,7 +930,7 @@ export default function ClinicsScreen() {
         </View>
       ) : (
         /* ══════════════════════════════════════════════════════════
-           LIST VIEW (Full search and filtering features)
+           LIST VIEW (Full search, Nearest Clinic banner, and filters)
            ══════════════════════════════════════════════════════════ */
         <View style={styles.listRootContainer}>
           {/* Header */}
@@ -543,7 +940,9 @@ export default function ClinicsScreen() {
             </TouchableOpacity>
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={styles.listHeaderTitle}>Find Clinics</Text>
-              <Text style={styles.listHeaderSubtitle}>Verified dermatologists in Cebu</Text>
+              <Text style={styles.listHeaderSubtitle}>
+                Sorted by proximity to {locationLabel}
+              </Text>
             </View>
 
             {/* Toggle back to Map */}
@@ -624,13 +1023,21 @@ export default function ClinicsScreen() {
               </ScrollView>
             </View>
 
-            {/* Sort Controls */}
+            {/* Sort Controls (Including Nearest to Me) */}
             <View style={styles.sortRow}>
               <View style={styles.sortLabelGroup}>
                 <Ionicons name="swap-vertical" size={14} color={COLORS.textSecondary} />
                 <Text style={styles.sortLabel}>Sort by:</Text>
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sortPills}>
+                <TouchableOpacity
+                  style={[styles.sortPill, sortBy === 'nearest' && styles.sortPillActive]}
+                  onPress={() => setSortBy('nearest')}
+                >
+                  <Text style={[styles.sortPillTxt, sortBy === 'nearest' && styles.sortPillTxtActive]}>
+                    Nearest to Me
+                  </Text>
+                </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.sortPill, sortBy === 'recommended' && styles.sortPillActive]}
                   onPress={() => setSortBy('recommended')}
@@ -708,10 +1115,19 @@ export default function ClinicsScreen() {
                 clinics.map((clinic) => {
                   const isSaved = savedClinicIds.includes(clinic.id);
                   const isOpen = isClinicOpenToday(clinic.hours);
+                  const isNearest = clinic.id === nearestClinicId;
+                  const distKm = clinicDistancesKm[clinic.id];
 
                   return (
-                    <View key={clinic.id} style={styles.card}>
-                      <View style={styles.cardTopRow}>
+                    <View key={clinic.id} style={[styles.card, isNearest && styles.cardNearest]}>
+                      <TouchableOpacity
+                        style={styles.cardTopRow}
+                        activeOpacity={0.8}
+                        onPress={() => {
+                          setViewMode('map');
+                          selectClinicOnMap(clinic, 15);
+                        }}
+                      >
                         {clinic.logoUrl ? (
                           <Image source={{ uri: clinic.logoUrl }} style={styles.clinicLogo} />
                         ) : (
@@ -723,6 +1139,12 @@ export default function ClinicsScreen() {
                         <View style={{ flex: 1, marginLeft: 12 }}>
                           <View style={styles.nameRow}>
                             <Text style={styles.clinicName}>{clinic.name}</Text>
+                            {isNearest && (
+                              <View style={styles.nearestBadgePill}>
+                                <Ionicons name="navigate" size={10} color="#fff" />
+                                <Text style={styles.nearestBadgePillTxt}>Nearest</Text>
+                              </View>
+                            )}
                             {clinic.verified && (
                               <View style={styles.verifiedBadge}>
                                 <Ionicons name="shield-checkmark" size={11} color="#fff" />
@@ -735,6 +1157,11 @@ export default function ClinicsScreen() {
                             <Text style={styles.listCardSub} numberOfLines={1}>
                               {clinic.address || clinic.district || 'Cebu City'}
                             </Text>
+                            {distKm !== undefined && (
+                              <Text style={styles.listDistanceTxt}>
+                                · {formatDistanceLabel(distKm)}
+                              </Text>
+                            )}
                           </View>
                         </View>
 
@@ -750,7 +1177,7 @@ export default function ClinicsScreen() {
                             color={isSaved ? COLORS.primary : COLORS.textSecondary}
                           />
                         </TouchableOpacity>
-                      </View>
+                      </TouchableOpacity>
 
                       {/* Doctor Info */}
                       {clinic.doctors.length > 0 && (
@@ -801,6 +1228,16 @@ export default function ClinicsScreen() {
                       <View style={styles.actionsRow}>
                         <TouchableOpacity
                           style={styles.secondaryBtn}
+                          onPress={() => {
+                            setViewMode('map');
+                            selectClinicOnMap(clinic, 15);
+                          }}
+                        >
+                          <Ionicons name="map-outline" size={15} color={COLORS.primary} />
+                          <Text style={styles.secondaryBtnText}>Map</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.secondaryBtn}
                           onPress={() => setSelectedClinic(clinic)}
                         >
                           <Ionicons name="information-circle-outline" size={15} color={COLORS.primary} />
@@ -816,7 +1253,7 @@ export default function ClinicsScreen() {
                           }
                         >
                           <Ionicons name="calendar-outline" size={15} color="#fff" />
-                          <Text style={styles.primaryBtnText}>Book Consultation</Text>
+                          <Text style={styles.primaryBtnText}>Book</Text>
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -832,6 +1269,8 @@ export default function ClinicsScreen() {
       {selectedClinic && (
         <ClinicDetailsModal
           clinic={selectedClinic}
+          distanceKm={clinicDistancesKm[selectedClinic.id]}
+          isNearest={selectedClinic.id === nearestClinicId}
           isSaved={savedClinicIds.includes(selectedClinic.id)}
           onToggleSave={() => toggleSaveClinic(selectedClinic.id)}
           onClose={() => setSelectedClinic(null)}
@@ -845,8 +1284,6 @@ export default function ClinicsScreen() {
           }}
         />
       )}
-
-
     </SafeAreaView>
   );
 }
@@ -864,12 +1301,16 @@ function Chip({ label, active, onPress }: { label: string; active: boolean; onPr
 // ─────────────────────────────────────────────────────────
 function ClinicDetailsModal({
   clinic,
+  distanceKm,
+  isNearest,
   isSaved,
   onToggleSave,
   onClose,
   onBook,
 }: {
   clinic: ClinicRecord;
+  distanceKm?: number;
+  isNearest?: boolean;
   isSaved: boolean;
   onToggleSave: () => void;
   onClose: () => void;
@@ -894,6 +1335,12 @@ function ClinicDetailsModal({
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   <Text style={styles.modalTitle}>{clinic.name}</Text>
+                  {isNearest && (
+                    <View style={styles.nearestBadgePill}>
+                      <Ionicons name="navigate" size={10} color="#fff" />
+                      <Text style={styles.nearestBadgePillTxt}>Nearest</Text>
+                    </View>
+                  )}
                   {clinic.verified && (
                     <View style={styles.verifiedBadge}>
                       <Ionicons name="shield-checkmark" size={10} color="#fff" />
@@ -901,7 +1348,10 @@ function ClinicDetailsModal({
                     </View>
                   )}
                 </View>
-                <Text style={styles.modalSubtitle}>{clinic.district || 'Cebu City, Philippines'}</Text>
+                <Text style={styles.modalSubtitle}>
+                  {clinic.district || 'Cebu City, Philippines'}
+                  {distanceKm !== undefined ? ` · ${formatDistanceLabel(distanceKm)}` : ''}
+                </Text>
               </View>
             </View>
 
@@ -966,7 +1416,7 @@ function ClinicDetailsModal({
             {/* Doctors List */}
             <View style={styles.modalSection}>
               <Text style={styles.modalSectionHeading}>
-                Dermatologists & Medical Specialists ({clinic.doctors.length})
+                Dermatologists &amp; Medical Specialists ({clinic.doctors.length})
               </Text>
               <View style={styles.doctorsList}>
                 {clinic.doctors.map((doc, idx) => (
@@ -992,7 +1442,7 @@ function ClinicDetailsModal({
             {/* Services & Conditions Treated */}
             {clinic.conditionsTreated && clinic.conditionsTreated.length > 0 && (
               <View style={styles.modalSection}>
-                <Text style={styles.modalSectionHeading}>Services & Conditions Treated</Text>
+                <Text style={styles.modalSectionHeading}>Services &amp; Conditions Treated</Text>
                 <View style={styles.modalTagsWrap}>
                   {clinic.conditionsTreated.map((tag, idx) => (
                     <View key={idx} style={styles.modalTag}>
@@ -1006,7 +1456,7 @@ function ClinicDetailsModal({
 
             {/* Contact & Location Details */}
             <View style={styles.modalSection}>
-              <Text style={styles.modalSectionHeading}>Contact & Location</Text>
+              <Text style={styles.modalSectionHeading}>Contact &amp; Location</Text>
               <View style={styles.contactDetailsCard}>
                 <View style={styles.contactDetailRow}>
                   <Ionicons name="location" size={16} color={COLORS.primary} />
@@ -1069,17 +1519,21 @@ function ClinicDetailsModal({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#f8fafc' },
+  safe: { flex: 1, backgroundColor: '#ffffff' },
 
   // ── MAP VIEW STYLES ──
   mapRootContainer: {
     flex: 1,
     position: 'relative',
     overflow: 'hidden',
-    backgroundColor: '#bfe3ea', // Soft water color matching modern map tiles
+    backgroundColor: '#bfe3ea',
   },
   mapCanvas: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   mapTile: {
     position: 'absolute',
@@ -1096,16 +1550,122 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.18)',
   },
 
+  // User Location Marker
+  userLocMarkerWrap: {
+    position: 'absolute',
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 8,
+  },
+  userLocPulse: {
+    position: 'absolute',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(37, 99, 235, 0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(37, 99, 235, 0.4)',
+  },
+  userLocDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#2563eb',
+    borderWidth: 2.5,
+    borderColor: '#ffffff',
+  },
+
   // Map Pins
+  pinsOverlayLayer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 18,
+  },
   pinContainer: {
     position: 'absolute',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 10,
+    zIndex: 18,
   },
   pinContainerSelected: {
-    zIndex: 20,
-    transform: [{ scale: 1.15 }],
+    zIndex: 28,
+    transform: [{ scale: 1.14 }],
+  },
+  mapSearchDropdown: {
+    marginTop: 8,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  mapSearchEmptyRow: {
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  mapSearchEmptyTxt: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+  },
+  mapSearchItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f8fafc',
+  },
+  mapSearchItemIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: COLORS.primary + '12',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapSearchItemTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  mapSearchItemSub: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginTop: 1,
+  },
+  mapSearchItemDist: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+  nearestPinTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#059669',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    marginBottom: 3,
+    borderWidth: 1.5,
+    borderColor: '#ffffff',
+  },
+  nearestPinTagTxt: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '800',
   },
   pinBadge: {
     flexDirection: 'row',
@@ -1127,7 +1687,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primaryDark,
     borderColor: '#ffffff',
     paddingHorizontal: 11,
-    paddingVertical: 7,
+    paddingVertical: 6,
     shadowColor: COLORS.primary,
     shadowOpacity: 0.45,
     shadowRadius: 8,
@@ -1135,7 +1695,7 @@ const styles = StyleSheet.create({
   },
   pinNumber: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
   },
   pinPoint: {
@@ -1164,6 +1724,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   topTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 8,
   },
   topTitle: {
@@ -1171,6 +1734,25 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: COLORS.text,
     letterSpacing: -0.5,
+  },
+  nearMeHeaderPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  nearMeHeaderPillTxt: {
+    color: '#ffffff',
+    fontSize: 11.5,
+    fontWeight: '700',
   },
   searchRow: {
     flexDirection: 'row',
@@ -1254,28 +1836,6 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 
-  // Floating Map Controls (Right side: Recenter, +, -)
-  floatingMapControls: {
-    position: 'absolute',
-    right: 16,
-    top: 155,
-    zIndex: 25,
-    gap: 8,
-  },
-  mapControlBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 5,
-    elevation: 4,
-  },
-
   // Bottom Floating Clinic Card
   bottomFloatingCardContainer: {
     position: 'absolute',
@@ -1334,10 +1894,16 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#fff',
   },
+  floatingTitleBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   floatingCardTitle: {
     fontSize: 15,
     fontWeight: '800',
     color: COLORS.text,
+    flexShrink: 1,
   },
   floatingCardSubtitle: {
     fontSize: 12,
@@ -1347,19 +1913,50 @@ const styles = StyleSheet.create({
   floatingCardMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    marginTop: 4,
+    gap: 6,
+    marginTop: 5,
+    flexWrap: 'wrap',
+  },
+  nearestBadgePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 999,
+  },
+  nearestBadgePillTxt: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  distanceBadgePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: COLORS.primaryXLight,
+    borderWidth: 1,
+    borderColor: COLORS.primaryLight,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  distanceBadgePillTxt: {
+    color: COLORS.primary,
+    fontSize: 10,
+    fontWeight: '700',
   },
   openDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: '#10b981',
   },
   floatingCardHours: {
     fontSize: 11,
     color: '#059669',
-    fontWeight: '600',
+    fontWeight: '700',
   },
   floatingCardActionBtn: {
     width: 36,
@@ -1397,7 +1994,7 @@ const styles = StyleSheet.create({
   // ── LIST VIEW STYLES ──
   listRootContainer: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#ffffff',
   },
   listHeader: {
     flexDirection: 'row',
@@ -1574,6 +2171,10 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 2,
   },
+  cardNearest: {
+    borderColor: COLORS.primary,
+    borderWidth: 1.5,
+  },
   cardTopRow: { flexDirection: 'row', alignItems: 'flex-start' },
   clinicLogo: { width: 44, height: 44, borderRadius: 12 },
   listIconWrap: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
@@ -1589,8 +2190,9 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   verifiedBadgeText: { color: '#fff', fontSize: 9, fontWeight: '700' },
-  addressRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 3 },
-  listCardSub: { fontSize: 11, color: COLORS.textSecondary },
+  addressRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 3, flexWrap: 'wrap' },
+  listCardSub: { fontSize: 11, color: COLORS.textSecondary, flexShrink: 1 },
+  listDistanceTxt: { fontSize: 11, color: COLORS.primary, fontWeight: '700' },
   bookmarkBtn: {
     width: 32,
     height: 32,
@@ -1620,7 +2222,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  feeBadgeLabel: { fontSize: 10, color: '#059669', fontWeight: '500' },
+  feeBadgeLabel: { fontSize: 10, color: '#059699', fontWeight: '500' },
   feeBadgeText: { fontSize: 11, color: '#059669', fontWeight: '800' },
   conditionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   conditionTag: { backgroundColor: COLORS.primary + '10', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },

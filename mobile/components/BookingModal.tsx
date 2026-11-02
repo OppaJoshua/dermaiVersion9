@@ -33,6 +33,7 @@ import {
   type ClinicDoctor,
   type ScanResult,
 } from '@/lib/store';
+import { processPayMongoBookingPayment } from '@/lib/paymongo';
 
 const GCASH_LOGO = require('@/assets/images/gcash.png');
 const MAYA_LOGO = require('@/assets/images/maya.png');
@@ -222,6 +223,7 @@ export function BookingModal({
   const [payerAddress, setPayerAddress] = useState('');
   const [payerMobile, setPayerMobile] = useState('');
   const [paymentProcessing, setPaymentProcessing] = useState(false);
+  const [reservedApptId, setReservedApptId] = useState<string | null>(null);
   const [paymentReceipt, setPaymentReceipt] = useState<{
     reference: string;
     amount: number;
@@ -241,6 +243,7 @@ export function BookingModal({
       setStep(1);
       setPaymentReceipt(null);
       setPaymentProcessing(false);
+      setReservedApptId(null);
     }
   }, [visible]);
 
@@ -448,7 +451,7 @@ export function BookingModal({
     setStep(3);
   }
 
-  // Step 3 Payment Processing and Supabase Sync
+  // Step 3 Payment Processing via PayMongo Test Checkout and Supabase Sync
   async function handleProcessPayment() {
     const activeUser = user || currentUser;
     if (!activeUser) {
@@ -472,20 +475,85 @@ export function BookingModal({
 
     setPaymentProcessing(true);
     const feeNum = Number(selectedClinic.consultationFee) > 0 ? Number(selectedClinic.consultationFee) : 500;
-    const refNumber = generatePaymentReference();
 
     try {
       const docDispName = selectedDoctor?.name
         ? (selectedDoctor.name.startsWith('Dr') ? selectedDoctor.name : `Dr. ${selectedDoctor.name}`)
         : undefined;
 
+      const resolvedPatientName = payerName.trim() || patientName.trim() || activeUser.fullName || 'Patient';
+      const resolvedPatientEmail = payerEmail.trim() || patientEmail.trim() || activeUser.email || 'patient@dermai.com';
+      const resolvedPatientAddress = payerAddress.trim() || patientAddress.trim() || 'Cebu City';
+
+      // 1. Reserve / create appointment in Supabase before launching PayMongo Test Checkout (matches web AppointmentPage)
+      let apptId = reservedApptId;
+      if (!apptId) {
+        apptId = await saveAppointment({
+          userId: activeUser.id,
+          clinicId: selectedClinic.id,
+          clinicName: selectedClinic.name,
+          clinicAddress: selectedClinic.address,
+          clinicPhone: selectedClinic.phone,
+          assignedDoctorId: selectedDoctor?.id,
+          doctorName: selectedDoctor?.name,
+          specialty: selectedDoctor?.specialization,
+          consultationType: 'face-to-face',
+          patientName: resolvedPatientName,
+          patientEmail: resolvedPatientEmail,
+          patientContact: cleanedMobile,
+          patientAddress: resolvedPatientAddress,
+          patientGender: patientGender || undefined,
+          patientBirthdate: patientBirthdate || undefined,
+          emergencyContactName: emergencyName.trim() || undefined,
+          emergencyContactPhone: emergencyPhone.trim() || undefined,
+          emergencyContactRelationship: emergencyRelationship || undefined,
+          primaryScanId: selectedScanId || undefined,
+          conditionId: (selectedScan as any)?.conditionId || (selectedScan as any)?.condition_id || undefined,
+          conditionName: activeConditionName,
+          confidence: selectedScan?.confidence,
+          questionnaireAnswers: (selectedScan as any)?.answers || (selectedScan as any)?.questionnaire_answers || undefined,
+          date: dateStr.trim(),
+          time: selectedBatch.batchTime,
+          batchTime: selectedBatch.label,
+          checkInStatus: 'scheduled',
+          status: 'pending',
+          notes: notes.trim() || undefined,
+          clinicNote: docDispName
+            ? `Assigned to ${docDispName} for pre-consultation review.`
+            : 'Unassigned consultation request.',
+          skinPhotoUri: activePhotoUri || undefined,
+          paymentStatus: 'unpaid',
+          paymentAmount: feeNum,
+        });
+        setReservedApptId(apptId);
+      }
+
+      // 2. Launch PayMongo Test Checkout (GCash / Maya) & verify payment intent
+      const { paymongoPaymentId } = await processPayMongoBookingPayment({
+        amount: feeNum,
+        paymentMethod,
+        clinicId: selectedClinic.id,
+        clinicName: selectedClinic.name,
+        doctorId: selectedDoctor?.id,
+        doctorName: docDispName,
+        appointmentDate: dateStr.trim(),
+        appointmentTime: selectedBatch.batchTime,
+        appointmentId: apptId,
+        patientName: resolvedPatientName,
+        patientEmail: resolvedPatientEmail,
+        patientContact: cleanedMobile,
+        patientAddress: resolvedPatientAddress,
+      });
+
+      const refNumber = paymongoPaymentId || generatePaymentReference();
       const paySummary = `Paid online via ${paymentMethod.toUpperCase()} (Ref: ${refNumber}, Amount: ₱${feeNum.toFixed(2)})`;
-      const initialClinicNote = docDispName
+      const finalClinicNote = docDispName
         ? `Assigned to ${docDispName} for pre-consultation review. | ${paySummary}`
         : `Unassigned consultation request. | ${paySummary}`;
 
-      // 1. Save appointment with payment confirmation in Supabase
+      // 3. Finalize appointment payment status in Supabase (Edge Function also fulfills atomically)
       await saveAppointment({
+        id: apptId,
         userId: activeUser.id,
         clinicId: selectedClinic.id,
         clinicName: selectedClinic.name,
@@ -495,10 +563,10 @@ export function BookingModal({
         doctorName: selectedDoctor?.name,
         specialty: selectedDoctor?.specialization,
         consultationType: 'face-to-face',
-        patientName: payerName.trim() || patientName.trim() || activeUser.fullName,
-        patientEmail: payerEmail.trim() || patientEmail.trim() || activeUser.email,
+        patientName: resolvedPatientName,
+        patientEmail: resolvedPatientEmail,
         patientContact: cleanedMobile,
-        patientAddress: payerAddress.trim() || patientAddress.trim() || undefined,
+        patientAddress: resolvedPatientAddress,
         patientGender: patientGender || undefined,
         patientBirthdate: patientBirthdate || undefined,
         emergencyContactName: emergencyName.trim() || undefined,
@@ -515,7 +583,7 @@ export function BookingModal({
         checkInStatus: 'scheduled',
         status: 'pending',
         notes: notes.trim() ? `${notes.trim()}\n[Payment: ${paySummary}]` : `[Payment: ${paySummary}]`,
-        clinicNote: initialClinicNote,
+        clinicNote: finalClinicNote,
         skinPhotoUri: activePhotoUri || undefined,
         paymentStatus: 'paid',
         paymentReference: refNumber,
@@ -523,16 +591,7 @@ export function BookingModal({
         paidAt: new Date().toISOString(),
       });
 
-      // 2. Record to user_payment ledger table for Billing Screen parity
-      await recordUserPayment({
-        userId: activeUser.id,
-        amount: feeNum,
-        method: paymentMethod,
-        referenceNumber: refNumber,
-        clinicName: selectedClinic.name,
-      });
-
-      // 3. Trigger in-app notification
+      // 4. Trigger in-app notification
       await addAppNotification(activeUser.id, {
         type: 'appointment',
         title: 'Payment Confirmed & Consultation Booked',
@@ -540,13 +599,13 @@ export function BookingModal({
         userId: activeUser.id,
       });
 
-      // 4. Set receipt modal data
+      // 5. Set receipt modal data
       setPaymentReceipt({
         reference: refNumber,
         amount: feeNum,
         method: paymentMethod,
         mobileNumber: cleanedMobile,
-        patientName: payerName.trim() || patientName.trim() || activeUser.fullName,
+        patientName: resolvedPatientName,
         clinicName: selectedClinic.name,
         doctorName: docDispName || 'Attending Dermatologist',
         date: formatDateDisplay(dateStr),
@@ -555,7 +614,7 @@ export function BookingModal({
       });
     } catch (err: any) {
       console.error('[BookingModal] Payment booking error:', err);
-      Alert.alert('Payment Error', err?.message || 'Could not complete payment and booking. Please try again.');
+      Alert.alert('Payment Notice', err?.message || 'Could not complete payment and booking. Please try again.');
     } finally {
       setPaymentProcessing(false);
     }

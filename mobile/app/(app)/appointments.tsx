@@ -178,7 +178,7 @@ export default function AppointmentsScreen() {
           <Text style={styles.headerWelcome}>Your Consultations</Text>
           <Text style={styles.headerName}>Appointments</Text>
         </View>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setShowBooking(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={() => router.push('/(app)/clinics')}>
           <Ionicons name="add" size={17} color="#fff" />
           <Text style={styles.addBtnTxt}>Book New</Text>
         </TouchableOpacity>
@@ -233,7 +233,7 @@ export default function AppointmentsScreen() {
                   : 'Your completed and cancelled appointments will be recorded here.'}
               </Text>
               {tab === 'upcoming' && (
-                <TouchableOpacity style={styles.bookBtn} onPress={() => setShowBooking(true)}>
+                <TouchableOpacity style={styles.bookBtn} onPress={() => router.push('/(app)/clinics')}>
                   <Ionicons name="add-circle-outline" size={18} color="#fff" />
                   <Text style={styles.bookBtnTxt}>Book an Appointment</Text>
                 </TouchableOpacity>
@@ -767,12 +767,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: '#fbcfe1',
     marginBottom: 10,
   },
   dutyPillText: {
@@ -909,12 +909,12 @@ const styles = StyleSheet.create({
   queueCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     borderRadius: 14,
     padding: 12,
     marginTop: 10,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: '#fbcfe1',
   },
   queueIconWrap: {
     width: 32,
@@ -940,7 +940,7 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
-  safe: { flex: 1, backgroundColor: '#F8FAFC' },
+  safe: { flex: 1, backgroundColor: '#ffffff' },
 
   // Header
   header: {
@@ -955,7 +955,7 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1044,7 +1044,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
@@ -1087,7 +1087,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 14,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1164,14 +1164,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
     marginTop: 8,
   },
   cardConditionLabel: { fontSize: 11, fontWeight: '600', color: COLORS.primary },
-  cardConditionVal: { fontSize: 11, fontWeight: '700', color: '#831843' },
+  cardConditionVal: { fontSize: 11, fontWeight: '700', color: '#85134a' },
   reason: { fontSize: 12, color: COLORS.textSecondary, marginTop: 8, lineHeight: 17 },
   referralTag: {
     flexDirection: 'row',
@@ -1202,7 +1202,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 8,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
   },
   viewSummaryTxt: { fontSize: 12, fontWeight: '700', color: COLORS.primary },
   cancelActionBtn: {
@@ -1262,20 +1262,20 @@ const styles = StyleSheet.create({
   },
   clinicChipSelected: {
     borderColor: COLORS.primary,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
   },
   chipLogo: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#f1f5f9' },
   chipLogoFallback: {
     width: 34,
     height: 34,
     borderRadius: 10,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
   },
   chipLogoTxt: { color: COLORS.primary, fontWeight: '800', fontSize: 14 },
   clinicChipTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text },
-  clinicChipTitleSelected: { color: '#831843' },
+  clinicChipTitleSelected: { color: '#85134a' },
   clinicChipSub: { fontSize: 11, color: COLORS.textSecondary, marginTop: 1 },
 
   // Doctor selection chips
@@ -1292,18 +1292,18 @@ const styles = StyleSheet.create({
   },
   doctorChipSelected: {
     borderColor: COLORS.primary,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
   },
   docAvatar: {
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
   },
   doctorChipName: { fontSize: 13, fontWeight: '700', color: COLORS.text },
-  doctorChipNameSelected: { color: '#831843' },
+  doctorChipNameSelected: { color: '#85134a' },
   doctorChipSpec: { fontSize: 11, color: COLORS.textSecondary },
   doctorChipSpecSelected: { color: COLORS.primary },
   noDoctorsNotice: {
@@ -1326,7 +1326,7 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     alignItems: 'center',
   },
-  quickDateChipActive: { backgroundColor: '#fdf2f8', borderColor: COLORS.primary },
+  quickDateChipActive: { backgroundColor: '#fdf2f7', borderColor: COLORS.primary },
   quickDateLabel: { fontSize: 11, fontWeight: '700', color: COLORS.text },
   quickDateLabelActive: { color: COLORS.primary },
   quickDateSub: { fontSize: 9, color: COLORS.textSecondary, marginTop: 2 },
@@ -1347,7 +1347,7 @@ const styles = StyleSheet.create({
   },
   batchSlotSelected: {
     borderColor: COLORS.primary,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
   },
   batchSlotTxt: { fontSize: 12, fontWeight: '600', color: '#334155' },
   batchSlotTxtSelected: { color: COLORS.primary, fontWeight: '700' },
@@ -1361,13 +1361,13 @@ const styles = StyleSheet.create({
     paddingVertical: 22,
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
   },
   photoUploadIconCircle: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
@@ -1406,27 +1406,27 @@ const styles = StyleSheet.create({
     width: 26,
     height: 26,
     borderRadius: 8,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
   },
   summaryTitle: { fontSize: 14, fontWeight: '800', color: COLORS.text },
   summaryModeBadge: {
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     paddingHorizontal: 10,
     paddingVertical: 3,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: '#fbcfe1',
   },
   summaryModeTxt: { fontSize: 10, fontWeight: '700', color: COLORS.primary },
 
   summarySlotBox: {
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     borderRadius: 14,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#fce7f3',
+    borderColor: '#fce7f0',
     marginBottom: 12,
   },
   summarySlotLabel: {
@@ -1460,7 +1460,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: '#fce7f3',
+    backgroundColor: '#fce7f0',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1515,12 +1515,12 @@ const styles = StyleSheet.create({
   summaryInfoKey: { fontSize: 12, color: COLORS.textSecondary },
   summaryInfoVal: { fontSize: 12, fontWeight: '700', color: COLORS.text },
   conditionTag: {
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#fce7f3',
+    borderColor: '#fce7f0',
   },
   conditionTagTxt: { fontSize: 11, fontWeight: '700', color: COLORS.primary },
   summaryNotesTxt: { fontSize: 12, color: COLORS.text, lineHeight: 18, marginTop: 4 },

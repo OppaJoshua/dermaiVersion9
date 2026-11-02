@@ -596,7 +596,7 @@ function HelpModal({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F8FAFC' },
+  safe: { flex: 1, backgroundColor: '#ffffff' },
 
   header: {
     flexDirection: 'row',
@@ -658,7 +658,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
   },
-  planTagPremium: { backgroundColor: '#fdf2f8', borderColor: '#fbcfe8' },
+  planTagPremium: { backgroundColor: '#fdf2f7', borderColor: '#fbcfe1' },
   planTagFree: { backgroundColor: '#f8fafc', borderColor: '#e2e8f0' },
   planTagTxt: { fontSize: 11, fontWeight: '700' },
   planTagTxtPremium: { color: COLORS.primary },
@@ -707,7 +707,7 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 10,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#fdf2f7',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -785,7 +785,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#FDF2F8',
+    backgroundColor: '#fdf2f7',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -841,7 +841,7 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
   },
   topicChipActive: {
-    backgroundColor: '#FDF2F8',
+    backgroundColor: '#fdf2f7',
     borderColor: COLORS.primary,
   },
   topicChipTxt: {
@@ -1007,7 +1007,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#FDF2F8',
+    backgroundColor: '#fdf2f7',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
@@ -1028,8 +1028,8 @@ const styles = StyleSheet.create({
   ticketIdBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FDF2F8',
-    borderColor: '#FBCFE8',
+    backgroundColor: '#fdf2f7',
+    borderColor: '#fbcfe1',
     borderWidth: 1,
     borderRadius: 8,
     paddingHorizontal: 12,

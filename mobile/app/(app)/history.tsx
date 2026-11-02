@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Alert,
   Image,
   Modal,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -18,6 +19,15 @@ import { COLORS, FONTS } from '@/lib/constants';
 import { getCurrentUser, getSkinHistory, deleteScanResult } from '@/lib/store';
 import type { ScanResult } from '@/lib/store';
 
+// Web Patient Theme Colors (matching web/src/index.css & SkinHistoryPage.tsx)
+const PATIENT_THEME = {
+  bg: '#ffffff',
+  magenta600: '#85134a',
+  magenta500: '#A0195A',
+  magenta100: '#fce7f0',
+  magenta50: '#fdf2f7',
+};
+
 const CONDITION_IMAGES: Record<string, any> = {
   'Acne Rosacea': require('../../assets/images/acne-rosacea.png'),
 };
@@ -26,8 +36,8 @@ function RadialProgressBar({
   progress,
   size = 56,
   strokeWidth = 5,
-  color = COLORS.primary,
-  bgColor = COLORS.primaryLight,
+  color = PATIENT_THEME.magenta600,
+  bgColor = PATIENT_THEME.magenta100,
 }: {
   progress: number;
   size?: number;
@@ -36,7 +46,7 @@ function RadialProgressBar({
   bgColor?: string;
 }) {
   const safeProgress = Math.min(Math.max(isNaN(progress) ? 0 : progress, 0), 100);
-  const strokeColor = color || COLORS.primary;
+  const strokeColor = color || PATIENT_THEME.magenta600;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (circumference * safeProgress) / 100;
@@ -69,7 +79,7 @@ function RadialProgressBar({
           style={{
             fontSize: size * 0.23,
             fontWeight: '800',
-            color: strokeColor,
+            color: '#111827',
             fontFamily: FONTS.bold,
           }}
         >
@@ -80,11 +90,86 @@ function RadialProgressBar({
   );
 }
 
+// ─────────────────────────────────────────────
+// Skeleton Loading Card (Matches Reference Screenshot)
+// ─────────────────────────────────────────────
+function SkinHistorySkeleton({ pulseAnim }: { pulseAnim: Animated.Value }) {
+  return (
+    <View style={styles.scrollList}>
+      <Animated.View style={[styles.skeletonCard, { opacity: pulseAnim }]}>
+        {/* Top small label bar */}
+        <View style={styles.skeletonBarTop} />
+
+        {/* Title block + pill */}
+        <View style={styles.skeletonHeaderRow}>
+          <View style={styles.skeletonBarMain} />
+          <View style={styles.skeletonPill} />
+        </View>
+
+        {/* 2-Column Summary Mini Cards */}
+        <View style={styles.skeletonTwoColGrid}>
+          <View style={styles.skeletonMiniBox}>
+            <View style={styles.skeletonMiniLabel} />
+            <View style={styles.skeletonMiniValue} />
+          </View>
+          <View style={styles.skeletonMiniBox}>
+            <View style={styles.skeletonMiniLabel} />
+            <View style={styles.skeletonMiniValue} />
+          </View>
+        </View>
+
+        {/* Section Subtitle Bar */}
+        <View style={styles.skeletonSectionTitle} />
+
+        {/* Dashed Scan Record Rows */}
+        {[0, 1, 2].map((idx) => (
+          <View
+            key={idx}
+            style={[
+              styles.skeletonDashedRow,
+              idx > 0 && { marginTop: 12 },
+            ]}
+          >
+            <View style={styles.skeletonThumbSquare} />
+            <View style={{ flex: 1 }}>
+              <View style={styles.skeletonLinePrimary} />
+              <View style={styles.skeletonLineSecondary} />
+            </View>
+          </View>
+        ))}
+      </Animated.View>
+    </View>
+  );
+}
+
 export default function HistoryScreen() {
   const router = useRouter();
   const [history, setHistory] = useState<ScanResult[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<ScanResult | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const hasLoadedRef = useRef(false);
+
+  const pulseAnim = useRef(new Animated.Value(0.55)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 750,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0.45,
+          duration: 750,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulseAnim]);
 
   useFocusEffect(
     useCallback(() => {
@@ -93,10 +178,16 @@ export default function HistoryScreen() {
   );
 
   async function loadHistory() {
-    const user = await getCurrentUser();
-    if (!user) return;
-    const h = await getSkinHistory(user.id);
-    setHistory(h);
+    if (!hasLoadedRef.current) setLoading(true);
+    try {
+      const user = await getCurrentUser();
+      if (!user) return;
+      const h = await getSkinHistory(user.id);
+      setHistory(h);
+      hasLoadedRef.current = true;
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleDelete(item: ScanResult) {
@@ -137,9 +228,11 @@ export default function HistoryScreen() {
       {/* ── Header ── */}
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Scan History</Text>
+          <Text style={styles.headerTitle}>Skin Analysis History</Text>
           <Text style={styles.headerSub}>
-            {history.length} {history.length === 1 ? 'record' : 'records'} logged
+            {loading
+              ? 'Loading your skin analysis records...'
+              : `${history.length} ${history.length === 1 ? 'record' : 'records'} logged`}
           </Text>
         </View>
         <TouchableOpacity
@@ -153,10 +246,10 @@ export default function HistoryScreen() {
       </View>
 
       {/* ── Search Bar ── */}
-      {history.length > 0 && (
+      {!loading && history.length > 0 && (
         <View style={styles.controlSection}>
           <View style={styles.searchRow}>
-            <Ionicons name="search-outline" size={17} color={COLORS.primary} style={{ marginRight: 8 }} />
+            <Ionicons name="search-outline" size={17} color={PATIENT_THEME.magenta600} style={{ marginRight: 8 }} />
             <TextInput
               style={styles.searchInput}
               placeholder="Search condition or Tagalog name..."
@@ -173,24 +266,30 @@ export default function HistoryScreen() {
         </View>
       )}
 
-      {/* ── Main Content / List / Empty State ── */}
-      {history.length === 0 ? (
+      {/* ── Main Content / Skeleton / List / Empty State ── */}
+      {loading ? (
+        <ScrollView showsVerticalScrollIndicator={false}>
+          <SkinHistorySkeleton pulseAnim={pulseAnim} />
+        </ScrollView>
+      ) : history.length === 0 ? (
         <View style={styles.emptyWrap}>
-          <View style={styles.emptyIconCircle}>
-            <Ionicons name="document-text-outline" size={40} color={COLORS.primary} />
+          <View style={styles.emptyCard}>
+            <View style={styles.emptyIconCircle}>
+              <Ionicons name="document-text-outline" size={38} color={PATIENT_THEME.magenta600} />
+            </View>
+            <Text style={styles.emptyTitle}>No History Found</Text>
+            <Text style={styles.emptySub}>
+              You haven&apos;t performed any skin analysis yet. Start your first scan today!
+            </Text>
+            <TouchableOpacity
+              style={styles.ctaBtn}
+              activeOpacity={0.88}
+              onPress={() => router.push('/(app)/scan')}
+            >
+              <Ionicons name="camera-outline" size={17} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.ctaBtnTxt}>Perform Your First Scan</Text>
+            </TouchableOpacity>
           </View>
-          <Text style={styles.emptyTitle}>No Scans Yet</Text>
-          <Text style={styles.emptySub}>
-            Take your first skin photo with AI analysis to see your health history here.
-          </Text>
-          <TouchableOpacity
-            style={styles.ctaBtn}
-            activeOpacity={0.88}
-            onPress={() => router.push('/(app)/scan')}
-          >
-            <Ionicons name="camera-outline" size={17} color="#fff" style={{ marginRight: 8 }} />
-            <Text style={styles.ctaBtnTxt}>Start AI Scan</Text>
-          </TouchableOpacity>
         </View>
       ) : (
         <ScrollView
@@ -200,10 +299,10 @@ export default function HistoryScreen() {
           {filteredHistory.length === 0 ? (
             <View style={styles.emptySearchWrap}>
               <View style={styles.emptyIconCircleSm}>
-                <Ionicons name="search-outline" size={32} color={COLORS.primary} />
+                <Ionicons name="search-outline" size={32} color={PATIENT_THEME.magenta600} />
               </View>
               <Text style={styles.emptyTitleSm}>No Matching Scans</Text>
-              <Text style={styles.emptySubSm}>No results found for "{searchTerm}"</Text>
+              <Text style={styles.emptySubSm}>No results found for &quot;{searchTerm}&quot;</Text>
               <TouchableOpacity
                 style={styles.resetSearchBtn}
                 onPress={() => setSearchTerm('')}
@@ -239,7 +338,7 @@ export default function HistoryScreen() {
 }
 
 // ─────────────────────────────────────────────
-// Scan Card (Clean, NO badge on pic, NO Dermatology, NO trash icon)
+// Scan Card (Matching Web Patient SkinHistoryPage.tsx)
 // ─────────────────────────────────────────────
 function ScanCard({
   item,
@@ -263,7 +362,7 @@ function ScanCard({
       onPress={onPress}
       activeOpacity={0.82}
     >
-      {/* Left: Clean Thumbnail Image (NO percentage bar overlay!) or Radial Progress */}
+      {/* Left: Clean Thumbnail Image or Radial Progress */}
       <View style={styles.cardLeftCol}>
         {hasImage ? (
           <View style={styles.thumbWrapper}>
@@ -274,8 +373,8 @@ function ScanCard({
             progress={item.confidence}
             size={56}
             strokeWidth={5}
-            color={COLORS.primary}
-            bgColor={COLORS.primaryLight}
+            color={PATIENT_THEME.magenta600}
+            bgColor={PATIENT_THEME.magenta100}
           />
         )}
       </View>
@@ -289,38 +388,38 @@ function ScanCard({
         {/* Tagalog Name */}
         {item.localName ? (
           <Text style={styles.cardLocalName} numberOfLines={1}>
-            {item.localName}
+            ({item.localName})
           </Text>
         ) : null}
 
-        {/* Meta badges: Date & Match Score */}
+        {/* Meta badges: Body Location, Date & Confidence */}
         <View style={styles.metaRow}>
-          <View style={styles.metaBadge}>
-            <Ionicons name="calendar-outline" size={11} color={COLORS.textSecondary} />
-            <Text style={styles.metaBadgeTxt}>{formattedDate}</Text>
-          </View>
-
-          <View style={[styles.metaBadge, styles.metaBadgePrimary]}>
-            <Ionicons name="sparkles" size={11} color={COLORS.primary} />
-            <Text style={[styles.metaBadgeTxt, { color: COLORS.primary, fontWeight: '700' }]}>
-              {item.confidence}% Match
-            </Text>
-          </View>
-
           {item.answers?.bodyLocation ? (
             <View style={styles.metaBadge}>
-              <Ionicons name="location-outline" size={11} color={COLORS.textSecondary} />
+              <Ionicons name="location-outline" size={11} color="#9ca3af" />
               <Text style={styles.metaBadgeTxt} numberOfLines={1}>
                 {String(item.answers.bodyLocation)}
               </Text>
             </View>
           ) : null}
+
+          <View style={styles.metaBadge}>
+            <Ionicons name="calendar-outline" size={11} color="#9ca3af" />
+            <Text style={styles.metaBadgeTxt}>{formattedDate}</Text>
+          </View>
+
+          <View style={[styles.metaBadge, styles.metaBadgePrimary]}>
+            <Ionicons name="pulse-outline" size={11} color={PATIENT_THEME.magenta600} />
+            <Text style={[styles.metaBadgeTxt, { color: PATIENT_THEME.magenta600, fontWeight: '700' }]}>
+              {item.confidence}% confidence
+            </Text>
+          </View>
         </View>
 
         {/* Tags if applicable */}
         {item.referralSuggested && (
           <View style={styles.referralTag}>
-            <Ionicons name="medkit-outline" size={11} color={COLORS.primary} />
+            <Ionicons name="medkit-outline" size={11} color={PATIENT_THEME.magenta600} />
             <Text style={styles.referralTagTxt}>Dermatologist referral recommended</Text>
           </View>
         )}
@@ -332,9 +431,11 @@ function ScanCard({
         )}
       </View>
 
-      {/* Right Column: Clean navigation chevron (No trash icon on card) */}
+      {/* Right Column: Clean navigation chevron */}
       <View style={styles.cardRightCol}>
-        <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
+        <View style={styles.viewBtnBadge}>
+          <Ionicons name="chevron-forward" size={16} color={PATIENT_THEME.magenta600} />
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -454,7 +555,7 @@ function DetailView({
 
             {/* Disclaimer Box (Matching Web Patient Rose Box) */}
             <View style={styles.disclaimerBox}>
-              <Ionicons name="warning-outline" size={16} color={COLORS.primary} style={{ marginTop: 1, marginRight: 8 }} />
+              <Ionicons name="warning-outline" size={16} color={PATIENT_THEME.magenta600} style={{ marginTop: 1, marginRight: 8 }} />
               <Text style={styles.disclaimerTxt}>
                 This is <Text style={{ fontWeight: '800' }}>NOT</Text> a medical diagnosis. Please consult a licensed dermatologist for proper evaluation and treatment.
               </Text>
@@ -488,7 +589,7 @@ function DetailView({
 // Styles
 // ─────────────────────────────────────────────
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F7F8FA' },
+  safe: { flex: 1, backgroundColor: PATIENT_THEME.bg },
 
   // ── Header ──
   header: {
@@ -502,16 +603,16 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
-  headerTitle: { fontSize: 22, fontWeight: '800', color: COLORS.text, letterSpacing: -0.3 },
-  headerSub: { fontSize: 12, color: COLORS.textSecondary, marginTop: 2, fontWeight: '500' },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: '#111827', letterSpacing: -0.3 },
+  headerSub: { fontSize: 12, color: '#6b7280', marginTop: 2, fontWeight: '500' },
   newScanBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.primary,
+    backgroundColor: PATIENT_THEME.magenta600,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 9,
-    shadowColor: COLORS.primary,
+    shadowColor: PATIENT_THEME.magenta600,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.18,
     shadowRadius: 6,
@@ -531,7 +632,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginHorizontal: 20,
     marginTop: 10,
-    backgroundColor: '#F7F8FA',
+    backgroundColor: PATIENT_THEME.bg,
     borderRadius: 14,
     paddingHorizontal: 14,
     borderWidth: 1,
@@ -541,7 +642,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 10,
     fontSize: 13.5,
-    color: COLORS.text,
+    color: '#111827',
   },
   clearBtn: { padding: 4 },
 
@@ -555,34 +656,135 @@ const styles = StyleSheet.create({
     gap: 12,
   },
 
-  // ── Scan Card ──
+  // ── Skeleton Loading Styles (Matches Reference Screenshot) ──
+  skeletonCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#f3f4f6',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.03,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 1,
+  },
+  skeletonBarTop: {
+    height: 12,
+    width: 64,
+    borderRadius: 6,
+    backgroundColor: '#f3f4f6',
+    marginBottom: 10,
+  },
+  skeletonHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 20,
+  },
+  skeletonBarMain: {
+    height: 32,
+    width: 96,
+    borderRadius: 8,
+    backgroundColor: '#e5e7eb',
+  },
+  skeletonPill: {
+    height: 20,
+    width: 64,
+    borderRadius: 999,
+    backgroundColor: '#f3f4f6',
+  },
+  skeletonTwoColGrid: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 20,
+  },
+  skeletonMiniBox: {
+    flex: 1,
+    borderRadius: 16,
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#f3f4f6',
+    padding: 14,
+  },
+  skeletonMiniLabel: {
+    height: 10,
+    width: 64,
+    borderRadius: 5,
+    backgroundColor: '#f3f4f6',
+    marginBottom: 8,
+  },
+  skeletonMiniValue: {
+    height: 16,
+    width: 96,
+    borderRadius: 6,
+    backgroundColor: '#e5e7eb',
+  },
+  skeletonSectionTitle: {
+    height: 14,
+    width: 112,
+    borderRadius: 6,
+    backgroundColor: '#f3f4f6',
+    marginBottom: 12,
+  },
+  skeletonDashedRow: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#e5e7eb',
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  skeletonThumbSquare: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#f3f4f6',
+  },
+  skeletonLinePrimary: {
+    height: 12,
+    width: '62%',
+    borderRadius: 6,
+    backgroundColor: '#f3f4f6',
+    marginBottom: 7,
+  },
+  skeletonLineSecondary: {
+    height: 10,
+    width: '82%',
+    borderRadius: 5,
+    backgroundColor: '#f3f4f6',
+  },
+
+  // ── Scan Card (Web Patient Matching Design) ──
   card: {
     backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 13,
+    borderRadius: 20,
+    padding: 15,
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#f1f5f9',
-    shadowColor: COLORS.primary,
+    borderColor: '#f3f4f6',
+    shadowColor: '#0f172a',
     shadowOpacity: 0.04,
-    shadowRadius: 8,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
   cardLeftCol: {
-    marginRight: 13,
+    marginRight: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
   thumbWrapper: {
-    width: 62,
-    height: 62,
-    borderRadius: 15,
+    width: 58,
+    height: 58,
+    borderRadius: 14,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#f1f5f9',
-    backgroundColor: '#F7F8FA',
+    borderWidth: 2,
+    borderColor: PATIENT_THEME.magenta100,
+    backgroundColor: PATIENT_THEME.magenta50,
   },
   thumb: {
     width: '100%',
@@ -593,16 +795,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   condName: {
-    fontSize: 15,
+    fontSize: 15.5,
     fontWeight: '700',
-    color: COLORS.text,
+    color: '#111827',
     marginBottom: 2,
   },
   cardLocalName: {
     fontSize: 12,
-    color: COLORS.textSecondary,
+    color: '#9ca3af',
     marginBottom: 6,
-    fontStyle: 'italic',
   },
   metaRow: {
     flexDirection: 'row',
@@ -613,18 +814,21 @@ const styles = StyleSheet.create({
   metaBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3.5,
-    backgroundColor: '#F5F6FA',
-    paddingHorizontal: 7.5,
+    gap: 4,
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#f3f4f6',
+    paddingHorizontal: 8,
     paddingVertical: 3.5,
-    borderRadius: 7,
+    borderRadius: 8,
   },
   metaBadgePrimary: {
-    backgroundColor: COLORS.primaryLight,
+    backgroundColor: PATIENT_THEME.magenta50,
+    borderColor: PATIENT_THEME.magenta100,
   },
   metaBadgeTxt: {
-    fontSize: 10.5,
-    color: COLORS.textSecondary,
+    fontSize: 11,
+    color: '#6b7280',
     fontWeight: '500',
   },
   referralTag: {
@@ -632,9 +836,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     marginTop: 6,
-    backgroundColor: '#fdf2f8',
+    backgroundColor: PATIENT_THEME.magenta50,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: PATIENT_THEME.magenta100,
     borderRadius: 8,
     paddingHorizontal: 7,
     paddingVertical: 3,
@@ -642,7 +846,7 @@ const styles = StyleSheet.create({
   },
   referralTagTxt: {
     fontSize: 10,
-    color: COLORS.primary,
+    color: PATIENT_THEME.magenta600,
     fontWeight: '700',
   },
   flagTag: {
@@ -666,43 +870,61 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingLeft: 8,
   },
-
-  // ── Empty State ──
-  emptyWrap: {
-    flex: 1,
+  viewBtnBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: '#f9fafb',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 32,
-    paddingBottom: 60,
+  },
+
+  // ── Empty State (Web Dashed Card Style) ──
+  emptyWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+  },
+  emptyCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#e5e7eb',
+    paddingVertical: 44,
+    paddingHorizontal: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   emptyIconCircle: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    backgroundColor: COLORS.primaryLight,
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: PATIENT_THEME.magenta50,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 14,
   },
-  emptyTitle: { fontSize: 19, fontWeight: '800', color: COLORS.text },
+  emptyTitle: { fontSize: 19, fontWeight: '800', color: '#111827' },
   emptySub: {
     fontSize: 13.5,
-    color: COLORS.textSecondary,
+    color: '#6b7280',
     textAlign: 'center',
     lineHeight: 20,
-    marginTop: 4,
-    marginBottom: 16,
+    marginTop: 6,
+    marginBottom: 20,
   },
   ctaBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.primary,
-    borderRadius: 16,
+    backgroundColor: PATIENT_THEME.magenta600,
+    borderRadius: 14,
     paddingHorizontal: 22,
     paddingVertical: 13,
-    shadowColor: COLORS.primary,
+    shadowColor: PATIENT_THEME.magenta600,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.22,
+    shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 3,
   },
@@ -717,22 +939,22 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: COLORS.primaryLight,
+    backgroundColor: PATIENT_THEME.magenta50,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
   },
-  emptyTitleSm: { fontSize: 16, fontWeight: '700', color: COLORS.text },
-  emptySubSm: { fontSize: 13, color: COLORS.textSecondary, marginTop: 4, marginBottom: 14 },
+  emptyTitleSm: { fontSize: 16, fontWeight: '700', color: '#111827' },
+  emptySubSm: { fontSize: 13, color: '#6b7280', marginTop: 4, marginBottom: 14 },
   resetSearchBtn: {
     paddingHorizontal: 14,
     paddingVertical: 7,
-    backgroundColor: COLORS.primaryXLight,
+    backgroundColor: PATIENT_THEME.magenta50,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: PATIENT_THEME.magenta100,
   },
-  resetSearchBtnTxt: { color: COLORS.primary, fontSize: 12.5, fontWeight: '700' },
+  resetSearchBtnTxt: { color: PATIENT_THEME.magenta600, fontSize: 12.5, fontWeight: '700' },
 
   // ── Web Patient Matching Modal ──
   modalOverlay: {
@@ -852,7 +1074,7 @@ const styles = StyleSheet.create({
   confValue: {
     fontSize: 14,
     fontWeight: '800',
-    color: COLORS.primary,
+    color: PATIENT_THEME.magenta600,
   },
   confTrack: {
     width: '100%',
@@ -863,7 +1085,7 @@ const styles = StyleSheet.create({
   },
   confFill: {
     height: '100%',
-    backgroundColor: COLORS.primary,
+    backgroundColor: PATIENT_THEME.magenta600,
     borderRadius: 4,
   },
   infoSection: {
@@ -910,12 +1132,12 @@ const styles = StyleSheet.create({
   },
   findDermBtn: {
     width: '100%',
-    backgroundColor: COLORS.primary,
+    backgroundColor: PATIENT_THEME.magenta600,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: COLORS.primary,
+    shadowColor: PATIENT_THEME.magenta600,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.22,
     shadowRadius: 8,

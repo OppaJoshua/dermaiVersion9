@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,18 +7,22 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Modal,
   Image,
+  StatusBar,
+  Animated,
+  Easing,
 } from 'react-native';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useRouter, useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, CEBU_DISTRICTS } from '@/lib/constants';
+import { supabase } from '@/lib/supabase';
 import {
   getCurrentUser,
   getSkinHistory,
@@ -33,24 +37,56 @@ import type { PatientAccount, SubscriptionRecord } from '@/lib/store';
 export default function ProfileScreen() {
   const router = useRouter();
   const [user, setUser] = useState<PatientAccount | null>(null);
-  const [scanCount, setScanCount] = useState(0);
-  const [apptCount, setApptCount] = useState(0);
+  const [scanCount, setScanCount] = useState<number>(0);
+  const [apptCount, setApptCount] = useState<number>(0);
   const [sub, setSub] = useState<SubscriptionRecord | null>(null);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ fullName: '', phone: '', dateOfBirth: '', gender: '', district: '', address: '' });
+  const [form, setForm] = useState({
+    fullName: '',
+    phone: '',
+    dateOfBirth: '',
+    gender: '',
+    district: '',
+    address: '',
+  });
   const [saving, setSaving] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
+  const hasLoadedRef = useRef(false);
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
+      loadData(true);
     }, [])
   );
 
-  async function loadData() {
-    setLoadingData(true);
+  // Realtime sync with Supabase `user` table so Web <-> Mobile profile changes reflect immediately
+  useEffect(() => {
+    if (!user?.id) return;
+    const channel = supabase
+      .channel(`profile-sync-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'user',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          loadData(true);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  async function loadData(forceRefresh = false) {
+    if (!hasLoadedRef.current) setLoadingData(true);
     try {
-      const u = await getCurrentUser();
+      const u = await getCurrentUser(forceRefresh);
       setUser(u);
       if (!u) {
         setLoadingData(false);
@@ -61,18 +97,26 @@ export default function ProfileScreen() {
         phone: u.phone ?? '',
         dateOfBirth: u.dateOfBirth ?? '',
         gender: u.gender ?? '',
-        district: (u as any).district ?? '',
+        district: u.district ?? '',
         address: u.address ?? '',
       });
-      const history = await getSkinHistory(u.id);
-      setScanCount(history.length);
-      const appts = await getAppointments(u.id);
-      setApptCount(appts.length);
-      const s = await getUserSubscription(u.id);
-      setSub(s);
+      hasLoadedRef.current = true;
+      setLoadingData(false);
+
+      // Load counts and subscription in the background so the screen renders immediately
+      Promise.all([
+        getSkinHistory(u.id),
+        getAppointments(u.id),
+        getUserSubscription(u.id),
+      ])
+        .then(([history, appts, s]) => {
+          setScanCount(history.length);
+          setApptCount(appts.length);
+          setSub(s);
+        })
+        .catch(() => {});
     } catch (err: any) {
       console.warn('[Profile] Failed to load data:', err?.message);
-    } finally {
       setLoadingData(false);
     }
   }
@@ -88,16 +132,17 @@ export default function ProfileScreen() {
       const updated: PatientAccount = {
         ...user,
         fullName: form.fullName.trim(),
-        phone: form.phone.trim() || undefined,
-        dateOfBirth: form.dateOfBirth || undefined,
-        gender: (form.gender as any) || undefined,
-        address: form.address.trim() || undefined,
+        phone: form.phone.trim(),
+        dateOfBirth: form.dateOfBirth,
+        gender: form.gender,
+        district: form.district,
+        address: form.address.trim(),
       };
-      (updated as any).district = form.district || undefined;
       await savePatientAccount(updated);
-      setUser(updated);
+      const freshUser = await getCurrentUser(true);
+      setUser(freshUser ?? updated);
       setEditing(false);
-      Alert.alert('Profile Saved', 'Your personal information has been updated.');
+      Alert.alert('Profile Saved', 'Your personal information has been synced with your account.');
     } catch (err: any) {
       console.error('[Profile] Save error:', err?.message);
       Alert.alert('Error', err?.message ?? 'Failed to update profile.');
@@ -128,7 +173,8 @@ export default function ProfileScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.5,
+      base64: true,
     };
     const result = useCamera
       ? await ImagePicker.launchCameraAsync(opts)
@@ -137,10 +183,15 @@ export default function ProfileScreen() {
     if (result.canceled || !result.assets[0]?.uri) return;
 
     try {
-      const publicUrl = await uploadProfileImage(user.id, result.assets[0].uri);
+      const asset = result.assets[0];
+      const dataUri = asset.base64
+        ? `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`
+        : asset.uri;
+      const publicUrl = await uploadProfileImage(user.id, dataUri);
       const updated: PatientAccount = { ...user, profileImage: publicUrl };
       await savePatientAccount(updated);
-      setUser(updated);
+      const freshUser = await getCurrentUser(true);
+      setUser(freshUser ?? updated);
     } catch (err: any) {
       console.error('[Profile] Image upload error:', err?.message);
       Alert.alert('Upload Failed', err?.message ?? 'Could not upload image. Try again.');
@@ -149,9 +200,9 @@ export default function ProfileScreen() {
 
   async function handleRemoveImage() {
     if (!user) return;
-    const updated: PatientAccount = { ...user, profileImage: undefined };
+    const updated: PatientAccount = { ...user, profileImage: '' };
     await savePatientAccount(updated);
-    setUser(updated);
+    setUser({ ...user, profileImage: undefined });
   }
 
   async function handleLogout() {
@@ -175,25 +226,17 @@ export default function ProfileScreen() {
 
   const isPremium = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
 
-  if (loadingData) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!user) {
+  if (!loadingData && !user) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.guestContainer}>
           <View style={styles.guestIconCircle}>
-            <Ionicons name="person-outline" size={48} color={COLORS.primary} />
+            <Ionicons name="person-outline" size={44} color={COLORS.primary} />
           </View>
           <Text style={styles.guestTitle}>No Account Logged In</Text>
-          <Text style={styles.guestSub}>Sign in to view your scan history, appointments, and personal profile.</Text>
+          <Text style={styles.guestSub}>
+            Sign in to view your scan history, appointments, and personal profile.
+          </Text>
           <TouchableOpacity style={styles.guestBtn} onPress={() => router.replace('/(auth)/login')}>
             <Text style={styles.guestBtnTxt}>Sign In</Text>
           </TouchableOpacity>
@@ -202,168 +245,192 @@ export default function ProfileScreen() {
     );
   }
 
-  const memberSinceYear = user.createdAt
-    ? new Date(user.createdAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
-    : 'Active';
+  const initials = (user?.fullName || 'P')
+    .split(' ')
+    .slice(0, 2)
+    .map((n) => n[0])
+    .join('')
+    .toUpperCase();
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      {/* ── Top Header ── */}
-      <View style={styles.topHeader}>
-        <View style={styles.topHeaderAvatarCircle}>
-          <Ionicons name="person" size={20} color={COLORS.primary} />
-        </View>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={styles.headerWelcome}>Patient Account</Text>
-          <Text style={styles.headerName}>Your Profile</Text>
-        </View>
-        <TouchableOpacity style={styles.settingsIconBtn} onPress={() => router.push('/(app)/settings')}>
-          <Ionicons name="settings-outline" size={20} color={COLORS.text} />
-        </TouchableOpacity>
-      </View>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.primary} />
 
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
-        {/* ── Avatar Profile Card ── */}
-        <View style={styles.profileCard}>
-          <TouchableOpacity onPress={handlePickImage} activeOpacity={0.8} style={styles.avatarWrap}>
-            {user.profileImage ? (
-              <Image source={{ uri: user.profileImage }} style={styles.avatarImg} />
+      <ScrollView
+        style={styles.container}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        {/* ══════════════════════════════════════════════════════════
+            TOP CURVED HERO HEADER (Matches Reference Structure)
+           ══════════════════════════════════════════════════════════ */}
+        <View style={styles.heroBanner}>
+          {/* Animated Moving Gradient & Curved Wave Background */}
+          <MovingHeroGradient />
+
+          {/* Top Navigation Row: Back Arrow (Left) · Profile (Center) · Settings Gear (Right) */}
+          <View style={styles.heroNavRow}>
+            <TouchableOpacity
+              onPress={() => (router.canGoBack() ? router.back() : router.push('/(app)'))}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.heroNavBtn}
+            >
+              <Ionicons name="arrow-back" size={22} color="#ffffff" />
+            </TouchableOpacity>
+
+            <Text style={styles.heroNavTitle}>Profile</Text>
+
+            <TouchableOpacity
+              onPress={() => router.push('/(app)/settings')}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.heroNavBtn}
+            >
+              <Ionicons name="settings-sharp" size={21} color="#ffffff" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Centered Circular Avatar with White Ring Border */}
+          <TouchableOpacity
+            onPress={handlePickImage}
+            activeOpacity={0.85}
+            style={styles.heroAvatarWrap}
+          >
+            {user?.profileImage ? (
+              <Image source={{ uri: user.profileImage }} style={styles.heroAvatarImg} />
             ) : (
-              <View style={styles.avatarFallback}>
-                <Text style={styles.avatarTxt}>
-                  {user.fullName
-                    .split(' ')
-                    .slice(0, 2)
-                    .map((n) => n[0])
-                    .join('')
-                    .toUpperCase()}
-                </Text>
+              <View style={styles.heroAvatarFallback}>
+                <Text style={styles.heroAvatarInitials}>{initials}</Text>
               </View>
             )}
-            <View style={styles.avatarCameraBadge}>
-              <Ionicons name="camera" size={13} color="#fff" />
+            <View style={styles.heroCameraBadge}>
+              <Ionicons name="camera" size={12} color={COLORS.primary} />
             </View>
           </TouchableOpacity>
 
-          {user.profileImage && (
-            <TouchableOpacity onPress={handleRemoveImage} style={styles.removeImgBtn}>
-              <Text style={styles.removeImgTxt}>Remove Photo</Text>
+          {user?.profileImage ? (
+            <TouchableOpacity onPress={handleRemoveImage} style={styles.removePhotoLink}>
+              <Text style={styles.removePhotoLinkTxt}>Remove photo</Text>
             </TouchableOpacity>
-          )}
+          ) : null}
 
-          <Text style={styles.userName}>{user.fullName}</Text>
-          <Text style={styles.userEmail}>{user.email}</Text>
+          {/* Centered User Name & Role/Plan Subtitle */}
+          <Text style={styles.heroUserName} numberOfLines={1}>
+            {user?.fullName || 'Patient'}
+          </Text>
+          <Text style={styles.heroUserRole}>
+            {isPremium ? 'Premium Plan Member' : 'Free Plan Patient'}
+          </Text>
 
-          <View style={[styles.planBadge, isPremium ? styles.planBadgePremium : styles.planBadgeFree]}>
-            <Ionicons
-              name={isPremium ? 'star' : 'shield-outline'}
-              size={13}
-              color={isPremium ? COLORS.primary : '#64748b'}
-              style={{ marginRight: 5 }}
-            />
-            <Text style={[styles.planBadgeTxt, isPremium ? styles.planBadgeTxtPremium : styles.planBadgeTxtFree]}>
-              {isPremium ? 'Premium Plan Member' : 'Free Plan Tier'}
-            </Text>
+          {/* 2-Column Inline Stats Row with Center Divider (Like "1000 Followers | 1200 Following") */}
+          <View style={styles.heroStatsBar}>
+            <TouchableOpacity
+              style={styles.heroStatCol}
+              activeOpacity={0.8}
+              onPress={() => router.push('/(app)/history')}
+            >
+              <Text style={styles.heroStatNumber}>{scanCount}</Text>
+              <Text style={styles.heroStatLabel}>Skin Scans</Text>
+            </TouchableOpacity>
+
+            <View style={styles.heroStatDivider} />
+
+            <TouchableOpacity
+              style={styles.heroStatCol}
+              activeOpacity={0.8}
+              onPress={() => router.push('/(app)/appointments')}
+            >
+              <Text style={styles.heroStatNumber}>{apptCount}</Text>
+              <Text style={styles.heroStatLabel}>Appointments</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
-        {/* ── Activity Statistics (Matching DermAI Magenta Overview Palette) ── */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Your Health Activity</Text>
-        </View>
-        <View style={styles.statsRow}>
-          {/* Card 1: Scans */}
-          <View style={styles.statCard}>
-            <View style={styles.cardCornerCircle} />
-            <View style={styles.statIconWrap}>
-              <Ionicons name="scan-outline" size={17} color="#fff" />
-            </View>
-            <Text style={styles.statValue}>{scanCount}</Text>
-            <Text style={styles.statLabel}>Skin Scans</Text>
+        {/* ══════════════════════════════════════════════════════════
+            CLEAN WHITE BODY LIST (Icon + Stacked Label & Value + Divider)
+           ══════════════════════════════════════════════════════════ */}
+        <View style={styles.listBody}>
+          {/* Edit Profile Action Row */}
+          <View style={styles.listTopActionsRow}>
+            <Text style={styles.listSectionHint}>Personal Information</Text>
+            <TouchableOpacity
+              style={styles.editPillBtn}
+              onPress={() => setEditing(true)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="pencil" size={12} color={COLORS.primary} />
+              <Text style={styles.editPillBtnTxt}>Edit Details</Text>
+            </TouchableOpacity>
           </View>
 
-          {/* Card 2: Consultations */}
-          <View style={styles.statCard}>
-            <View style={styles.cardCornerCircle} />
-            <View style={styles.statIconWrap}>
-              <Ionicons name="calendar-outline" size={17} color="#fff" />
-            </View>
-            <Text style={styles.statValue}>{apptCount}</Text>
-            <Text style={styles.statLabel}>Appointments</Text>
-          </View>
+          <ProfileDetailItem
+            icon="mail-outline"
+            label="Email"
+            value={user?.email || 'Not set'}
+          />
 
-          {/* Card 3: Member Since */}
-          <View style={styles.statCard}>
-            <View style={styles.cardCornerCircle} />
-            <View style={styles.statIconWrap}>
-              <Ionicons name="time-outline" size={17} color="#fff" />
-            </View>
-            <Text style={[styles.statValue, { fontSize: 13 }]}>{memberSinceYear}</Text>
-            <Text style={styles.statLabel}>Member Since</Text>
-          </View>
-        </View>
+          <ProfileDetailItem
+            icon="phone-portrait-outline"
+            label="Mobile"
+            value={user?.phone || 'Not set'}
+          />
 
-        {/* ── Personal Details Card ── */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Personal Details</Text>
-          <TouchableOpacity style={styles.editBtn} onPress={() => setEditing(true)}>
-            <Ionicons name="pencil" size={12} color={COLORS.primary} />
-            <Text style={styles.editBtnTxt}>Edit</Text>
+          <ProfileDetailItem
+            icon="calendar-outline"
+            label="Date of Birth"
+            value={user?.dateOfBirth || 'Not set'}
+          />
+
+          <ProfileDetailItem
+            icon="person-outline"
+            label="Gender"
+            value={user?.gender || 'Not set'}
+          />
+
+          <ProfileDetailItem
+            icon="location-outline"
+            label="City / District"
+            value={(user as any)?.district || 'Not set'}
+          />
+
+          <ProfileDetailItem
+            icon="home-outline"
+            label="Home Address"
+            value={user?.address || 'Not set'}
+          />
+
+          <ProfileDetailItem
+            icon="star-outline"
+            label="Subscription Plan"
+            value={isPremium ? 'DermAI Premium Plan (Active)' : 'Free Tier Plan'}
+            onPress={() =>
+              router.push({ pathname: '/(app)/subscription', params: { from: 'profile' } })
+            }
+          />
+
+          <ProfileDetailItem
+            icon="settings-outline"
+            label="Settings & Preferences"
+            value="Notifications, support & account controls"
+            onPress={() => router.push('/(app)/settings')}
+          />
+
+          {/* Sign Out Row */}
+          <TouchableOpacity
+            style={styles.signOutRow}
+            onPress={handleLogout}
+            activeOpacity={0.75}
+          >
+            <View style={styles.detailIconCol}>
+              <Ionicons name="log-out-outline" size={21} color="#dc2626" />
+            </View>
+            <View style={styles.detailTextCol}>
+              <Text style={[styles.detailLabel, { color: '#ef4444' }]}>Account Session</Text>
+              <Text style={[styles.detailValue, { color: '#dc2626', fontWeight: '700' }]}>
+                Sign Out of DermAI
+              </Text>
+            </View>
           </TouchableOpacity>
         </View>
-        <View style={styles.card}>
-          <InfoRow label="Full Name" value={user.fullName} />
-          <InfoRow label="Email Address" value={user.email} />
-          <InfoRow label="Phone Number" value={user.phone || 'Not set'} />
-          <InfoRow label="Date of Birth" value={user.dateOfBirth || 'Not set'} />
-          <InfoRow label="Gender" value={user.gender || 'Not set'} />
-          <InfoRow label="City / District" value={(user as any).district || 'Not set'} />
-          <InfoRow label="Home Address" value={user.address || 'Not set'} last />
-        </View>
-
-        {/* ── Services & Account Menu ── */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Account &amp; Services</Text>
-        </View>
-        <View style={styles.card}>
-          <MenuRow
-            icon="star-outline"
-            label="Subscription &amp; Plans"
-            value={isPremium ? 'Active' : 'Free'}
-            onPress={() => router.push({ pathname: '/(app)/subscription', params: { from: 'profile' } })}
-          />
-          <MenuRow
-            icon="calendar-outline"
-            label="Consultations &amp; Appointments"
-            value={`${apptCount} visits`}
-            onPress={() => router.push('/(app)/appointments')}
-          />
-          <MenuRow
-            icon="scan-outline"
-            label="Skin Scan History"
-            value={`${scanCount} scans`}
-            onPress={() => router.push('/(app)/history')}
-          />
-          <MenuRow
-            icon="business-outline"
-            label="Dermatology Clinics"
-            onPress={() => router.push('/(app)/clinics')}
-          />
-          <MenuRow
-            icon="settings-outline"
-            label="Preferences &amp; Settings"
-            onPress={() => router.push('/(app)/settings')}
-            last
-          />
-        </View>
-
-        {/* ── Sign Out Button ── */}
-        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={18} color="#dc2626" />
-          <Text style={styles.logoutTxt}>Sign Out</Text>
-        </TouchableOpacity>
-
-        <View style={{ height: 32 }} />
       </ScrollView>
 
       {/* Edit modal */}
@@ -379,52 +446,141 @@ export default function ProfileScreen() {
   );
 }
 
-function InfoRow({
-  label,
-  value,
-  last,
-}: {
-  label: string;
-  value: string;
-  last?: boolean;
-}) {
+// ─────────────────────────────────────────────────────────
+// Animated Seamless Moving Gradient Hero Background
+// ─────────────────────────────────────────────────────────
+function MovingHeroGradient() {
+  const shiftAnim = useRef(new Animated.Value(0)).current;
+  const crossfadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const useNative = Platform.OS !== 'web';
+
+    const shiftLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(shiftAnim, {
+          toValue: 1,
+          duration: 3800,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+        Animated.timing(shiftAnim, {
+          toValue: 0,
+          duration: 3800,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+      ])
+    );
+
+    const crossfadeLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(crossfadeAnim, {
+          toValue: 1,
+          duration: 3000,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+        Animated.timing(crossfadeAnim, {
+          toValue: 0,
+          duration: 3000,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+      ])
+    );
+
+    shiftLoop.start();
+    crossfadeLoop.start();
+
+    return () => {
+      shiftLoop.stop();
+      crossfadeLoop.stop();
+    };
+  }, [shiftAnim, crossfadeAnim]);
+
+  const bgTranslateX = shiftAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-220, 0],
+  });
+
   return (
-    <View style={[styles.infoRow, last && { borderBottomWidth: 0 }]}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue} numberOfLines={2}>{value}</Text>
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      {/* Sliding Multi-Stop Linear Gradient Layer */}
+      <Animated.View
+        style={[
+          styles.movingGradientStrip,
+          { transform: [{ translateX: bgTranslateX }] },
+        ]}
+      >
+        <Svg width="100%" height="100%" viewBox="0 0 800 400" preserveAspectRatio="none">
+          <Defs>
+            <SvgLinearGradient id="heroMovingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <Stop offset="0%" stopColor="#5c0b33" />
+              <Stop offset="22%" stopColor="#85134a" />
+              <Stop offset="48%" stopColor="#d12679" />
+              <Stop offset="74%" stopColor="#85134a" />
+              <Stop offset="100%" stopColor="#5c0b33" />
+            </SvgLinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="800" height="400" fill="url(#heroMovingGrad)" />
+        </Svg>
+      </Animated.View>
+
+      {/* Smooth Crossfading Opposite-Angle Gradient Layer (No Circles) */}
+      <Animated.View
+        style={[
+          StyleSheet.absoluteFill,
+          { opacity: crossfadeAnim },
+        ]}
+      >
+        <Svg width="100%" height="100%" viewBox="0 0 400 400" preserveAspectRatio="none">
+          <Defs>
+            <SvgLinearGradient id="heroCrossGrad" x1="100%" y1="0%" x2="0%" y2="100%">
+              <Stop offset="0%" stopColor="#d92b7f" stopOpacity="0.65" />
+              <Stop offset="50%" stopColor="#A0195A" stopOpacity="0.35" />
+              <Stop offset="100%" stopColor="#5c0b33" stopOpacity="0.7" />
+            </SvgLinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="400" height="400" fill="url(#heroCrossGrad)" />
+        </Svg>
+      </Animated.View>
     </View>
   );
 }
 
-function MenuRow({
+// ─────────────────────────────────────────────────────────
+// Clean Stacked Detail Item (Matches Reference Image Rows)
+// ─────────────────────────────────────────────────────────
+function ProfileDetailItem({
   icon,
   label,
   value,
   onPress,
-  last,
 }: {
   icon: React.ComponentProps<typeof Ionicons>['name'];
   label: string;
-  value?: string;
+  value: string;
   onPress?: () => void;
-  last?: boolean;
 }) {
+  const Wrapper = onPress ? TouchableOpacity : View;
   return (
-    <TouchableOpacity
-      style={[styles.menuRow, last && { borderBottomWidth: 0 }]}
+    <Wrapper
+      style={styles.detailRow}
       onPress={onPress}
-      disabled={!onPress}
       activeOpacity={0.7}
     >
-      <View style={styles.menuIconWrap}>
-        <Ionicons name={icon} size={18} color={COLORS.primary} />
+      <View style={styles.detailIconCol}>
+        <Ionicons name={icon} size={21} color="#6b7280" />
       </View>
-      <Text style={styles.menuLabel}>{label}</Text>
-      <View style={styles.menuRight}>
-        {value && <Text style={styles.menuValue}>{value}</Text>}
-        <Ionicons name="chevron-forward" size={16} color="#94a3b8" />
+      <View style={styles.detailTextCol}>
+        <Text style={styles.detailLabel}>{label}</Text>
+        <Text style={styles.detailValue}>{value}</Text>
       </View>
-    </TouchableOpacity>
+      {onPress ? (
+        <Ionicons name="chevron-forward" size={16} color="#cbd5e1" style={{ marginTop: 4 }} />
+      ) : null}
+    </Wrapper>
   );
 }
 
@@ -461,7 +617,7 @@ function EditModal({
     if (!iso) return '';
     const [y, m, d] = iso.split('-');
     if (!y || !m || !d) return iso;
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return `${months[parseInt(m, 10) - 1]} ${parseInt(d, 10)}, ${y}`;
   }
 
@@ -476,7 +632,7 @@ function EditModal({
             <TouchableOpacity onPress={onClose}>
               <Text style={styles.modalCancel}>Cancel</Text>
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>Edit Personal Details</Text>
+            <Text style={styles.modalTitle}>Edit Profile</Text>
             <TouchableOpacity onPress={onSave} disabled={saving}>
               <Text style={[styles.modalSave, saving && { opacity: 0.5 }]}>
                 {saving ? 'Saving…' : 'Save'}
@@ -620,247 +776,252 @@ function EditModal({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F8FAFC' },
-  container: { flex: 1 },
+  safe: { flex: 1, backgroundColor: '#ffffff' },
+  container: { flex: 1, backgroundColor: '#ffffff' },
+  scrollContent: { paddingBottom: 36 },
 
-  topHeader: {
+  // ── Top Curved Hero Header (Reference Image Structure) ──
+  heroBanner: {
+    backgroundColor: COLORS.primary, // #85134a
+    borderBottomLeftRadius: 30,
+    borderBottomRightRadius: 30,
+    paddingTop: 14,
+    paddingBottom: 24,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    position: 'relative',
+    overflow: 'hidden',
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  movingGradientStrip: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '220%',
+    height: '100%',
+  },
+  heroNavRow: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 14,
-    paddingBottom: 10,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    justifyContent: 'space-between',
+    marginBottom: 18,
   },
-  topHeaderAvatarCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#fce7f3',
+  heroNavBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerWelcome: { fontSize: 11, color: COLORS.textSecondary, letterSpacing: 0.2 },
-  headerName: { fontSize: 19, fontWeight: '800', color: COLORS.text },
-  settingsIconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f8fafc',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+  heroNavTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#ffffff',
+    letterSpacing: 0.2,
   },
 
-  // Profile Card
-  profileCard: {
-    backgroundColor: '#fff',
-    borderRadius: 22,
-    marginHorizontal: 16,
-    marginTop: 14,
-    padding: 20,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#f1f5f9',
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+  // Centered Circular Avatar
+  heroAvatarWrap: {
+    position: 'relative',
+    marginBottom: 12,
   },
-  avatarWrap: { position: 'relative', marginBottom: 10 },
-  avatarImg: { width: 84, height: 84, borderRadius: 42, borderWidth: 3, borderColor: '#fce7f3' },
-  avatarFallback: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    backgroundColor: '#be185d',
+  heroAvatarImg: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 3.5,
+    borderColor: '#ffffff',
+  },
+  heroAvatarFallback: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderWidth: 3.5,
+    borderColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: '#fce7f3',
   },
-  avatarTxt: { fontSize: 28, fontWeight: '800', color: '#fff' },
-  avatarCameraBadge: {
+  heroAvatarInitials: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  heroCameraBadge: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
+    bottom: 2,
+    right: 2,
     width: 26,
     height: 26,
     borderRadius: 13,
-    backgroundColor: COLORS.primary,
+    backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  removeImgBtn: { marginTop: -4, marginBottom: 8 },
-  removeImgTxt: { fontSize: 11, color: '#dc2626', fontWeight: '600' },
-  userName: { fontSize: 18, fontWeight: '800', color: COLORS.text, textAlign: 'center' },
-  userEmail: { fontSize: 13, color: COLORS.textSecondary, marginTop: 2, textAlign: 'center' },
-  planBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 999,
-    marginTop: 10,
-    borderWidth: 1,
-  },
-  planBadgePremium: { backgroundColor: '#fdf2f8', borderColor: '#fbcfe8' },
-  planBadgeFree: { backgroundColor: '#f8fafc', borderColor: '#e2e8f0' },
-  planBadgeTxt: { fontSize: 11, fontWeight: '700' },
-  planBadgeTxtPremium: { color: COLORS.primary },
-  planBadgeTxtFree: { color: '#64748b' },
-
-  // Stats Row (Consistent Magenta Overview Theme)
-  statsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginHorizontal: 16,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#be185d',
-    borderRadius: 16,
-    padding: 12,
-    alignItems: 'flex-start',
-    position: 'relative',
-    overflow: 'hidden',
-    shadowColor: '#be185d',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.22,
-    shadowRadius: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
     elevation: 3,
   },
-  cardCornerCircle: {
-    position: 'absolute',
-    top: -16,
-    right: -16,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  removePhotoLink: {
+    marginTop: -4,
+    marginBottom: 6,
   },
-  statIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  removePhotoLinkTxt: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.85)',
+    textDecorationLine: 'underline',
+  },
+
+  // Centered Name & Subtitle
+  heroUserName: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: '#ffffff',
+    textAlign: 'center',
+  },
+  heroUserRole: {
+    fontSize: 12.5,
+    fontWeight: '500',
+    color: 'rgba(255, 255, 255, 0.82)',
+    marginTop: 3,
+    textAlign: 'center',
+  },
+
+  // 2-Column Inline Stats Bar inside Hero Banner
+  heroStatsBar: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8,
+    marginTop: 20,
+    width: '100%',
   },
-  statValue: { fontSize: 17, fontWeight: '800', color: '#fff' },
-  statLabel: { fontSize: 10, fontWeight: '600', color: 'rgba(255, 255, 255, 0.85)', marginTop: 2 },
-
-  // Sections
-  sectionHeader: {
+  heroStatCol: {
+    flex: 1,
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 8,
-  },
-  sectionTitle: { fontSize: 14, fontWeight: '800', color: '#334155', textTransform: 'uppercase', letterSpacing: 0.5 },
-  editBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: '#fdf2f8',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  editBtnTxt: { fontSize: 12, fontWeight: '700', color: COLORS.primary },
-
-  // Detail Card
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    marginHorizontal: 16,
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    borderColor: '#f1f5f9',
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  infoLabel: { fontSize: 13, color: '#64748b', fontWeight: '500' },
-  infoValue: { fontSize: 13, fontWeight: '700', color: '#1e293b', maxWidth: '60%', textAlign: 'right' },
-
-  menuRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  menuIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: '#fdf2f8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  menuLabel: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1e293b' },
-  menuRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  menuValue: { fontSize: 12, color: '#64748b', fontWeight: '600' },
-
-  logoutBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'baseline',
     justifyContent: 'center',
     gap: 6,
-    marginHorizontal: 16,
-    marginTop: 22,
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: '#fff1f2',
-    borderWidth: 1,
-    borderColor: '#fecdd3',
   },
-  logoutTxt: { fontSize: 14, fontWeight: '700', color: '#dc2626' },
+  heroStatNumber: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  heroStatLabel: {
+    fontSize: 12.5,
+    fontWeight: '500',
+    color: 'rgba(255, 255, 255, 0.82)',
+  },
+  heroStatDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.28)',
+  },
+
+  // ── Clean White List Body (Reference Image List Structure) ──
+  listBody: {
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 22,
+    paddingTop: 18,
+  },
+  listTopActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  listSectionHint: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#9ca3af',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  editPillBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: COLORS.primaryXLight,
+    borderWidth: 1,
+    borderColor: COLORS.primaryLight,
+  },
+  editPillBtnTxt: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  detailIconCol: {
+    width: 34,
+    paddingTop: 2,
+    alignItems: 'flex-start',
+  },
+  detailTextCol: {
+    flex: 1,
+  },
+  detailLabel: {
+    fontSize: 12,
+    color: '#9ca3af',
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  detailValue: {
+    fontSize: 14.5,
+    color: '#1f2937',
+    fontWeight: '600',
+  },
+  signOutRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 16,
+    marginTop: 4,
+  },
 
   // Guest State
   guestContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
   guestIconCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#fce7f3',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: COLORS.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
   },
-  guestTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text },
-  guestSub: { fontSize: 13, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 20, marginTop: 6 },
+  guestTitle: { fontSize: 19, fontWeight: '800', color: COLORS.text },
+  guestSub: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginTop: 6,
+  },
   guestBtn: {
     backgroundColor: COLORS.primary,
     paddingHorizontal: 28,
     paddingVertical: 12,
     borderRadius: 14,
-    marginTop: 20,
+    marginTop: 18,
   },
   guestBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
 
   // Edit Modal
-  modalSafe: { flex: 1, backgroundColor: '#fff' },
+  modalSafe: { flex: 1, backgroundColor: '#ffffff' },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -878,7 +1039,7 @@ const styles = StyleSheet.create({
   formGroup: { marginBottom: 14 },
   formLabel: { fontSize: 12, fontWeight: '700', color: '#334155', marginBottom: 6 },
   formInput: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#ffffff',
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -892,7 +1053,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#ffffff',
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -906,12 +1067,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
   genderChipSelected: {
-    backgroundColor: '#fdf2f8',
+    backgroundColor: COLORS.primaryXLight,
     borderColor: COLORS.primary,
   },
   genderChipTxt: { fontSize: 12, color: '#475569', fontWeight: '600' },
@@ -928,7 +1089,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     borderRadius: 10,
   },
-  districtItemActive: { backgroundColor: '#fdf2f8' },
+  districtItemActive: { backgroundColor: COLORS.primaryXLight },
   districtItemTxt: { fontSize: 13, color: '#1e293b', fontWeight: '500' },
   districtItemTxtActive: { color: COLORS.primary, fontWeight: '700' },
 });
