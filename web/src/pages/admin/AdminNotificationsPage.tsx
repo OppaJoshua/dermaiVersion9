@@ -19,6 +19,7 @@ import {
   type NotificationItem,
 } from "@/lib/notificationService";
 import { useAuth } from "@/context/AuthContext";
+import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 
 function AdminNotifAvatar({ item }: { item: NotificationItem }) {
   const [imgError, setImgError] = useState(false);
@@ -36,13 +37,18 @@ function AdminNotifAvatar({ item }: { item: NotificationItem }) {
     return <Bell className="w-5 h-5 text-magenta-600" />;
   };
 
-  const hasAvatar = Boolean(item.senderAvatar && item.senderAvatar.trim() !== "");
+  const avatarUrl = resolveAvatarUrl(
+    item.senderAvatar ||
+    item.metadata?.clinic_logo ||
+    item.metadata?.logo_url
+  );
+  const hasAvatar = Boolean(avatarUrl && avatarUrl.trim() !== "");
 
   return (
     <div className="relative shrink-0 w-10 h-10">
       {hasAvatar && !imgError ? (
         <img
-          src={item.senderAvatar!}
+          src={avatarUrl!}
           alt={item.senderName || item.category || "User"}
           referrerPolicy="no-referrer"
           className="w-10 h-10 rounded-full object-cover border border-gray-200 bg-white"

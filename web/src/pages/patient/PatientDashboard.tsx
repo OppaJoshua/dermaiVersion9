@@ -223,48 +223,6 @@ export default function PatientDashboard() {
           })
         );
 
-        // Merge offline/optimistic appointments from local storage
-        try {
-          const rawLocal = localStorage.getItem("dermai_clinic_appointments");
-          if (rawLocal) {
-            const parsedLocal = JSON.parse(rawLocal);
-            if (Array.isArray(parsedLocal)) {
-              for (const localItem of parsedLocal) {
-                const localPhoto = localItem.skinPhotoUrl || localItem.conditionImage;
-                const existing = mappedAppts.find((m) => m.id === localItem.id);
-                if (existing) {
-                  if (!existing.conditionImage && localPhoto) {
-                    const signed = await getSignedSkinPhotoUrl(localPhoto);
-                    if (signed) existing.conditionImage = signed;
-                  }
-                } else {
-                  const pDate = localItem.date ? new Date(localItem.date) : null;
-                  const isValid = pDate && !isNaN(pDate.getTime());
-                  let localDisplayImage: string | undefined = undefined;
-                  if (localPhoto) {
-                    const signed = await getSignedSkinPhotoUrl(localPhoto);
-                    if (signed) localDisplayImage = signed;
-                  }
-                  mappedAppts.unshift({
-                    id: localItem.id,
-                    clinicId: localItem.clinicId || 0,
-                    clinicName: localItem.clinicName || "Clinic",
-                    consultationType: "face-to-face" as const,
-                    conditionId: localItem.conditionId || undefined,
-                    conditionName: localItem.aiConditionName || localItem.conditionName || "Skin concern",
-                    conditionImage: localDisplayImage,
-                    date: isValid ? pDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : (localItem.date || "Date pending"),
-                    time: localItem.time || (isValid && localItem.date?.includes("T") ? pDate.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true }) : ""),
-                    notes: localItem.notes || "",
-                    status: (localItem.status === "cancelled" ? "cancelled" : localItem.status === "confirmed" || localItem.status === "scheduled" || localItem.doctorStatus === "approved" ? "scheduled" : localItem.status === "completed" ? "completed" : localItem.status === "rejected" ? "rejected" : "pending") as AppointmentRecord["status"],
-                    createdAt: localItem.createdAt || new Date().toISOString(),
-                  });
-                }
-              }
-            }
-          }
-        } catch { }
-
         setAppointments(mappedAppts);
 
         // Fetch scan history

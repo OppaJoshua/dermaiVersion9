@@ -556,17 +556,57 @@ export default function ReassignDoctorPage() {
         }
       }
 
-      // 2. Deliver to Clinic Portal: Send notification to clinic owner
+      // 2. Deliver to Clinic Portal: Send notification to clinic owner under bookings_and_reselections
       const clinicOwnerUserId = (appointment.clinic as any)?.owner_user_id;
       if (clinicOwnerUserId) {
+        // Resolve patient details & avatar for display in the clinic notification
+        let patientAvatarUrl: string | null = null;
+        let patientFirstName: string | null = null;
+        let patientLastName: string | null = null;
+        const patientUserId = appointment.user_id || user?.id;
+        if (patientUserId) {
+          try {
+            const { data: patientProfile } = await supabase
+              .from("user")
+              .select("avatar_url, full_name")
+              .eq("user_id", patientUserId)
+              .maybeSingle();
+            if (patientProfile) {
+              if (patientProfile.avatar_url) patientAvatarUrl = patientProfile.avatar_url;
+              if (patientProfile.full_name) {
+                const parts = patientProfile.full_name.trim().split(/\s+/);
+                patientFirstName = parts[0] || null;
+                patientLastName = parts.slice(1).join(" ") || null;
+              }
+            }
+          } catch { }
+        }
+        const cleanPatientName = (patientFirstName && patientLastName)
+          ? `${patientFirstName} ${patientLastName}`
+          : (appointment.patient_name || user?.user_metadata?.full_name || "Patient").replace(/^patient\s+/i, "").trim() || "Patient";
         try {
           await supabase.from("user_notification").insert({
             user_id: clinicOwnerUserId,
-            type: "appointment",
+            clinic_id: appointment.clinic_id || (appointment.clinic as any)?.clinic_id || null,
+            patient_id: patientUserId || null,
+            type: "bookings_and_reselections",
             subtype: "alternate_doctor_selected",
             title: "Alternate Doctor Selected",
-            body: `Patient ${appointment.patient_name || "Patient"} has selected Dr. ${selectedDoctor.doctor_name} as their alternate doctor.`,
+            body: `Patient ${cleanPatientName} has selected Dr. ${selectedDoctor.doctor_name} as their alternate doctor.`,
             is_read: false,
+            metadata: {
+              category: "bookings_and_reselections",
+              type: "bookings_and_reselections",
+              subtype: "alternate_doctor_selected",
+              patient_id: patientUserId || null,
+              patient_name: cleanPatientName,
+              patient_first_name: patientFirstName,
+              patient_last_name: patientLastName,
+              patient_avatar: patientAvatarUrl,
+              appointment_id: appointment.appointment_id,
+              new_doctor_name: selectedDoctor.doctor_name,
+              new_doctor_id: selectedDoctor.doctor_id,
+            },
           });
         } catch (clinicNotifErr) {
           console.warn("[ReassignDoctorPage] Clinic notification insert warning:", clinicNotifErr);

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
@@ -75,9 +75,55 @@ interface Appointment {
 
 const STEPS = ["Request Sent", "Doctor Review", "Scheduled", "Completed"];
 
+function isAppointmentReselectionRequired(app: Appointment): boolean {
+  const qa = app.questionnaireAnswers && typeof app.questionnaireAnswers === "object" ? app.questionnaireAnswers : {};
+  if (
+    qa.reselection_status === "reselected" ||
+    qa.reselection_required === false ||
+    qa.workflow_status === "pending_doctor_review" ||
+    qa.doctor_declined === false
+  ) {
+    return false;
+  }
+  try {
+    const rawReselected = localStorage.getItem("dermai_reselected_appointments");
+    if (rawReselected && app.id) {
+      const map = JSON.parse(rawReselected);
+      if (map && map[String(app.id)]) {
+        return false;
+      }
+    }
+  } catch { }
+
+  const rawStatus = String(app.status || "").toLowerCase();
+  const docStatus = String(app.doctorStatus || "").toLowerCase();
+  if (
+    rawStatus === "pending_doctor_review" ||
+    rawStatus === "reselected" ||
+    rawStatus === "scheduled" ||
+    rawStatus === "confirmed" ||
+    rawStatus === "completed" ||
+    rawStatus === "cancelled" ||
+    docStatus === "pending-review" ||
+    docStatus === "approved"
+  ) {
+    return false;
+  }
+
+  return (
+    rawStatus === "reselection_required" ||
+    rawStatus === "doctor_declined" ||
+    docStatus === "rejected" ||
+    rawStatus === "rejected" ||
+    rawStatus === "declined" ||
+    rawStatus === "clinic_reassigning" ||
+    rawStatus === "needs_doctor"
+  );
+}
+
 function getStepIndex(app: Appointment): number {
   if (app.status === "Completed") return 3;
-  if ((app.status === "Scheduled" || app.doctorStatus === "approved") && app.doctorStatus !== "rejected") return 2;
+  if ((app.status === "Scheduled" || app.doctorStatus === "approved") && !isAppointmentReselectionRequired(app)) return 2;
   if (app.status === "Pending" && app.assignedDoctorId && app.doctorStatus === "pending-review") return 1;
   return 0;
 }
@@ -99,8 +145,8 @@ function StatusBadge({ app }: { app: Appointment }) {
     );
   }
 
-  // Doctor declined/rejected takes precedence so unaccepted requests are never shown as confirmed
-  if (app.doctorStatus === "rejected") {
+  // Doctor declined/rejected takes precedence only when reselection is still required
+  if (isAppointmentReselectionRequired(app)) {
     const declinedTimestamp = app.doctorReviewedAt
       ? new Date(app.doctorReviewedAt).getTime()
       : app.createdAt
@@ -164,9 +210,9 @@ function StatusTracker({ app }: { app: Appointment }) {
   const isCancelled = app.status === "Cancelled" || app.status === "Rejected" || app.checkInStatus === "no-show";
   const activeStep = isCancelled ? -1 : getStepIndex(app);
 
-  const isConfirmedScheduled = (app.status === "Scheduled" || app.doctorStatus === "approved") && app.doctorStatus !== "rejected";
+  const isDoctorDeclined = isAppointmentReselectionRequired(app);
+  const isConfirmedScheduled = (app.status === "Scheduled" || app.doctorStatus === "approved") && !isDoctorDeclined;
   const isUnderDoctorReview = !!app.assignedDoctorId && app.doctorStatus === "pending-review";
-  const isDoctorDeclined = app.doctorStatus === "rejected";
 
   return (
     <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
@@ -510,14 +556,7 @@ function AppointmentCard({
   onSelectAlternateDoctor?: (app: Appointment) => void;
   onViewDetails?: (app: Appointment) => void;
 }) {
-  const rawStatus = (app.status || "").toLowerCase();
-  const docStatus = (app.doctorStatus || "").toLowerCase();
-  const isDeclined =
-    docStatus === "rejected" ||
-    rawStatus === "rejected" ||
-    rawStatus === "declined" ||
-    rawStatus === "clinic_reassigning" ||
-    rawStatus === "needs_doctor";
+  const isDeclined = isAppointmentReselectionRequired(app);
 
   const isFinalized = (app.status === "Scheduled" || app.doctorStatus === "approved" || app.status === "Completed") && !isDeclined;
   const isConfirmed = (app.status === "Scheduled" || app.status === "Completed") && !isDeclined;
@@ -1018,101 +1057,26 @@ function ConsultationDetailsModal({
   );
 }
 
-function getCachedAppointments(): Appointment[] {
-  try {
-    const rawLocal = localStorage.getItem("dermai_clinic_appointments");
-    if (!rawLocal) return [];
-    const parsedLocal = JSON.parse(rawLocal);
-    if (!Array.isArray(parsedLocal)) return [];
-    return parsedLocal
-      .map((localItem: any) => {
-        const pDate = localItem.date ? new Date(localItem.date) : null;
-        const isValid = pDate && !isNaN(pDate.getTime());
-        let formattedLocalTime = "Time pending";
-        if (localItem.time && localItem.time !== "Time pending") {
-          if (localItem.time.includes("AM") || localItem.time.includes("PM")) {
-            formattedLocalTime = localItem.time;
-          } else if (localItem.time.includes(":")) {
-            const [h, m] = localItem.time.split(":").map(Number);
-            const ampm = (h || 0) >= 12 ? "PM" : "AM";
-            const hr = (h || 0) % 12 || 12;
-            formattedLocalTime = `${hr}:${String(m || 0).padStart(2, "0")} ${ampm}`;
-          } else {
-            formattedLocalTime = localItem.time;
-          }
-        } else if (isValid && localItem.date?.includes("T")) {
-          formattedLocalTime = pDate.toLocaleTimeString("en-PH", {
-            timeZone: "Asia/Manila",
-            hour: "numeric",
-            minute: "2-digit",
-            hour12: true,
-          });
-        }
-
-        return {
-          id: localItem.id || localItem.appointment_id,
-          clinicId: localItem.clinicId || localItem.clinic_id,
-          clinicName: localItem.clinicName || "Skin Clinic",
-          doctor: localItem.doctor || (localItem.assignedDoctorName ? `Dr. ${localItem.assignedDoctorName.replace(/^dr\.\s*/i, "")}` : "To be assigned"),
-          assignedDoctorName: localItem.assignedDoctorName,
-          assignedDoctorId: localItem.assignedDoctorId,
-          previousDoctorId: localItem.previousDoctorId,
-          previousDoctorName: localItem.previousDoctorName,
-          doctorStatus: localItem.doctorStatus,
-          hasDate: Boolean(isValid || localItem.date),
-          date: isValid
-            ? pDate.toLocaleDateString("en-PH", { timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric" })
-            : (localItem.date || "Date pending"),
-          time: formattedLocalTime,
-          status: (localItem.status === "cancelled" ? "Cancelled" : localItem.status === "confirmed" || localItem.status === "scheduled" || localItem.doctorStatus === "approved" ? "Scheduled" : localItem.status === "completed" ? "Completed" : localItem.status === "rejected" ? "Rejected" : "Pending") as Appointment["status"],
-          clinicNote: localItem.clinicNote,
-          doctorNote: localItem.doctorNote,
-          doctorDiagnosis: localItem.doctorDiagnosis || undefined,
-          aiConditionName: localItem.aiConditionName || localItem.conditionName || undefined,
-          aiConfidence: localItem.aiConfidence != null ? Number(localItem.aiConfidence) : undefined,
-          skinPhotoUrl: localItem.skinPhotoUrl || localItem.skin_photo_url || localItem.photoUrl || undefined,
-          questionnaireAnswers: localItem.questionnaireAnswers || localItem.questionnaire_answers || undefined,
-          createdAt: localItem.createdAt || new Date().toISOString(),
-          userId: localItem.userId,
-          patientEmail: localItem.patientEmail,
-          primaryScanId: localItem.primaryScanId,
-          rescheduleRequested: Boolean(localItem.rescheduleRequested || localItem.reschedule_requested),
-          rescheduleDate: localItem.rescheduleDate || localItem.reschedule_date,
-          rescheduleTime: localItem.rescheduleTime || localItem.reschedule_time,
-          rescheduleReason: localItem.rescheduleReason || localItem.reschedule_reason,
-          needsPatientReschedule: Boolean(localItem.needsPatientReschedule || localItem.needs_patient_reschedule),
-          appointmentHistory: localItem.appointmentHistory || localItem.appointment_history || [],
-          paymentStatus: (localItem.paymentStatus as Appointment["paymentStatus"]) || undefined,
-          paymentAmount: localItem.paymentAmount ? Number(localItem.paymentAmount) : undefined,
-          paymentReference: localItem.paymentReference || undefined,
-          paymentMethod: detectOnlinePaymentMethod(
-            localItem.clinicNote || localItem.clinic_note,
-            localItem.paymentReference || localItem.payment_reference,
-            localItem.paymentMethod || localItem.payment_method
-          ),
-          paidAt: localItem.paidAt || undefined,
-        };
-      })
-      .filter((a: any) => {
-        const paySt = String(a.paymentStatus || "").toLowerCase().trim();
-        return paySt !== "pending_hold" && paySt !== "expired" && paySt !== "failed";
-      });
-  } catch {
-    return [];
-  }
-}
-
 const AppointmentStatusPage: React.FC = () => {
   const { user } = useAuth();
-  const [allAppointments, setAllAppointments] = useState<Appointment[]>(() => getCachedAppointments());
+  const [allAppointments, setAllAppointments] = useState<Appointment[]>([]);
   const [cancellingAppt, setCancellingAppt] = useState<Appointment | null>(null);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
 
   // Search parameters for notification routing & modal trigger
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const paramApptId = searchParams.get("appointment_id") || searchParams.get("appointment");
   const paramAction = searchParams.get("action");
+  const dismissedReassignIdsRef = useRef<Set<string>>(new Set());
+
+  const clearReassignActionParam = useCallback(() => {
+    if (searchParams.has("action")) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("action");
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   // Tabs state
   const [activeTab, setActiveTab] = useState<"upcoming" | "past">("upcoming");
@@ -1137,15 +1101,25 @@ const AppointmentStatusPage: React.FC = () => {
   const [withdrawSaving, setWithdrawSaving] = useState(false);
 
   // Auto-open Alternate Doctor Modal if routed with ?appointment_id=[id]&action=reassign
+  // Strictly checks isAppointmentReselectionRequired so completed/reselected appointments never reopen the modal
   useEffect(() => {
     if (!paramApptId || allAppointments.length === 0) return;
-    const targetAppt = allAppointments.find((a) => a.id === paramApptId);
-    if (targetAppt) {
-      if (paramAction === "reassign") {
+    const targetAppt = allAppointments.find((a) => String(a.id) === String(paramApptId));
+    if (!targetAppt) return;
+
+    if (paramAction === "reassign") {
+      if (
+        !dismissedReassignIdsRef.current.has(String(targetAppt.id)) &&
+        isAppointmentReselectionRequired(targetAppt)
+      ) {
+        dismissedReassignIdsRef.current.add(String(targetAppt.id));
         setReassignModalAppt(targetAppt);
+      } else if (!isAppointmentReselectionRequired(targetAppt)) {
+        setReassignModalAppt(null);
+        clearReassignActionParam();
       }
     }
-  }, [paramApptId, paramAction, allAppointments]);
+  }, [paramApptId, paramAction, allAppointments, clearReassignActionParam]);
 
   const fetchAppointments = useCallback(async () => {
     try {
@@ -1302,14 +1276,36 @@ const AppointmentStatusPage: React.FC = () => {
             displayStatus = "Cancelled";
           }
 
+          const qAnswers = typeof a.questionnaire_answers === "object" && a.questionnaire_answers !== null ? a.questionnaire_answers : {};
+          let localReselectedEntry: any = null;
+          try {
+            const rawReselected = localStorage.getItem("dermai_reselected_appointments");
+            if (rawReselected && a.appointment_id) {
+              const parsedMap = JSON.parse(rawReselected);
+              localReselectedEntry = parsedMap?.[String(a.appointment_id)] || null;
+            }
+          } catch { }
+
+          const isAlreadyReselected =
+            Boolean(localReselectedEntry) ||
+            qAnswers.reselection_status === "reselected" ||
+            qAnswers.reselection_required === false ||
+            qAnswers.workflow_status === "pending_doctor_review";
+
           const clinicObj: any = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
           const resolvedClinicName = clinicObj?.name || clinicNameMap.get(String(a.clinic_id)) || "Skin Clinic";
-          const isDocRejected = a.doctor_status === "rejected";
-          const docName = (a.assigned_doctor_id && !isDocRejected && docNameMap.has(a.assigned_doctor_id))
-            ? `Dr. ${docNameMap.get(a.assigned_doctor_id)!.replace(/^dr\.\s*/i, "")}`
-            : (a.assigned_doctor_id && !isDocRejected)
-              ? "Doctor Assigned"
-              : "To be assigned";
+          const isDocRejected = !isAlreadyReselected && a.doctor_status === "rejected";
+          const effectiveDoctorId = localReselectedEntry?.newDoctorId || a.assigned_doctor_id;
+          const effectiveDoctorStatus = isAlreadyReselected && a.doctor_status === "rejected"
+            ? "pending-review"
+            : (a.doctor_status || undefined);
+          const docName = localReselectedEntry?.newDoctorName
+            ? `Dr. ${String(localReselectedEntry.newDoctorName).replace(/^dr\.\s*/i, "")}`
+            : (effectiveDoctorId && !isDocRejected && docNameMap.has(effectiveDoctorId))
+              ? `Dr. ${docNameMap.get(effectiveDoctorId)!.replace(/^dr\.\s*/i, "")}`
+              : (effectiveDoctorId && !isDocRejected)
+                ? "Doctor Assigned"
+                : "To be assigned";
 
           let docDiagnosis = "";
           let docNoteClean = "";
@@ -1326,7 +1322,6 @@ const AppointmentStatusPage: React.FC = () => {
             }
           }
 
-          const qAnswers = typeof a.questionnaire_answers === "object" && a.questionnaire_answers !== null ? a.questionnaire_answers : {};
           const rescheduleRequested = Boolean(a.reschedule_requested ?? qAnswers.reschedule_requested);
           const rDate = a.reschedule_date || qAnswers.reschedule_date || undefined;
           const rTime = a.reschedule_time || qAnswers.reschedule_time || undefined;
@@ -1342,15 +1337,15 @@ const AppointmentStatusPage: React.FC = () => {
             clinicId: a.clinic_id,
             clinicName: resolvedClinicName,
             doctor: docName,
-            assignedDoctorName: a.assigned_doctor_id && !isDocRejected && docNameMap.has(a.assigned_doctor_id)
-              ? docNameMap.get(a.assigned_doctor_id)
-              : undefined,
-            assignedDoctorId: !isDocRejected ? (a.assigned_doctor_id || undefined) : undefined,
+            assignedDoctorName: localReselectedEntry?.newDoctorName || (effectiveDoctorId && !isDocRejected && docNameMap.has(effectiveDoctorId)
+              ? docNameMap.get(effectiveDoctorId)
+              : undefined),
+            assignedDoctorId: !isDocRejected ? (effectiveDoctorId || undefined) : undefined,
             previousDoctorId: a.assigned_doctor_id || undefined,
             previousDoctorName: a.assigned_doctor_id && docNameMap.has(a.assigned_doctor_id)
               ? docNameMap.get(a.assigned_doctor_id)
               : undefined,
-            doctorStatus: a.doctor_status || undefined,
+            doctorStatus: effectiveDoctorStatus as Appointment["doctorStatus"],
             hasDate: Boolean(isValidDate),
             date: dateStr,
             time: timeStr,
@@ -1394,95 +1389,15 @@ const AppointmentStatusPage: React.FC = () => {
           };
         });
 
-        // Also merge any offline/optimistic records from local cache
-        try {
-          const rawLocal = localStorage.getItem("dermai_clinic_appointments");
-          if (rawLocal) {
-            const parsedLocal = JSON.parse(rawLocal);
-            if (Array.isArray(parsedLocal)) {
-              parsedLocal.forEach((localItem: any) => {
-                const existing = mapped.find((m) => m.id === localItem.id);
-                if (!existing) {
-                  const pDate = localItem.date ? new Date(localItem.date) : null;
-                  const isValid = pDate && !isNaN(pDate.getTime());
-
-                  let formattedLocalTime = "Time pending";
-                  if (localItem.time && localItem.time !== "Time pending") {
-                    if (localItem.time.includes("AM") || localItem.time.includes("PM")) {
-                      formattedLocalTime = localItem.time;
-                    } else if (localItem.time.includes(":")) {
-                      const [h, m] = localItem.time.split(":").map(Number);
-                      const ampm = (h || 0) >= 12 ? "PM" : "AM";
-                      const hr = (h || 0) % 12 || 12;
-                      formattedLocalTime = `${hr}:${String(m || 0).padStart(2, "0")} ${ampm}`;
-                    } else {
-                      formattedLocalTime = localItem.time;
-                    }
-                  } else if (isValid && localItem.date?.includes("T")) {
-                    formattedLocalTime = pDate.toLocaleTimeString("en-PH", {
-                      timeZone: "Asia/Manila",
-                      hour: "numeric",
-                      minute: "2-digit",
-                      hour12: true,
-                    });
-                  }
-
-                  mapped.push({
-                    id: localItem.id,
-                    clinicId: localItem.clinicId,
-                    clinicName: localItem.clinicName || "Clinic",
-                    doctor: localItem.assignedDoctorName ? `Dr. ${localItem.assignedDoctorName.replace(/^dr\.\s*/i, "")}` : "To be assigned",
-                    assignedDoctorName: localItem.assignedDoctorName,
-                    assignedDoctorId: localItem.assignedDoctorId,
-                    doctorStatus: localItem.doctorStatus,
-                    hasDate: Boolean(isValid || localItem.date),
-                    date: isValid
-                      ? pDate.toLocaleDateString("en-PH", { timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric" })
-                      : (localItem.date || "Date pending"),
-                    time: formattedLocalTime,
-                    status: (localItem.status === "cancelled" ? "Cancelled" : localItem.status === "confirmed" || localItem.status === "scheduled" || localItem.doctorStatus === "approved" ? "Scheduled" : localItem.status === "completed" ? "Completed" : localItem.status === "rejected" ? "Rejected" : "Pending") as Appointment["status"],
-                    clinicNote: localItem.clinicNote,
-                    doctorNote: localItem.doctorNote,
-                    doctorDiagnosis: localItem.doctorDiagnosis || undefined,
-                    aiConditionName: localItem.aiConditionName || localItem.conditionName || undefined,
-                    aiConfidence: localItem.aiConfidence != null ? Number(localItem.aiConfidence) : undefined,
-                    skinPhotoUrl: localItem.skinPhotoUrl || localItem.skin_photo_url || localItem.photoUrl || undefined,
-                    questionnaireAnswers: localItem.questionnaireAnswers || localItem.questionnaire_answers || undefined,
-                    createdAt: localItem.createdAt || new Date().toISOString(),
-                    userId: localItem.userId,
-                    patientEmail: localItem.patientEmail,
-                    primaryScanId: localItem.primaryScanId,
-                    rescheduleRequested: Boolean(localItem.rescheduleRequested || localItem.reschedule_requested),
-                    rescheduleDate: localItem.rescheduleDate || localItem.reschedule_date,
-                    rescheduleTime: localItem.rescheduleTime || localItem.reschedule_time,
-                    rescheduleReason: localItem.rescheduleReason || localItem.reschedule_reason,
-                    needsPatientReschedule: Boolean(localItem.needsPatientReschedule || localItem.needs_patient_reschedule),
-                    appointmentHistory: localItem.appointmentHistory || localItem.appointment_history || [],
-                    paymentStatus: (localItem.paymentStatus as Appointment["paymentStatus"]) || undefined,
-                    paymentAmount: localItem.paymentAmount ? Number(localItem.paymentAmount) : undefined,
-                    paymentReference: localItem.paymentReference || undefined,
-                    paymentMethod: detectOnlinePaymentMethod(
-                      localItem.clinicNote,
-                      localItem.paymentReference,
-                      localItem.paymentMethod ||
-                        localItem.payment_method ||
-                        (localItem.id ? paymentMap.get(String(localItem.id)) : undefined) ||
-                        (localItem.paymentReference ? paymentMap.get(String(localItem.paymentReference)) : undefined)
-                    ),
-                    rejectionReason: extractClinicCancellationReason(localItem.clinicNote) || undefined,
-                    paidAt: localItem.paidAt || undefined,
-                  });
-                }
-              });
-            }
-          }
-        } catch { }
-
         // Exclude temporary unpaid holds and expired holds from active status list
         const confirmedAppointments = mapped.filter((a) => {
           const paySt = String(a.paymentStatus || "").toLowerCase().trim();
           return paySt !== "pending_hold" && paySt !== "expired" && paySt !== "failed";
         });
+
+        try {
+          localStorage.setItem("dermai_clinic_appointments", JSON.stringify(confirmedAppointments));
+        } catch { }
 
         setAllAppointments(confirmedAppointments);
       }
@@ -1980,11 +1895,47 @@ const AppointmentStatusPage: React.FC = () => {
       {/* Select Alternate Doctor Modal */}
       <SelectAlternateDoctorModal
         isOpen={Boolean(reassignModalAppt)}
-        onClose={() => setReassignModalAppt(null)}
+        onClose={() => {
+          if (reassignModalAppt?.id) {
+            dismissedReassignIdsRef.current.add(String(reassignModalAppt.id));
+          }
+          setReassignModalAppt(null);
+          clearReassignActionParam();
+        }}
         appointment={reassignModalAppt}
         clinicId={reassignModalAppt?.clinicId ? String(reassignModalAppt.clinicId) : undefined}
         appointmentId={reassignModalAppt?.id}
         onSuccess={(newDoctorName) => {
+          const completedApptId = reassignModalAppt?.id;
+          if (completedApptId) {
+            dismissedReassignIdsRef.current.add(String(completedApptId));
+          }
+          setReassignModalAppt(null);
+          clearReassignActionParam();
+          if (completedApptId) {
+            const formattedDoc = `Dr. ${newDoctorName.replace(/^dr\.\s*/i, "")}`;
+            setAllAppointments((prev) =>
+              prev.map((a) =>
+                String(a.id) === String(completedApptId)
+                  ? {
+                    ...a,
+                    status: "Pending",
+                    doctorStatus: "pending-review",
+                    doctor: formattedDoc,
+                    assignedDoctorName: newDoctorName,
+                    doctorNote: undefined,
+                    questionnaireAnswers: {
+                      ...(typeof a.questionnaireAnswers === "object" && a.questionnaireAnswers !== null ? a.questionnaireAnswers : {}),
+                      reselection_status: "reselected",
+                      reselection_required: false,
+                      doctor_declined: false,
+                      workflow_status: "pending_doctor_review",
+                    },
+                  }
+                  : a
+              )
+            );
+          }
           setSuccessToast(`Successfully assigned consultation to Dr. ${newDoctorName.replace(/^dr\.\s*/i, "")}. The doctor has been notified for review.`);
           fetchAppointments();
         }}

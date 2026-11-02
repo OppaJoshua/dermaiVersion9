@@ -1134,6 +1134,10 @@ export function SelectAlternateDoctorModal({
         reassigned_by: "patient",
         previous_doctor_id: previousDoctor?.id || appointment.assignedDoctorId,
         is_paid: true,
+        reselection_status: "reselected",
+        reselection_required: false,
+        doctor_declined: false,
+        workflow_status: "pending_doctor_review",
         appointment_history: [
           ...(Array.isArray(baseQa.appointment_history) ? baseQa.appointment_history : []),
           historyEntry,
@@ -1155,10 +1159,27 @@ export function SelectAlternateDoctorModal({
       };
 
       // 1. Update public.patient_appointment
-      const { error: updateError } = await supabase
+      let { error: updateError } = await supabase
         .from("patient_appointment")
         .update(updatePayload)
         .eq("appointment_id", appointment.id);
+
+      if (updateError && classifyHoldFailure(updateError.code, updateError.message) !== "slot_conflict") {
+        const fallbackRes = await supabase
+          .from("patient_appointment")
+          .update({
+            assigned_doctor_id: selectedDoctor.doctor_id,
+            status: "pending",
+            doctor_status: "pending-review",
+            date: scheduledDateTimeIso,
+            clinic_note: updatePayload.clinic_note,
+            doctor_note: null,
+            doctor_reviewed_at: null,
+            questionnaire_answers: nextQa,
+          })
+          .eq("appointment_id", appointment.id);
+        updateError = fallbackRes.error;
+      }
 
       if (updateError) {
         if (classifyHoldFailure(updateError.code, updateError.message) === "slot_conflict") {
@@ -1178,6 +1199,47 @@ export function SelectAlternateDoctorModal({
           throw new Error("This consultation slot was just reserved or booked by another patient. Please select another available schedule.");
         }
         throw new Error(updateError.message || "Failed to update appointment record.");
+      }
+
+      // Immediately record re-selection resolution in localStorage and mark rejection notifications as read/resolved
+      try {
+        const rawReselected = localStorage.getItem("dermai_reselected_appointments");
+        const reselectedMap = rawReselected ? JSON.parse(rawReselected) : {};
+        reselectedMap[String(appointment.id)] = {
+          appointmentId: String(appointment.id),
+          newDoctorId: selectedDoctor.doctor_id,
+          newDoctorName: selectedDoctor.doctor_name,
+          date: selectedDate,
+          time: selectedTime,
+          status: "pending_doctor_review",
+          resolvedAt: new Date().toISOString(),
+        };
+        localStorage.setItem("dermai_reselected_appointments", JSON.stringify(reselectedMap));
+      } catch { }
+
+      // Suppress / mark associated 'Re-selection Required' / 'appointment-rejected' notifications as resolved/read in Supabase & local cache
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const effectivePatientUserId = appointment.userId || sessionData?.session?.user?.id;
+        if (effectivePatientUserId) {
+          try {
+            const readKey = `dermai_read_notifs_${effectivePatientUserId}`;
+            const existingRead: string[] = JSON.parse(localStorage.getItem(readKey) || "[]");
+            const syntheticRejId = `appt-rejected-${appointment.id}`;
+            if (!existingRead.includes(syntheticRejId)) {
+              existingRead.push(syntheticRejId);
+              localStorage.setItem(readKey, JSON.stringify(existingRead));
+            }
+          } catch { }
+
+          await supabase
+            .from("user_notification")
+            .update({ is_read: true })
+            .eq("user_id", effectivePatientUserId)
+            .or("type.in.(appointment-rejected,appointment_rejected,reselection_required,doctor-declined),subtype.in.(doctor-declined,doctor_declined,rejected,declined,schedule-conflict,reselection_required)");
+        }
+      } catch (suppressErr) {
+        console.warn("[SelectAlternateDoctorModal] Notification suppression warning:", suppressErr);
       }
 
       if (targetClinicId) {
@@ -1217,17 +1279,57 @@ export function SelectAlternateDoctorModal({
         }
       }
 
-      // 3. Deliver to Clinic Portal: Send notification to clinic owner
+      // 3. Deliver to Clinic Portal: Send notification to clinic owner under bookings_and_reselections
       const clinicOwnerUserId = clinicData?.owner_user_id;
       if (clinicOwnerUserId) {
+        // Resolve patient details & avatar from user table for display in the clinic notification
+        let patientAvatarUrl: string | null = null;
+        let patientFirstName: string | null = null;
+        let patientLastName: string | null = null;
+        const patientUserId = appointment.userId || null;
+        if (patientUserId) {
+          try {
+            const { data: patientProfile } = await supabase
+              .from("user")
+              .select("avatar_url, full_name")
+              .eq("user_id", patientUserId)
+              .maybeSingle();
+            if (patientProfile) {
+              if (patientProfile.avatar_url) patientAvatarUrl = patientProfile.avatar_url;
+              if (patientProfile.full_name) {
+                const parts = patientProfile.full_name.trim().split(/\s+/);
+                patientFirstName = parts[0] || null;
+                patientLastName = parts.slice(1).join(" ") || null;
+              }
+            }
+          } catch { }
+        }
+        const cleanPatientName = (patientFirstName && patientLastName)
+          ? `${patientFirstName} ${patientLastName}`
+          : (appointment.patientName || "Patient").replace(/^patient\s+/i, "").trim() || "Patient";
         try {
           await supabase.from("user_notification").insert({
             user_id: clinicOwnerUserId,
-            type: "appointment",
+            clinic_id: appointment.clinicId || null,
+            patient_id: patientUserId || null,
+            type: "bookings_and_reselections",
             subtype: "alternate_doctor_selected",
             title: "Alternate Doctor Selected",
-            body: `Patient ${appointment.patientName || "Patient"} has selected Dr. ${selectedDoctor.doctor_name.replace(/^dr\.\s*/i, "")} as their alternate doctor.`,
+            body: `Patient ${cleanPatientName} has selected Dr. ${selectedDoctor.doctor_name.replace(/^dr\.\s*/i, "")} as their alternate doctor.`,
             is_read: false,
+            metadata: {
+              category: "bookings_and_reselections",
+              type: "bookings_and_reselections",
+              subtype: "alternate_doctor_selected",
+              patient_id: patientUserId || null,
+              patient_name: cleanPatientName,
+              patient_first_name: patientFirstName,
+              patient_last_name: patientLastName,
+              patient_avatar: patientAvatarUrl,
+              appointment_id: appointment.id,
+              new_doctor_name: selectedDoctor.doctor_name,
+              new_doctor_id: selectedDoctor.doctor_id,
+            },
           });
         } catch (clinicNotifErr) {
           console.warn("[SelectAlternateDoctorModal] Clinic notification insert warning:", clinicNotifErr);
@@ -1272,6 +1374,7 @@ export function SelectAlternateDoctorModal({
                   status: "pending",
                   doctorStatus: "pending-review",
                   assignedDoctorId: selectedDoctor.doctor_id,
+                  assignedDoctorName: selectedDoctor.doctor_name,
                   doctor: `Dr. ${selectedDoctor.doctor_name.replace(/^dr\.\s*/i, "")}`,
                   doctorNote: null,
                   doctorReviewedAt: null,
@@ -1279,6 +1382,7 @@ export function SelectAlternateDoctorModal({
                   date: selectedDate,
                   time: formatTime12h(selectedTime),
                   batchTime: selectedTime,
+                  questionnaireAnswers: nextQa,
                   appointmentHistory: nextQa.appointment_history,
                 }
                 : a
@@ -1288,15 +1392,16 @@ export function SelectAlternateDoctorModal({
         }
       } catch { }
 
+      // Immediately close modal before triggering parent refresh and cross-portal events
+      onClose();
+      if (onSuccess) {
+        onSuccess(selectedDoctor.doctor_name);
+      }
+
       // Dispatch cross-portal update events
       window.dispatchEvent(new CustomEvent("dermai_appointments_updated"));
       window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
       window.dispatchEvent(new Event("storage"));
-
-      if (onSuccess) {
-        onSuccess(selectedDoctor.doctor_name);
-      }
-      onClose();
     } catch (err: any) {
       console.error("[SelectAlternateDoctorModal] Confirmation error:", err);
       setErrorMsg(err?.message || "Failed to confirm alternate doctor. Please try again.");

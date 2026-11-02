@@ -712,6 +712,10 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
           body: isApproved
             ? `Dr. ${doctorName || "your doctor"} has approved your consultation schedule.`
             : `Dr. ${doctorName || "your doctor"} had a schedule conflict: ${note || "Consultation will be reassigned."}`,
+          metadata: {
+            appointment_id: appointmentId,
+            declined_at: new Date().toISOString(),
+          },
         });
       }
 
@@ -743,7 +747,9 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
               metadata: {
                 appointment_id: appointmentId,
                 doctor_id: branchDoctor.doctor_id,
-                doctor_name: doctorName || undefined,
+                doctor_user_id: user?.id,
+                doctor_name: docDisplayName,
+                doctor_avatar: (branchDoctor as any).photo_url || (user as any)?.avatar_url || undefined,
                 clinic_id: clinicIdToNotify,
                 clinic_name: clinicRow?.name || undefined,
                 patient_name: patientDisplayName,

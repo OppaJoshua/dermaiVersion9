@@ -15,6 +15,7 @@ import {
   CheckCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
 import { useRoleNotifications, type NotificationItem } from "@/lib/notificationService";
 
@@ -48,7 +49,10 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
           n.category === "ticket" ||
           n.type === "support" ||
           n.type === "support_ticket" ||
-          n.metadata?.category === "support"
+          n.type?.includes("ticket") ||
+          n.type?.includes("support") ||
+          n.metadata?.category === "support" ||
+          n.metadata?.category === "ticket"
       );
     } else if (activeTab !== "all") {
       list = notifications.filter((n) => n.category === activeTab);
@@ -56,10 +60,27 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
 
     const seenIds = new Set<string>();
     const seenContent = new Set<string>();
+    const seenRejectionAppts = new Set<string>();
+
     return list.filter((n) => {
       if (!n || !n.id) return false;
       if (seenIds.has(n.id)) return false;
       seenIds.add(n.id);
+
+      // Rejection / Conflict deduplication: suppress duplicates for the same appointment conflict
+      const isRej =
+        n.type === "appointment-rejected" ||
+        n.metadata?.subtype === "doctor-declined" ||
+        n.metadata?.subtype === "schedule-conflict" ||
+        /review update|schedule conflict|appointment declined|declined/i.test(n.title || "");
+      const rApptId =
+        n.metadata?.appointment_id ||
+        (n.id.startsWith("appt-rejected-") ? n.id.replace("appt-rejected-", "") : undefined);
+
+      if (isRej && rApptId) {
+        if (seenRejectionAppts.has(rApptId)) return false;
+        seenRejectionAppts.add(rApptId);
+      }
 
       const normTitle = (n.title || "").trim().toLowerCase();
       const normMsg = (n.message || "").trim().toLowerCase();
@@ -95,7 +116,10 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
     if (n.type === "appointment-accepted") return <CheckCircle2 className={cls} />;
     if (n.type === "appointment-rejected") return <XCircle className={cls} />;
     if (n.type === "appointment-completed") return <Sparkles className={cls} />;
-    if (n.category === "ticket") return <HelpCircle className={cls} />;
+    if (n.type === "appointment-payment-confirmed" || n.type === "payment-confirmed") return <CheckCircle2 className={cls} />;
+    if (n.category === "ticket" || n.type === "support" || n.type === "support_ticket" || n.type?.includes("ticket") || n.type?.includes("support")) {
+      return <HelpCircle className={cls} />;
+    }
     if (
       n.category === "broadcast" ||
       n.type === "broadcast" ||
@@ -187,8 +211,62 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
           </div>
         ) : (
           filtered.map((item) => {
-            const isRejected = item.type === "appointment-rejected";
+            const isRescheduleDeclined =
+              item.type === "reschedule_declined" ||
+              item.type === "appointment-reschedule-declined" ||
+              item.type === "appointment_reschedule_declined" ||
+              item.metadata?.subtype === "reschedule_declined" ||
+              item.metadata?.subtype === "reschedule-declined" ||
+              /reschedule.*declined/i.test(item.title || "") ||
+              /request to reschedule.*could not be accepted|original appointment.*remains reserved/i.test(item.message || "");
+            const isRejected =
+              !isRescheduleDeclined &&
+              (item.type === "doctor_cancelled" ||
+                item.type === "doctor_declined" ||
+                item.type === "doctor-declined" ||
+                item.type === "appointment-rejected" ||
+                item.metadata?.subtype === "doctor_cancelled" ||
+                item.metadata?.subtype === "doctor_declined" ||
+                item.metadata?.subtype === "doctor-declined" ||
+                item.metadata?.subtype === "schedule-conflict" ||
+                /review update|schedule conflict|appointment declined/i.test(item.title || ""));
             const isCompleted = item.type === "appointment-completed";
+            const isPaymentConfirmed =
+              item.type === "payment-confirmed" ||
+              item.type === "payment_confirmed" ||
+              item.type === "appointment-payment-confirmed" ||
+              item.metadata?.subtype === "payment_confirmed" ||
+              item.metadata?.subtype === "payment-confirmed" ||
+              item.metadata?.subtype === "payment" ||
+              /payment.*(confirm|verifi|receiv)/i.test(item.title || "") ||
+              /payment.*(confirm|verifi)/i.test(item.message || "");
+            const isScheduleApproved =
+              !isCompleted &&
+              !isRejected &&
+              (
+                item.type === "appointment-scheduled" ||
+                item.type === "appointment_scheduled" ||
+                item.type === "appointment-accepted" ||
+                item.type === "appointment_accepted" ||
+                item.type === "appointment-approved" ||
+                item.type === "appointment_approved" ||
+                item.type === "doctor-confirmed-schedule" ||
+                item.type === "doctor_confirmed_schedule" ||
+                item.type === "schedule-confirmed" ||
+                item.type === "schedule_confirmed" ||
+                item.metadata?.subtype === "doctor-confirmed-schedule" ||
+                item.metadata?.subtype === "doctor_confirmed_schedule" ||
+                item.metadata?.subtype === "appointment-approved" ||
+                item.metadata?.subtype === "appointment_approved" ||
+                item.metadata?.subtype === "schedule-confirmed" ||
+                item.metadata?.subtype === "schedule_confirmed" ||
+                item.metadata?.subtype === "confirmed" ||
+                item.metadata?.subtype === "doctor-approved" ||
+                item.metadata?.subtype === "doctor_approved" ||
+                item.metadata?.subtype === "reassigned" ||
+                /doctor confirmed schedule|appointment confirmed|schedule confirmed|reschedule request approved/i.test(item.title || "") ||
+                /approved your consultation schedule|schedule.*confirmed|has been confirmed|has been reassigned/i.test(item.message || "")
+              );
             const isMaintenance =
               item.metadata?.subtype === "maintenance_alert" ||
               item.type === "maintenance_alert" ||
@@ -197,6 +275,15 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
               item.category === "broadcast" ||
               item.type === "broadcast" ||
               item.metadata?.subtype === "admin_announcement";
+            const isTicket =
+              item.category === "ticket" ||
+              item.type === "support" ||
+              item.type === "support_ticket" ||
+              item.type?.includes("ticket") ||
+              item.type?.includes("support") ||
+              item.metadata?.category === "support" ||
+              item.metadata?.category === "ticket" ||
+              /support ticket|ticket received|ticket resolved|ticket updated/i.test(item.title || "");
 
             // Resolve appointment_id for "Consultation Completed" deep-link
             const completedApptId = isCompleted
@@ -206,25 +293,36 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                   : null)
               : null;
 
-            // Resolve the display name for completed consultation cards.
+            // Resolve the display name for clinic notifications (completed consultation, payment confirmed, schedule approved, etc.)
             // item.senderName is the clinic name set by the service (e.g. "DerMA").
             // Fallback to "Clinic" only if the service couldn't resolve it — this keeps
             // initials meaningful ("D" / "SC") and avoids leaking "Clinic Update" into
-            // the avatar circle.
-            const resolvedClinicName: string = isCompleted
-              ? (item.senderName || "Clinic")
+            // the avatar circle or header label.
+            const isClinicNotif =
+              !isTicket &&
+              (isCompleted ||
+                isPaymentConfirmed ||
+                isRejected ||
+                isScheduleApproved ||
+                item.senderType === "clinic" ||
+                item.category === "appointment");
+            const resolvedClinicName: string = isClinicNotif
+              ? (item.senderName && item.senderName !== "Clinic Update" ? item.senderName : "Clinic")
               : (item.senderName || "");
 
             // Derive initials from the real clinic name, never from display fallback strings.
             // "DerMA" → "D" | "Skin Care Clinic" → "SC"
             const clinicInitials = resolvedClinicName
               ? resolvedClinicName
-                  .split(" ")
+                  .split(/\s+/)
                   .filter(Boolean)
                   .slice(0, 2)
                   .map((w: string) => w[0].toUpperCase())
                   .join("")
               : "C";
+
+            const rawAvatarUrl = item.senderAvatar || item.metadata?.sender_avatar || item.metadata?.avatar_url;
+            const resolvedLogoUrl = resolveAvatarUrl(rawAvatarUrl) || rawAvatarUrl || null;
 
             return (
               <div
@@ -250,20 +348,49 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
 
                 {/* Sender Avatar / Icon */}
                 <div className="shrink-0">
-                  {item.senderAvatar ? (
-                    /* Has an explicit avatar/logo URL — show it */
-                    <img
-                      src={item.senderAvatar}
-                      alt={item.senderName || "Clinic"}
-                      referrerPolicy="no-referrer"
-                      className="w-10 h-10 rounded-full object-cover border border-gray-200 bg-white"
-                    />
-                  ) : isCompleted ? (
-                    /* Consultation Completed: show clinic initials (graceful fallback) */
+                  {resolvedLogoUrl ? (
+                    /* Has an explicit avatar/logo URL — prioritize rendering clinic logo or admin support avatar image */
+                    <>
+                      <img
+                        src={resolvedLogoUrl}
+                        alt={isTicket ? (item.senderName || "DERMAI Support") : (resolvedClinicName || item.senderName || "Clinic")}
+                        referrerPolicy="no-referrer"
+                        className="w-10 h-10 rounded-full object-cover border border-gray-200 bg-white"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLElement).style.display = "none";
+                          const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                          if (fallback) fallback.style.display = "flex";
+                        }}
+                      />
+                      {isTicket ? (
+                        <div
+                          style={{ display: "none" }}
+                          className="w-10 h-10 rounded-full bg-magenta-50 border border-magenta-100 items-center justify-center shrink-0"
+                        >
+                          <HelpCircle className="w-5 h-5 text-magenta-600" />
+                        </div>
+                      ) : (
+                        <div
+                          style={{ display: "none" }}
+                          className="w-10 h-10 rounded-full bg-magenta-600 items-center justify-center shrink-0"
+                        >
+                          <span className="text-white text-xs font-bold leading-none">{clinicInitials}</span>
+                        </div>
+                      )}
+                    </>
+                  ) : loading ? (
+                    <div className="w-10 h-10 rounded-full bg-gray-100 animate-pulse border border-gray-200 shrink-0" />
+                  ) : (isCompleted || isPaymentConfirmed || isScheduleApproved || (item.senderType === "clinic" && !isRejected && !isTicket)) ? (
+                    /* Consultation Completed / Payment Confirmed / Schedule Approved: show clinic initials (graceful fallback) */
                     <div className="w-10 h-10 rounded-full bg-magenta-600 flex items-center justify-center shrink-0">
                       <span className="text-white text-xs font-bold leading-none">{clinicInitials}</span>
                     </div>
-                  ) : item.senderType === "clinic" ? (
+                  ) : isRejected ? (
+                    /* Rejection fallback when no logo URL: show red X icon */
+                    <div className="w-10 h-10 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center">
+                      <XCircle className="w-5 h-5 text-rose-600" />
+                    </div>
+                  ) : item.senderType === "clinic" && !isTicket ? (
                     <div className="w-10 h-10 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center">
                       <Building2 className="w-5 h-5 text-magenta-600" />
                     </div>
@@ -292,7 +419,11 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                           isMaintenance ? "text-amber-800" : "text-magenta-700"
                         )}
                       >
-                        {isCompleted ? resolvedClinicName : (item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : "Clinic Update"))}
+                        {isTicket
+                          ? (item.senderName || "DERMAI Support")
+                          : isClinicNotif
+                          ? resolvedClinicName
+                          : (item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : resolvedClinicName || "Clinic"))}
                       </span>
                       {isMaintenance && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
@@ -347,6 +478,35 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                     const notifApptId =
                       item.metadata?.appointment_id ||
                       (item.id.startsWith("appt-rejected-") ? item.id.replace("appt-rejected-", "") : "");
+                    let isReselectionResolved = Boolean(item.metadata?.reselection_resolved);
+                    if (!isReselectionResolved && notifApptId) {
+                      try {
+                        const reselectedMap = JSON.parse(localStorage.getItem("dermai_reselected_appointments") || "{}");
+                        if (reselectedMap[notifApptId]) {
+                          isReselectionResolved = true;
+                        } else {
+                          const localAppts: any[] = JSON.parse(localStorage.getItem("dermai_clinic_appointments") || "[]");
+                          const matchedAppt = localAppts.find(
+                            (a: any) => String(a.id || a.appointment_id) === String(notifApptId)
+                          );
+                          if (matchedAppt) {
+                            const qa = matchedAppt.questionnaireAnswers || matchedAppt.questionnaire_answers || {};
+                            const docSt = String(matchedAppt.doctorStatus || matchedAppt.doctor_status || "").toLowerCase();
+                            if (
+                              qa.reselection_status === "reselected" ||
+                              qa.reselection_required === false ||
+                              qa.workflow_status === "pending_doctor_review" ||
+                              (docSt && docSt !== "rejected" && docSt !== "declined" && docSt !== "reselection_required")
+                            ) {
+                              isReselectionResolved = true;
+                            }
+                          }
+                        }
+                      } catch { }
+                    }
+
+                    if (isReselectionResolved) return null;
+
                     const declinedTimestamp = item.metadata?.declined_at
                       ? new Date(item.metadata.declined_at).getTime()
                       : item.timestamp
@@ -383,16 +543,39 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                     );
                   })()}
 
-                  {/* Action Link for general notifications (not completed, not rejected) */}
-                  {item.link && !isRejected && !isCompleted && (
-                    <Link
-                      to={item.link}
-                      onClick={onClose}
-                      className="mt-2 inline-flex items-center text-sm font-medium text-magenta-700 hover:text-magenta-800 transition-colors"
-                    >
-                      View details →
-                    </Link>
-                  )}
+                  {/* Action Link for schedule approvals ("Doctor Confirmed Schedule", "Reschedule Request Approved", etc.) and general notifications */}
+                  {(() => {
+                    const validApptId =
+                      item.metadata?.appointment_id ||
+                      item.metadata?.appointmentId ||
+                      item.metadata?.booking_id ||
+                      item.metadata?.bookingId ||
+                      (item as any).appointment_id ||
+                      (item as any).booking_id ||
+                      (item.id.startsWith("appt-accepted-")
+                        ? item.id.replace("appt-accepted-", "")
+                        : item.id.startsWith("appt-scheduled-")
+                        ? item.id.replace("appt-scheduled-", "")
+                        : null);
+                    const targetLink = isScheduleApproved
+                      ? (validApptId
+                          ? `/patient/appointment-status?appointment_id=${validApptId}`
+                          : null)
+                      : (item.link || (validApptId ? `/patient/appointment-status?appointment_id=${validApptId}` : null));
+                    if (!targetLink || isRejected || isCompleted || isRescheduleDeclined) return null;
+                    return (
+                      <Link
+                        to={targetLink}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClose?.();
+                        }}
+                        className="mt-2 inline-flex items-center text-sm font-medium text-magenta-700 hover:text-magenta-800 transition-colors"
+                      >
+                        View details →
+                      </Link>
+                    );
+                  })()}
                 </div>
               </div>
             );

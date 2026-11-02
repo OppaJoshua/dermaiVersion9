@@ -9,6 +9,7 @@ import {
   Megaphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
 import { useRoleNotifications } from "@/lib/notificationService";
 
@@ -167,12 +168,38 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
               item.category === "appointment" ||
               item.type === "appointment_request" ||
               item.type === "appointment-request" ||
+              item.type === "new-booking" ||
+              item.type === "new_booking" ||
+              item.type === "appointment-created" ||
+              item.type === "appointment_created" ||
               item.type.includes("delegated") ||
-              item.type.includes("appointment");
+              item.type.includes("appointment") ||
+              item.type.includes("booking");
 
             const clinicId = item.metadata?.clinicId || item.metadata?.clinic_id;
             const patientId = item.metadata?.patientId || item.metadata?.patient_id || item.metadata?.user_id;
             const appointmentId = item.metadata?.appointmentId || item.metadata?.appointment_id;
+
+            const clinicName =
+              item.metadata?.clinic_name ||
+              item.metadata?.clinicName ||
+              item.metadata?.branch_name;
+
+            const clinicLogo =
+              item.metadata?.clinic_logo ||
+              item.metadata?.branch_logo ||
+              item.metadata?.logo_url;
+
+            // Prioritize dynamic clinic.name instead of "DERMAI Admin"
+            const displaySenderName = isAppointmentRequest
+              ? (item.senderName && item.senderName !== "DERMAI Admin"
+                  ? item.senderName
+                  : (clinicName || "Clinic"))
+              : (item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : item.category));
+
+            // Prioritize rendering senderAvatar (the clinic logo image)
+            const rawAvatar = item.senderAvatar || clinicLogo;
+            const resolvedAvatar = resolveAvatarUrl(rawAvatar);
 
             const targetLink = item.link || (
               item.metadata?.clinicId && item.metadata?.patientId
@@ -183,6 +210,8 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
                 ? `/doctor/clinics/${clinicId}/patients/${patientId}${
                     appointmentId ? `?appointmentId=${appointmentId}` : ""
                   }`
+                : isAppointmentRequest
+                ? (appointmentId ? `/doctor/appointments?appointmentId=${appointmentId}` : "/doctor/appointments")
                 : null
             );
 
@@ -229,10 +258,10 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
 
                 {/* Avatar with real profile picture & fallback initials */}
                 <div className="relative shrink-0 w-10 h-10">
-                  {item.senderAvatar ? (
+                  {resolvedAvatar ? (
                     <img
-                      src={item.senderAvatar}
-                      alt={item.senderName || "Sender"}
+                      src={resolvedAvatar}
+                      alt={displaySenderName || "Sender"}
                       referrerPolicy="no-referrer"
                       className="w-10 h-10 rounded-full object-cover border border-gray-200 bg-white"
                       onError={(e) => {
@@ -251,14 +280,14 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
                         ? "bg-magenta-50 text-magenta-700 border-magenta-200"
                         : "bg-magenta-50 text-magenta-700 border-magenta-100"
                     )}
-                    style={{ display: item.senderAvatar ? "none" : "flex" }}
+                    style={{ display: resolvedAvatar ? "none" : "flex" }}
                   >
                     {isMaintenance ? (
                       <AlertTriangle className="w-5 h-5 text-amber-600" />
                     ) : isBroadcast ? (
                       <Megaphone className="w-5 h-5 text-magenta-600" />
                     ) : (
-                      (item.senderName || "PT").slice(0, 2).toUpperCase()
+                      (displaySenderName || "CL").replace(/^(clinic|dr\.?)\s+/i, "").trim().slice(0, 2).toUpperCase()
                     )}
                   </div>
                 </div>
@@ -273,7 +302,7 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
                           isMaintenance ? "text-amber-800" : "text-magenta-700"
                         )}
                       >
-                        {item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : item.category)}
+                        {displaySenderName}
                       </span>
                       {isMaintenance && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">

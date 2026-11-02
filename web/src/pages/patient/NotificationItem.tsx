@@ -14,7 +14,8 @@ export interface NotificationItemProps {
  * /patient/appointment-status?appointment_id=[appointment_id]&action=reassign
  */
 export function NotificationItem({ item, onClose }: NotificationItemProps) {
-  const isRejected = item.type === "appointment-rejected";
+  const isRescheduleDeclined = item.type === "reschedule_declined" || item.type === "appointment-reschedule-declined" || item.type === "appointment_reschedule_declined" || item.metadata?.subtype === "reschedule_declined" || item.metadata?.subtype === "reschedule-declined" || /reschedule.*declined/i.test(item.title || "") || /request to reschedule.*could not be accepted|original appointment.*remains reserved/i.test(item.message || "");
+  const isRejected = !isRescheduleDeclined && (item.type === "doctor_cancelled" || item.type === "doctor_declined" || item.type === "doctor-declined" || item.type === "appointment-rejected" || item.metadata?.subtype === "doctor_cancelled" || item.metadata?.subtype === "doctor_declined" || item.metadata?.subtype === "doctor-declined");
   const notifApptId = item.metadata?.appointment_id || (item.link?.match(/[0-9a-fA-F-]{36}/) ? item.link.match(/[0-9a-fA-F-]{36}/)?.[0] : null);
 
   const declinedTimestamp = item.metadata?.declined_at
@@ -34,7 +35,7 @@ export function NotificationItem({ item, onClose }: NotificationItemProps) {
       </div>
       <p className="text-xs text-gray-600 mt-1 leading-relaxed">{item.message}</p>
 
-      {isRejected && (
+      {isRejected && !Boolean(item.metadata?.reselection_resolved) && (
         isWindowExpired ? (
           <div className="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
@@ -59,9 +60,9 @@ export function NotificationItem({ item, onClose }: NotificationItemProps) {
         )
       )}
 
-      {item.link && !isRejected && (
+      {(item.link || notifApptId || item.metadata?.booking_id) && !isRejected && !isRescheduleDeclined && (
         <Link
-          to={item.link}
+          to={item.link || `/patient/appointment-status?appointment_id=${notifApptId || item.metadata?.booking_id}`}
           onClick={onClose}
           className="mt-2 inline-flex items-center text-xs font-semibold text-[#A21D5C] hover:underline"
         >

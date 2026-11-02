@@ -2,11 +2,14 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import { getLocalHelpdeskTickets } from "./store";
 import { logAuditEvent } from "./auditLog";
+import { resolveAvatarUrl } from "./avatarUrlResolver";
 
 export type NotificationRole = "patient" | "doctor" | "clinic" | "admin";
 
 export type NotificationCategory =
   | "appointment"
+  | "bookings_and_reselections"
+  | "doctor_actions"
   | "ticket"
   | "broadcast"
   | "subscription"
@@ -25,6 +28,7 @@ export interface NotificationItem {
   senderName?: string;
   senderType?: "clinic" | "admin" | "doctor" | "system" | "patient" | "user";
   senderAvatar?: string | null;
+  appointment_id?: string;
   link?: string;
   timestamp: string;
   isRead: boolean;
@@ -47,6 +51,7 @@ export interface PatientNotificationPayload {
   subtype?: string;
   title: string;
   body: string;
+  metadata?: Record<string, any>;
 }
 
 const LOCAL_NOTIF_PREFIX = "dermai_patient_notifications_";
@@ -128,6 +133,9 @@ export function resolveAppointmentTimestamp(appt: any, preferredTimestamp?: stri
  * 3. Checks content fingerprint: normalized title + message (prevents duplicate entries with identical content)
  * 4. Prioritizes persistent DB records (UUID) over synthetic prefixes (broadcast-, ticket-update-, appt-)
  */
+const isUuid = (str: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
 export function deduplicateNotificationItems(items: NotificationItem[]): NotificationItem[] {
   if (!Array.isArray(items) || items.length === 0) return [];
 
@@ -137,9 +145,6 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
   const seenApptActions = new Set<string>();
 
   // Sort so persistent database records with UUID IDs take precedence over synthetic fallback IDs
-  const isUuid = (str: string) =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-
   const sorted = [...items].sort((a, b) => {
     const aIsUuid = isUuid(a.id);
     const bIsUuid = isUuid(b.id);
@@ -171,10 +176,36 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
     }
 
     // B2. Appointment + Action deduplication (dedupes persistent DB user_notification with synthetic fallback)
-    const apptId = item.metadata?.appointment_id || (item.id.startsWith("clinic-") ? item.id.replace(/^clinic-[a-z]+-/, "") : undefined);
+    const apptId =
+      item.metadata?.appointment_id ||
+      (item.id.startsWith("clinic-")
+        ? item.id.replace(/^clinic-[a-z]+-/, "")
+        : item.id.startsWith("appt-rejected-")
+        ? item.id.replace("appt-rejected-", "")
+        : item.id.startsWith("appt-completed-")
+        ? item.id.replace("appt-completed-", "")
+        : item.id.startsWith("appt-cancelled-")
+        ? item.id.replace("appt-cancelled-", "")
+        : item.id.startsWith("appt-accepted-")
+        ? item.id.replace("appt-accepted-", "")
+        : undefined);
+
     const normType = (item.type || item.metadata?.type || "").toLowerCase().replace(/_/g, "-");
     const isDoctorAction = normType.includes("doctor-");
-    if (apptId && (isDoctorAction || normType === "appointment-cancelled" || normType === "appointment-request")) {
+
+    // Conflict / rejection deduplication: suppress duplicate notification cards for the same appointment conflict
+    const isRejectionAction =
+      normType === "appointment-rejected" ||
+      normType === "appointment-declined" ||
+      item.metadata?.subtype === "doctor-declined" ||
+      item.metadata?.subtype === "schedule-conflict" ||
+      /review update|schedule conflict|declined|rejected/i.test(item.title || "");
+
+    if (apptId && isRejectionAction) {
+      const rejectKey = `${apptId}:::rejected`;
+      if (seenApptActions.has(rejectKey)) continue;
+      seenApptActions.add(rejectKey);
+    } else if (apptId && (isDoctorAction || normType === "appointment-cancelled" || normType === "appointment-request")) {
       const apptActionKey = `${apptId}:::${normType}`;
       if (seenApptActions.has(apptActionKey)) continue;
       seenApptActions.add(apptActionKey);
@@ -214,9 +245,9 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
   const items: NotificationItem[] = [];
 
   try {
-    // ── Pre-fetch both DB notifications and appointments in parallel so we can
-    //    enrich appointment-completed DB records with real clinic name + logo.
-    const [{ data: dbNotifs }, { data: appointments }] = await Promise.all([
+    // ── Pre-fetch DB notifications, appointments, and admin/support profiles in parallel
+    //    so we can enrich clinic appointments and support ticket notifications with real avatars.
+    const [{ data: dbNotifs }, { data: appointments }, { data: adminUsers }] = await Promise.all([
       supabase
         .from("user_notification")
         .select("notif_id, type, subtype, title, body, is_read, metadata, created_at")
@@ -236,26 +267,108 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           created_at,
           assigned_doctor_id,
           doctor_reviewed_at,
+          questionnaire_answers,
           clinic:clinic_id (name, logo_url)
         `)
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
         .limit(20),
+      supabase
+        .from("user")
+        .select("user_id, full_name, avatar_url, email, role")
+        .or("role.eq.admin,email.eq.dermaisupport@gmail.com,user_id.eq.03c4dbd4-5d15-4c78-872e-93811b3afa23")
+        .limit(10),
     ]);
+
+    const adminProfileById = new Map<string, { fullName?: string; avatarUrl?: string }>();
+    let defaultAdminAvatar: string | undefined = undefined;
+    (adminUsers || []).forEach((au: any) => {
+      const resolvedUrl = au.avatar_url ? (resolveAvatarUrl(au.avatar_url) || au.avatar_url) : undefined;
+      if (au.user_id) {
+        adminProfileById.set(String(au.user_id), {
+          fullName: au.full_name || undefined,
+          avatarUrl: resolvedUrl,
+        });
+      }
+      if (!defaultAdminAvatar && resolvedUrl) {
+        defaultAdminAvatar = resolvedUrl;
+      }
+    });
+
+    // Also check profiles table for admin avatar or specific admin_id / resolved_by in ticket metadata
+    const ticketAdminIds = Array.from(
+      new Set(
+        (dbNotifs || [])
+          .map((n: any) => n.metadata?.admin_id || n.metadata?.resolved_by || n.metadata?.responder_id)
+          .filter((id: any) => id && !adminProfileById.has(String(id)))
+      )
+    );
+    if (!defaultAdminAvatar || ticketAdminIds.length > 0) {
+      try {
+        let profQuery = supabase.from("profiles").select("user_id, full_name, avatar_url, profile_picture, role");
+        if (ticketAdminIds.length > 0) {
+          profQuery = profQuery.or(`role.eq.admin,user_id.in.(${ticketAdminIds.join(",")})`);
+        } else {
+          profQuery = profQuery.eq("role", "admin");
+        }
+        const { data: adminProfs } = await profQuery.limit(10);
+        (adminProfs || []).forEach((ap: any) => {
+          const rawAv = ap.avatar_url || ap.profile_picture;
+          const resolvedUrl = rawAv ? (resolveAvatarUrl(rawAv) || rawAv) : undefined;
+          if (ap.user_id) {
+            const existing = adminProfileById.get(String(ap.user_id));
+            adminProfileById.set(String(ap.user_id), {
+              fullName: existing?.fullName || ap.full_name || undefined,
+              avatarUrl: existing?.avatarUrl || resolvedUrl,
+            });
+          }
+          if (!defaultAdminAvatar && resolvedUrl) {
+            defaultAdminAvatar = resolvedUrl;
+          }
+        });
+      } catch { }
+    }
 
     // Build a lookup map: appointment_id → { name, logo }
     // This lets us enrich appointment-completed DB notification records with the
     // correct clinic name and logo_url, even when the user_notification row only
     // stores a bare subtype like "reviewed" and no sender_name in metadata.
     const clinicByApptId = new Map<string, { name: string; logo: string | null }>();
+    const apptById = new Map<string, any>();
     (appointments || []).forEach((appt: any) => {
       if (!appt.appointment_id) return;
+      apptById.set(String(appt.appointment_id), appt);
       const cObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
       clinicByApptId.set(appt.appointment_id, {
         name: cObj?.name || "Clinic",
         logo: cObj?.logo_url || null,
       });
     });
+
+    let reselectedMapLocal: Record<string, any> = {};
+    try {
+      reselectedMapLocal = JSON.parse(localStorage.getItem("dermai_reselected_appointments") || "{}");
+    } catch { }
+
+    const isApptReselectionResolved = (targetApptId?: string): boolean => {
+      if (!targetApptId) return false;
+      if (reselectedMapLocal[targetApptId]) return true;
+      const appt = apptById.get(String(targetApptId));
+      if (!appt) return false;
+      const qa = appt.questionnaire_answers || {};
+      if (
+        qa.reselection_status === "reselected" ||
+        qa.reselection_required === false ||
+        qa.workflow_status === "pending_doctor_review"
+      ) {
+        return true;
+      }
+      const docSt = String(appt.doctor_status || "").toLowerCase();
+      if (docSt && docSt !== "rejected" && docSt !== "declined" && docSt !== "reselection_required") {
+        return true;
+      }
+      return false;
+    };
 
     // 1. Direct user_notification records for this patient
     if (dbNotifs) {
@@ -265,12 +378,23 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         const isTicket =
           n.type === "support_ticket" ||
           n.type === "support" ||
+          n.type === "support-ticket-received" ||
+          n.type === "support_ticket_received" ||
+          n.type === "support-ticket-resolved" ||
+          n.type === "support_ticket_resolved" ||
           n.subtype === "support" ||
           n.subtype === "support_ticket" ||
+          n.subtype === "support-ticket-received" ||
+          n.subtype === "support_ticket_received" ||
+          n.subtype === "support-ticket-resolved" ||
+          n.subtype === "support_ticket_resolved" ||
           n.type?.includes("ticket") ||
           n.type?.includes("support") ||
+          n.subtype?.includes("ticket") ||
+          n.subtype?.includes("support") ||
           (n as any).metadata?.category === "support" ||
-          (n as any).metadata?.category === "ticket";
+          (n as any).metadata?.category === "ticket" ||
+          /support ticket|ticket received|ticket resolved|ticket updated/i.test(n.title || "");
         const isAdminSystem = isBroadcast || isMaintenance;
         // Detect appointment-completed regardless of which field carries the signal
         const isApptCompleted =
@@ -278,36 +402,115 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           n.type === "appointment_completed" ||
           n.subtype === "reviewed" ||
           n.subtype === "appointment-completed";
+
+        // Detect payment confirmation / verification notifications
+        const isPaymentConfirmed =
+          n.type === "payment-confirmed" ||
+          n.type === "payment_confirmed" ||
+          n.type === "appointment-payment-confirmed" ||
+          n.subtype === "payment_confirmed" ||
+          n.subtype === "payment-confirmed" ||
+          n.subtype === "payment" ||
+          /payment.*(confirm|verifi|receiv)/i.test(n.title || "") ||
+          /payment.*(confirm|verifi)/i.test(n.subtype || "") ||
+          /payment.*(confirm|verifi)/i.test(n.body || "");
+
+        // Detect appointment rejection / schedule conflict notifications
+        const isApptRejected =
+          n.type === "appointment-rejected" ||
+          n.type === "appointment_rejected" ||
+          n.subtype === "doctor-declined" ||
+          n.subtype === "doctor_declined" ||
+          n.subtype === "rejected" ||
+          n.subtype === "declined" ||
+          n.subtype === "schedule-conflict" ||
+          n.subtype === "schedule_conflict" ||
+          /review update|schedule conflict|declined|rejected/i.test(n.title || "") ||
+          /schedule conflict|consultation will be reassigned|was declined/i.test(n.body || "");
+
+        // Detect schedule confirmation / approval notifications
+        const isScheduleApproved =
+          !isApptCompleted &&
+          !isApptRejected &&
+          (
+            n.type === "appointment-scheduled" ||
+            n.type === "appointment_scheduled" ||
+            n.type === "appointment-accepted" ||
+            n.type === "appointment_accepted" ||
+            n.type === "appointment-approved" ||
+            n.type === "appointment_approved" ||
+            n.type === "doctor-confirmed-schedule" ||
+            n.type === "doctor_confirmed_schedule" ||
+            n.type === "schedule-confirmed" ||
+            n.type === "schedule_confirmed" ||
+            n.subtype === "doctor-confirmed-schedule" ||
+            n.subtype === "doctor_confirmed_schedule" ||
+            n.subtype === "appointment-approved" ||
+            n.subtype === "appointment_approved" ||
+            n.subtype === "schedule-confirmed" ||
+            n.subtype === "schedule_confirmed" ||
+            n.subtype === "confirmed" ||
+            n.subtype === "doctor-approved" ||
+            n.subtype === "doctor_approved" ||
+            n.subtype === "reassigned" ||
+            /doctor confirmed schedule|appointment confirmed|schedule confirmed|reschedule request approved/i.test(n.title || "") ||
+            /approved your consultation schedule|schedule.*confirmed|has been confirmed|has been reassigned/i.test(n.body || "")
+          );
+
+        const needsClinicEnrichment = !isTicket && !isAdminSystem && (isApptCompleted || isPaymentConfirmed || isApptRejected || isScheduleApproved);
         const ticketIdMatch = n.body?.match(/ticket #([^ ')]+)/i)?.[1];
 
-        // For completed-consultation DB records, resolve the real clinic name + logo.
-        //
-        // Strategy (in order of precision):
-        //   1. metadata.appointment_id → exact lookup in clinicByApptId map
-        //   2. No appointment_id in metadata → find completed appointment whose
-        //      doctor_reviewed_at/created_at is closest to this notification's timestamp.
-        //      This handles triggers that store no appointment_id in the payload.
-        //   3. Ultimate fallback: undefined (component will show initials from senderName)
-        const apptId = (n as any).metadata?.appointment_id as string | undefined;
+        // For completed consultations, payment confirmations, schedule approvals, and conflict/rejection DB records,
+        // resolve the real clinic name + logo using the 2-path lookup strategy:
+        //   Path 1: metadata.appointment_id → exact lookup in clinicByApptId map
+        //   Path 2: No appointment_id in metadata → find appointment whose timestamp
+        //          is closest to this notification's timestamp.
+        const apptId = ((n as any).metadata?.appointment_id || (n as any).metadata?.appointmentId) as string | undefined;
 
-        let clinicEnrichment: { name: string; logo: string | null } | undefined;
+        let clinicEnrichment: {
+          name: string;
+          logo: string | null;
+          appointmentId?: string;
+          declinedAt?: string;
+        } | undefined;
 
-        if (isApptCompleted) {
+        if (needsClinicEnrichment) {
           if (apptId) {
             // Path 1: exact match by appointment_id
-            clinicEnrichment = clinicByApptId.get(apptId);
+            const matchedClinic = clinicByApptId.get(apptId);
+            if (matchedClinic) {
+              clinicEnrichment = {
+                name: matchedClinic.name,
+                logo: matchedClinic.logo,
+                appointmentId: apptId,
+              };
+            }
           }
 
           if (!clinicEnrichment) {
-            // Path 2: no appointment_id in metadata — find the completed appointment
+            // Path 2: no appointment_id in metadata — find the appointment
             // whose timestamp is closest to this notification's created_at.
             const notifTime = new Date(n.created_at).getTime();
-            const completedAppts = (appointments || []).filter(
-              (a: any) => a.status === "completed"
-            );
+            const approvedFilter = (a: any) =>
+              a.doctor_status === "approved" ||
+              a.status === "confirmed" ||
+              a.status === "scheduled" ||
+              a.status === "approved";
 
-            if (completedAppts.length > 0) {
-              const closest = completedAppts.reduce((best: any, appt: any) => {
+            const candidateAppts = isApptCompleted
+              ? ((appointments || []).filter((a: any) => a.status === "completed").length > 0
+                  ? (appointments || []).filter((a: any) => a.status === "completed")
+                  : (appointments || []))
+              : isApptRejected
+              ? (appointments || []).filter((a: any) => a.doctor_status === "rejected" || a.status === "cancelled")
+              : isScheduleApproved
+              ? ((appointments || []).filter(approvedFilter).length > 0
+                  ? (appointments || []).filter(approvedFilter)
+                  : (appointments || []))
+              : (appointments || []);
+
+            if (candidateAppts.length > 0) {
+              const closest = candidateAppts.reduce((best: any, appt: any) => {
                 const apptTime = new Date(
                   appt.doctor_reviewed_at || appt.created_at || 0
                 ).getTime();
@@ -327,16 +530,41 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
                 clinicEnrichment = {
                   name: cObj.name,
                   logo: cObj.logo_url || null,
+                  appointmentId: closest.appointment_id,
+                  declinedAt: closest.doctor_reviewed_at || closest.created_at,
                 };
               }
             }
           }
         }
 
+        const resolvedApptId = apptId || clinicEnrichment?.appointmentId || (n as any).metadata?.appointment_id;
+        const isRejectedResolved =
+          isApptRejected &&
+          (Boolean((n as any).metadata?.reselection_resolved) || isApptReselectionResolved(resolvedApptId));
+        const metaAdminId =
+          (n as any).metadata?.admin_id ||
+          (n as any).metadata?.resolved_by ||
+          (n as any).metadata?.responder_id;
+        const matchedAdmin = metaAdminId ? adminProfileById.get(String(metaAdminId)) : undefined;
+        const resolvedAdminAvatar =
+          resolveAvatarUrl((n as any).metadata?.sender_avatar || (n as any).metadata?.avatar_url) ||
+          matchedAdmin?.avatarUrl ||
+          defaultAdminAvatar ||
+          undefined;
+
         items.push({
           id: n.notif_id,
-          type: isApptCompleted ? "appointment-completed" : (n.type || "system"),
-          category: (n.type?.includes("appointment") || isApptCompleted)
+          type: isApptCompleted
+            ? "appointment-completed"
+            : isPaymentConfirmed
+            ? (n.type || "appointment-payment-confirmed")
+            : isApptRejected
+            ? "appointment-rejected"
+            : isScheduleApproved
+            ? (n.type || "appointment-scheduled")
+            : (n.type || "system"),
+          category: (!isTicket && (n.type?.includes("appointment") || needsClinicEnrichment))
             ? "appointment"
             : isTicket
               ? "ticket"
@@ -345,27 +573,42 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
                 : "system",
           title: n.title,
           message: n.body || "",
-          // Completed consultations: use real clinic name from the appointment join.
-          // Other types: fall through to metadata.sender_name then role defaults.
+          // Completed consultations, payment confirmations, schedule approvals & rejections: use real clinic name from appointment join.
+          // Support tickets: use "DERMAI Support" or responding admin's full name.
           senderName:
-            (isApptCompleted && clinicEnrichment?.name) ||
+            (needsClinicEnrichment && clinicEnrichment?.name) ||
+            (!isTicket && (n as any).metadata?.clinic_name) ||
             (n as any).metadata?.sender_name ||
-            (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : undefined),
-          // Completed consultations: attach clinic logo so the <img> avatar renders.
-          // null means "no logo URL" — component will render initials fallback instead.
-          senderAvatar: isApptCompleted
-            ? (clinicEnrichment?.logo ?? null)
-            : undefined,
-          senderType: isApptCompleted
+            (n as any).metadata?.admin_name ||
+            (isTicket
+              ? (matchedAdmin?.fullName || "DERMAI Support")
+              : isAdminSystem
+              ? "Platform Administrator"
+              : undefined),
+          // Completed consultations, payment confirmations, schedule approvals & rejections: attach clinic logo for avatar rendering.
+          // Support tickets & admin notifications: attach resolved admin profile avatar.
+          senderAvatar: needsClinicEnrichment
+            ? (clinicEnrichment?.logo ?? (n as any).metadata?.clinic_logo ?? (n as any).metadata?.sender_avatar ?? null)
+            : (isTicket || isAdminSystem)
+            ? resolvedAdminAvatar
+            : ((n as any).metadata?.sender_avatar || (n as any).metadata?.avatar_url || undefined),
+          senderType: needsClinicEnrichment
             ? "clinic"
             : isTicket || isAdminSystem
             ? "admin"
             : (n.subtype as any) || "system",
-          link: (n as any).metadata?.link || (isTicket ? "/patient/support" : undefined),
+          link: isRejectedResolved
+            ? "/patient/appointment-status"
+            : ((n as any).metadata?.link || (isApptRejected && resolvedApptId
+                ? `/patient/appointment-status?appointment_id=${resolvedApptId}&action=reassign`
+                : isTicket ? "/patient/support" : undefined)),
           timestamp: n.created_at,
-          isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
+          isRead: Boolean(n.is_read || readSet.has(n.notif_id) || isRejectedResolved),
           metadata: {
             ...(n as any).metadata,
+            appointment_id: resolvedApptId,
+            declined_at: (n as any).metadata?.declined_at || clinicEnrichment?.declinedAt || n.created_at,
+            reselection_resolved: isRejectedResolved,
             ticket_id: ticketIdMatch || (n as any).metadata?.ticket_id,
             subtype: n.subtype,
           },
@@ -405,8 +648,8 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           });
         }
 
-        // B1. Doctor-Initiated Decline (Only when doctor declined and not patient cancelled)
-        if (appt.doctor_status === "rejected" && appt.status !== "cancelled") {
+        // B1. Doctor-Initiated Decline (Only when doctor declined and not patient cancelled and reselection not already resolved)
+        if (appt.doctor_status === "rejected" && appt.status !== "cancelled" && !isApptReselectionResolved(appt.appointment_id)) {
           const notifId = `appt-rejected-${appt.appointment_id}`;
           const noteText = appt.doctor_note ? ` Note: "${appt.doctor_note}".` : "";
           const rejectMsg = `Your appointment request at ${clinicName} on ${dateStr} was declined.${noteText} You can select another available doctor within 24 hours. If no selection is made within 24 hours, the clinic will automatically assign an available doctor to your booking.`;
@@ -514,6 +757,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             message: `Your ticket "${ticket.subject}" is now ${ticket.status}.${replySummary}`,
             senderName: "DERMAI Support",
             senderType: "admin",
+            senderAvatar: defaultAdminAvatar || undefined,
             link: "/dashboard/settings/help",
             timestamp: ticket.updated_at || ticket.created_at,
             isRead: readSet.has(notifId),
@@ -552,6 +796,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           message: b.message,
           senderName: "Platform Administrator",
           senderType: "admin",
+          senderAvatar: defaultAdminAvatar || undefined,
           timestamp: b.sent_at,
           isRead: readSet.has(notifId),
           metadata: {
@@ -621,12 +866,24 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       const { data: adminUser } = await supabase
         .from("user")
         .select("avatar_url")
-        .eq("role", "admin")
+        .or("role.eq.admin,email.eq.dermaisupport@gmail.com,user_id.eq.03c4dbd4-5d15-4c78-872e-93811b3afa23")
         .not("avatar_url", "is", null)
         .limit(1)
         .maybeSingle();
       if (adminUser?.avatar_url) {
-        adminAvatar = adminUser.avatar_url;
+        adminAvatar = resolveAvatarUrl(adminUser.avatar_url) || adminUser.avatar_url;
+      }
+      if (!adminAvatar) {
+        const { data: adminProf } = await supabase
+          .from("profiles")
+          .select("avatar_url, profile_picture")
+          .eq("role", "admin")
+          .limit(1)
+          .maybeSingle();
+        const rawAv = (adminProf as any)?.avatar_url || (adminProf as any)?.profile_picture;
+        if (rawAv) {
+          adminAvatar = resolveAvatarUrl(rawAv) || rawAv;
+        }
       }
     } catch { }
 
@@ -656,6 +913,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
     };
 
     // 2A. Fetch Doctor's Assigned Appointments (existing behavior)
+    let fetchedAssignedAppts: any[] = [];
     if (validDoctorIds.length > 0) {
       const { data: appointments } = await supabase
         .from("patient_appointment")
@@ -680,6 +938,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
         .limit(20);
 
       if (appointments) {
+        fetchedAssignedAppts = appointments;
         const { fallbackAvatarMap } = await buildNotifItems(appointments);
 
         appointments.forEach((appt: any) => {
@@ -769,6 +1028,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
     // 2B. Cross-Branch: Fetch NEW unassigned pending appointment requests
     //     from ALL clinic branches this doctor belongs to.
     //     This fires for any branch — even one not currently active in the UI.
+    let fetchedBranchRequests: any[] = [];
     if (validBranchIds.length > 0) {
       const alreadyTrackedIds = new Set(items.map((i) => {
         // extract appointment_id suffix from notifId like "doc-req-<uuid>"
@@ -798,6 +1058,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
         .limit(30);
 
       if (branchRequests) {
+        fetchedBranchRequests = branchRequests;
         const { fallbackAvatarMap } = await buildNotifItems(branchRequests);
 
         branchRequests.forEach((appt: any) => {
@@ -927,7 +1188,22 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       });
     }
 
-    // 5. Direct User Notifications for Doctor
+    // 5. Direct User Notifications for Doctor (with clinic enrichment for booking notifications)
+    const allDoctorAppointments = [...fetchedAssignedAppts, ...fetchedBranchRequests];
+    const clinicByApptId = new Map<string, { clinic_id?: string; name: string; logo: string | null }>();
+
+    allDoctorAppointments.forEach((appt: any) => {
+      if (!appt.appointment_id) return;
+      const cObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
+      const cName = cObj?.name || clinicNameMap.get(appt.clinic_id) || currentClinicName;
+      const cLogo = cObj?.logo_url || clinicLogoMap.get(appt.clinic_id) || null;
+      clinicByApptId.set(appt.appointment_id, {
+        clinic_id: appt.clinic_id,
+        name: cName,
+        logo: cLogo,
+      });
+    });
+
     const { data: directNotifs } = await supabase
       .from("user_notification")
       .select("notif_id, type, subtype, title, body, is_read, metadata, created_at")
@@ -935,11 +1211,82 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       .order("created_at", { ascending: false })
       .limit(30);
 
-    if (directNotifs) {
+    if (directNotifs && directNotifs.length > 0) {
+      // Pre-resolve missing appointment IDs or clinic IDs referenced in direct notifications
+      const missingApptIds = Array.from(new Set(
+        directNotifs
+          .map((n: any) => n.metadata?.appointment_id || n.metadata?.appointmentId)
+          .filter((id: any): id is string => Boolean(id && isUuid(id) && !clinicByApptId.has(id)))
+      ));
+
+      if (missingApptIds.length > 0) {
+        try {
+          const { data: extraAppts } = await supabase
+            .from("patient_appointment")
+            .select("appointment_id, clinic_id, created_at, date, clinic:clinic_id(name, logo_url)")
+            .in("appointment_id", missingApptIds);
+
+          (extraAppts || []).forEach((ea: any) => {
+            const cObj = Array.isArray(ea.clinic) ? ea.clinic[0] : ea.clinic;
+            const cName = cObj?.name || clinicNameMap.get(ea.clinic_id) || currentClinicName;
+            const cLogo = cObj?.logo_url || clinicLogoMap.get(ea.clinic_id) || null;
+            if (ea.appointment_id) {
+              clinicByApptId.set(ea.appointment_id, {
+                clinic_id: ea.clinic_id,
+                name: cName,
+                logo: cLogo,
+              });
+            }
+            if (ea.clinic_id && cName) {
+              clinicNameMap.set(ea.clinic_id, cName);
+              if (cLogo) clinicLogoMap.set(ea.clinic_id, cLogo);
+            }
+            allDoctorAppointments.push(ea);
+          });
+        } catch { }
+      }
+
+      const missingClinicIds = Array.from(new Set(
+        directNotifs
+          .map((n: any) => n.metadata?.clinic_id || n.metadata?.clinicId)
+          .filter((id: any): id is string => Boolean(id && isUuid(id) && !clinicNameMap.has(id)))
+      ));
+
+      if (missingClinicIds.length > 0) {
+        try {
+          const { data: extraClinics } = await supabase
+            .from("clinic")
+            .select("clinic_id, name, logo_url")
+            .in("clinic_id", missingClinicIds);
+
+          (extraClinics || []).forEach((c: any) => {
+            if (c.clinic_id && c.name) {
+              clinicNameMap.set(c.clinic_id, c.name);
+              if (c.logo_url) clinicLogoMap.set(c.clinic_id, c.logo_url);
+            }
+          });
+        } catch { }
+      }
+
       directNotifs.forEach((n) => {
         const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
         const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
-        const isTicket = n.type === "support_ticket" || n.type?.includes("ticket");
+        const isTicket =
+          n.type === "support_ticket" ||
+          n.type === "support" ||
+          n.type === "support-ticket-received" ||
+          n.type === "support_ticket_received" ||
+          n.type === "support-ticket-resolved" ||
+          n.type === "support_ticket_resolved" ||
+          n.subtype === "support" ||
+          n.subtype === "support_ticket" ||
+          n.type?.includes("ticket") ||
+          n.type?.includes("support") ||
+          n.subtype?.includes("ticket") ||
+          n.subtype?.includes("support") ||
+          (n as any).metadata?.category === "support" ||
+          (n as any).metadata?.category === "ticket" ||
+          /support ticket|ticket received|ticket resolved|ticket updated/i.test(n.title || "");
         const isAdminSystem = isBroadcast || isMaintenance;
         const ticketIdMatch = n.body?.match(/ticket #([^ ')]+)/i)?.[1];
 
@@ -948,36 +1295,142 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
         const metaPatientId = meta.patientId || meta.patient_id || meta.user_id;
         const metaApptId = meta.appointmentId || meta.appointment_id;
 
+        const isBookingNotif =
+          !isTicket &&
+          !isAdminSystem &&
+          (
+            meta.category === "appointment" ||
+            n.type === "new-booking" ||
+            n.type === "new_booking" ||
+            n.type === "appointment-created" ||
+            n.type === "appointment_created" ||
+            n.type === "appointment_request" ||
+            n.type === "appointment-request" ||
+            n.type === "appointment" ||
+            n.type === "appointment-confirmed" ||
+            n.subtype === "new-booking" ||
+            n.subtype === "new_booking" ||
+            n.subtype === "appointment-created" ||
+            n.subtype === "appointment_created" ||
+            n.subtype === "appointment_request" ||
+            Boolean(metaApptId) ||
+            /booking|appointment/i.test(n.title || "") ||
+            /booking|appointment/i.test(n.type || "")
+          );
+
+        // Path 1 & Path 2 Clinic Lookup for Booking Notifications
+        let enrichedClinic: { name: string; logo_url: string | null; clinic_id?: string; appointment_id?: string } | null = null;
+
+        if (isBookingNotif) {
+          // Path 1: Check metadata.appointment_id or metadata.clinic_id
+          if (metaApptId && clinicByApptId.has(metaApptId)) {
+            const match = clinicByApptId.get(metaApptId)!;
+            enrichedClinic = {
+              name: match.name,
+              logo_url: match.logo,
+              clinic_id: match.clinic_id || metaClinicId,
+              appointment_id: metaApptId,
+            };
+          } else if (metaClinicId && clinicNameMap.has(metaClinicId)) {
+            enrichedClinic = {
+              name: clinicNameMap.get(metaClinicId)!,
+              logo_url: clinicLogoMap.get(metaClinicId) || null,
+              clinic_id: metaClinicId,
+              appointment_id: metaApptId,
+            };
+          }
+
+          // Path 2: Match the closest appointment record in appointments joined with clinics (name, logo_url)
+          if (!enrichedClinic && allDoctorAppointments.length > 0) {
+            const notifTime = new Date(n.created_at || Date.now()).getTime();
+            const closest = allDoctorAppointments.reduce((best: any, appt: any) => {
+              const apptTime = new Date(appt.created_at || appt.date || 0).getTime();
+              const bestTime = new Date(best.created_at || best.date || 0).getTime();
+              return Math.abs(apptTime - notifTime) < Math.abs(bestTime - notifTime) ? appt : best;
+            });
+
+            if (closest) {
+              const cObj = Array.isArray(closest.clinic) ? closest.clinic[0] : closest.clinic;
+              const cName = cObj?.name || clinicNameMap.get(closest.clinic_id) || currentClinicName;
+              const cLogo = cObj?.logo_url || clinicLogoMap.get(closest.clinic_id) || null;
+              if (cName) {
+                enrichedClinic = {
+                  name: cName,
+                  logo_url: cLogo,
+                  clinic_id: closest.clinic_id,
+                  appointment_id: closest.appointment_id,
+                };
+              }
+            }
+          }
+
+          // Fallback to doctor's primary clinic
+          if (!enrichedClinic && currentClinicName && currentClinicName !== "Clinic") {
+            enrichedClinic = {
+              name: currentClinicName,
+              logo_url: (branchClinicIds[0] && clinicLogoMap.get(branchClinicIds[0])) || null,
+              clinic_id: branchClinicIds[0],
+              appointment_id: metaApptId,
+            };
+          }
+        }
+
+        const category: NotificationCategory =
+          isTicket ? "ticket" :
+          isAdminSystem ? "broadcast" :
+          isBookingNotif || meta.category === "appointment" || n.type === "appointment_request" || n.type === "appointment" ? "appointment" :
+          meta.category || "system";
+
+        const resolvedClinicId = enrichedClinic?.clinic_id || metaClinicId;
+        const resolvedApptId = enrichedClinic?.appointment_id || metaApptId;
+
         const resolvedLink =
           meta.link ||
           (isTicket
             ? "/doctor/settings"
-            : metaClinicId && metaPatientId
-              ? `/doctor/clinics/${metaClinicId}/patients/${metaPatientId}${metaApptId ? `?appointmentId=${metaApptId}` : ""}`
+            : resolvedClinicId && metaPatientId
+              ? `/doctor/clinics/${resolvedClinicId}/patients/${metaPatientId}${resolvedApptId ? `?appointmentId=${resolvedApptId}` : ""}`
+              : isBookingNotif
+              ? (resolvedApptId ? `/doctor/appointments?appointmentId=${resolvedApptId}` : "/doctor/appointments")
               : undefined);
 
-        const category =
-          meta.category ||
-          (isTicket ? "ticket" : isBroadcast ? "broadcast" : n.type === "appointment_request" || n.type === "appointment" ? "appointment" : "system");
+        // Explicitly override sender values for booking notifications:
+        // item.senderName = clinic.name (e.g., "DerMA", "DERMCARE", etc.)
+        // item.senderAvatar = clinic.logo_url
+        const finalSenderName = enrichedClinic?.name ||
+          meta.sender_name ||
+          (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : (isBookingNotif ? (currentClinicName || "Clinic") : "DERMAI Admin"));
+
+        const finalSenderAvatar = enrichedClinic?.logo_url ||
+          resolveAvatarUrl(meta.avatar_url || meta.sender_avatar) ||
+          ((isAdminSystem || isTicket) ? adminAvatar : undefined);
+
+        const finalSenderType = enrichedClinic ? "clinic" : (isAdminSystem || isTicket ? "admin" : (n.subtype as any) || (isBookingNotif ? "clinic" : "system"));
 
         items.push({
           id: n.notif_id,
-          type: n.type || "system",
+          type: n.type || (isBookingNotif ? "appointment_request" : "system"),
           category,
           title: n.title,
           message: n.body || "",
           link: resolvedLink,
-          senderName:
-            meta.sender_name ||
-            (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : "DERMAI Admin"),
-          senderType: isAdminSystem || isTicket ? "admin" : (n.subtype as any) || "system",
-          senderAvatar: meta.avatar_url || (isAdminSystem ? adminAvatar : undefined),
+          senderName: finalSenderName,
+          senderType: finalSenderType,
+          senderAvatar: finalSenderAvatar || undefined,
           timestamp: n.created_at,
           isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
           metadata: {
             ...meta,
             ticket_id: ticketIdMatch || meta.ticket_id,
             subtype: n.subtype,
+            clinic_id: resolvedClinicId,
+            clinicId: resolvedClinicId,
+            clinic_name: enrichedClinic?.name,
+            clinic_logo: enrichedClinic?.logo_url,
+            branch_name: enrichedClinic?.name || meta.branch_name,
+            branch_logo: enrichedClinic?.logo_url || meta.branch_logo,
+            appointment_id: resolvedApptId,
+            appointmentId: resolvedApptId,
           },
         });
       });
@@ -1074,39 +1527,542 @@ export async function fetchClinicNotifications(
       }
     }
 
-    // Pre-fetch live admin profile picture from public.user in Supabase
+    // Pre-fetch live admin profile picture from public.user / public.profiles in Supabase
     let adminAvatar: string | null = null;
     try {
       const { data: adminUser } = await supabase
         .from("user")
         .select("avatar_url")
-        .eq("role", "admin")
+        .or("role.eq.admin,email.eq.dermaisupport@gmail.com,user_id.eq.03c4dbd4-5d15-4c78-872e-93811b3afa23")
         .not("avatar_url", "is", null)
         .limit(1)
         .maybeSingle();
       if (adminUser?.avatar_url) {
-        adminAvatar = adminUser.avatar_url;
+        adminAvatar = resolveAvatarUrl(adminUser.avatar_url) || adminUser.avatar_url;
+      }
+      if (!adminAvatar) {
+        const { data: adminProf } = await supabase
+          .from("profiles")
+          .select("avatar_url, profile_picture")
+          .eq("role", "admin")
+          .limit(1)
+          .maybeSingle();
+        const rawAv = (adminProf as any)?.avatar_url || (adminProf as any)?.profile_picture;
+        if (rawAv) {
+          adminAvatar = resolveAvatarUrl(rawAv) || rawAv;
+        }
       }
     } catch { }
 
-    // 1. Live Appointments for this clinic directly from public.patient_appointment
-    if (resolvedClinicId) {
-      // Pre-fetch clinic doctors so doctor names & avatars can be mapped reliably without fragile joins
-      const docNameMap = new Map<string, string>();
-      const docPhotoMap = new Map<string, string>();
-      try {
-        const { data: cDocs } = await supabase
-          .from("clinic_doctor")
-          .select("doctor_id, doctor_name, photo_url")
-          .eq("clinic_id", resolvedClinicId);
-        (cDocs || []).forEach((cd: any) => {
-          if (cd.doctor_id) {
-            docNameMap.set(cd.doctor_id, cd.doctor_name);
-            if (cd.photo_url) docPhotoMap.set(cd.doctor_id, cd.photo_url);
+    // Helper to strip generic "Patient" / "Patient Patient" placeholders and return only a real patient name
+    const cleanClinicPatientName = (raw?: string | null): string => {
+      if (!raw || typeof raw !== "string") return "";
+      const cleaned = raw
+        .replace(/^(?:patient\s+)+/i, "")
+        .replace(/^patient$/i, "")
+        .replace(/^a\s+patient$/i, "")
+        .trim();
+      if (!cleaned || /^(?:patient|a patient|unknown|doctor|clinic system|dermai admin)$/i.test(cleaned)) {
+        return "";
+      }
+      return cleaned;
+    };
+
+    // Helper to normalize and format doctor full names with "Dr. " prefix
+    const formatDoctorSenderName = (raw?: string | null): string => {
+      if (!raw || typeof raw !== "string") return "";
+      const cleaned = raw.replace(/^(?:dr\.?|doctor)\s+/i, "").trim();
+      if (!cleaned || /^(?:doctor|assigned doctor|attending doctor|unknown|dr)$/i.test(cleaned)) {
+        return "";
+      }
+      return `Dr. ${cleaned}`;
+    };
+
+    const normalizeDoctorKey = (raw?: string | null): string => {
+      if (!raw || typeof raw !== "string") return "";
+      return raw.replace(/^(?:dr\.?|doctor)\s+/i, "").trim().toLowerCase();
+    };
+
+    const patientProfileByUserId = new Map<string, { fullName: string; avatarUrl?: string }>();
+    const patientProfileByApptId = new Map<
+      string,
+      {
+        fullName: string;
+        avatarUrl?: string;
+        userId?: string;
+        doctorName?: string;
+        doctorAvatar?: string;
+        assignedDoctorId?: string;
+        doctorStatus?: string;
+        doctorReviewedAt?: string;
+        status?: string;
+        createdAt?: string;
+        qAnswers?: any;
+      }
+    >();
+
+    const docNameMap = new Map<string, string>();
+    const docPhotoMap = new Map<string, string>();
+    const doctorProfileById = new Map<string, { fullName: string; avatarUrl?: string; doctorId?: string; userId?: string }>();
+    const doctorProfileByName = new Map<string, { fullName: string; avatarUrl?: string; doctorId?: string; userId?: string }>();
+
+    const registerDoctorProfile = (entry: {
+      doctorId?: string | null;
+      userId?: string | null;
+      rawName?: string | null;
+      rawAvatar?: string | null;
+    }) => {
+      const fullName = formatDoctorSenderName(entry.rawName);
+      const avatarUrl = entry.rawAvatar ? (resolveAvatarUrl(entry.rawAvatar) || entry.rawAvatar) : undefined;
+      const docId = entry.doctorId ? String(entry.doctorId).trim() : undefined;
+      const uId = entry.userId ? String(entry.userId).trim() : undefined;
+
+      if (!fullName && !avatarUrl && !docId && !uId) return;
+
+      if (docId) {
+        const prev = doctorProfileById.get(docId);
+        const merged = {
+          fullName: fullName || prev?.fullName || "",
+          avatarUrl: avatarUrl || prev?.avatarUrl,
+          doctorId: docId,
+          userId: uId || prev?.userId,
+        };
+        doctorProfileById.set(docId, merged);
+        if (merged.fullName) docNameMap.set(docId, merged.fullName);
+        if (merged.avatarUrl) docPhotoMap.set(docId, merged.avatarUrl);
+      }
+
+      if (uId) {
+        const prev = doctorProfileById.get(uId);
+        const merged = {
+          fullName: fullName || prev?.fullName || "",
+          avatarUrl: avatarUrl || prev?.avatarUrl,
+          doctorId: docId || prev?.doctorId,
+          userId: uId,
+        };
+        doctorProfileById.set(uId, merged);
+        if (merged.fullName && !docNameMap.has(uId)) docNameMap.set(uId, merged.fullName);
+        if (merged.avatarUrl && !docPhotoMap.has(uId)) docPhotoMap.set(uId, merged.avatarUrl);
+      }
+
+      const normName = normalizeDoctorKey(entry.rawName);
+      if (normName) {
+        const prevByName = doctorProfileByName.get(normName);
+        const mergedByName = {
+          fullName: fullName || prevByName?.fullName || "",
+          avatarUrl: avatarUrl || prevByName?.avatarUrl,
+          doctorId: docId || prevByName?.doctorId,
+          userId: uId || prevByName?.userId,
+        };
+        doctorProfileByName.set(normName, mergedByName);
+        const compactKey = normName.replace(/\s+/g, "");
+        if (compactKey && compactKey !== normName) {
+          const prevCompact = doctorProfileByName.get(compactKey);
+          doctorProfileByName.set(compactKey, {
+            fullName: mergedByName.fullName || prevCompact?.fullName || "",
+            avatarUrl: mergedByName.avatarUrl || prevCompact?.avatarUrl,
+            doctorId: mergedByName.doctorId || prevCompact?.doctorId,
+            userId: mergedByName.userId || prevCompact?.userId,
+          });
+        }
+        const firstToken = normName.split(/\s+/)[0];
+        if (firstToken && firstToken.length >= 2) {
+          const prevFirst = doctorProfileByName.get(firstToken);
+          if (!prevFirst || (!prevFirst.avatarUrl && mergedByName.avatarUrl)) {
+            doctorProfileByName.set(firstToken, {
+              fullName: prevFirst?.fullName || mergedByName.fullName,
+              avatarUrl: mergedByName.avatarUrl || prevFirst?.avatarUrl,
+              doctorId: mergedByName.doctorId || prevFirst?.doctorId,
+              userId: mergedByName.userId || prevFirst?.userId,
+            });
           }
+        }
+      }
+    };
+
+    // Preload doctor directory & user profiles (clinic_doctor -> user / profiles) so all
+    // doctor-action notifications resolve real doctor full names and avatar_url images
+    try {
+      const [{ data: allDoctors }, { data: allUsers }] = await Promise.all([
+        supabase.from("clinic_doctor").select("doctor_id, user_id, email, doctor_name, photo_url, clinic_id"),
+        supabase.from("user").select("user_id, full_name, email, role, avatar_url"),
+      ]);
+
+      const userByIdMap = new Map<string, any>();
+      const userByEmailMap = new Map<string, any>();
+      const userByNameMap = new Map<string, any>();
+
+      (allUsers || []).forEach((u: any) => {
+        if (u.user_id) {
+          const uid = String(u.user_id);
+          userByIdMap.set(uid, u);
+          const pName = cleanClinicPatientName(u.full_name);
+          if (pName || u.avatar_url) {
+            patientProfileByUserId.set(uid, {
+              fullName: pName,
+              avatarUrl: u.avatar_url || undefined,
+            });
+          }
+        }
+        if (u.email) userByEmailMap.set(String(u.email).trim().toLowerCase(), u);
+        if (u.full_name) {
+          const norm = normalizeDoctorKey(u.full_name);
+          if (norm) {
+            userByNameMap.set(norm, u);
+            userByNameMap.set(norm.replace(/\s+/g, ""), u);
+          }
+        }
+        if (u.role === "doctor" || u.full_name) {
+          registerDoctorProfile({
+            userId: u.user_id,
+            rawName: u.full_name,
+            rawAvatar: u.avatar_url,
+          });
+        }
+      });
+
+      (allDoctors || []).forEach((cd: any) => {
+        const linkedUser =
+          (cd.user_id ? userByIdMap.get(String(cd.user_id)) : undefined) ||
+          (cd.email ? userByEmailMap.get(String(cd.email).trim().toLowerCase()) : undefined) ||
+          (cd.doctor_name ? userByNameMap.get(normalizeDoctorKey(cd.doctor_name)) : undefined);
+
+        registerDoctorProfile({
+          doctorId: cd.doctor_id,
+          userId: cd.user_id || linkedUser?.user_id,
+          rawName: cd.doctor_name || linkedUser?.full_name,
+          rawAvatar: cd.photo_url || linkedUser?.avatar_url,
         });
+      });
+    } catch { }
+
+    const resolveClinicActivityDoctor = (notifRow: any): {
+      fullName: string;
+      avatarUrl?: string;
+      doctorId?: string;
+      userId?: string;
+      appointmentId?: string;
+    } => {
+      const meta = notifRow?.metadata || {};
+      const apptId = notifRow?.appointment_id || meta.appointment_id || meta.appointmentId;
+      const apptMatch = apptId ? patientProfileByApptId.get(String(apptId)) : undefined;
+
+      const rawDocId =
+        notifRow?.doctor_id ||
+        meta.doctor_id ||
+        meta.doctorId ||
+        notifRow?.assigned_doctor_id ||
+        meta.assigned_doctor_id;
+      const rawDocUserId = meta.doctor_user_id || (meta.user_id && String(meta.user_id) !== String(resolvedUserId) ? meta.user_id : undefined);
+
+      const bodyText = notifRow?.body || notifRow?.message || "";
+      const bodyDocName = bodyText
+        .match(/^(?:Dr\.?|Doctor)\s+(.+?)\s+(?:accepted|declined|rejected|completed|approved|confirmed|had a schedule conflict)/i)?.[1]
+        ?.trim();
+      const rawMetaDocName =
+        meta.doctor_name ||
+        meta.doctorName ||
+        (notifRow?.sender_name && !/^(?:patient|dermai|platform)/i.test(notifRow.sender_name) ? notifRow.sender_name : "") ||
+        (meta.sender_name && !/^(?:patient|dermai|platform)/i.test(meta.sender_name) ? meta.sender_name : "") ||
+        bodyDocName ||
+        "";
+
+      const isDecline =
+        notifRow?.subtype === "doctor-declined" ||
+        notifRow?.subtype === "doctor-rejected" ||
+        notifRow?.type === "doctor-rejected" ||
+        notifRow?.type === "doctor-declined" ||
+        /declined/i.test(notifRow?.title || "") ||
+        /declined/i.test(bodyText);
+
+      // Check appointment history for the specific doctor who accepted/declined if appointment was later reassigned
+      let historyDocId: string | undefined;
+      let historyDocName: string | undefined;
+      if (apptMatch?.qAnswers && Array.isArray(apptMatch.qAnswers.appointment_history)) {
+        const targetAction = isDecline ? "doctor_rejected" : "doctor_approved";
+        const matchingHist = apptMatch.qAnswers.appointment_history.find(
+          (h: any) => h?.action === targetAction && (h?.doctorId || h?.doctorName)
+        );
+        if (matchingHist) {
+          historyDocId = matchingHist.doctorId ? String(matchingHist.doctorId) : undefined;
+          historyDocName = matchingHist.doctorName;
+        }
+      }
+
+      const byDocId = rawDocId ? doctorProfileById.get(String(rawDocId)) : undefined;
+      const byUserId = rawDocUserId ? doctorProfileById.get(String(rawDocUserId)) : undefined;
+      const byHistId = historyDocId ? doctorProfileById.get(String(historyDocId)) : undefined;
+
+      const normCandidateName = normalizeDoctorKey(rawMetaDocName || bodyDocName || historyDocName || apptMatch?.doctorName);
+      let byName = normCandidateName
+        ? doctorProfileByName.get(normCandidateName) ||
+          doctorProfileByName.get(normCandidateName.replace(/\s+/g, "")) ||
+          doctorProfileByName.get(normCandidateName.split(/\s+/)[0])
+        : undefined;
+
+      if (!byName && normCandidateName) {
+        for (const [k, val] of doctorProfileByName.entries()) {
+          if (k.startsWith(normCandidateName) || normCandidateName.startsWith(k)) {
+            if (val.avatarUrl || !byName) {
+              byName = val;
+              if (val.avatarUrl) break;
+            }
+          }
+        }
+      }
+
+      // Prefer explicit notification doctor name (formatted as "Dr. ...") so a declined notification
+      // for Dr. Audrey isn't overwritten by a newly reassigned doctor on the appointment
+      const explicitName = formatDoctorSenderName(rawMetaDocName || bodyDocName || historyDocName);
+      const profileName =
+        byDocId?.fullName ||
+        byUserId?.fullName ||
+        byName?.fullName ||
+        byHistId?.fullName ||
+        formatDoctorSenderName(apptMatch?.doctorName);
+
+      const fullName = explicitName || profileName || "Dr. Attending Doctor";
+      const rawAvatar =
+        byDocId?.avatarUrl ||
+        byUserId?.avatarUrl ||
+        byName?.avatarUrl ||
+        byHistId?.avatarUrl ||
+        meta.doctor_avatar ||
+        meta.sender_avatar ||
+        (!explicitName || (apptMatch?.doctorName && normalizeDoctorKey(apptMatch.doctorName) === normalizeDoctorKey(explicitName))
+          ? apptMatch?.doctorAvatar
+          : undefined);
+      const avatarUrl = rawAvatar ? (resolveAvatarUrl(rawAvatar) || rawAvatar) : undefined;
+      let resolvedApptId = apptId ? String(apptId) : undefined;
+
+      // Path 2: If notification lacks appointment_id in metadata, match against clinic appointments
+      // using patient name in notification body, doctor name/ID, or closest review timestamp
+      if (!resolvedApptId && patientProfileByApptId.size > 0) {
+        const patientInBody = bodyText
+          .match(/(?:request\s+for|booking\s+for|notes.*?for|for)\s+([A-Za-z][A-Za-z\s.'-]+?)(?:[:.]|\s+on\s+|$)/i)?.[1]
+          ?.trim()
+          ?.toLowerCase();
+
+        const allAppts = Array.from(patientProfileByApptId.entries()).map(([id, val]) => ({ id, ...val }));
+        const patMatched = patientInBody
+          ? allAppts.filter((e) => {
+              const pName = (e.fullName || "").trim().toLowerCase();
+              return pName && (pName.includes(patientInBody) || patientInBody.includes(pName));
+            })
+          : [];
+
+        const docMatched = normCandidateName
+          ? (patMatched.length > 0 ? patMatched : allAppts).filter((e) => {
+              const dName = normalizeDoctorKey(e.doctorName);
+              const histHasDoc =
+                Array.isArray(e.qAnswers?.appointment_history) &&
+                e.qAnswers.appointment_history.some(
+                  (h: any) =>
+                    normalizeDoctorKey(h?.doctorName || h?.previousDoctorName) === normCandidateName ||
+                    (rawDocId && String(h?.doctorId || h?.previousDoctorId) === String(rawDocId))
+                );
+              return (dName && (dName.includes(normCandidateName) || normCandidateName.includes(dName))) || histHasDoc;
+            })
+          : [];
+
+        const candidates = docMatched.length > 0 ? docMatched : patMatched.length > 0 ? patMatched : allAppts;
+        if (candidates.length > 0) {
+          const notifTime = new Date(notifRow?.created_at || 0).getTime();
+          let best = candidates[0];
+          if (!isNaN(notifTime) && notifTime > 0) {
+            let bestDiff = Infinity;
+            candidates.forEach((c) => {
+              const cTime = new Date(c.doctorReviewedAt || c.createdAt || 0).getTime();
+              const diff = !isNaN(cTime) && cTime > 0 ? Math.abs(notifTime - cTime) : Infinity;
+              if (diff < bestDiff) {
+                bestDiff = diff;
+                best = c;
+              }
+            });
+          }
+          if (best?.id) {
+            resolvedApptId = best.id;
+          }
+        }
+      }
+
+      return {
+        fullName,
+        avatarUrl,
+        doctorId: String(rawDocId || byDocId?.doctorId || byName?.doctorId || historyDocId || apptMatch?.assignedDoctorId || "") || undefined,
+        userId: String(rawDocUserId || byDocId?.userId || byName?.userId || "") || undefined,
+        appointmentId: resolvedApptId,
+      };
+    };
+
+    const fetchAndCachePatientProfiles = async (userIds: string[]) => {
+      const missingIds = Array.from(new Set(userIds.map((id) => String(id || "").trim()).filter((id) => id && !patientProfileByUserId.has(id))));
+      if (missingIds.length === 0) return;
+
+      try {
+        const { data: userRows } = await supabase
+          .from("user")
+          .select("user_id, full_name, avatar_url")
+          .in("user_id", missingIds);
+        if (Array.isArray(userRows)) {
+          userRows.forEach((u: any) => {
+            const uid = String(u.user_id || "");
+            if (!uid) return;
+            const fullName = cleanClinicPatientName(u.full_name);
+            const avatarUrl = u.avatar_url || undefined;
+            if (fullName || avatarUrl) {
+              patientProfileByUserId.set(uid, { fullName, avatarUrl });
+            }
+          });
+        }
       } catch { }
 
+      try {
+        const { data: profRows } = await supabase
+          .from("profiles")
+          .select("user_id, patient_id, first_name, last_name, full_name, avatar_url, profile_picture")
+          .in("user_id", missingIds);
+        if (Array.isArray(profRows)) {
+          profRows.forEach((p: any) => {
+            const uid = String(p.patient_id || p.user_id || "");
+            if (!uid) return;
+            const existing = patientProfileByUserId.get(uid);
+            const fullName =
+              existing?.fullName ||
+              cleanClinicPatientName(p.full_name) ||
+              cleanClinicPatientName([p.first_name, p.last_name].filter(Boolean).join(" "));
+            const avatarUrl = existing?.avatarUrl || p.avatar_url || p.profile_picture || undefined;
+            if (fullName || avatarUrl) {
+              patientProfileByUserId.set(uid, { fullName, avatarUrl });
+            }
+          });
+        }
+      } catch { }
+
+      try {
+        const { data: patRows } = await supabase
+          .from("patients")
+          .select("user_id, patient_id, first_name, last_name, full_name, avatar_url, profile_picture")
+          .in("user_id", missingIds);
+        if (Array.isArray(patRows)) {
+          patRows.forEach((p: any) => {
+            const uid = String(p.patient_id || p.user_id || "");
+            if (!uid) return;
+            const existing = patientProfileByUserId.get(uid);
+            const fullName =
+              existing?.fullName ||
+              cleanClinicPatientName(p.full_name) ||
+              cleanClinicPatientName([p.first_name, p.last_name].filter(Boolean).join(" "));
+            const avatarUrl = existing?.avatarUrl || p.avatar_url || p.profile_picture || undefined;
+            if (fullName || avatarUrl) {
+              patientProfileByUserId.set(uid, { fullName, avatarUrl });
+            }
+          });
+        }
+      } catch { }
+    };
+
+    const resolveClinicActivityPatient = (notifRow: any): { fullName: string; avatarUrl?: string; appointmentId?: string; patientId?: string } => {
+      const meta = notifRow?.metadata || {};
+      const apptId = notifRow?.appointment_id || meta.appointment_id || meta.appointmentId;
+      const apptMatch = apptId ? patientProfileByApptId.get(String(apptId)) : undefined;
+      const rawPid =
+        notifRow?.patient_id ||
+        meta.patient_id ||
+        meta.patientId ||
+        meta.user_id ||
+        apptMatch?.userId ||
+        (notifRow?.user_id && String(notifRow.user_id) !== String(resolvedUserId) ? notifRow.user_id : undefined);
+
+      const joinedPat = Array.isArray(notifRow?.patient) ? notifRow.patient[0] : notifRow?.patient;
+      const profMatch = rawPid ? patientProfileByUserId.get(String(rawPid)) : undefined;
+
+      const metaFullName =
+        cleanClinicPatientName([joinedPat?.first_name || meta.patient_first_name, joinedPat?.last_name || meta.patient_last_name].filter(Boolean).join(" ")) ||
+        cleanClinicPatientName(joinedPat?.full_name) ||
+        cleanClinicPatientName(meta.patient_name) ||
+        cleanClinicPatientName(meta.sender_name) ||
+        cleanClinicPatientName(notifRow?.sender_name);
+
+      let fullName = profMatch?.fullName || apptMatch?.fullName || metaFullName || "";
+      let avatarUrl =
+        joinedPat?.avatar_url ||
+        joinedPat?.profile_picture ||
+        profMatch?.avatarUrl ||
+        apptMatch?.avatarUrl ||
+        meta.patient_avatar ||
+        meta.sender_avatar ||
+        undefined;
+      let resolvedApptId = apptId ? String(apptId) : undefined;
+      let resolvedPid = rawPid ? String(rawPid) : undefined;
+
+      // Path 2: If notification lacks metadata/patient_id or appointment_id, match against the clinic's appointments
+      if ((!fullName || !avatarUrl || !resolvedApptId) && patientProfileByApptId.size > 0) {
+        const bodyText = notifRow?.body || notifRow?.message || "";
+        const docInBody = bodyText
+          .match(/selected\s+(?:Dr\.?\s+)?(.+?)\s+as their alternate doctor/i)?.[1]
+          ?.replace(/^dr\.?\s+/i, "")
+          .trim()
+          .toLowerCase();
+
+        const allEntries = Array.from(patientProfileByApptId.entries())
+          .map(([id, val]) => ({ id, ...val }))
+          .filter((e) => e.fullName || e.avatarUrl || e.id);
+
+        const pidOrNameMatched = allEntries.filter((e) => {
+          if (resolvedPid && e.userId && String(e.userId) === String(resolvedPid)) return true;
+          if (fullName && e.fullName && e.fullName.trim().toLowerCase() === fullName.trim().toLowerCase()) return true;
+          return false;
+        });
+
+        const docMatched = docInBody
+          ? (pidOrNameMatched.length > 0 ? pidOrNameMatched : allEntries).filter((e) => {
+              const dName = (e.doctorName || "").replace(/^dr\.?\s+/i, "").trim().toLowerCase();
+              return dName && (dName.includes(docInBody) || docInBody.includes(dName));
+            })
+          : [];
+
+        const reassignedMatched = (pidOrNameMatched.length > 0 ? pidOrNameMatched : allEntries).filter(
+          (e) =>
+            e.qAnswers?.reassigned_by === "patient" ||
+            (Array.isArray(e.qAnswers?.appointment_history) &&
+              e.qAnswers.appointment_history.some((h: any) => h?.action === "alternate_doctor_selected"))
+        );
+
+        const candidates =
+          docMatched.length > 0
+            ? docMatched
+            : reassignedMatched.length > 0
+            ? reassignedMatched
+            : pidOrNameMatched.length > 0
+            ? pidOrNameMatched
+            : allEntries;
+        if (candidates.length > 0) {
+          const notifTime = new Date(notifRow?.created_at || 0).getTime();
+          let best = candidates[0];
+          if (!isNaN(notifTime) && notifTime > 0) {
+            let bestDiff = Infinity;
+            candidates.forEach((c) => {
+              const cTime = new Date(c.qAnswers?.reassigned_at || c.createdAt || 0).getTime();
+              const diff = !isNaN(cTime) && cTime > 0 ? Math.abs(notifTime - cTime) : Infinity;
+              if (diff < bestDiff) {
+                bestDiff = diff;
+                best = c;
+              }
+            });
+          }
+          if (!fullName && best.fullName) fullName = best.fullName;
+          if (!avatarUrl && best.avatarUrl) avatarUrl = best.avatarUrl;
+          if (!resolvedApptId && best.id) resolvedApptId = best.id;
+          if (!resolvedPid && best.userId) resolvedPid = String(best.userId);
+        }
+      }
+
+      return { fullName, avatarUrl, appointmentId: resolvedApptId, patientId: resolvedPid };
+    };
+
+    // 1. Live Appointments for this clinic directly from public.patient_appointment
+    if (resolvedClinicId) {
       let liveAppts: any[] = [];
       const { data: appointments, error: apptError } = await supabase
         .from("patient_appointment")
@@ -1167,29 +2123,71 @@ export async function fetchClinicNotifications(
       } catch { }
 
       if (liveAppts.length > 0) {
+        await fetchAndCachePatientProfiles(
+          liveAppts.map((a: any) => a.user_id || a.userId).filter(Boolean)
+        );
+
         liveAppts.forEach((appt: any) => {
           const apptId = appt.appointment_id || appt.id;
-          const patient = appt.patient_name || appt.patientName || "A patient";
           const uObj = Array.isArray(appt.user) ? appt.user[0] : appt.user;
-          const patientAvatar = uObj?.avatar_url || appt.patientAvatar || undefined;
+          const uid = appt.user_id || appt.userId;
+          const prof = uid ? patientProfileByUserId.get(String(uid)) : undefined;
+          const resolvedPatFullName =
+            cleanClinicPatientName(uObj?.full_name) ||
+            prof?.fullName ||
+            cleanClinicPatientName(appt.patient_name || appt.patientName);
+          const patient = resolvedPatFullName || "A patient";
+          const patientAvatar = uObj?.avatar_url || prof?.avatarUrl || appt.patientAvatar || undefined;
 
           const docObj = Array.isArray(appt.doctor) ? appt.doctor[0] : appt.doctor;
           const assignedId = appt.assigned_doctor_id || appt.assignedDoctorId;
-          const doctorName =
+          const rawDocName =
             docObj?.doctor_name ||
             appt.assignedDoctorName ||
-            (assignedId ? docNameMap.get(assignedId) : undefined) ||
-            "Assigned doctor";
-          const doctorAvatar = docObj?.photo_url || (assignedId ? docPhotoMap.get(assignedId) : undefined) || undefined;
+            (assignedId ? docNameMap.get(String(assignedId)) : undefined);
+          const normDocKey = normalizeDoctorKey(rawDocName);
+          const docByName = normDocKey
+            ? doctorProfileByName.get(normDocKey) ||
+              doctorProfileByName.get(normDocKey.replace(/\s+/g, "")) ||
+              doctorProfileByName.get(normDocKey.split(/\s+/)[0])
+            : undefined;
+          const doctorName =
+            formatDoctorSenderName(rawDocName) ||
+            (assignedId ? doctorProfileById.get(String(assignedId))?.fullName : undefined) ||
+            docByName?.fullName ||
+            "Dr. Assigned Doctor";
+          const rawDocAvatar =
+            docObj?.photo_url ||
+            (assignedId ? docPhotoMap.get(String(assignedId)) || doctorProfileById.get(String(assignedId))?.avatarUrl : undefined) ||
+            docByName?.avatarUrl ||
+            undefined;
+          const doctorAvatar = rawDocAvatar ? (resolveAvatarUrl(rawDocAvatar) || rawDocAvatar) : undefined;
+
+          const qAnswers = typeof appt.questionnaire_answers === "object" && appt.questionnaire_answers
+            ? appt.questionnaire_answers
+            : (appt.questionnaireAnswers || {});
+
+          if (apptId) {
+            patientProfileByApptId.set(String(apptId), {
+              fullName: resolvedPatFullName,
+              avatarUrl: patientAvatar,
+              userId: uid ? String(uid) : undefined,
+              doctorName,
+              doctorAvatar,
+              assignedDoctorId: assignedId ? String(assignedId) : undefined,
+              doctorStatus: appt.doctor_status || appt.doctorStatus,
+              doctorReviewedAt: appt.doctor_reviewed_at || appt.doctorReviewedAt,
+              status: appt.status,
+              createdAt: appt.created_at || appt.createdAt,
+              qAnswers,
+            });
+          }
 
           const condition = appt.ai_condition_name || appt.aiConditionName ? ` for ${appt.ai_condition_name || appt.aiConditionName}` : "";
           const dateStr = appt.date
             ? new Date(appt.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
             : "scheduled date";
 
-          const qAnswers = typeof appt.questionnaire_answers === "object" && appt.questionnaire_answers
-            ? appt.questionnaire_answers
-            : (appt.questionnaireAnswers || {});
           const needsReschedule = Boolean(qAnswers.needs_patient_reschedule || qAnswers.reschedule_requested || appt.needsPatientReschedule || appt.rescheduleRequested);
 
           const docStatus = (appt.doctor_status || appt.doctorStatus || "").toLowerCase();
@@ -1206,6 +2204,7 @@ export async function fetchClinicNotifications(
           ) {
             const notifId = `clinic-req-${apptId}`;
             const reqTime = resolveAppointmentTimestamp(appt, appt.created_at || appt.createdAt);
+            const targetLink = apptId ? `/clinic/appointments?appointment=${apptId}` : "/clinic/appointments";
             items.push({
               id: notifId,
               type: "appointment-request",
@@ -1215,7 +2214,8 @@ export async function fetchClinicNotifications(
               senderName: patient,
               senderType: "patient",
               senderAvatar: patientAvatar,
-              link: "/clinic/appointments",
+              appointment_id: apptId ? String(apptId) : undefined,
+              link: targetLink,
               timestamp: reqTime,
               isRead: readSet.has(notifId),
               metadata: { appointment_id: apptId, type: "appointment-request" },
@@ -1226,6 +2226,7 @@ export async function fetchClinicNotifications(
           if (docStatus === "approved" && apptStatus !== "completed" && apptStatus !== "cancelled") {
             const notifId = `clinic-doc-accept-${apptId}`;
             const acceptTime = resolveAppointmentTimestamp(appt, appt.doctor_reviewed_at || appt.doctorReviewedAt);
+            const targetLink = apptId ? `/clinic/appointments?appointment=${apptId}` : "/clinic/appointments";
             items.push({
               id: notifId,
               type: "doctor-accepted",
@@ -1235,7 +2236,8 @@ export async function fetchClinicNotifications(
               senderName: doctorName,
               senderType: "doctor",
               senderAvatar: doctorAvatar,
-              link: "/clinic/appointments",
+              appointment_id: apptId ? String(apptId) : undefined,
+              link: targetLink,
               timestamp: acceptTime,
               isRead: readSet.has(notifId),
               metadata: { appointment_id: apptId, type: "doctor-accepted" },
@@ -1247,6 +2249,7 @@ export async function fetchClinicNotifications(
             const notifId = `clinic-doc-reject-${apptId}`;
             const docNote = appt.doctor_note || appt.doctorNote ? `: "${appt.doctor_note || appt.doctorNote}"` : "";
             const declineTime = resolveAppointmentTimestamp(appt, appt.doctor_reviewed_at || appt.doctorReviewedAt);
+            const targetLink = apptId ? `/clinic/appointments?appointment=${apptId}` : "/clinic/appointments";
             items.push({
               id: notifId,
               type: "doctor-rejected",
@@ -1256,7 +2259,8 @@ export async function fetchClinicNotifications(
               senderName: doctorName,
               senderType: "doctor",
               senderAvatar: doctorAvatar,
-              link: "/clinic/appointments",
+              appointment_id: apptId ? String(apptId) : undefined,
+              link: targetLink,
               timestamp: declineTime,
               isRead: readSet.has(notifId),
               metadata: { appointment_id: apptId, type: "doctor-rejected" },
@@ -1271,6 +2275,7 @@ export async function fetchClinicNotifications(
             const cancelMsg = cancelNote && !/cancelled by patient/i.test(cancelNote)
               ? `The appointment for ${patient} on ${dateStr} was cancelled (${cancelNote}).`
               : `The appointment for ${patient} on ${dateStr} was cancelled.`;
+            const targetLink = apptId ? `/clinic/appointments?appointment=${apptId}` : "/clinic/appointments";
 
             items.push({
               id: notifId,
@@ -1281,7 +2286,8 @@ export async function fetchClinicNotifications(
               senderName: patient,
               senderType: "patient",
               senderAvatar: patientAvatar,
-              link: "/clinic/appointments",
+              appointment_id: apptId ? String(apptId) : undefined,
+              link: targetLink,
               timestamp: cancelTime,
               isRead: readSet.has(notifId),
               metadata: { appointment_id: apptId, type: "appointment-cancelled" },
@@ -1292,6 +2298,7 @@ export async function fetchClinicNotifications(
           if (needsReschedule) {
             const notifId = `clinic-reselect-${apptId}`;
             const reselTime = resolveAppointmentTimestamp(appt, appt.doctor_reviewed_at || appt.doctorReviewedAt);
+            const targetLink = apptId ? `/clinic/appointments?appointment=${apptId}` : "/clinic/appointments";
             items.push({
               id: notifId,
               type: "patient-reselection",
@@ -1301,7 +2308,8 @@ export async function fetchClinicNotifications(
               senderName: patient,
               senderType: "patient",
               senderAvatar: patientAvatar,
-              link: "/clinic/appointments",
+              appointment_id: apptId ? String(apptId) : undefined,
+              link: targetLink,
               timestamp: reselTime,
               isRead: readSet.has(notifId),
               metadata: { appointment_id: apptId, type: "patient-reselection" },
@@ -1312,6 +2320,7 @@ export async function fetchClinicNotifications(
           if (apptStatus === "completed") {
             const notifId = `clinic-complete-${apptId}`;
             const compTime = resolveAppointmentTimestamp(appt, appt.created_at || appt.createdAt);
+            const targetLink = apptId ? `/clinic/appointments?appointment=${apptId}` : "/clinic/appointments";
             items.push({
               id: notifId,
               type: "consultation-completed",
@@ -1321,7 +2330,8 @@ export async function fetchClinicNotifications(
               senderName: doctorName,
               senderType: "doctor",
               senderAvatar: doctorAvatar,
-              link: "/clinic/appointments",
+              appointment_id: apptId ? String(apptId) : undefined,
+              link: targetLink,
               timestamp: compTime,
               isRead: readSet.has(notifId),
               metadata: { appointment_id: apptId, type: "consultation-completed" },
@@ -1329,6 +2339,105 @@ export async function fetchClinicNotifications(
           }
         });
       }
+    }
+
+    // 1b. Direct notifications for this clinic (e.g. booking_created, doctor_reselection, reselection_required)
+    if (resolvedClinicId) {
+      try {
+        let dbRows: any[] = [];
+        const { data: nData, error: nErr } = await supabase
+          .from("notifications")
+          .select("*")
+          .in("type", ["booking_created", "doctor_reselection", "reselection_required"])
+          .eq("clinic_id", resolvedClinicId)
+          .order("created_at", { ascending: false })
+          .limit(30);
+
+        if (!nErr && Array.isArray(nData)) {
+          dbRows = nData;
+        } else {
+          const { data: unData } = await supabase
+            .from("user_notification")
+            .select("*")
+            .in("type", ["booking_created", "doctor_reselection", "reselection_required"])
+            .eq("clinic_id", resolvedClinicId)
+            .order("created_at", { ascending: false })
+            .limit(30);
+          if (Array.isArray(unData)) dbRows = unData;
+        }
+
+        if (dbRows.length > 0) {
+          await fetchAndCachePatientProfiles(
+            dbRows
+              .map((r: any) => r.patient_id || r.metadata?.patient_id || r.metadata?.patientId || r.metadata?.user_id)
+              .filter(Boolean)
+          );
+        }
+
+        dbRows.forEach((r: any) => {
+          const notifId = String(r.id || r.notif_id);
+          const type = r.type || "booking_created";
+          const resolvedPat = resolveClinicActivityPatient(r);
+          const patDisplayName = resolvedPat.fullName;
+
+          let defaultTitle = "Booking & Reselection Alert";
+          let defaultMsg = "Appointment update for this clinic.";
+          if (type === "booking_created") {
+            defaultTitle = "New Booking Created";
+            defaultMsg = patDisplayName
+              ? `${patDisplayName} scheduled a new consultation booking.`
+              : "A new appointment booking has been created.";
+          } else if (type === "doctor_reselection") {
+            defaultTitle = "Doctor Reselection";
+            defaultMsg = patDisplayName
+              ? `${patDisplayName} has reselected an alternate doctor.`
+              : "Patient selected an alternate doctor for their appointment.";
+          } else if (type === "reselection_required") {
+            defaultTitle = "Doctor Reselection Required";
+            defaultMsg = "Appointment requires selecting an alternate doctor.";
+          }
+
+          let rawMessage = r.message || r.body || defaultMsg;
+          const patInBody = patDisplayName ? `Patient ${patDisplayName}` : "Patient";
+          if (rawMessage.includes("Patient Patient")) {
+            rawMessage = rawMessage.replace(/Patient\s+Patient/gi, patInBody);
+          } else if (patDisplayName && /^Patient\s+has\s+selected\b/i.test(rawMessage)) {
+            rawMessage = rawMessage.replace(/^Patient\s+has\s+selected\b/i, `${patInBody} has selected`);
+          }
+
+          const finalApptId = resolvedPat.appointmentId || r.appointment_id || r.metadata?.appointment_id || r.metadata?.appointmentId;
+          const targetLink = finalApptId
+            ? `/clinic/appointments?appointment=${finalApptId}`
+            : (r.link || r.metadata?.link || "/clinic/appointments");
+
+          items.push({
+            id: notifId,
+            type,
+            subtype: r.subtype || r.metadata?.subtype,
+            category: "appointment",
+            title: r.title || defaultTitle,
+            message: rawMessage,
+            senderName:
+              type === "reselection_required"
+                ? "Clinic System"
+                : patDisplayName || "Patient",
+            senderType: (type === "reselection_required" ? "system" : "patient") as any,
+            senderAvatar: resolvedPat.avatarUrl || null,
+            appointment_id: finalApptId ? String(finalApptId) : undefined,
+            link: targetLink,
+            timestamp: r.created_at || new Date().toISOString(),
+            isRead: Boolean(r.is_read || readSet.has(notifId)),
+            metadata: {
+              ...r.metadata,
+              appointment_id: finalApptId,
+              patient_id: resolvedPat.patientId || r.patient_id || r.metadata?.patient_id,
+              patient_name: patDisplayName || r.metadata?.patient_name,
+              patient_avatar: resolvedPat.avatarUrl || r.metadata?.patient_avatar,
+              clinic_id: resolvedClinicId,
+            },
+          });
+        });
+      } catch { }
     }
 
     // 2. User Notifications for Clinic Owner (including Clinic Application Approval, broadcasts, maintenance)
@@ -1341,6 +2450,12 @@ export async function fetchClinicNotifications(
         .limit(30);
 
       if (userNotifs) {
+        await fetchAndCachePatientProfiles(
+          userNotifs
+            .map((n: any) => n.metadata?.patient_id || n.metadata?.patientId || n.metadata?.user_id)
+            .filter(Boolean)
+        );
+
         userNotifs.forEach((n: any) => {
           const isApproval =
             n.type === "clinic_application" ||
@@ -1348,13 +2463,41 @@ export async function fetchClinicNotifications(
             n.subtype === "clinic_approval";
           const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
           const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
-          const isTicket = n.type === "support_ticket" || n.type?.includes("ticket");
-          const isAppointment = n.type === "appointment" || n.metadata?.category === "appointment";
+          const isTicket =
+            n.type === "support_ticket" ||
+            n.type === "support" ||
+            n.type === "support-ticket-received" ||
+            n.type === "support_ticket_received" ||
+            n.type === "support-ticket-resolved" ||
+            n.type === "support_ticket_resolved" ||
+            n.subtype === "support" ||
+            n.subtype === "support_ticket" ||
+            n.type?.includes("ticket") ||
+            n.type?.includes("support") ||
+            n.subtype?.includes("ticket") ||
+            n.subtype?.includes("support") ||
+            (n as any).metadata?.category === "support" ||
+            (n as any).metadata?.category === "ticket" ||
+            /support ticket|ticket received|ticket resolved|ticket updated/i.test(n.title || "");
+          const isAppointment = !isTicket && (n.type === "appointment" || n.metadata?.category === "appointment");
+          // alternate_doctor_selected is a patient booking action — belongs to Bookings & Reselections,
+          // not Doctor Actions. Exclude it from isDoctorAction so it doesn't route to the wrong tab.
+          const isAlternateDoctorSelected =
+            n.subtype === "alternate_doctor_selected" ||
+            n.subtype === "alternate-doctor-selected" ||
+            n.type === "alternate_doctor_selected" ||
+            n.title === "Alternate Doctor Selected";
+          const isReselectionOrPatientActivity =
+            isAlternateDoctorSelected ||
+            n.subtype === "reselection" ||
+            n.type === "doctor_reselection" ||
+            n.type === "bookings_and_reselections";
           const isDoctorAction =
-            n.subtype?.includes("doctor") ||
+            !isReselectionOrPatientActivity &&
+            (n.subtype?.includes("doctor") ||
             n.type?.includes("doctor") ||
             n.metadata?.type?.includes("doctor") ||
-            n.title?.toLowerCase().includes("doctor");
+            n.title?.toLowerCase().includes("doctor"));
           const isAdminSystem = isBroadcast || isMaintenance;
           const ticketIdMatch = n.body?.match(/ticket #([^ ')]+)/i)?.[1];
 
@@ -1364,54 +2507,112 @@ export async function fetchClinicNotifications(
               ? "clinic"
               : isTicket
                 ? "ticket"
-                : isAppointment
-                  ? "appointment"
-                  : "system";
+                : isReselectionOrPatientActivity
+                  ? "bookings_and_reselections"
+                  : isAppointment
+                    ? "appointment"
+                    : "system";
 
           const senderType = isDoctorAction
             ? "doctor"
-            : isAppointment
+            : (isAppointment || isReselectionOrPatientActivity)
               ? "patient"
               : "admin";
 
-          const senderName =
-            (n as any).metadata?.doctor_name ||
-            (n as any).metadata?.sender_name ||
-            (isTicket
-              ? "DERMAI Support"
-              : isAdminSystem
-                ? "Platform Administrator"
-                : isApproval
-                  ? "Platform Admin"
-                  : isDoctorAction
-                    ? "Doctor"
-                    : "DERMAI Admin");
+          // For alternate_doctor_selected / reselection / patient appointment notifications,
+          // dynamically resolve the patient's full name and avatar via metadata, user/profiles join, or clinic appointment lookup
+          const resolvedPat = (isReselectionOrPatientActivity || (isAppointment && !isDoctorAction))
+            ? resolveClinicActivityPatient(n)
+            : { fullName: "", avatarUrl: undefined, appointmentId: undefined, patientId: undefined };
+          const cleanPatName = resolvedPat.fullName;
+
+          // For doctor-accepted / doctor-declined / doctor-action notifications,
+          // dynamically resolve the doctor's full name (e.g. "Dr. Clark", "Dr. AUDREY LEE SALUDAGA") and avatar_url
+          const resolvedDoc = isDoctorAction
+            ? resolveClinicActivityDoctor(n)
+            : { fullName: "", avatarUrl: undefined, doctorId: undefined, userId: undefined, appointmentId: undefined };
+
+          const senderName = isReselectionOrPatientActivity
+            ? (cleanPatName || "Patient")
+            : isDoctorAction
+              ? (resolvedDoc.fullName || formatDoctorSenderName((n as any).metadata?.doctor_name) || "Dr. Attending Doctor")
+              : (cleanPatName ||
+                cleanClinicPatientName((n as any).metadata?.sender_name) ||
+                (isTicket
+                  ? "DERMAI Support"
+                  : isAdminSystem
+                    ? "Platform Administrator"
+                    : isApproval
+                      ? "Platform Admin"
+                      : isAppointment
+                        ? "Patient"
+                        : "DERMAI Admin"));
+
+          const senderAvatar = isReselectionOrPatientActivity || (isAppointment && !isDoctorAction)
+            ? (resolvedPat.avatarUrl || undefined)
+            : isDoctorAction
+              ? (resolvedDoc.avatarUrl || undefined)
+              : (adminAvatar || undefined);
+
+          const finalApptId =
+            resolvedPat.appointmentId ||
+            resolvedDoc.appointmentId ||
+            n.appointment_id ||
+            (n as any).metadata?.appointment_id ||
+            (n as any).metadata?.appointmentId;
 
           const notifLink =
             isApproval
               ? "/clinic"
               : isTicket
                 ? "/clinic/settings"
-                : isAppointment
-                  ? "/clinic/appointments"
+                : (isAppointment || isReselectionOrPatientActivity || isDoctorAction)
+                  ? (finalApptId ? `/clinic/appointments?appointment=${finalApptId}` : "/clinic/appointments")
                   : undefined;
+
+          // Route alternate_doctor_selected to "bookings_and_reselections" so it displays under
+          // the Bookings & Reselections tab rather than Doctor Actions.
+          const resolvedType = isReselectionOrPatientActivity
+            ? "bookings_and_reselections"
+            : (isApproval ? "application_approved" : n.subtype || n.type || "system");
+
+          let notifMessage = n.body || n.message || "";
+          const displayTitle = cleanPatName ? `Patient ${cleanPatName}` : "Patient";
+          if (isReselectionOrPatientActivity) {
+            if (notifMessage.includes("Patient Patient")) {
+              notifMessage = notifMessage.replace(/Patient\s+Patient/gi, displayTitle);
+            } else if (cleanPatName && /^Patient\s+has\s+selected\b/i.test(notifMessage)) {
+              notifMessage = notifMessage.replace(/^Patient\s+has\s+selected\b/i, `${displayTitle} has selected`);
+            }
+          }
 
           items.push({
             id: n.notif_id,
-            type: isApproval ? "application_approved" : n.subtype || n.type || "system",
+            type: resolvedType,
+            subtype: n.subtype,
             category,
             title: n.title,
-            message: n.body || n.message || "",
+            message: notifMessage,
             senderName,
             senderType,
-            senderAvatar: isDoctorAction ? undefined : adminAvatar || undefined,
+            senderAvatar,
+            appointment_id: finalApptId ? String(finalApptId) : undefined,
             link: notifLink,
             timestamp: n.created_at,
             isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
             metadata: {
               ...(n as any).metadata,
+              category,
+              type: resolvedType,
               ticket_id: ticketIdMatch || (n as any).metadata?.ticket_id,
               subtype: n.subtype,
+              ...(finalApptId ? { appointment_id: finalApptId } : {}),
+              ...(resolvedPat.patientId ? { patient_id: resolvedPat.patientId } : {}),
+              ...(cleanPatName ? { patient_name: cleanPatName } : {}),
+              ...(resolvedPat.avatarUrl ? { patient_avatar: resolvedPat.avatarUrl } : {}),
+              ...(resolvedDoc.doctorId ? { doctor_id: resolvedDoc.doctorId } : {}),
+              ...(resolvedDoc.fullName ? { doctor_name: resolvedDoc.fullName } : {}),
+              ...(resolvedDoc.avatarUrl ? { doctor_avatar: resolvedDoc.avatarUrl } : {}),
               ...(isApproval ? { clinic_id: resolvedClinicId, status: "approved" } : {}),
             },
           });
@@ -2092,6 +3293,107 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
         });
       });
     }
+
+    // 8. Direct User Notifications for Admin (including booking events)
+    if (userId) {
+      const { data: adminDirectNotifs } = await supabase
+        .from("user_notification")
+        .select("notif_id, type, subtype, title, body, message, is_read, metadata, created_at")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(30);
+
+      if (adminDirectNotifs && adminDirectNotifs.length > 0) {
+        const clinicIdMap = new Map<string, { name: string; logo_url: string | null }>();
+        (allClinics || []).forEach((c: any) => {
+          if (c.clinic_id) {
+            clinicIdMap.set(c.clinic_id, { name: c.name, logo_url: c.logo_url || null });
+          }
+        });
+
+        const missingApptIds = Array.from(new Set(
+          adminDirectNotifs
+            .map((n: any) => n.metadata?.appointment_id || n.metadata?.appointmentId)
+            .filter((id: any): id is string => Boolean(id && isUuid(id)))
+        ));
+
+        const apptLookupMap = new Map<string, { clinic_id?: string; name: string; logo: string | null }>();
+        if (missingApptIds.length > 0) {
+          try {
+            const { data: appts } = await supabase
+              .from("patient_appointment")
+              .select("appointment_id, clinic_id, clinic:clinic_id(name, logo_url)")
+              .in("appointment_id", missingApptIds);
+            (appts || []).forEach((a: any) => {
+              const cObj = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
+              const cName = cObj?.name || clinicIdMap.get(a.clinic_id)?.name || "Clinic";
+              const cLogo = cObj?.logo_url || clinicIdMap.get(a.clinic_id)?.logo_url || null;
+              apptLookupMap.set(a.appointment_id, {
+                clinic_id: a.clinic_id,
+                name: cName,
+                logo: cLogo,
+              });
+            });
+          } catch { }
+        }
+
+        adminDirectNotifs.forEach((n: any) => {
+          const notifId = String(n.notif_id || n.id || "");
+          if (!notifId || items.some((i) => i.id === notifId)) return;
+
+          const meta = n.metadata || {};
+          const metaApptId = meta.appointmentId || meta.appointment_id;
+          const metaClinicId = meta.clinicId || meta.clinic_id;
+
+          const isBookingNotif =
+            n.type === "new-booking" ||
+            n.type === "new_booking" ||
+            n.type === "appointment-created" ||
+            n.type === "appointment_created" ||
+            n.type === "appointment_request" ||
+            n.type === "appointment-request" ||
+            n.subtype === "new-booking" ||
+            n.subtype === "appointment-created" ||
+            Boolean(metaApptId) ||
+            /booking|appointment/i.test(n.title || "");
+
+          if (isBookingNotif) {
+            let enrichedClinic: { name: string; logo_url: string | null; clinic_id?: string } | null = null;
+            // Path 1: Check metadata.appointment_id or metadata.clinic_id
+            if (metaApptId && apptLookupMap.has(metaApptId)) {
+              const match = apptLookupMap.get(metaApptId)!;
+              enrichedClinic = { name: match.name, logo_url: match.logo, clinic_id: match.clinic_id || metaClinicId };
+            } else if (metaClinicId && clinicIdMap.has(metaClinicId)) {
+              const match = clinicIdMap.get(metaClinicId)!;
+              enrichedClinic = { name: match.name, logo_url: match.logo_url, clinic_id: metaClinicId };
+            }
+
+            const finalSenderName = enrichedClinic?.name || meta.sender_name || "Clinic";
+            const finalSenderAvatar = enrichedClinic?.logo_url || meta.avatar_url || null;
+
+            items.push({
+              id: notifId,
+              type: n.type || "appointment_request",
+              category: "clinic",
+              title: n.title,
+              message: n.body || n.message || "",
+              link: "/admin/clinic-management",
+              senderName: finalSenderName,
+              senderType: "clinic",
+              senderAvatar: finalSenderAvatar || undefined,
+              timestamp: n.created_at,
+              isRead: Boolean(n.is_read || readSet.has(notifId)),
+              metadata: {
+                ...meta,
+                clinic_id: enrichedClinic?.clinic_id || metaClinicId,
+                clinic_name: finalSenderName,
+                clinic_logo: finalSenderAvatar,
+              },
+            });
+          }
+        });
+      }
+    }
   } catch (err) {
     console.warn("[notificationService] Error fetching admin notifications:", err);
   }
@@ -2211,6 +3513,89 @@ interface RoleStore {
 }
 
 const roleStores = new Map<string, RoleStore>();
+const ROLE_STORE_CACHE_PREFIX = "dermai_role_notifs_cache_v2_";
+
+function normalizeCachedNotificationItem(item: NotificationItem): NotificationItem {
+  if (!item || typeof item !== "object") return item;
+  const isDocAction =
+    item.senderType === "doctor" ||
+    item.type?.includes("doctor-") ||
+    item.type?.includes("doctor_") ||
+    item.subtype?.includes("doctor") ||
+    item.type === "consultation-completed";
+  let senderName = item.senderName;
+  if (isDocAction) {
+    const rawDoc =
+      item.senderName ||
+      item.metadata?.doctor_name ||
+      (item.message || "").match(/^(?:Dr\.?|Doctor)\s+(.+?)\s+(?:accepted|declined|rejected|completed|approved)/i)?.[1] ||
+      "";
+    const cleaned = String(rawDoc).replace(/^(?:dr\.?|doctor)\s+/i, "").trim();
+    if (cleaned && !/^(?:doctor|assigned doctor|attending doctor|unknown)$/i.test(cleaned)) {
+      senderName = `Dr. ${cleaned}`;
+    }
+  }
+  const rawAvatar = item.senderAvatar || item.metadata?.doctor_avatar || item.metadata?.patient_avatar || item.metadata?.sender_avatar;
+  const resolvedAvatar = rawAvatar ? (resolveAvatarUrl(rawAvatar) || rawAvatar) : item.senderAvatar;
+  const resolvedApptId =
+    item.appointment_id ||
+    item.metadata?.appointment_id ||
+    item.metadata?.appointmentId ||
+    (item.id?.startsWith("clinic-doc-accept-")
+      ? item.id.replace("clinic-doc-accept-", "")
+      : item.id?.startsWith("clinic-doc-reject-")
+      ? item.id.replace("clinic-doc-reject-", "")
+      : item.id?.startsWith("clinic-req-")
+      ? item.id.replace("clinic-req-", "")
+      : item.id?.startsWith("clinic-cancel-")
+      ? item.id.replace("clinic-cancel-", "")
+      : item.id?.startsWith("clinic-reselect-")
+      ? item.id.replace("clinic-reselect-", "")
+      : item.id?.startsWith("clinic-complete-")
+      ? item.id.replace("clinic-complete-", "")
+      : undefined);
+  return {
+    ...item,
+    senderName,
+    senderAvatar: resolvedAvatar,
+    ...(resolvedApptId ? { appointment_id: String(resolvedApptId) } : {}),
+  };
+}
+
+function readHydratedRoleStoreCache(key: string, fallbackKey?: string): NotificationItem[] | null {
+  if (typeof window === "undefined") return null;
+  const keysToTry = [
+    `${ROLE_STORE_CACHE_PREFIX}${key}`,
+    ...(fallbackKey ? [`${ROLE_STORE_CACHE_PREFIX}${fallbackKey}`] : []),
+    ...(key.startsWith("clinic:") ? [`${ROLE_STORE_CACHE_PREFIX}clinic:latest`] : []),
+  ];
+  for (const storageKey of keysToTry) {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map(normalizeCachedNotificationItem);
+        }
+      }
+    } catch { }
+  }
+  return null;
+}
+
+function writeHydratedRoleStoreCache(key: string, items: NotificationItem[], userId?: string) {
+  if (typeof window === "undefined") return;
+  try {
+    const serialized = JSON.stringify(items);
+    localStorage.setItem(`${ROLE_STORE_CACHE_PREFIX}${key}`, serialized);
+    if (key.startsWith("clinic:")) {
+      localStorage.setItem(`${ROLE_STORE_CACHE_PREFIX}clinic:latest`, serialized);
+      if (userId) {
+        localStorage.setItem(`${ROLE_STORE_CACHE_PREFIX}clinic:${userId}`, serialized);
+      }
+    }
+  } catch { }
+}
 
 function getRoleStoreKey(role: NotificationRole, config: { userId?: string; clinicId?: string }): string {
   if (role === "admin") {
@@ -2222,14 +3607,20 @@ function getRoleStoreKey(role: NotificationRole, config: { userId?: string; clin
   return `${role}:${config.userId || "global"}`;
 }
 
-function getOrCreateRoleStore(key: string): RoleStore {
+function getOrCreateRoleStore(key: string, fallbackKey?: string): RoleStore {
   let store = roleStores.get(key);
   if (!store) {
+    const fallbackStore = fallbackKey ? roleStores.get(fallbackKey) : undefined;
+    const cachedItems =
+      (fallbackStore && fallbackStore.state.notifications.length > 0
+        ? fallbackStore.state.notifications
+        : null) || readHydratedRoleStoreCache(key, fallbackKey);
+
     store = {
       state: {
-        notifications: [],
-        loading: true,
-        unreadCount: 0,
+        notifications: cachedItems || [],
+        loading: cachedItems ? false : true,
+        unreadCount: cachedItems ? cachedItems.filter((n) => !n.isRead).length : 0,
       },
       listeners: new Set(),
       refCount: 0,
@@ -2249,11 +3640,13 @@ export function broadcastMarkAllRead(role: NotificationRole, userId?: string, cl
       (userId && key.includes(userId)) ||
       (clinicId && key.includes(clinicId))
     ) {
+      const updated = store.state.notifications.map((n) => ({ ...n, isRead: true }));
       store.state = {
         ...store.state,
         unreadCount: 0,
-        notifications: store.state.notifications.map((n) => ({ ...n, isRead: true })),
+        notifications: updated,
       };
+      writeHydratedRoleStoreCache(key, updated, userId);
       store.listeners.forEach((listener) => {
         try {
           listener();
@@ -2293,6 +3686,7 @@ export function broadcastMarkRead(id: string, role: NotificationRole, userId?: s
           unreadCount: Math.max(0, store.state.unreadCount - 1),
           notifications: updated,
         };
+        writeHydratedRoleStoreCache(key, updated, userId);
         store.listeners.forEach((listener) => {
           try {
             listener();
@@ -2320,7 +3714,8 @@ export function useRoleNotifications(
 ) {
   const { userId, clinicId, userEmail } = config;
   const storeKey = getRoleStoreKey(role, { userId, clinicId });
-  const store = getOrCreateRoleStore(storeKey);
+  const fallbackKey = role === "clinic" && userId ? `clinic:${userId}` : undefined;
+  const store = getOrCreateRoleStore(storeKey, fallbackKey);
 
   const [, setTick] = useState(0);
 
@@ -2336,13 +3731,29 @@ export function useRoleNotifications(
       } else if (role === "admin") {
         data = await fetchAdminNotifications(userId);
       }
-      const deduplicated = deduplicateNotificationItems(data);
+      const prevById = new Map<string, NotificationItem>();
+      store.state.notifications.forEach((prevItem) => {
+        if (prevItem?.id) prevById.set(prevItem.id, prevItem);
+      });
+      const deduplicated = deduplicateNotificationItems(data).map((item) => {
+        const normalized = normalizeCachedNotificationItem(item);
+        const prev = prevById.get(normalized.id);
+        return {
+          ...normalized,
+          senderAvatar: normalized.senderAvatar || prev?.senderAvatar,
+          senderName:
+            normalized.senderName && !/^(?:Doctor|Dr\.\s*Attending Doctor|Patient|Clinic Update)$/i.test(normalized.senderName)
+              ? normalized.senderName
+              : prev?.senderName || normalized.senderName,
+        };
+      });
       const unread = deduplicated.filter((n) => !n.isRead).length;
       store.state = {
         notifications: deduplicated,
         unreadCount: unread,
         loading: false,
       };
+      writeHydratedRoleStoreCache(storeKey, deduplicated, userId);
       store.listeners.forEach((l) => {
         try {
           l();
@@ -2360,7 +3771,7 @@ export function useRoleNotifications(
         } catch { }
       });
     }
-  }, [role, userId, clinicId, userEmail, store]);
+  }, [role, userId, clinicId, userEmail, storeKey, store]);
 
   useEffect(() => {
     const listener = () => setTick((t) => t + 1);
@@ -2409,10 +3820,20 @@ export function useRoleNotifications(
             { event: "*", schema: "public", table: "patient_appointment", filter: `clinic_id=eq.${clinicId}` },
             () => fetchFn()
           );
+          channel.on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "notifications", filter: `clinic_id=eq.${clinicId}` },
+            () => fetchFn()
+          );
         } else {
           channel.on(
             "postgres_changes",
             { event: "*", schema: "public", table: "patient_appointment" },
+            () => fetchFn()
+          );
+          channel.on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "notifications" },
             () => fetchFn()
           );
         }
@@ -2528,7 +3949,7 @@ export function useNotifications(
  * Legacy support for createPatientNotification
  */
 export async function createPatientNotification(payload: PatientNotificationPayload): Promise<boolean> {
-  const { userId, type, subtype, title, body } = payload;
+  const { userId, type, subtype, title, body, metadata } = payload;
   if (!userId) return false;
 
   try {
@@ -2539,6 +3960,7 @@ export async function createPatientNotification(payload: PatientNotificationPayl
       title,
       body,
       is_read: false,
+      metadata: metadata || null,
     });
     if (error) {
       console.warn("[notificationService] Supabase insert warning:", error.message);

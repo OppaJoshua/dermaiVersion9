@@ -624,102 +624,6 @@ export default function ClinicAppointmentsPage() {
         };
       });
 
-    // Merge with local storage appointments
-    try {
-      const raw = localStorage.getItem("dermai_clinic_appointments");
-      if (raw) {
-        const localList = JSON.parse(raw);
-        if (Array.isArray(localList)) {
-          localList.forEach((localItem: any) => {
-            const exists = mapped.some((m) => m.id === localItem.id);
-            if (!exists) {
-              const isClinicMatch =
-                (resolvedClinicId && localItem.clinicId && String(localItem.clinicId) === String(resolvedClinicId)) ||
-                (clinicName && localItem.clinicName && localItem.clinicName.toLowerCase().trim() === clinicName.toLowerCase().trim()) ||
-                (!resolvedClinicId);
-              if (isClinicMatch) {
-                const localPayStatus = String(localItem.paymentStatus || localItem.payment_status || "").toLowerCase().trim();
-                const localIsPaid =
-                  localItem.isPaid === true ||
-                  localItem.is_paid === true ||
-                  localPayStatus === "paid" ||
-                  localPayStatus === "success" ||
-                  localPayStatus === "completed" ||
-                  /paid online|gcash ref|maya ref|paymongo|payment verified|payment.*success/i.test(String(localItem.clinicNote || localItem.clinic_note || "")) ||
-                  /paid online|gcash ref|maya ref/i.test(String(localItem.notes || ""));
-
-                let localMethod = localItem.paymentMethod || localItem.payment_method || "";
-                if (!localMethod && (localItem.clinicNote || localItem.clinic_note)) {
-                  const combined = `${localItem.clinicNote || ""} ${localItem.clinic_note || ""}`;
-                  if (/maya/i.test(combined)) localMethod = "Maya";
-                  else if (/gcash/i.test(combined)) localMethod = "GCash";
-                }
-                let localRef = localItem.paymentReference || localItem.payment_reference || "";
-                if (!localRef && (localItem.clinicNote || localItem.clinic_note)) {
-                  const refMatch = `${localItem.clinicNote || ""} ${localItem.clinic_note || ""}`.match(/(?:Ref|Reference):\s*([A-Za-z0-9_-]+)/i);
-                  if (refMatch) localRef = refMatch[1];
-                }
-
-                const localUserAvatar = resolveAvatarUrl(
-                  localItem.patientAvatar ||
-                  (localItem.userId ? userProfileMap.get(localItem.userId) : undefined) ||
-                  (localItem.patientEmail ? userProfileMap.get(localItem.patientEmail.toLowerCase().trim()) : undefined)
-                );
-
-                mapped.push({
-                  id: localItem.id,
-                  clinicId: 0,
-                  clinicName: localItem.clinicName || clinicName || "Clinic",
-                  patientName: localItem.patientName || "Patient",
-                  patientAvatar: localUserAvatar,
-                  patientEmail: localItem.patientEmail || undefined,
-                  patientAddress: localItem.patientAddress || undefined,
-                  patientContact: localItem.patientContact || undefined,
-                  emergencyContactName: localItem.emergencyContactName || localItem.emergency_contact_name || undefined,
-                  emergencyContactPhone: localItem.emergencyContactPhone || localItem.emergency_contact_phone || undefined,
-                  emergencyRelationship: localItem.emergencyRelationship || localItem.emergency_relationship || undefined,
-                  consultationType: "face-to-face" as const,
-                  conditionName: localItem.aiConditionName || localItem.conditionName || undefined,
-                  date: localItem.date || "",
-                  time: localItem.time || "",
-                  notes: localItem.notes || "",
-                  status: localItem.status || "pending",
-                  clinicNote: localItem.clinicNote || undefined,
-                  assignedDoctorId: localItem.assignedDoctorId || undefined,
-                  assignedDoctorName: localItem.assignedDoctorName || undefined,
-                  doctorStatus: localItem.doctorStatus || undefined,
-                  doctorNote: localItem.doctorNote || undefined,
-                  doctorReviewedAt: localItem.doctorReviewedAt || undefined,
-                  scheduleSentToDoctor: localItem.scheduleSentToDoctor || false,
-                  createdAt: localItem.createdAt || new Date().toISOString(),
-                  skinPhotoUrl: localItem.skinPhotoUrl || undefined,
-                  aiConditionName: localItem.aiConditionName || undefined,
-                  aiConfidence: localItem.aiConfidence ? Number(localItem.aiConfidence) : undefined,
-                  queueNumber: localItem.queueNumber || localItem.queue_number || 1,
-                  batchTime: localItem.batchTime || localItem.batch_time || undefined,
-                  checkInStatus: localItem.checkInStatus || localItem.check_in_status || "scheduled",
-                  isWalkIn: Boolean(localItem.isWalkIn ?? localItem.is_walk_in),
-                  userId: localItem.userId || localItem.user_id || undefined,
-                  rescheduleRequested: localItem.rescheduleRequested,
-                  rescheduleDate: localItem.rescheduleDate,
-                  rescheduleTime: localItem.rescheduleTime,
-                  rescheduleReason: localItem.rescheduleReason,
-                  needsPatientReschedule: localItem.needsPatientReschedule,
-                  appointmentHistory: localItem.appointmentHistory || [],
-                  primaryScanId: localItem.primaryScanId,
-                  paymentStatus: localIsPaid ? "paid" : (localPayStatus || "pending"),
-                  isPaid: localIsPaid,
-                  paymentAmount: localItem.paymentAmount || localItem.payment_amount || resolvedFee,
-                  paymentMethod: localMethod || undefined,
-                  paymentReference: localRef || undefined,
-                });
-              }
-            }
-          });
-        }
-      }
-    } catch { }
-
     setAppointments(mapped);
     try {
       localStorage.setItem("dermai_clinic_appointments", JSON.stringify(mapped));
@@ -794,10 +698,16 @@ export default function ClinicAppointmentsPage() {
   // Queue tab filter: all | needs_doctor | in_review | approved | reschedule_requests
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get("tab");
+  const targetAppointmentParam =
+    searchParams.get("appointment") ||
+    searchParams.get("appointment_id") ||
+    searchParams.get("id");
   const validTabs = ["all", "needs_doctor", "in_review", "approved", "reschedule_requests"] as const;
   const [queueFilter, setQueueFilter] = useState<"all" | "needs_doctor" | "in_review" | "approved" | "reschedule_requests">(
     initialTab && (validTabs as readonly string[]).includes(initialTab) ? (initialTab as any) : "all"
   );
+  const [highlightedApptId, setHighlightedApptId] = useState<string | null>(null);
+  const [lastHandledDeepLink, setLastHandledDeepLink] = useState<string | null>(null);
 
   useEffect(() => {
     const tab = searchParams.get("tab");
@@ -999,12 +909,72 @@ export default function ClinicAppointmentsPage() {
   );
 
   const displayedQueue = useMemo(() => {
-    if (queueFilter === "needs_doctor") return needsDoctorQueue;
-    if (queueFilter === "in_review") return inReviewQueue;
-    if (queueFilter === "approved") return approvedQueue;
-    if (queueFilter === "reschedule_requests") return [...rescheduleRequestsQueue].sort((a, b) => compareAppointmentUrgency(a, b, urgencyNow));
-    return incomingQueue;
-  }, [queueFilter, incomingQueue, needsDoctorQueue, inReviewQueue, approvedQueue, rescheduleRequestsQueue, urgencyNow]);
+    let base: AppointmentRecord[] = incomingQueue;
+    if (queueFilter === "needs_doctor") base = needsDoctorQueue;
+    else if (queueFilter === "in_review") base = inReviewQueue;
+    else if (queueFilter === "approved") base = approvedQueue;
+    else if (queueFilter === "reschedule_requests") {
+      base = [...rescheduleRequestsQueue].sort((a, b) => compareAppointmentUrgency(a, b, urgencyNow));
+    }
+
+    if (highlightedApptId) {
+      const target = appointments.find((a) => String(a.id) === String(highlightedApptId));
+      if (target) {
+        const rest = base.filter((a) => String(a.id) !== String(target.id));
+        return [target, ...rest];
+      }
+    }
+    return base;
+  }, [queueFilter, incomingQueue, needsDoctorQueue, inReviewQueue, approvedQueue, rescheduleRequestsQueue, urgencyNow, highlightedApptId, appointments]);
+
+  // Deep-link handler: when ?appointment=<id> is present in URL, auto-select tab, calendar date, highlight card, and open detail modal
+  useEffect(() => {
+    if (!targetAppointmentParam) {
+      setHighlightedApptId(null);
+      setLastHandledDeepLink(null);
+      return;
+    }
+    if (appointments.length === 0) return;
+    if (lastHandledDeepLink === targetAppointmentParam) return;
+
+    const targetAppt = appointments.find((a) => String(a.id) === String(targetAppointmentParam));
+    if (!targetAppt) return;
+
+    setLastHandledDeepLink(targetAppointmentParam);
+    setHighlightedApptId(targetAppt.id);
+
+    // Auto-select appropriate queue filter tab
+    if (targetAppt.rescheduleRequested) {
+      setQueueFilter("reschedule_requests");
+    } else if (approvedQueue.some((a) => String(a.id) === String(targetAppt.id))) {
+      setQueueFilter("approved");
+    } else {
+      setQueueFilter("all");
+    }
+
+    // Sync calendar date & month to targeted appointment
+    if (targetAppt.date) {
+      const dateKey = targetAppt.date.includes("T") ? targetAppt.date.split("T")[0] : targetAppt.date;
+      const m = dateKey.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if (m) {
+        const yr = parseInt(m[1], 10);
+        const mo = parseInt(m[2], 10);
+        setSelectedDate(dateKey);
+        setCurrentMonth(new Date(yr, mo - 1, 1));
+      }
+    }
+
+    // Open the detailed patient/appointment modal automatically
+    setViewingPatient(targetAppt);
+
+    // Scroll targeted card into view
+    setTimeout(() => {
+      const el = document.getElementById(`clinic-appt-card-${targetAppt.id}`);
+      if (el && typeof el.scrollIntoView === "function") {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 150);
+  }, [targetAppointmentParam, appointments, approvedQueue, lastHandledDeepLink]);
 
   const handleGoToToday = () => {
     const now = new Date();
@@ -2117,13 +2087,15 @@ export default function ClinicAppointmentsPage() {
                     return (
                       <motion.div
                         key={appointment.id}
+                        id={`clinic-calendar-appt-${appointment.id}`}
                         initial={{ opacity: 0, y: 4 }}
                         animate={{ opacity: 1, y: 0 }}
                         onClick={() => setViewingPatient(appointment)}
                         className={cn(
                           "py-3.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer group hover:bg-gray-50/80 rounded-2xl px-2.5 transition-all border border-transparent",
                           isPast && !isNoShow && !isCompleted && "bg-rose-50/30 hover:bg-rose-50/60 border-rose-100/80 shadow-2xs",
-                          isNoShow && "bg-gray-50/40 opacity-80"
+                          isNoShow && "bg-gray-50/40 opacity-80",
+                          highlightedApptId === appointment.id && "ring-2 ring-[#c0166a] bg-rose-50/40 border-rose-200"
                         )}
                       >
                         {/* Left: Details */}
@@ -2286,16 +2258,20 @@ export default function ClinicAppointmentsPage() {
               return (
                 <div
                   key={appointment.id}
-                  className={`rounded-2xl border p-4 transition-all ${urgency !== null
-                    ? "border-amber-300 bg-amber-50/70"
-                    : isDoctorDeclined
-                      ? "border-red-200 bg-red-50/30"
-                      : isApproved
-                        ? "border-emerald-200 bg-emerald-50/30"
-                        : isInReview
-                          ? "border-blue-100 bg-blue-50/20"
-                          : "border-amber-100 bg-amber-50/20"
-                    }`}
+                  id={`clinic-appt-card-${appointment.id}`}
+                  className={cn(
+                    `rounded-2xl border p-4 transition-all ${urgency !== null
+                      ? "border-amber-300 bg-amber-50/70"
+                      : isDoctorDeclined
+                        ? "border-red-200 bg-red-50/30"
+                        : isApproved
+                          ? "border-emerald-200 bg-emerald-50/30"
+                          : isInReview
+                            ? "border-blue-100 bg-blue-50/20"
+                            : "border-amber-100 bg-amber-50/20"
+                      }`,
+                    highlightedApptId === appointment.id && "ring-2 ring-magenta-600 shadow-md"
+                  )}
                 >
                   <div className="flex items-start gap-3 mb-2.5">
                     <PatientAvatar

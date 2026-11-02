@@ -3021,7 +3021,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       // 4. Save to local cache & notify listeners
       try {
         const newLocalAppt = {
-          id: insertedApptId || `appt-${Date.now()}`,
+          id: insertedApptId,
           clinicId: targetClinicId,
           clinicName: selectedClinic.name || "Skin Clinic",
           patientName: payerName,
@@ -3058,7 +3058,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         };
         const existing = localStorage.getItem("dermai_clinic_appointments");
         const list = existing ? JSON.parse(existing) : [];
-        if (Array.isArray(list)) {
+        if (insertedApptId && Array.isArray(list)) {
           list.unshift(newLocalAppt);
           localStorage.setItem("dermai_clinic_appointments", JSON.stringify(list));
         }
