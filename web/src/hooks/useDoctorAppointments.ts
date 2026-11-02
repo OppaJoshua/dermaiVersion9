@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { resolveAvatarUrl } from "@/utils/storage";
-import { createPatientNotification } from "@/lib/notificationService";
+import { createPatientNotification, notifyAdminDoctorCompletedReview } from "@/lib/notificationService";
 import { recordDoctorAiReview } from "@/lib/doctorReviewService";
 import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 import { compareDoctorAppointments, scopeDoctorAppointments } from "@/lib/doctorAppointmentScope";
@@ -794,7 +794,7 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
         console.warn("[useDoctorAppointments] LocalStorage sync warning:", storageErr);
       }
 
-      // 2. Upsert into doctor_ai_review validation table
+      // 2. Upsert into doctor_ai_review validation table & trigger admin notification
       if (finalDiagnosis) {
         recordDoctorAiReview({
           appointmentId,
@@ -809,6 +809,19 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
           reviewedAt: updatePayload.doctor_reviewed_at,
         }).catch((err: unknown) => {
           console.warn("[useDoctorAppointments] recordDoctorAiReview notice:", err);
+        });
+
+        // Ensure admin receives immediate notification under AI Scans & Reviews
+        notifyAdminDoctorCompletedReview({
+          appointmentId,
+          doctorName: doctorName || targetAppt?.assignedDoctorName || undefined,
+          patientName: targetAppt?.patientName,
+          finalDiagnosis,
+          aiPrediction: targetAppt?.aiConditionName || targetAppt?.conditionName,
+          confidence: targetAppt?.aiConfidence,
+          doctorId: doctorIds[0] || targetAppt?.assignedDoctorId || undefined,
+        }).catch((err: unknown) => {
+          console.warn("[useDoctorAppointments] notifyAdminDoctorCompletedReview notice:", err);
         });
       }
 

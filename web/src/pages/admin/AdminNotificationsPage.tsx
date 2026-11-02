@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Bell,
   Building2,
@@ -63,6 +63,7 @@ export interface AdminNotificationsProps {
 }
 
 export function AdminNotifications({ onClose, isDropdown = false }: AdminNotificationsProps) {
+  const navigate = useNavigate();
   const { session } = useAuth();
   const { notifications, loading, unreadCount, markRead, markAllRead } = useRoleNotifications("admin", {
     userId: session?.user?.id,
@@ -73,8 +74,21 @@ export function AdminNotifications({ onClose, isDropdown = false }: AdminNotific
   >("all");
 
   const filtered = useMemo(() => {
-    if (activeTab === "all") return notifications;
-    return notifications.filter((n) => n.category === activeTab);
+    // Exclude intermediate pending-review notifications for doctor actions
+    const cleanNotifications = notifications.filter((n) => {
+      const fullText = `${n.title || ""} ${n.message || ""}`.toLowerCase();
+      if (
+        fullText.includes("pending-review") ||
+        n.metadata?.doctor_status === "pending-review" ||
+        n.metadata?.status === "pending-review"
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    if (activeTab === "all") return cleanNotifications;
+    return cleanNotifications.filter((n) => n.category === activeTab || (activeTab === "clinic" && (n.type === "clinic" || n.type?.startsWith("clinic"))));
   }, [notifications, activeTab]);
 
   const timeAgo = (iso: string) => {
@@ -174,7 +188,14 @@ export function AdminNotifications({ onClose, isDropdown = false }: AdminNotific
           filtered.map((item) => (
             <div
               key={item.id}
-              onClick={() => !item.isRead && markRead(item.id)}
+              onClick={(e) => {
+                if (!item.isRead) markRead(item.id);
+                const target = e.target as HTMLElement;
+                if (!target.closest("a") && !target.closest("button") && item.link) {
+                  onClose?.();
+                  navigate(item.link);
+                }
+              }}
               className={cn(
                 "relative flex items-start gap-3 px-5 py-4 transition-colors cursor-pointer",
                 !item.isRead ? "bg-magenta-50/40 hover:bg-magenta-50/70" : "hover:bg-gray-50"
@@ -198,10 +219,19 @@ export function AdminNotifications({ onClose, isDropdown = false }: AdminNotific
                 <p className="text-sm font-semibold text-gray-900 mt-0.5">{item.title}</p>
                 <p className="text-sm text-gray-600 leading-relaxed mt-0.5 break-words">{item.message}</p>
 
-                {item.link && (
+                {(item.link || item.category === "scan" || item.category === "clinic") && (
                   <Link
-                    to={item.link}
-                    onClick={onClose}
+                    to={
+                      item.category === "scan" && (item.type === "doctor-review" || item.title?.includes("Review"))
+                        ? "/admin/doctor-ai-review"
+                        : item.link || "/admin/doctor-ai-review"
+                    }
+                    onClick={() => {
+                      if (!item.isRead) {
+                        markRead(item.id);
+                      }
+                      onClose?.();
+                    }}
                     className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-magenta-700 hover:text-magenta-800 transition-colors"
                   >
                     <span>Inspect record</span>

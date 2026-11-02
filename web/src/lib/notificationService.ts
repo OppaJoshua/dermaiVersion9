@@ -1264,8 +1264,11 @@ export async function fetchClinicNotifications(
  * - New user registrations (Patients & Doctors)
  * ----------------------------------------------------------------------------
  */
-export async function fetchAdminNotifications(): Promise<NotificationItem[]> {
-  const readSet = getReadIds("admin", "admin");
+export async function fetchAdminNotifications(userId?: string): Promise<NotificationItem[]> {
+  const readSet = new Set<string>([
+    ...Array.from(getReadIds("admin", "admin")),
+    ...(userId ? Array.from(getReadIds("admin", userId)) : []),
+  ]);
   const items: NotificationItem[] = [];
 
   try {
@@ -1353,34 +1356,185 @@ export async function fetchAdminNotifications(): Promise<NotificationItem[]> {
       return null;
     };
 
-    // 1. Pending Clinic Applications
-    const { data: pendingClinics } = await supabase
-      .from("clinic")
-      .select("clinic_id, name, created_at, email, status, logo_url")
-      .eq("status", "pending")
-      .order("created_at", { ascending: false })
-      .limit(10);
+    // 1. Pending Clinic Applications & Explicit Clinic Notifications (Union Merge)
+    const seenClinicIds = new Set<string>();
+    const seenClinicNotifIds = new Set<string>();
 
-    if (pendingClinics) {
-      pendingClinics.forEach((c: any) => {
-        const notifId = `admin-clinic-app-${c.clinic_id}`;
-        const avatar = c.logo_url || clinicByName.get(c.name?.trim().toLowerCase()) || null;
-        items.push({
-          id: notifId,
-          type: "clinic-pending",
-          category: "clinic",
-          title: "New Clinic Application",
-          message: `"${c.name}" submitted verification credentials awaiting administrative approval.`,
-          senderName: c.name,
-          senderType: "clinic",
-          senderAvatar: avatar,
-          link: "/admin/clinics",
-          timestamp: c.created_at || new Date().toISOString(),
-          isRead: readSet.has(notifId),
-          metadata: { clinic_id: c.clinic_id },
-        });
-      });
+    const formatClinicMessage = (name?: string) => {
+      const rawName = (name || "New Clinic").trim();
+      const clinicDisplay = rawName.toLowerCase().startsWith("clinic ") ? rawName : `Clinic ${rawName}`;
+      return `${clinicDisplay} has submitted a new application for platform approval.`;
+    };
+
+    // 1a. Query pending/submitted clinic registration applications directly from Supabase public.clinic
+    let pendingClinics: any[] = [];
+    try {
+      const { data: clinicsData } = await supabase
+        .from("clinic")
+        .select("clinic_id, name, created_at, email, status, logo_url, address, district")
+        .in("status", ["pending", "submitted"])
+        .order("created_at", { ascending: false })
+        .limit(30);
+      if (clinicsData) {
+        pendingClinics = clinicsData;
+      }
+    } catch (clinicErr) {
+      console.warn("[fetchAdminNotifications] clinic table lookup warning:", clinicErr);
     }
+
+    // Fallback: Query public.clinic_registration if present
+    try {
+      const { data: regData } = await supabase
+        .from("clinic_registration")
+        .select("id, clinic_id, name, created_at, email, status, logo_url")
+        .in("status", ["pending", "submitted"])
+        .order("created_at", { ascending: false })
+        .limit(30);
+      if (regData && regData.length > 0) {
+        regData.forEach((r: any) => {
+          const rId = String(r.clinic_id || r.id);
+          if (!pendingClinics.some((c) => String(c.clinic_id || c.id) === rId)) {
+            pendingClinics.push({
+              clinic_id: rId,
+              name: r.name,
+              created_at: r.created_at,
+              email: r.email,
+              status: r.status,
+              logo_url: r.logo_url,
+            });
+          }
+        });
+      }
+    } catch {}
+
+    // Fallback: Local storage mirrors for newly registered clinics
+    if (typeof window !== "undefined") {
+      try {
+        const localAppsRaw = localStorage.getItem("dermai_clinic_applications");
+        if (localAppsRaw) {
+          const localApps = JSON.parse(localAppsRaw);
+          if (Array.isArray(localApps)) {
+            localApps.forEach((la: any) => {
+              const laId = String(la.id || la.clinic_id || "");
+              const laStatus = (la.status || "pending").toLowerCase();
+              if (
+                laId &&
+                (laStatus === "pending" || laStatus === "submitted") &&
+                !pendingClinics.some((c) => String(c.clinic_id || c.id) === laId)
+              ) {
+                pendingClinics.push({
+                  clinic_id: laId,
+                  name: la.name,
+                  created_at: la.createdAt || la.dateApplied || new Date().toISOString(),
+                  email: la.email,
+                  status: laStatus,
+                  logo_url: la.logo || la.logo_url,
+                });
+              }
+            });
+          }
+        }
+      } catch {}
+    }
+
+    // 1b. Query explicit clinic user_notification records from Supabase
+    let explicitClinicDbNotifs: any[] = [];
+    try {
+      const { data: cNotifs } = await supabase
+        .from("user_notification")
+        .select("notif_id, type, subtype, title, body, message, metadata, is_read, read_at, created_at, user_id")
+        .or("type.eq.clinic,type.eq.clinic-pending,type.eq.new_clinic_application,subtype.eq.clinic_registration,subtype.eq.new_clinic_application")
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (cNotifs) {
+        explicitClinicDbNotifs = cNotifs;
+      }
+    } catch {}
+
+    const uniqueClinicNotifsMap = new Map<string, any>();
+    (explicitClinicDbNotifs || []).forEach((n: any) => {
+      const id = String(n.notif_id || n.id || "");
+      if (id && !uniqueClinicNotifsMap.has(id)) {
+        uniqueClinicNotifsMap.set(id, n);
+      }
+    });
+
+    // 1c. Primary: Render all explicit user_notification records tagged with category/type = 'clinic'
+    uniqueClinicNotifsMap.forEach((rn: any, nid: string) => {
+      seenClinicNotifIds.add(nid);
+      const clinicId = String(
+        rn.metadata?.clinic_id || rn.metadata?.clinicId || rn.metadata?.id || ""
+      );
+      if (clinicId) {
+        seenClinicIds.add(clinicId);
+      }
+
+      const clinicName =
+        rn.metadata?.clinic_name ||
+        rn.metadata?.clinicName ||
+        (clinicId ? allClinics?.find((c: any) => String(c.clinic_id) === clinicId)?.name : null) ||
+        rn.title?.replace(/^New Clinic Application Submitted:?\s*/i, "").trim() ||
+        "New Clinic";
+
+      const avatar =
+        rn.metadata?.logo_url ||
+        (clinicId && clinicByName.get(clinicName.toLowerCase())) ||
+        resolveUserAvatar(undefined, clinicName);
+
+      items.push({
+        id: nid,
+        type: "clinic",
+        category: "clinic",
+        title: "New Clinic Application Submitted",
+        message: formatClinicMessage(clinicName),
+        senderName: clinicName,
+        senderType: "clinic",
+        senderAvatar: avatar,
+        link: "/admin/clinic-management",
+        timestamp: rn.created_at || new Date().toISOString(),
+        isRead: Boolean(
+          rn.is_read ||
+            readSet.has(nid) ||
+            (clinicId && readSet.has(`admin-clinic-app-${clinicId}`))
+        ),
+        metadata: {
+          clinic_id: clinicId || undefined,
+          status: rn.metadata?.status || "pending",
+          ...rn.metadata,
+        },
+      });
+    });
+
+    // 1d. Fallback Union: Merge pending clinic applications not yet represented in user_notification
+    pendingClinics.forEach((c: any) => {
+      const cId = String(c.clinic_id || c.id || "");
+      if (!cId || seenClinicIds.has(cId)) return;
+      seenClinicIds.add(cId);
+
+      const notifId = `admin-clinic-app-${cId}`;
+      seenClinicNotifIds.add(notifId);
+
+      const avatar = c.logo_url || clinicByName.get(c.name?.trim().toLowerCase()) || null;
+      const clinicName = c.name?.trim() || "New Clinic";
+
+      items.push({
+        id: notifId,
+        type: "clinic",
+        category: "clinic",
+        title: "New Clinic Application Submitted",
+        message: formatClinicMessage(clinicName),
+        senderName: clinicName,
+        senderType: "clinic",
+        senderAvatar: avatar,
+        link: "/admin/clinic-management",
+        timestamp: c.created_at || new Date().toISOString(),
+        isRead: Boolean(readSet.has(notifId) || readSet.has(`admin-clinic-app-${cId}`)),
+        metadata: {
+          clinic_id: cId,
+          status: c.status || "pending",
+        },
+      });
+    });
 
     // 2. Open Support Tickets Across All Roles
     const { data: tickets } = await supabase
@@ -1891,7 +2045,7 @@ export function useRoleNotifications(
       } else if (role === "clinic") {
         data = await fetchClinicNotifications(clinicId || "", userId, userEmail);
       } else if (role === "admin") {
-        data = await fetchAdminNotifications();
+        data = await fetchAdminNotifications(userId);
       }
       const deduplicated = deduplicateNotificationItems(data);
       const unread = deduplicated.filter((n) => !n.isRead).length;
@@ -2612,4 +2766,158 @@ export async function dispatchSystemMaintenanceAlert(params: {
   }
 
   return { recipientCount: recipientIds.length };
+}
+/**
+ * Dispatch real-time admin notification when a new clinic registers / applies
+ * for platform verification and approval.
+ */
+export async function notifyAdminNewClinicApplication(
+  clinicId: string | number,
+  fallbackClinicData?: { name?: string; email?: string; logo_url?: string }
+): Promise<void> {
+  const cId = String(clinicId);
+  let clinicName = fallbackClinicData?.name;
+  let logoUrl = fallbackClinicData?.logo_url;
+
+  if (!clinicName && cId && !cId.startsWith("temp_")) {
+    try {
+      const { data: clinic } = await supabase
+        .from("clinic")
+        .select("clinic_id, name, logo_url")
+        .eq("clinic_id", cId)
+        .maybeSingle();
+      if (clinic) {
+        clinicName = clinic.name;
+        logoUrl = clinic.logo_url || logoUrl;
+      }
+    } catch (err) {
+      console.warn("[notifyAdminNewClinicApplication] Clinic query warning:", err);
+    }
+  }
+
+  const rawName = (clinicName || "New Clinic").trim();
+  const clinicDisplay = rawName.toLowerCase().startsWith("clinic ") ? rawName : `Clinic ${rawName}`;
+  const title = "New Clinic Application Submitted";
+  const bodyText = `${clinicDisplay} has submitted a new application for platform approval.`;
+  const link = "/admin/clinic-management";
+
+  // 1. Resolve all admin accounts in Supabase
+  try {
+    const { data: adminUsers } = await supabase
+      .from("user")
+      .select("user_id, email, role")
+      .or("role.eq.admin,email.eq.dermaisupport@gmail.com");
+
+    const targetUserIds = new Set<string>();
+    if (adminUsers && adminUsers.length > 0) {
+      adminUsers.forEach((a: any) => {
+        if (a.user_id) targetUserIds.add(String(a.user_id));
+      });
+    }
+    // Always include the primary admin account
+    targetUserIds.add("03c4dbd4-5d15-4c78-872e-93811b3afa23");
+
+    const rows = Array.from(targetUserIds).map((uid) => ({
+      user_id: uid,
+      type: "clinic",
+      subtype: "new_clinic_application",
+      title,
+      body: bodyText,
+      message: bodyText,
+      is_read: false,
+      metadata: {
+        clinic_id: cId,
+        clinic_name: rawName,
+        category: "clinic",
+        link,
+        logo_url: logoUrl || null,
+        priority: "high",
+      },
+    }));
+
+    await supabase.from("user_notification").insert(rows);
+  } catch (err) {
+    console.warn("[notifyAdminNewClinicApplication] Database notice insert warning:", err);
+  }
+
+  // 2. Broadcast local realtime events so all open admin tabs refresh immediately
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("dermai_notifications_updated", {
+        detail: { role: "admin", clinicId: cId, action: "new_clinic_application" },
+      })
+    );
+    window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+    window.dispatchEvent(new Event("storage"));
+  }
+}
+
+/**
+ * Dispatch real-time admin notification when a doctor completes a patient consultation
+ * and submits the final diagnosis.
+ */
+export async function notifyAdminDoctorCompletedReview(payload: {
+  appointmentId: string;
+  doctorName?: string | null;
+  patientName?: string | null;
+  finalDiagnosis: string;
+  aiPrediction?: string | null;
+  confidence?: number | string | null;
+  doctorId?: string | null;
+}): Promise<void> {
+  if (!payload.finalDiagnosis || !payload.finalDiagnosis.trim()) return;
+
+  const rawDocName = (payload.doctorName || "Doctor").trim();
+  const cleanDoc = rawDocName.replace(/^(dr\.?|doctor)\s+/i, "").trim();
+  const formattedDoctor = cleanDoc.toLowerCase() === "doctor" ? "Doctor" : `Dr. ${cleanDoc}`;
+  const patient = (payload.patientName || "Patient").trim();
+
+  const title = "Doctor Completed Review";
+  const bodyText = `${formattedDoctor} completed the review for ${patient}. Final Diagnosis: ${payload.finalDiagnosis.trim()}`;
+
+  // 1. Resolve all admin accounts in Supabase
+  try {
+    const { data: adminUsers } = await supabase
+      .from("user")
+      .select("user_id, email, role")
+      .or("role.eq.admin,email.eq.dermaisupport@gmail.com");
+
+    const targetUserIds = new Set<string>();
+    if (adminUsers && adminUsers.length > 0) {
+      adminUsers.forEach((a: any) => {
+        if (a.user_id) targetUserIds.add(String(a.user_id));
+      });
+    }
+    // Always include the verified primary admin account
+    targetUserIds.add("03c4dbd4-5d15-4c78-872e-93811b3afa23");
+
+    const rows = Array.from(targetUserIds).map((uid) => ({
+      user_id: uid,
+      type: "scan",
+      subtype: "doctor_completed_review",
+      title,
+      body: bodyText,
+      message: bodyText,
+      is_read: false,
+      metadata: {
+        appointment_id: payload.appointmentId,
+        category: "scan",
+        link: "/admin/doctor-ai-review",
+        doctor_name: formattedDoctor,
+        patient_name: patient,
+        final_diagnosis: payload.finalDiagnosis.trim(),
+        ai_prediction: payload.aiPrediction || null,
+        confidence: payload.confidence || null,
+      },
+    }));
+    await supabase.from("user_notification").insert(rows);
+  } catch (err) {
+    console.warn("[notifyAdminDoctorCompletedReview] Database notice insert warning:", err);
+  }
+
+  // 2. Broadcast local realtime events so all open admin tabs refresh immediately
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+    window.dispatchEvent(new Event("storage"));
+  }
 }

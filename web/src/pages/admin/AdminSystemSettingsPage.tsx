@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
-import { AlertTriangle, UserCircle, Loader2, ShieldAlert, CheckCircle2 } from "lucide-react";
+import { UserCircle, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/context/AuthContext";
-import { dispatchSystemMaintenanceAlert } from "@/lib/notificationService";
 
 const districts = [
   "Cebu City",
@@ -18,69 +17,19 @@ const districts = [
   "Other",
 ];
 
-interface PlatformSettings {
+export interface PlatformSettings {
   siteName: string;
   contactEmail: string;
-  maintenanceMode: boolean;
 }
 
-const DEFAULT_PLATFORM_SETTINGS: PlatformSettings = {
+export const DEFAULT_PLATFORM_SETTINGS: PlatformSettings = {
   siteName: "DERMAI",
   contactEmail: "support@dermai.ph",
-  maintenanceMode: false,
 };
-
-function getSavedPlatformSettings(): PlatformSettings {
-  try {
-    const raw = localStorage.getItem("dermai_admin_platform_settings");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") {
-        return { ...DEFAULT_PLATFORM_SETTINGS, ...parsed };
-      }
-    }
-  } catch { }
-  return DEFAULT_PLATFORM_SETTINGS;
-}
 
 const inputClass =
   "w-full px-3.5 py-2.5 rounded-md border border-gray-300 text-sm text-black placeholder:text-gray-500 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/15 bg-white";
 const labelClass = "block text-sm font-medium text-black mb-1.5";
-
-function Toggle({
-  on,
-  onClick,
-  disabled,
-  loading,
-}: {
-  on: boolean;
-  onClick: () => void;
-  disabled?: boolean;
-  loading?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={disabled ? undefined : onClick}
-      disabled={disabled}
-      aria-pressed={on}
-      className={cn(
-        "relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0",
-        disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
-        on ? "bg-magenta-600" : "bg-gray-300"
-      )}
-    >
-      <span
-        className={cn(
-          "absolute h-4 w-4 rounded-full bg-white shadow-sm transition-transform flex items-center justify-center",
-          on ? "translate-x-6" : "translate-x-1"
-        )}
-      >
-        {loading && <Loader2 className="w-2.5 h-2.5 text-magenta-600 animate-spin" />}
-      </span>
-    </button>
-  );
-}
 
 function Section({
   title,
@@ -119,21 +68,8 @@ export default function AdminSystemSettingsPage() {
   const [profileSaved, setProfileSaved] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
 
-  // Platform & Notification Settings State
-  const [platformSettings, setPlatformSettings] = useState<PlatformSettings>(getSavedPlatformSettings);
-  const [saved, setSaved] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // System Maintenance Notification State
-  const [maintenanceWindow, setMaintenanceWindow] = useState("Tonight from 11:00 PM to 1:00 AM PHT");
-  const [estimatedDowntime, setEstimatedDowntime] = useState("1-2 hours");
-  const [maintenanceInstructions, setMaintenanceInstructions] = useState(
-    "Some features such as booking and online consultations may be temporarily unavailable. Please complete any active sessions."
-  );
-  const [dispatchingNotice, setDispatchingNotice] = useState(false);
-  const [dispatchFeedback, setDispatchFeedback] = useState<string | null>(null);
-  const prevMaintenanceRef = useRef(platformSettings.maintenanceMode);
 
   // Load Admin Profile from Supabase & localStorage on mount
   useEffect(() => {
@@ -294,82 +230,14 @@ export default function AdminSystemSettingsPage() {
     }
   };
 
-  const handleSave = async () => {
-    try {
-      localStorage.setItem("dermai_admin_platform_settings", JSON.stringify(platformSettings));
-      window.dispatchEvent(new CustomEvent("dermai_platform_settings_changed", { detail: platformSettings }));
-
-      const wasActive = prevMaintenanceRef.current;
-      const isActive = platformSettings.maintenanceMode;
-      prevMaintenanceRef.current = isActive;
-
-      if (!wasActive && isActive) {
-        setDispatchingNotice(true);
-        const { recipientCount } = await dispatchSystemMaintenanceAlert({
-          scheduledWindow: maintenanceWindow,
-          estimatedDowntime,
-          instructions: maintenanceInstructions,
-          enabled: true,
-        });
-        setDispatchFeedback(`Maintenance alert dispatched to ${recipientCount} active accounts across Patients, Clinics, and Doctors.`);
-        setDispatchingNotice(false);
-      } else if (wasActive && !isActive) {
-        await dispatchSystemMaintenanceAlert({
-          scheduledWindow: "",
-          estimatedDowntime: "",
-          enabled: false,
-        });
-        setDispatchFeedback("Maintenance mode deactivated. Normal access restored.");
-      }
-
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } catch (err) {
-      console.error("Failed to save platform settings:", err);
-    } finally {
-      setDispatchingNotice(false);
-    }
-  };
-
-  const handleManualDispatchMaintenance = async () => {
-    setDispatchingNotice(true);
-    setDispatchFeedback(null);
-    try {
-      const { recipientCount } = await dispatchSystemMaintenanceAlert({
-        scheduledWindow: maintenanceWindow,
-        estimatedDowntime,
-        instructions: maintenanceInstructions,
-        enabled: true,
-      });
-      setDispatchFeedback(`High-priority maintenance notice dispatched to ${recipientCount} active users.`);
-      setTimeout(() => setDispatchFeedback(null), 6000);
-    } catch (err) {
-      console.error("Manual maintenance dispatch failed:", err);
-      setDispatchFeedback("Failed to dispatch maintenance alert.");
-    } finally {
-      setDispatchingNotice(false);
-    }
-  };
 
 
   return (
     <div className="max-w-5xl">
       <div className="mb-8">
         <h1 className="text-2xl font-display font-bold text-black">System Settings</h1>
-        <p className="text-sm text-gray-600 mt-1">Manage your profile and configure platform settings and behavior.</p>
+        <p className="text-sm text-gray-600 mt-1">Manage your profile details and contact information.</p>
       </div>
-
-      {platformSettings.maintenanceMode && (
-        <div className="mb-8 border border-gray-200 border-l-4 border-l-magenta-600 rounded-md bg-white px-5 py-4 flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-magenta-600 shrink-0 mt-0.5"/>
-          <div>
-            <p className="text-sm font-semibold text-black">Maintenance mode is active</p>
-            <p className="text-sm text-gray-700 mt-0.5">
-              Users will see a maintenance page when visiting the platform.
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Personal information */}
       <Section
@@ -481,139 +349,7 @@ export default function AdminSystemSettingsPage() {
         </div>
       </Section>
 
-      {/* Maintenance Mode */}
-      <Section
-        title="Maintenance mode"
-        description="Temporarily disable platform access or schedule a maintenance window with automated high-priority alerts."
-      >
-        <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-200">
-          <div className="px-7 py-6 flex items-center justify-between gap-6">
-            <div>
-              <p className="text-sm font-semibold text-black">Enable maintenance mode</p>
-              <p className="text-sm text-gray-600 mt-0.5">
-                When active, platform users will be notified and redirected to a maintenance notice.
-              </p>
-            </div>
-            <Toggle
-              on={platformSettings.maintenanceMode}
-              onClick={() => setPlatformSettings((prev) => ({ ...prev, maintenanceMode: !prev.maintenanceMode }))}
-            />
-          </div>
 
-          {/* Maintenance Notice Details Configuration */}
-          <div className="p-7 space-y-5 bg-gray-50/50">
-            <div className="flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-amber-600" />
-              <h3 className="text-sm font-semibold text-black">High-Priority Alert Notice to All Roles</h3>
-            </div>
-            <p className="text-xs text-gray-600 leading-relaxed">
-              When maintenance is scheduled or enabled, an automated high-priority system notice will be dispatched in real time to all active Patients, Clinics, and Doctors.
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className={labelClass}>Scheduled Window</label>
-                <input
-                  type="text"
-                  value={maintenanceWindow}
-                  onChange={(e) => setMaintenanceWindow(e.target.value)}
-                  placeholder="e.g. Tonight from 11:00 PM to 1:00 AM PHT"
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label className={labelClass}>Estimated Downtime</label>
-                <input
-                  type="text"
-                  value={estimatedDowntime}
-                  onChange={(e) => setEstimatedDowntime(e.target.value)}
-                  placeholder="e.g. 1-2 hours"
-                  className={inputClass}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className={labelClass}>Instructions &amp; Affected Features</label>
-              <textarea
-                value={maintenanceInstructions}
-                onChange={(e) => setMaintenanceInstructions(e.target.value)}
-                placeholder="Describe any instructions or temporarily unavailable features..."
-                rows={2}
-                className={cn(inputClass, "resize-none")}
-              />
-            </div>
-
-            {dispatchFeedback && (
-              <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-200 rounded-md text-xs font-medium text-emerald-800">
-                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-                <span>{dispatchFeedback}</span>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between pt-2">
-              <span className="text-xs text-gray-500">
-                Audience: All active Patients, Clinics, and Doctors
-              </span>
-              <button
-                type="button"
-                onClick={handleManualDispatchMaintenance}
-                disabled={dispatchingNotice}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                {dispatchingNotice && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                <span>{dispatchingNotice ? "Dispatching alert..." : "Dispatch Alert Now"}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </Section>
-
-      {/* Platform Branding */}
-      <Section
-        title="Platform settings"
-        description="Basic branding and contact configuration."
-      >
-        <div className="bg-white rounded-lg border border-gray-200 p-7">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            <div>
-              <label className={labelClass}>Platform name</label>
-              <input
-                type="text"
-                value={platformSettings.siteName}
-                onChange={(e) => setPlatformSettings((prev) => ({ ...prev, siteName: e.target.value }))}
-                className={inputClass}
-              />
-            </div>
-            <div>
-              <label className={labelClass}>Support email</label>
-              <input
-                type="email"
-                value={platformSettings.contactEmail}
-                onChange={(e) => setPlatformSettings((prev) => ({ ...prev, contactEmail: e.target.value }))}
-                className={inputClass}
-              />
-            </div>
-          </div>
-        </div>
-      </Section>
-
-
-      {/* Save Settings Button */}
-      <div className="flex items-center gap-4 pt-6 border-t border-gray-200">
-        <button
-          type="button"
-          onClick={handleSave}
-          className="px-6 py-2.5 rounded-md bg-magenta-600 text-white font-medium text-sm hover:bg-magenta-700 transition-colors cursor-pointer"
-        >
-          Save settings
-        </button>
-        {saved && (
-          <span className="text-sm font-medium text-magenta-700">
-            Settings saved successfully
-          </span>
-        )}
-      </div>
     </div>
   );
 }

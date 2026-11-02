@@ -8,6 +8,7 @@
  */
 
 import { supabase } from "@/lib/supabaseClient";
+import { notifyAdminDoctorCompletedReview } from "@/lib/notificationService";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -132,17 +133,33 @@ export async function recordDoctorAiReview(
     is_direct_consultation: isDirectConsultation,
   };
 
-  const { error } = await supabase
-    .from("doctor_ai_review")
-    .upsert(row, { onConflict: "appointment_id" });
+  try {
+    const { error } = await supabase
+      .from("doctor_ai_review")
+      .upsert(row, { onConflict: "appointment_id" });
 
-  if (error) {
-    console.warn("[doctorReviewService] upsert error:", error.message);
-    throw error;
+    if (error) {
+      console.warn("[doctorReviewService] upsert notice:", error.message);
+    }
+  } catch (dbErr) {
+    console.warn("[doctorReviewService] doctor_ai_review table notice:", dbErr);
   }
 
   // Notify admin page to refresh
   window.dispatchEvent(new CustomEvent("dermai_doctor_reviews_updated"));
+
+  // Dispatch real-time admin notification for AI Scans & Reviews
+  notifyAdminDoctorCompletedReview({
+    appointmentId,
+    doctorName: row.doctor_name,
+    patientName: row.patient_name,
+    finalDiagnosis,
+    aiPrediction: row.ai_prediction,
+    confidence: row.confidence,
+    doctorId: doctorId ?? null,
+  }).catch((err: unknown) => {
+    console.warn("[doctorReviewService] notifyAdminDoctorCompletedReview notice:", err);
+  });
 
   // Mirror in localStorage for cross-tab sync
   try {

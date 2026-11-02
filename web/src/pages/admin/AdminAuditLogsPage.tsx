@@ -66,7 +66,6 @@ const CATEGORIES: AuditEntryType[] = [
   "user",
   "subscription",
   "clinic",
-  "system",
   "scan",
   "appointment",
 ];
@@ -77,7 +76,6 @@ const ACTORS: { key: ActorFilter; label: string }[] = [
   { key: "doctor", label: "Doctor" },
   { key: "clinic", label: "Clinic" },
   { key: "admin", label: "Admin" },
-  { key: "system", label: "System" },
 ];
 
 const PAGE_SIZE = 15;
@@ -152,7 +150,10 @@ export default function AdminAuditLogsPage() {
         )
         .order("timestamp", { ascending: false });
 
-      // Apply actor filter across Patient, Doctor, Clinic, Admin, System
+      // Exclude system logs
+      query = query.neq("user_type", "system").neq("log_type", "system");
+
+      // Apply actor filter across Patient, Doctor, Clinic, Admin
       if (actorFilter !== "all") {
         query = query.eq("user_type", actorFilter);
       }
@@ -178,7 +179,14 @@ export default function AdminAuditLogsPage() {
         return;
       }
 
-      const mapped: AuditEntry[] = (data || []).map((l: any) => {
+      const mapped: AuditEntry[] = (data || [])
+        .filter(
+          (l: any) =>
+            l.user_type !== "system" &&
+            l.log_type !== "system" &&
+            !String(l.action || "").toLowerCase().includes("system initialization")
+        )
+        .map((l: any) => {
         const userObj = Array.isArray(l.user) ? l.user[0] : l.user;
         const fallbackPerformer =
           l.performer_name || userObj?.full_name || userObj?.email || (l.user_type === "system" ? "System Core" : "User");
@@ -228,6 +236,7 @@ export default function AdminAuditLogsPage() {
         async (payload) => {
           const newRecord = payload.new as any;
           if (!newRecord) return;
+          if (newRecord.user_type === "system" || newRecord.log_type === "system") return;
 
           // Check if new record matches current actor filter
           const matchesActor =
@@ -324,7 +333,7 @@ export default function AdminAuditLogsPage() {
       </div>
 
       {/* Category Metric Cards (Live dynamic count from Supabase) */}
-      <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-4 sm:gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-5 gap-4 sm:gap-6">
         {CATEGORIES.map((type) => {
           const Icon = typeIcon[type];
           const count = categoryCounts[type] ?? 0;

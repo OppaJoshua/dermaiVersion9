@@ -165,6 +165,8 @@ function App() {
         <Route path="/admin" element={<AdminLayout><AdminDashboardPage /></AdminLayout>} />
         <Route path="/admin/users" element={<AdminLayout><AdminUserManagement /></AdminLayout>} />
         <Route path="/admin/clinics" element={<AdminLayout><AdminClinicManagement /></AdminLayout>} />
+        <Route path="/admin/clinic-management" element={<AdminLayout><AdminClinicManagement /></AdminLayout>} />
+        <Route path="/admin/clinic-applications" element={<AdminLayout><AdminClinicManagement /></AdminLayout>} />
         <Route path="/admin/subscriptions" element={<AdminLayout><AdminSubscriptionManagement /></AdminLayout>} />
         <Route path="/admin/plans" element={<AdminLayout><AdminPlanManagement /></AdminLayout>} />
         <Route path="/admin/ai-analyses" element={<AdminLayout><AdminAiAnalysisManagement /></AdminLayout>} />

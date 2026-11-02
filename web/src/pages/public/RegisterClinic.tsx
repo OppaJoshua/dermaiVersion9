@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import type { ChangeEvent, FormEvent, DragEvent } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
+import { notifyAdminNewClinicApplication } from "@/lib/notificationService";
 import {
   ArrowLeft,
   ArrowRight,
@@ -678,6 +679,17 @@ export default function RegisterClinic() {
             .update({ role: "clinic" })
             .eq("user_id", session.user.id);
         } catch {}
+      }
+
+      // Notify admins in real-time
+      try {
+        await notifyAdminNewClinicApplication(clinicId, {
+          name: formData.name.trim(),
+          email: formData.email.trim(),
+          logo_url: uploadedLogoUrl || logoPreview || "",
+        });
+      } catch (notifErr) {
+        console.warn("Could not dispatch admin clinic notification:", notifErr);
       }
 
 
