@@ -715,6 +715,51 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
         });
       }
 
+      // Notify Clinic Owner of doctor's review decision (approval or decline)
+      const clinicIdToNotify = existingAppt.clinicId || branchDoctor.clinic_id;
+      if (clinicIdToNotify) {
+        try {
+          const { data: clinicRow } = await supabase
+            .from("clinic")
+            .select("owner_user_id, name")
+            .eq("clinic_id", clinicIdToNotify)
+            .maybeSingle();
+
+          const clinicOwnerUserId = clinicRow?.owner_user_id;
+          if (clinicOwnerUserId) {
+            const docDisplayName = docLabel || (doctorName ? `Dr. ${doctorName.replace(/^dr\.\s*/i, "")}` : "Attending Doctor");
+            const patientDisplayName = existingAppt.patientName || targetAppt?.patientName || "Patient";
+            const declineReasonText = note?.trim() ? `: "${note.trim()}"` : "";
+
+            await supabase.from("user_notification").insert({
+              user_id: clinicOwnerUserId,
+              type: "appointment",
+              subtype: isApproved ? "doctor-accepted" : "doctor-declined",
+              title: isApproved ? "Doctor Accepted Appointment" : "Doctor Declined Appointment",
+              body: isApproved
+                ? `${docDisplayName} accepted the consultation request for ${patientDisplayName}.`
+                : `${docDisplayName} declined the consultation request for ${patientDisplayName}${declineReasonText}. Reassignment required.`,
+              is_read: false,
+              metadata: {
+                appointment_id: appointmentId,
+                doctor_id: branchDoctor.doctor_id,
+                doctor_name: doctorName || undefined,
+                clinic_id: clinicIdToNotify,
+                clinic_name: clinicRow?.name || undefined,
+                patient_name: patientDisplayName,
+                decline_reason: note || undefined,
+                category: "appointment",
+                type: isApproved ? "doctor-accepted" : "doctor-rejected",
+                link: "/clinic/appointments",
+              },
+            });
+            window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+          }
+        } catch (clinicNotifErr) {
+          console.warn("[useDoctorAppointments] Clinic notification insert warning:", clinicNotifErr);
+        }
+      }
+
       logAuditEvent({
         userId: user?.id,
         role: "doctor",

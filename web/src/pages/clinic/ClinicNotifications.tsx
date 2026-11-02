@@ -33,8 +33,8 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
   const filtered = useMemo(() => {
     let list = notifications;
     if (activeTab === "clinic") list = notifications.filter((n) => n.category === "clinic" || n.type === "application_approved" || n.type === "clinic_application");
-    else if (activeTab === "requests") list = notifications.filter((n) => n.type === "appointment-request" || n.type === "patient-reselection");
-    else if (activeTab === "doctor-action") list = notifications.filter((n) => n.type.includes("doctor-") || n.type === "consultation-completed");
+    else if (activeTab === "requests") list = notifications.filter((n) => n.type === "appointment-request" || n.type === "patient-reselection" || n.type === "appointment-cancelled" || n.subtype === "alternate_doctor_selected");
+    else if (activeTab === "doctor-action") list = notifications.filter((n) => (n.type.includes("doctor-") || n.type.includes("doctor_") || n.type === "consultation-completed" || (n.category === "appointment" && n.senderType === "doctor")) && n.type !== "appointment-cancelled");
     else if (activeTab === "ticket") list = notifications.filter((n) => n.category === "ticket");
     else if (activeTab === "broadcast") {
       list = notifications.filter(
@@ -66,7 +66,10 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
   }, [notifications, activeTab]);
 
   const timeAgo = (iso: string) => {
-    const diff = Date.now() - new Date(iso).getTime();
+    const time = new Date(iso).getTime();
+    if (isNaN(time) || time <= 0) return "";
+    const diff = Date.now() - time;
+    if (diff < 0) return "Just now";
     const mins = Math.floor(diff / 60000);
     if (mins < 1) return "Just now";
     if (mins < 60) return `${mins}m ago`;

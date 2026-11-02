@@ -164,7 +164,7 @@ function getInitialSettings(): ClinicSettings {
         result = { ...parsed };
       }
     }
-  } catch {}
+  } catch { }
 
   // 2. Try dermai_clinic_applications if name or essential details are missing
   if (!result.name?.trim() || !result.email?.trim() || !result.phone?.trim()) {
@@ -193,7 +193,7 @@ function getInitialSettings(): ClinicSettings {
           };
         }
       }
-    } catch {}
+    } catch { }
   }
 
   // 3. Fallback to dermai_clinic_profile_cache for clinic name / logo
@@ -213,7 +213,7 @@ function getInitialSettings(): ClinicSettings {
         }
       }
     }
-  } catch {}
+  } catch { }
 
   return {
     ...DEFAULT_SETTINGS,
@@ -243,7 +243,7 @@ export default function ClinicSettingsPage() {
           if (svcs.length > 0) return svcs;
         }
       }
-    } catch {}
+    } catch { }
     return parseServices(DEFAULT_SETTINGS.servicesOffered).filter((s) => Boolean(s) && s.trim() !== "[]");
   });
 
@@ -264,7 +264,7 @@ export default function ClinicSettingsPage() {
           localStorage.setItem("dermai_clinic_settings", JSON.stringify(parsed));
         }
       }
-    } catch {}
+    } catch { }
   }, []);
   const [customServiceInput, setCustomServiceInput] = useState("");
 
@@ -340,7 +340,7 @@ export default function ClinicSettingsPage() {
             if (userData?.user) {
               session = (await supabase.auth.getSession()).data.session;
             }
-          } catch {}
+          } catch { }
         }
 
         const userId = session?.user?.id;
@@ -355,7 +355,7 @@ export default function ClinicSettingsPage() {
               const parsed = JSON.parse(cache);
               if (parsed.clinicId) resolvedClinicId = parsed.clinicId;
             }
-          } catch {}
+          } catch { }
         }
         if (!resolvedClinicId) {
           try {
@@ -364,7 +364,7 @@ export default function ClinicSettingsPage() {
               const parsed = JSON.parse(sett);
               if (parsed.id) resolvedClinicId = parsed.id;
             }
-          } catch {}
+          } catch { }
         }
         if (!resolvedClinicId) {
           try {
@@ -375,7 +375,7 @@ export default function ClinicSettingsPage() {
                 resolvedClinicId = parsed[0].id;
               }
             }
-          } catch {}
+          } catch { }
         }
 
         let dbClinic: any = null;
@@ -456,7 +456,7 @@ export default function ClinicSettingsPage() {
               const apps = localStorage.getItem("dermai_clinic_applications");
               if (apps) nameHint = JSON.parse(apps)?.[0]?.name || "";
             }
-          } catch {}
+          } catch { }
 
           if (nameHint && nameHint !== "Clinic Portal") {
             try {
@@ -500,7 +500,7 @@ export default function ClinicSettingsPage() {
             if (docList && docList.length > 0) {
               try {
                 localStorage.setItem("dermai_clinic_doctors", JSON.stringify(docList));
-              } catch {}
+              } catch { }
               loadedDoctors = docList.map((d: any) => ({
                 id: d.doctor_id,
                 name: d.doctor_name,
@@ -539,7 +539,7 @@ export default function ClinicSettingsPage() {
                 if (parsed.slotIntervalMinutes) loadedSlotInterval = Number(parsed.slotIntervalMinutes);
                 if (parsed.maxPatientsPerDay) loadedMaxPatients = Number(parsed.maxPatientsPerDay);
               }
-            } catch {}
+            } catch { }
 
             const next: ClinicSettings = {
               ...prev,
@@ -564,7 +564,7 @@ export default function ClinicSettingsPage() {
 
             try {
               localStorage.setItem("dermai_clinic_settings", JSON.stringify(next));
-            } catch {}
+            } catch { }
 
             return next;
           });
@@ -605,7 +605,7 @@ export default function ClinicSettingsPage() {
                 }
               }
             }
-          } catch {}
+          } catch { }
         }
       } catch (err) {
         console.error("Error loading clinic settings:", err);
@@ -651,8 +651,7 @@ export default function ClinicSettingsPage() {
 
     if (scheduleConflicts.length > 0) {
       setScheduleSaveError(
-        `Cannot save schedule changes: ${scheduleConflicts.length} doctor shift${
-          scheduleConflicts.length > 1 ? "s are" : " is"
+        `Cannot save schedule changes: ${scheduleConflicts.length} doctor shift${scheduleConflicts.length > 1 ? "s are" : " is"
         } outside clinic operating hours. Please resolve them in Doctor Shifts first.`
       );
       return;
@@ -678,7 +677,7 @@ export default function ClinicSettingsPage() {
     setSettings(settingsToSave);
     try {
       localStorage.setItem("dermai_clinic_settings", JSON.stringify(settingsToSave));
-    } catch {}
+    } catch { }
 
     // Also update matching clinic application cache for search and booking
     try {
@@ -718,7 +717,7 @@ export default function ClinicSettingsPage() {
           localStorage.setItem("dermai_clinic_applications", JSON.stringify(updatedApps));
         }
       }
-    } catch {}
+    } catch { }
 
     // 2. Synchronize clinic details, operating hours, consultation fee and services to Supabase
     try {
@@ -810,7 +809,7 @@ export default function ClinicSettingsPage() {
           operatingDays: settings.operatingDays,
           location: settings.location || settings.address,
         },
-      }).catch(() => {});
+      }).catch(() => { });
     } catch (cErr) {
       console.error("Error syncing clinic to Supabase:", cErr);
     } finally {
@@ -954,9 +953,8 @@ export default function ClinicSettingsPage() {
                 )}
                 <div className="flex items-center gap-3 flex-wrap">
                   <label
-                    className={`px-3.5 py-1.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-[13px] font-bold text-gray-700 shadow-2xs cursor-pointer transition-colors ${
-                      isPending ? "opacity-50 pointer-events-none" : ""
-                    }`}
+                    className={`px-3.5 py-1.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-[13px] font-bold text-gray-700 shadow-2xs cursor-pointer transition-colors ${isPending ? "opacity-50 pointer-events-none" : ""
+                      }`}
                   >
                     <span>Change photo</span>
                     <input
@@ -1105,11 +1103,10 @@ export default function ClinicSettingsPage() {
                     type="button"
                     disabled={isPending}
                     onClick={() => toggleService(svc)}
-                    className={`px-3.5 py-1.5 rounded-full text-[13px] font-semibold border transition-all cursor-pointer ${
-                      selected
+                    className={`px-3.5 py-1.5 rounded-full text-[13px] font-semibold border transition-all cursor-pointer ${selected
                         ? "bg-[#fbeaf0] text-[#901353] border-[#f3c2d4] shadow-2xs"
                         : "bg-white text-gray-600 border-gray-200 hover:border-pink-300 hover:bg-pink-50/40"
-                    }`}
+                      }`}
                   >
                     {svc}
                   </button>
@@ -1271,11 +1268,10 @@ export default function ClinicSettingsPage() {
                   setSettings((prev) => ({ ...prev, closeTime: e.target.value }));
                   setScheduleSaveError(null);
                 }}
-                className={`w-full px-3.5 py-2 rounded-xl border text-[13px] font-medium outline-none disabled:bg-gray-50 bg-white cursor-pointer transition-colors ${
-                  isCloseTimeInvalid
+                className={`w-full px-3.5 py-2 rounded-xl border text-[13px] font-medium outline-none disabled:bg-gray-50 bg-white cursor-pointer transition-colors ${isCloseTimeInvalid
                     ? "border-rose-400 text-rose-900 bg-rose-50/20 focus:border-rose-500 focus:ring-1 focus:ring-rose-500"
                     : "border-gray-200 text-gray-900 focus:border-magenta-500 focus:ring-1 focus:ring-magenta-500"
-                }`}
+                  }`}
               >
                 {isCloseTimeInvalid && (
                   <option value={settings.closeTime} disabled>
@@ -1432,14 +1428,13 @@ export default function ClinicSettingsPage() {
             hasScheduleConflicts
               ? `Cannot save: ${scheduleConflicts.length} doctor shift conflict${scheduleConflicts.length > 1 ? "s" : ""} must be resolved in Doctor Shifts first`
               : isCloseTimeInvalid
-              ? "Please select a valid closing time before saving"
-              : "Save settings"
+                ? "Please select a valid closing time before saving"
+                : "Save settings"
           }
-          className={`px-6 py-2.5 rounded-xl text-white text-xs font-bold transition-all shadow-xs ${
-            isSaveDisabled
+          className={`px-6 py-2.5 rounded-xl text-white text-xs font-bold transition-all shadow-xs ${isSaveDisabled
               ? "bg-gray-400 cursor-not-allowed opacity-60"
               : "bg-[#881337] hover:bg-[#70102d] cursor-pointer"
-          }`}
+            }`}
         >
           Save settings
         </button>
@@ -1461,7 +1456,7 @@ export default function ClinicSettingsPage() {
                 <Mail className="w-4 h-4 text-[#c0166a] mt-0.5 shrink-0" />
                 <div className="min-w-0">
                   <p className="text-xs font-semibold text-gray-500 mb-0.5">Email Support</p>
-                  <p className="text-[13px] font-bold text-gray-900 truncate">support@dermai.ph</p>
+                  <p className="text-[13px] font-bold text-gray-900 truncate">dermaisupport@gmail.com</p>
                   <p className="text-[11px] text-gray-400 mt-0.5">Replies within 24 hours on business days</p>
                 </div>
               </div>

@@ -18,6 +18,7 @@ export type NotificationCategory =
 export interface NotificationItem {
   id: string;
   type: string;
+  subtype?: string;
   category: NotificationCategory;
   title: string;
   message: string;
@@ -33,16 +34,16 @@ export interface NotificationItem {
 export interface PatientNotificationPayload {
   userId: string;
   type:
-    | "appointment-scheduled"
-    | "appointment-rejected"
-    | "appointment-cancelled"
-    | "appointment-completed"
-    | "appointment-reschedule-needed"
-    | "appointment-reschedule-declined"
-    | "doctor-assigned"
-    | "scan-completed"
-    | "broadcast"
-    | "system";
+  | "appointment-scheduled"
+  | "appointment-rejected"
+  | "appointment-cancelled"
+  | "appointment-completed"
+  | "appointment-reschedule-needed"
+  | "appointment-reschedule-declined"
+  | "doctor-assigned"
+  | "scan-completed"
+  | "broadcast"
+  | "system";
   subtype?: string;
   title: string;
   body: string;
@@ -50,34 +51,74 @@ export interface PatientNotificationPayload {
 
 const LOCAL_NOTIF_PREFIX = "dermai_patient_notifications_";
 
-function getReadIds(role: NotificationRole, userId?: string): Set<string> {
-  try {
-    const key = `dermai_${role}_read_ids_${userId || "default"}`;
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) return new Set(arr);
+function getReadIds(role: NotificationRole, userId?: string, fallbackId?: string): Set<string> {
+  const combined = new Set<string>();
+  const keys = [userId, fallbackId, "default"].filter(Boolean) as string[];
+  for (const k of keys) {
+    try {
+      const raw = localStorage.getItem(`dermai_${role}_read_ids_${k}`);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) arr.forEach((id) => combined.add(id));
+      }
+    } catch { }
+  }
+  return combined;
+}
+
+function saveReadId(role: NotificationRole, id: string, userId?: string, fallbackId?: string) {
+  const keys = [userId, fallbackId, "default"].filter(Boolean) as string[];
+  for (const k of keys) {
+    try {
+      const key = `dermai_${role}_read_ids_${k}`;
+      const set = getReadIds(role, k);
+      set.add(id);
+      localStorage.setItem(key, JSON.stringify(Array.from(set)));
+    } catch { }
+  }
+}
+
+function saveAllReadIds(role: NotificationRole, ids: string[], userId?: string, fallbackId?: string) {
+  const keys = [userId, fallbackId, "default"].filter(Boolean) as string[];
+  for (const k of keys) {
+    try {
+      const key = `dermai_${role}_read_ids_${k}`;
+      const set = getReadIds(role, k);
+      ids.forEach((id) => set.add(id));
+      localStorage.setItem(key, JSON.stringify(Array.from(set)));
+    } catch { }
+  }
+}
+
+export function resolveAppointmentTimestamp(appt: any, preferredTimestamp?: string): string {
+  if (preferredTimestamp) {
+    const parsed = new Date(preferredTimestamp).getTime();
+    if (!isNaN(parsed) && parsed > 0) return new Date(parsed).toISOString();
+  }
+  const candidates = [
+    appt.doctor_reviewed_at,
+    appt.doctorReviewedAt,
+    appt.cancelled_at,
+    appt.cancelledAt,
+    appt.updated_at,
+    appt.updatedAt,
+    appt.created_at,
+    appt.createdAt,
+  ];
+  for (const c of candidates) {
+    if (c) {
+      const parsed = new Date(c).getTime();
+      if (!isNaN(parsed) && parsed > 0) return new Date(parsed).toISOString();
     }
-  } catch {}
-  return new Set();
-}
-
-function saveReadId(role: NotificationRole, id: string, userId?: string) {
-  try {
-    const key = `dermai_${role}_read_ids_${userId || "default"}`;
-    const set = getReadIds(role, userId);
-    set.add(id);
-    localStorage.setItem(key, JSON.stringify(Array.from(set)));
-  } catch {}
-}
-
-function saveAllReadIds(role: NotificationRole, ids: string[], userId?: string) {
-  try {
-    const key = `dermai_${role}_read_ids_${userId || "default"}`;
-    const set = getReadIds(role, userId);
-    ids.forEach((id) => set.add(id));
-    localStorage.setItem(key, JSON.stringify(Array.from(set)));
-  } catch {}
+  }
+  if (appt.date) {
+    const timeStr = appt.time ? `T${appt.time.length === 5 ? appt.time + ":00" : appt.time}` : "T09:00:00";
+    const dateParsed = new Date(`${appt.date}${timeStr}`).getTime();
+    if (!isNaN(dateParsed) && dateParsed > 0) return new Date(dateParsed).toISOString();
+    const dateOnly = new Date(appt.date).getTime();
+    if (!isNaN(dateOnly) && dateOnly > 0) return new Date(dateOnly).toISOString();
+  }
+  return new Date().toISOString();
 }
 
 /**
@@ -93,6 +134,7 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
   const seenIds = new Set<string>();
   const seenBroadcastIds = new Set<string>();
   const seenContentKeys = new Set<string>();
+  const seenApptActions = new Set<string>();
 
   // Sort so persistent database records with UUID IDs take precedence over synthetic fallback IDs
   const isUuid = (str: string) =>
@@ -118,14 +160,24 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
     const bId =
       item.metadata?.broadcast_id ||
       (item.id.startsWith("broadcast-") ||
-      item.id.startsWith("clinic-broadcast-") ||
-      item.id.startsWith("doc-broadcast-")
+        item.id.startsWith("clinic-broadcast-") ||
+        item.id.startsWith("doc-broadcast-")
         ? item.id.replace(/^(clinic-|doc-)?broadcast-/, "")
         : undefined);
 
     if (bId) {
       if (seenBroadcastIds.has(bId)) continue;
       seenBroadcastIds.add(bId);
+    }
+
+    // B2. Appointment + Action deduplication (dedupes persistent DB user_notification with synthetic fallback)
+    const apptId = item.metadata?.appointment_id || (item.id.startsWith("clinic-") ? item.id.replace(/^clinic-[a-z]+-/, "") : undefined);
+    const normType = (item.type || item.metadata?.type || "").toLowerCase().replace(/_/g, "-");
+    const isDoctorAction = normType.includes("doctor-");
+    if (apptId && (isDoctorAction || normType === "appointment-cancelled" || normType === "appointment-request")) {
+      const apptActionKey = `${apptId}:::${normType}`;
+      if (seenApptActions.has(apptActionKey)) continue;
+      seenApptActions.add(apptActionKey);
     }
 
     // C. Content Fingerprint: normalized title + body
@@ -192,10 +244,10 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           category: n.type?.includes("appointment")
             ? "appointment"
             : isTicket
-            ? "ticket"
-            : isBroadcast
-            ? "broadcast"
-            : "system",
+              ? "ticket"
+              : isBroadcast
+                ? "broadcast"
+                : "system",
           title: n.title,
           message: n.body || "",
           senderName:
@@ -486,7 +538,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       if (adminUser?.avatar_url) {
         adminAvatar = adminUser.avatar_url;
       }
-    } catch {}
+    } catch { }
 
     // Helper: resolve patient avatar
     const buildNotifItems = async (appointments: any[]) => {
@@ -508,7 +560,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           (userRows || []).forEach((u: any) => {
             if (u.avatar_url) fallbackAvatarMap.set(u.user_id, u.avatar_url);
           });
-        } catch {}
+        } catch { }
       }
       return { fallbackAvatarMap };
     };
@@ -811,8 +863,8 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           (isTicket
             ? "/doctor/settings"
             : metaClinicId && metaPatientId
-            ? `/doctor/clinics/${metaClinicId}/patients/${metaPatientId}${metaApptId ? `?appointmentId=${metaApptId}` : ""}`
-            : undefined);
+              ? `/doctor/clinics/${metaClinicId}/patients/${metaPatientId}${metaApptId ? `?appointmentId=${metaApptId}` : ""}`
+              : undefined);
 
         const category =
           meta.category ||
@@ -894,13 +946,15 @@ export async function fetchClinicNotifications(
             if (Array.isArray(parsed) && parsed[0]?.id) resolvedClinicId = parsed[0].id;
           }
         }
-      } catch {}
+      } catch { }
     }
 
     // If clinicId is not provided, look up by owner user_id or email
     if (!resolvedClinicId && (userId || clinicEmail)) {
       let query = supabase.from("clinic").select("clinic_id, name, owner_user_id, status, logo_url, created_at");
-      if (userId) {
+      if (userId && clinicEmail) {
+        query = query.or(`owner_user_id.eq.${userId},email.ilike.${clinicEmail}`);
+      } else if (userId) {
         query = query.eq("owner_user_id", userId);
       } else if (clinicEmail) {
         query = query.ilike("email", clinicEmail);
@@ -943,10 +997,27 @@ export async function fetchClinicNotifications(
       if (adminUser?.avatar_url) {
         adminAvatar = adminUser.avatar_url;
       }
-    } catch {}
+    } catch { }
 
     // 1. Live Appointments for this clinic directly from public.patient_appointment
     if (resolvedClinicId) {
+      // Pre-fetch clinic doctors so doctor names & avatars can be mapped reliably without fragile joins
+      const docNameMap = new Map<string, string>();
+      const docPhotoMap = new Map<string, string>();
+      try {
+        const { data: cDocs } = await supabase
+          .from("clinic_doctor")
+          .select("doctor_id, doctor_name, photo_url")
+          .eq("clinic_id", resolvedClinicId);
+        (cDocs || []).forEach((cd: any) => {
+          if (cd.doctor_id) {
+            docNameMap.set(cd.doctor_id, cd.doctor_name);
+            if (cd.photo_url) docPhotoMap.set(cd.doctor_id, cd.photo_url);
+          }
+        });
+      } catch { }
+
+      let liveAppts: any[] = [];
       const { data: appointments, error: apptError } = await supabase
         .from("patient_appointment")
         .select(`
@@ -955,6 +1026,8 @@ export async function fetchClinicNotifications(
           time,
           status,
           doctor_status,
+          doctor_note,
+          doctor_reviewed_at,
           patient_name,
           ai_condition_name,
           questionnaire_answers,
@@ -966,35 +1039,83 @@ export async function fetchClinicNotifications(
         `)
         .eq("clinic_id", resolvedClinicId)
         .order("created_at", { ascending: false })
-        .limit(30);
+        .limit(40);
 
       if (apptError) {
-        console.warn("[notificationService] Error querying patient_appointment:", apptError);
+        console.warn("[notificationService] Error querying patient_appointment, attempting resilient fallback:", apptError.message);
+        try {
+          const { data: fallbackAppts } = await supabase
+            .from("patient_appointment")
+            .select("appointment_id, date, time, status, doctor_status, doctor_note, doctor_reviewed_at, patient_name, ai_condition_name, questionnaire_answers, created_at, user_id, assigned_doctor_id")
+            .eq("clinic_id", resolvedClinicId)
+            .order("created_at", { ascending: false })
+            .limit(40);
+          if (fallbackAppts) liveAppts = fallbackAppts;
+        } catch { }
       } else if (appointments) {
-        appointments.forEach((appt: any) => {
-          const patient = appt.patient_name || "A patient";
+        liveAppts = appointments;
+      }
+
+      // Also merge with local storage cache (matches ClinicAppointmentsPage)
+      try {
+        const rawLocal = localStorage.getItem("dermai_clinic_appointments");
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((localAppt: any) => {
+              const matchesClinic =
+                !localAppt.clinicId ||
+                String(localAppt.clinicId) === String(resolvedClinicId) ||
+                (clinicRow?.name && localAppt.clinicName && localAppt.clinicName.toLowerCase().trim() === clinicRow.name.toLowerCase().trim());
+              const apptId = localAppt.appointment_id || localAppt.id;
+              if (matchesClinic && apptId && !liveAppts.some((a) => (a.appointment_id || a.id) === apptId)) {
+                liveAppts.push(localAppt);
+              }
+            });
+          }
+        }
+      } catch { }
+
+      if (liveAppts.length > 0) {
+        liveAppts.forEach((appt: any) => {
+          const apptId = appt.appointment_id || appt.id;
+          const patient = appt.patient_name || appt.patientName || "A patient";
           const uObj = Array.isArray(appt.user) ? appt.user[0] : appt.user;
-          const patientAvatar = uObj?.avatar_url || undefined;
+          const patientAvatar = uObj?.avatar_url || appt.patientAvatar || undefined;
 
           const docObj = Array.isArray(appt.doctor) ? appt.doctor[0] : appt.doctor;
-          const doctorName = docObj?.doctor_name || "Assigned doctor";
-          const doctorAvatar = docObj?.photo_url || undefined;
+          const assignedId = appt.assigned_doctor_id || appt.assignedDoctorId;
+          const doctorName =
+            docObj?.doctor_name ||
+            appt.assignedDoctorName ||
+            (assignedId ? docNameMap.get(assignedId) : undefined) ||
+            "Assigned doctor";
+          const doctorAvatar = docObj?.photo_url || (assignedId ? docPhotoMap.get(assignedId) : undefined) || undefined;
 
-          const condition = appt.ai_condition_name ? ` for ${appt.ai_condition_name}` : "";
+          const condition = appt.ai_condition_name || appt.aiConditionName ? ` for ${appt.ai_condition_name || appt.aiConditionName}` : "";
           const dateStr = appt.date
             ? new Date(appt.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
             : "scheduled date";
 
-          const qAnswers = typeof appt.questionnaire_answers === "object" && appt.questionnaire_answers ? appt.questionnaire_answers : {};
-          const needsReschedule = Boolean(qAnswers.needs_patient_reschedule || qAnswers.reschedule_requested);
+          const qAnswers = typeof appt.questionnaire_answers === "object" && appt.questionnaire_answers
+            ? appt.questionnaire_answers
+            : (appt.questionnaireAnswers || {});
+          const needsReschedule = Boolean(qAnswers.needs_patient_reschedule || qAnswers.reschedule_requested || appt.needsPatientReschedule || appt.rescheduleRequested);
+
+          const docStatus = (appt.doctor_status || appt.doctorStatus || "").toLowerCase();
+          const apptStatus = (appt.status || "").toLowerCase();
 
           // A. New Appointment Request / Pending Doctor Review
+          // ONLY if not already approved, rejected, or cancelled
           if (
-            appt.status === "pending" ||
-            appt.doctor_status === "pending-review" ||
-            appt.doctor_status === "pending"
+            (apptStatus === "pending" || docStatus === "pending-review" || docStatus === "pending") &&
+            docStatus !== "rejected" &&
+            docStatus !== "approved" &&
+            apptStatus !== "cancelled" &&
+            apptStatus !== "rejected"
           ) {
-            const notifId = `clinic-req-${appt.appointment_id}`;
+            const notifId = `clinic-req-${apptId}`;
+            const reqTime = resolveAppointmentTimestamp(appt, appt.created_at || appt.createdAt);
             items.push({
               id: notifId,
               type: "appointment-request",
@@ -1005,15 +1126,16 @@ export async function fetchClinicNotifications(
               senderType: "patient",
               senderAvatar: patientAvatar,
               link: "/clinic/appointments",
-              timestamp: appt.created_at || new Date().toISOString(),
+              timestamp: reqTime,
               isRead: readSet.has(notifId),
-              metadata: { appointment_id: appt.appointment_id },
+              metadata: { appointment_id: apptId, type: "appointment-request" },
             });
           }
 
           // B. Doctor Action: Accepted Booking
-          if (appt.doctor_status === "approved" && appt.status !== "completed") {
-            const notifId = `clinic-doc-accept-${appt.appointment_id}`;
+          if (docStatus === "approved" && apptStatus !== "completed" && apptStatus !== "cancelled") {
+            const notifId = `clinic-doc-accept-${apptId}`;
+            const acceptTime = resolveAppointmentTimestamp(appt, appt.doctor_reviewed_at || appt.doctorReviewedAt);
             items.push({
               id: notifId,
               type: "doctor-accepted",
@@ -1024,36 +1146,62 @@ export async function fetchClinicNotifications(
               senderType: "doctor",
               senderAvatar: doctorAvatar,
               link: "/clinic/appointments",
-              timestamp: appt.created_at || new Date().toISOString(),
+              timestamp: acceptTime,
               isRead: readSet.has(notifId),
-              metadata: { appointment_id: appt.appointment_id },
+              metadata: { appointment_id: apptId, type: "doctor-accepted" },
             });
           }
 
-          // C. Doctor Action: Declined or Appointment Cancelled
-          if (appt.doctor_status === "rejected" || appt.status === "cancelled") {
-            const notifId = `clinic-doc-reject-${appt.appointment_id}`;
+          // C. Doctor Action: Declined Appointment
+          if (docStatus === "rejected") {
+            const notifId = `clinic-doc-reject-${apptId}`;
+            const docNote = appt.doctor_note || appt.doctorNote ? `: "${appt.doctor_note || appt.doctorNote}"` : "";
+            const declineTime = resolveAppointmentTimestamp(appt, appt.doctor_reviewed_at || appt.doctorReviewedAt);
             items.push({
               id: notifId,
               type: "doctor-rejected",
               category: "appointment",
-              title: appt.doctor_status === "rejected" ? "Doctor Declined Appointment" : "Appointment Cancelled",
-              message: appt.doctor_status === "rejected"
-                ? `${doctorName} declined the booking for ${patient}. The patient or clinic may reassign.`
-                : `The appointment for ${patient} on ${dateStr} was cancelled.`,
+              title: "Doctor Declined Appointment",
+              message: `${doctorName} declined the consultation request for ${patient}${docNote}. Reassignment required.`,
               senderName: doctorName,
               senderType: "doctor",
               senderAvatar: doctorAvatar,
               link: "/clinic/appointments",
-              timestamp: appt.created_at || new Date().toISOString(),
+              timestamp: declineTime,
               isRead: readSet.has(notifId),
-              metadata: { appointment_id: appt.appointment_id },
+              metadata: { appointment_id: apptId, type: "doctor-rejected" },
             });
           }
 
-          // D. Patient Re-selection / Reschedule Alert
+          // D. Patient Cancelled Appointment (ONLY if not a doctor decline)
+          if ((apptStatus === "cancelled" || apptStatus === "rejected") && docStatus !== "rejected") {
+            const notifId = `clinic-cancel-${apptId}`;
+            const cancelTime = resolveAppointmentTimestamp(appt, appt.cancelled_at || appt.cancelledAt || appt.updated_at || appt.updatedAt);
+            const cancelNote = appt.clinic_note || appt.clinicNote;
+            const cancelMsg = cancelNote && !/cancelled by patient/i.test(cancelNote)
+              ? `The appointment for ${patient} on ${dateStr} was cancelled (${cancelNote}).`
+              : `The appointment for ${patient} on ${dateStr} was cancelled.`;
+
+            items.push({
+              id: notifId,
+              type: "appointment-cancelled",
+              category: "appointment",
+              title: "Appointment Cancelled",
+              message: cancelMsg,
+              senderName: patient,
+              senderType: "patient",
+              senderAvatar: patientAvatar,
+              link: "/clinic/appointments",
+              timestamp: cancelTime,
+              isRead: readSet.has(notifId),
+              metadata: { appointment_id: apptId, type: "appointment-cancelled" },
+            });
+          }
+
+          // E. Patient Re-selection / Reschedule Alert
           if (needsReschedule) {
-            const notifId = `clinic-reselect-${appt.appointment_id}`;
+            const notifId = `clinic-reselect-${apptId}`;
+            const reselTime = resolveAppointmentTimestamp(appt, appt.doctor_reviewed_at || appt.doctorReviewedAt);
             items.push({
               id: notifId,
               type: "patient-reselection",
@@ -1064,15 +1212,16 @@ export async function fetchClinicNotifications(
               senderType: "patient",
               senderAvatar: patientAvatar,
               link: "/clinic/appointments",
-              timestamp: appt.created_at || new Date().toISOString(),
+              timestamp: reselTime,
               isRead: readSet.has(notifId),
-              metadata: { appointment_id: appt.appointment_id },
+              metadata: { appointment_id: apptId, type: "patient-reselection" },
             });
           }
 
-          // E. Consultation Completed
-          if (appt.status === "completed") {
-            const notifId = `clinic-complete-${appt.appointment_id}`;
+          // F. Consultation Completed
+          if (apptStatus === "completed") {
+            const notifId = `clinic-complete-${apptId}`;
+            const compTime = resolveAppointmentTimestamp(appt, appt.created_at || appt.createdAt);
             items.push({
               id: notifId,
               type: "consultation-completed",
@@ -1083,9 +1232,9 @@ export async function fetchClinicNotifications(
               senderType: "doctor",
               senderAvatar: doctorAvatar,
               link: "/clinic/appointments",
-              timestamp: appt.created_at || new Date().toISOString(),
+              timestamp: compTime,
               isRead: readSet.has(notifId),
-              metadata: { appointment_id: appt.appointment_id },
+              metadata: { appointment_id: apptId, type: "consultation-completed" },
             });
           }
         });
@@ -1110,21 +1259,63 @@ export async function fetchClinicNotifications(
           const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
           const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
           const isTicket = n.type === "support_ticket" || n.type?.includes("ticket");
+          const isAppointment = n.type === "appointment" || n.metadata?.category === "appointment";
+          const isDoctorAction =
+            n.subtype?.includes("doctor") ||
+            n.type?.includes("doctor") ||
+            n.metadata?.type?.includes("doctor") ||
+            n.title?.toLowerCase().includes("doctor");
           const isAdminSystem = isBroadcast || isMaintenance;
           const ticketIdMatch = n.body?.match(/ticket #([^ ')]+)/i)?.[1];
+
+          const category: NotificationCategory = isBroadcast
+            ? "broadcast"
+            : isApproval
+              ? "clinic"
+              : isTicket
+                ? "ticket"
+                : isAppointment
+                  ? "appointment"
+                  : "system";
+
+          const senderType = isDoctorAction
+            ? "doctor"
+            : isAppointment
+              ? "patient"
+              : "admin";
+
+          const senderName =
+            (n as any).metadata?.doctor_name ||
+            (n as any).metadata?.sender_name ||
+            (isTicket
+              ? "DERMAI Support"
+              : isAdminSystem
+                ? "Platform Administrator"
+                : isApproval
+                  ? "Platform Admin"
+                  : isDoctorAction
+                    ? "Doctor"
+                    : "DERMAI Admin");
+
+          const notifLink =
+            isApproval
+              ? "/clinic"
+              : isTicket
+                ? "/clinic/settings"
+                : isAppointment
+                  ? "/clinic/appointments"
+                  : undefined;
 
           items.push({
             id: n.notif_id,
             type: isApproval ? "application_approved" : n.subtype || n.type || "system",
-            category: isBroadcast ? "broadcast" : isApproval ? "clinic" : isTicket ? "ticket" : "system",
+            category,
             title: n.title,
-            message: n.body || "",
-            senderName:
-              (n as any).metadata?.sender_name ||
-              (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : isApproval ? "Platform Admin" : "DERMAI Admin"),
-            senderType: "admin",
-            senderAvatar: adminAvatar || undefined,
-            link: isApproval ? "/clinic" : isTicket ? "/clinic/settings" : undefined,
+            message: n.body || n.message || "",
+            senderName,
+            senderType,
+            senderAvatar: isDoctorAction ? undefined : adminAvatar || undefined,
+            link: notifLink,
             timestamp: n.created_at,
             isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
             metadata: {
@@ -1611,7 +1802,7 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
             });
           }
         });
-      } catch {}
+      } catch { }
     }
 
     // 3. AI Skin Analysis Scans (Patients)
@@ -1842,10 +2033,10 @@ export async function markNotificationAsRead(
   if (isUuid) {
     try {
       await supabase.from("user_notification").update({ is_read: true }).eq("notif_id", id);
-    } catch {}
+    } catch { }
     try {
       await supabase.from("admin_alert").update({ is_read: true }).eq("notif_id", id);
-    } catch {}
+    } catch { }
   }
 }
 
@@ -1864,12 +2055,12 @@ export async function markAllNotificationsAsRead(
     try {
       const { data } = await supabase.auth.getSession();
       currentUserId = data?.session?.user?.id;
-    } catch {}
+    } catch { }
     if (!currentUserId) {
       try {
         const { data } = await supabase.auth.getUser();
         currentUserId = data?.user?.id;
-      } catch {}
+      } catch { }
     }
   }
 
@@ -1903,10 +2094,10 @@ export async function markAllNotificationsAsRead(
         query.eq("user_id", currentUserId);
       }
       await query;
-    } catch {}
+    } catch { }
     try {
       await supabase.from("admin_alert").update({ is_read: true }).in("notif_id", uuidIds);
-    } catch {}
+    } catch { }
   }
 }
 
@@ -1976,7 +2167,7 @@ export function broadcastMarkAllRead(role: NotificationRole, userId?: string, cl
       store.listeners.forEach((listener) => {
         try {
           listener();
-        } catch {}
+        } catch { }
       });
     }
   });
@@ -2015,7 +2206,7 @@ export function broadcastMarkRead(id: string, role: NotificationRole, userId?: s
         store.listeners.forEach((listener) => {
           try {
             listener();
-          } catch {}
+          } catch { }
         });
       }
     }
@@ -2065,7 +2256,7 @@ export function useRoleNotifications(
       store.listeners.forEach((l) => {
         try {
           l();
-        } catch {}
+        } catch { }
       });
     } catch (err) {
       console.warn("[useRoleNotifications] fetch error:", err);
@@ -2076,7 +2267,7 @@ export function useRoleNotifications(
       store.listeners.forEach((l) => {
         try {
           l();
-        } catch {}
+        } catch { }
       });
     }
   }, [role, userId, clinicId, userEmail, store]);
@@ -2194,7 +2385,7 @@ export function useRoleNotifications(
       if (store.refCount === 0 && store.channel) {
         try {
           supabase.removeChannel(store.channel);
-        } catch {}
+        } catch { }
         store.channel = undefined;
       }
       window.removeEventListener("dermai_notifications_cleared", handleCleared);
@@ -2595,9 +2786,9 @@ export async function dispatchAdminBroadcastNotification(params: {
   const normAudience = (params.audience || "all").toLowerCase().trim();
   const dbAudience =
     normAudience === "patient" ? "patients"
-    : normAudience === "clinic" ? "clinics"
-    : normAudience === "doctor" ? "doctors"
-    : (["all", "patients", "clinics", "doctors"].includes(normAudience) ? normAudience : "all");
+      : normAudience === "clinic" ? "clinics"
+        : normAudience === "doctor" ? "doctors"
+          : (["all", "patients", "clinics", "doctors"].includes(normAudience) ? normAudience : "all");
 
   // 1. Insert into public.admin_broadcast
   const { data: bcastRow, error: bcastError } = await supabase
