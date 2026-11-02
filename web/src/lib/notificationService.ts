@@ -174,7 +174,15 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
       dbNotifs.forEach((n) => {
         const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
         const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
-        const isTicket = n.type === "support_ticket" || n.type?.includes("ticket");
+        const isTicket =
+          n.type === "support_ticket" ||
+          n.type === "support" ||
+          n.subtype === "support" ||
+          n.subtype === "support_ticket" ||
+          n.type?.includes("ticket") ||
+          n.type?.includes("support") ||
+          (n as any).metadata?.category === "support" ||
+          (n as any).metadata?.category === "ticket";
         const isAdminSystem = isBroadcast || isMaintenance;
         const ticketIdMatch = n.body?.match(/ticket #([^ ')]+)/i)?.[1];
 
@@ -194,7 +202,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             (n as any).metadata?.sender_name ||
             (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : (n.subtype as any) || "DERMAI Support"),
           senderType: isTicket || isAdminSystem ? "admin" : (n.subtype as any) || "system",
-          link: isTicket ? "/dashboard/settings/help" : undefined,
+          link: (n as any).metadata?.link || (isTicket ? "/patient/support" : undefined),
           timestamp: n.created_at,
           isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
           metadata: {
@@ -2919,5 +2927,58 @@ export async function notifyAdminDoctorCompletedReview(payload: {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
     window.dispatchEvent(new Event("storage"));
+  }
+}
+
+/**
+ * Triggers and persists a notification for a patient when they submit a support ticket.
+ * Tagged with category: 'support' (or type: 'support') to show under the Support tab.
+ */
+export async function notifyPatientPendingSupportTicket(params: {
+  userId: string;
+  ticketId: string;
+  ticketCode?: string;
+  subject: string;
+}): Promise<boolean> {
+  const { userId, ticketId, ticketCode, subject } = params;
+  if (!userId) return false;
+
+  const displayCode = ticketCode || (ticketId.length > 12 ? ticketId.slice(0, 8).toUpperCase() : ticketId);
+  const cleanSubject = (subject || "General Support").trim();
+  const title = "Support Ticket Received";
+  const body = `Your support ticket #${displayCode} ('${cleanSubject}') has been received and is currently pending review.`;
+
+  try {
+    const { error } = await supabase.from("user_notification").insert({
+      user_id: userId,
+      type: "support",
+      subtype: "support_ticket",
+      title,
+      body,
+      is_read: false,
+      metadata: {
+        category: "support",
+        ticket_id: ticketId,
+        ticket_code: displayCode,
+        subject: cleanSubject,
+        link: "/patient/support",
+        sender_name: "DERMAI Support",
+      },
+    });
+
+    if (error) {
+      console.warn("[notificationService] Failed to insert patient support ticket notification:", error.message);
+      return false;
+    }
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+      window.dispatchEvent(new Event("storage"));
+    }
+
+    return true;
+  } catch (err: any) {
+    console.warn("[notificationService] notifyPatientPendingSupportTicket error:", err?.message || err);
+    return false;
   }
 }

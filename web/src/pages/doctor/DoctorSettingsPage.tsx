@@ -63,6 +63,7 @@ function IdCardIcon({ className = "w-6 h-6 text-blue-600" }: { className?: strin
 
 interface DoctorProfile {
   id?: string;
+  userId?: string;
   fullName: string;
   email: string;
   prcLicense: string;
@@ -125,6 +126,7 @@ export default function DoctorSettingsPage() {
     return INITIAL_PROFILE;
   });
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const [sessionUserId, setSessionUserId] = useState<string>("");
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketMessage, setTicketMessage] = useState("");
   const [ticketSent, setTicketSent] = useState(false);
@@ -133,6 +135,14 @@ export default function DoctorSettingsPage() {
   const [photoSaved, setPhotoSaved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const profileRequestRef = useRef(0);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user?.id) {
+        setSessionUserId(session.user.id);
+      }
+    });
+  }, []);
 
   const uploadDoctorPhoto = async (file: File): Promise<string> => {
     const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -244,6 +254,7 @@ export default function DoctorSettingsPage() {
         const { data: sessionData } = await supabase.auth.getSession();
         const sessionUserId = sessionData?.session?.user?.id;
         if (!sessionUserId) return;
+        setSessionUserId(sessionUserId);
 
         // Resolve only the authenticated user's active branch affiliation.
         if (storedDocId) {
@@ -317,6 +328,7 @@ export default function DoctorSettingsPage() {
 
       const updatedProfile: DoctorProfile = {
         id: docFound?.doctor_id || storedDocId || "",
+        userId: sessionUserId || docFound?.user_id || "",
         fullName: docFound?.doctor_name || "",
         email: docFound?.email || "",
         prcLicense: docFound?.prc_license || "",
@@ -379,8 +391,9 @@ export default function DoctorSettingsPage() {
     setTicketSent(false);
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      const currentAuthId = session?.user?.id || sessionUserId || profile.userId || profile.id;
       await createHelpdeskTicketAsync({
-        userId: session?.user?.id || profile.id,
+        userId: currentAuthId,
         user: profile.fullName?.trim() || session?.user?.email?.split("@")[0] || "",
         email: profile.email?.trim() || session?.user?.email || "",
         subject: ticketSubject.trim(),
@@ -393,8 +406,12 @@ export default function DoctorSettingsPage() {
       setTicketMessage("");
       window.setTimeout(() => setTicketSent(false), 4000);
 
+      try {
+        window.dispatchEvent(new CustomEvent("dermai_tickets_updated"));
+      } catch {}
+
       logAuditEvent({
-        userId: session?.user?.id || profile.id,
+        userId: currentAuthId,
         role: "doctor",
         category: "System",
         action: "Support Ticket Submitted",
@@ -564,7 +581,7 @@ export default function DoctorSettingsPage() {
       {/* Disclaimer */}
       <div className="pt-4 border-t border-slate-200/60">
         <p className="text-[12px] text-slate-400 italic">
-          * Medical provider credentials, roster assignments, and clinic affiliations are managed by your clinic administration.
+          * If you have any concerns or need technical assistance, please contact our support teamation.
         </p>
       </div>
 
@@ -573,8 +590,8 @@ export default function DoctorSettingsPage() {
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex items-start gap-3.5">
           <Mail className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
           <div>
-            <p className="text-[14px] font-bold text-slate-400 uppercase tracking-wider">Clinical Support Email</p>
-            <p className="font-bold text-slate-900 text-sm mt-0.5">support@dermai.ph</p>
+            <p className="text-[14px] font-bold text-slate-400 uppercase tracking-wider">DermAI Support Email</p>
+            <p className="font-bold text-slate-900 text-sm mt-0.5">dermaisupport@gmail.com</p>
             <p className="text-[12px] text-slate-500 mt-0.5">Direct response within 24 hours on business days</p>
           </div>
         </div>
@@ -667,9 +684,10 @@ export default function DoctorSettingsPage() {
         </form>
       </div>
 
-      {/* Submitted tickets */}
+      {/* Submitted Doctor Support Tickets */}
       <MySupportTickets
-        userId={profile.id}
+        userId={sessionUserId || profile.userId}
+        doctorId={profile.id}
         portalTheme="doctor"
         title="My support tickets"
         hideWhenEmpty={false}
@@ -841,7 +859,7 @@ export default function DoctorSettingsPage() {
       {/* Row 4: Disclaimer Footer */}
       <div className="pt-4 border-t border-slate-200/60">
         <p className="text-[12px] text-slate-400 italic">
-          * Medical provider credentials, roster assignments, and clinic affiliations are managed by your clinic administration.
+       If you have any concerns or need technical assistance, please contact our support teamation.
         </p>
       </div>
 
@@ -850,8 +868,8 @@ export default function DoctorSettingsPage() {
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex items-start gap-3.5">
           <Mail className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
           <div>
-            <p className="text-[14px] font-bold text-slate-400 uppercase tracking-wider">Clinical Support Email</p>
-            <p className="font-bold text-slate-900 text-sm mt-0.5">support@dermai.ph</p>
+            <p className="text-[14px] font-bold text-slate-400 uppercase tracking-wider">DermAI Support Email</p>
+            <p className="font-bold text-slate-900 text-sm mt-0.5">dermaisupport@gmail.com</p>
             <p className="text-[12px] text-slate-500 mt-0.5">Direct response within 24 hours on business days</p>
           </div>
         </div>
@@ -965,7 +983,8 @@ export default function DoctorSettingsPage() {
 
       {/* Submitted Doctor Support Tickets */}
       <MySupportTickets
-        userId={profile.id}
+        userId={sessionUserId || profile.userId}
+        doctorId={profile.id}
         portalTheme="doctor"
         title="My support tickets"
         hideWhenEmpty={false}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Loader2, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
@@ -6,7 +6,8 @@ import { type HelpdeskTicket, getHelpdeskTicketsAsync } from "@/lib/store";
 import { TicketStatusBadge } from "./TicketStatusBadge";
 
 interface MySupportTicketsProps {
-  userId?: string;
+  userId?: string | string[];
+  doctorId?: string;
   portalTheme?: "patient" | "doctor" | "clinic";
   onOpenSubmit?: () => void;
   className?: string;
@@ -16,6 +17,7 @@ interface MySupportTicketsProps {
 
 export function MySupportTickets({
   userId,
+  doctorId,
   portalTheme = "patient",
   onOpenSubmit,
   className,
@@ -24,41 +26,61 @@ export function MySupportTickets({
 }: MySupportTicketsProps) {
   const [tickets, setTickets] = useState<HelpdeskTicket[]>([]);
   const [loading, setLoading] = useState(true);
-  const [currentUserId, setCurrentUserId] = useState<string | undefined>(userId);
+  const [authUserId, setAuthUserId] = useState<string | undefined>(undefined);
 
-  // Sync user id from session if not provided directly
+  // Sync authenticated user ID from active Supabase session
   useEffect(() => {
-    if (userId) {
-      setCurrentUserId(userId);
-      return;
-    }
     let isMounted = true;
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (isMounted && session?.user?.id) {
-        setCurrentUserId(session.user.id);
+        setAuthUserId(session.user.id);
       }
     });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (isMounted && session?.user?.id) {
+        setAuthUserId(session.user.id);
+      }
+    });
+
     return () => {
       isMounted = false;
+      authListener?.subscription?.unsubscribe();
     };
-  }, [userId]);
+  }, []);
+
+  // Compute all candidate IDs (auth user id, passed userId, doctorId)
+  const candidateIds = useMemo(() => {
+    const raw: (string | undefined)[] = [
+      authUserId,
+      ...(Array.isArray(userId) ? userId : [userId]),
+      doctorId,
+    ];
+    return Array.from(new Set(raw.filter(Boolean))) as string[];
+  }, [authUserId, userId, doctorId]);
 
   const fetchTickets = useCallback(async () => {
+    if (candidateIds.length === 0 && !userId) {
+      return;
+    }
     try {
-      const data = await getHelpdeskTicketsAsync(currentUserId);
+      const data = await getHelpdeskTicketsAsync(
+        candidateIds.length > 0 ? candidateIds : userId,
+        { doctorId }
+      );
       setTickets(data);
     } catch (err) {
       console.error("[MySupportTickets] Failed to load tickets:", err);
     } finally {
       setLoading(false);
     }
-  }, [currentUserId]);
+  }, [candidateIds, userId, doctorId]);
 
   useEffect(() => {
     fetchTickets();
 
-    // Supabase Real-time subscription to user_support_ticket
-    const channelId = `my-tickets-${currentUserId || "all"}-${Math.random().toString(36).slice(2, 7)}`;
+    // Supabase Real-time subscription across ticket tables
+    const channelId = `my-tickets-${candidateIds.join("-") || "all"}-${Math.random().toString(36).slice(2, 7)}`;
     const channel = supabase
       .channel(channelId)
       .on(
@@ -69,7 +91,28 @@ export function MySupportTickets({
           table: "user_support_ticket",
         },
         () => {
-          // Re-fetch live data immediately when Admin updates or inserts ticket
+          fetchTickets();
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "support_ticket",
+        },
+        () => {
+          fetchTickets();
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "helpdesk_ticket",
+        },
+        () => {
           fetchTickets();
         }
       )
@@ -84,7 +127,7 @@ export function MySupportTickets({
       window.removeEventListener("dermai_tickets_updated", handleUpdate);
       window.removeEventListener("storage", handleUpdate);
     };
-  }, [fetchTickets, currentUserId]);
+  }, [fetchTickets, candidateIds]);
 
   if (hideWhenEmpty && !loading && tickets.length === 0) {
     return null;
@@ -122,7 +165,7 @@ export function MySupportTickets({
       <div className="px-6 py-4.5 border-b border-gray-100 flex items-center justify-between">
         <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
           <span>{title}</span>
-          <span className="text-xs font-normal text-gray-400">
+          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
             ({tickets.length})
           </span>
         </h2>
@@ -152,20 +195,40 @@ export function MySupportTickets({
         ) : (
           tickets.map((t) => {
             const displayId =
-              t.id && t.id.length > 12
+              t.ticketNumber ||
+              t.ticketCode ||
+              t.code ||
+              (t.id && t.id.length > 12
                 ? t.id.slice(0, 8).toUpperCase()
-                : t.id || "TICKET";
+                : t.id || "TICKET");
 
             return (
               <div key={t.id} className="px-6 py-5 space-y-2.5">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2 mb-1 text-xs text-gray-500">
-                      <span className="font-mono font-bold text-gray-900">
+                    <div className="flex flex-wrap items-center gap-2 mb-1 text-xs text-gray-500">
+                      <span className="font-mono font-bold text-gray-900 bg-gray-100 px-2 py-0.5 rounded-md text-[11px]">
                         #{displayId}
                       </span>
                       <span>•</span>
-                      <span className="text-gray-600">{t.category}</span>
+                      <span className="font-medium text-gray-700">{t.category}</span>
+                      {t.priority && (
+                        <>
+                          <span>•</span>
+                          <span
+                            className={cn(
+                              "px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider",
+                              t.priority === "urgent" || t.priority === "high"
+                                ? "bg-rose-50 text-rose-700 border border-rose-200"
+                                : t.priority === "medium"
+                                ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                : "bg-slate-50 text-slate-600 border border-slate-200"
+                            )}
+                          >
+                            {t.priority}
+                          </span>
+                        </>
+                      )}
                     </div>
                     <h3 className="text-sm font-bold text-gray-900">{t.subject}</h3>
                   </div>

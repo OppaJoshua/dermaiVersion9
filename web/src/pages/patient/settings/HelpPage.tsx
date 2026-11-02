@@ -20,6 +20,7 @@ import {
 import { TicketStatusBadge } from "@/components/support/TicketStatusBadge";
 import { supabase } from "@/lib/supabaseClient";
 import { ModalPortal } from "@/components/common/ModalPortal";
+import { notifyPatientPendingSupportTicket } from "@/lib/notificationService";
 
 const guideSteps = [
   {
@@ -107,15 +108,6 @@ const faqs = [
 
 
 
-const CATEGORIES = [
-  "General Inquiry",
-  "Billing & Subscription",
-  "AI Skin Scan Issue",
-  "Clinic Booking",
-  "Account Support",
-  "Feedback / Suggestion",
-];
-
 const fieldClass =
   "w-full px-3.5 py-2.5 rounded-lg border border-gray-300 text-sm text-black placeholder:text-gray-500 bg-white focus:outline-none focus:border-[#801336] focus:ring-2 focus:ring-[#801336]/15";
 const labelClass = "block text-sm font-medium text-black mb-1.5";
@@ -127,7 +119,6 @@ export default function HelpPage() {
   const [showTicketForm, setShowTicketForm] = useState(false);
 
   // Form State
-  const [category, setCategory] = useState("General Inquiry");
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -189,18 +180,30 @@ export default function HelpPage() {
         email: user?.email || "",
         subject: subject.trim(),
         message: message.trim(),
-        category: category || "Patient Support",
+        category: "Patient Support",
         priority: "medium",
       });
 
       const displayId =
-        created.id.length > 12
-          ? created.id.slice(0, 8).toUpperCase()
-          : created.id;
+        created.ticketCode ||
+        created.ticketNumber ||
+        (created.id.length > 12 ? created.id.slice(0, 8).toUpperCase() : created.id);
       setSubmittedId(displayId);
+      const submittedSubject = subject.trim();
       setSubject("");
       setMessage("");
       fetchMyTickets();
+
+      if (user?.id) {
+        notifyPatientPendingSupportTicket({
+          userId: user.id,
+          ticketId: created.id,
+          ticketCode: displayId,
+          subject: submittedSubject,
+        }).catch((err) => {
+          console.warn("[HelpPage] Could not notify patient about pending support ticket:", err);
+        });
+      }
     } catch (err) {
       console.error("Failed to submit ticket:", err);
       setSubmittedId(null);
@@ -325,13 +328,17 @@ export default function HelpPage() {
           <p className="text-sm text-gray-600 mt-2 leading-relaxed">
             You can reach our official team directly at
           </p>
-
+          
           <a
             href="mailto:dermaisupport@gmail.com"
             className="mt-4 inline-block text-sm font-semibold text-[#801336] underline underline-offset-4 break-all hover:text-[#680f2b]"
           >
             dermaisupport@gmail.com
           </a>
+
+          <p className="text-sm text-gray-600 mt-2 leading-relaxed">
+            (032) 888-3472      
+          </p>
         </div>
       </div>
 
@@ -512,23 +519,6 @@ export default function HelpPage() {
                   </div>
                 ) : (
                   <div className="space-y-5">
-                    <div>
-                      <label className={labelClass}>
-                        Category
-                      </label>
-                      <select
-                        value={category}
-                        onChange={(e) => setCategory(e.target.value)}
-                        className={cn(fieldClass, "cursor-pointer")}
-                      >
-                        {CATEGORIES.map((cat) => (
-                          <option key={cat} value={cat}>
-                            {cat}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
                     <div>
                       <label className={labelClass}>
                         Subject

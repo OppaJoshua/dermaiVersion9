@@ -42,6 +42,14 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
           n.metadata?.subtype === "maintenance_alert" ||
           n.type === "maintenance_alert"
       );
+    } else if (activeTab === "ticket") {
+      list = notifications.filter(
+        (n) =>
+          n.category === "ticket" ||
+          n.type === "support" ||
+          n.type === "support_ticket" ||
+          n.metadata?.category === "support"
+      );
     } else if (activeTab !== "all") {
       list = notifications.filter((n) => n.category === activeTab);
     }

@@ -34,6 +34,14 @@ export function getTicketStatusBadge(
 ): TicketBadgeConfig {
   const normalized = String(status || "").toLowerCase().trim();
 
+  if (normalized === "resolved" || normalized === "closed") {
+    return {
+      key: "resolved",
+      label: "Resolved",
+      pill: "bg-emerald-50 border-emerald-200 text-emerald-800",
+    };
+  }
+
   if (
     normalized === "in_progress" ||
     normalized === "in-progress" ||
@@ -42,15 +50,18 @@ export function getTicketStatusBadge(
     return {
       key: "in_progress",
       label: "In Progress",
-      pill: "bg-amber-50 border-amber-200 text-amber-800",
+      pill:
+        portalTheme === "doctor"
+          ? "bg-blue-50 border-blue-200 text-blue-800"
+          : "bg-amber-50 border-amber-200 text-amber-800",
     };
   }
 
-  if (normalized === "resolved" || normalized === "closed") {
+  if (normalized === "open") {
     return {
-      key: "resolved",
-      label: "Resolved",
-      pill: "bg-emerald-50 border-emerald-200 text-emerald-800",
+      key: "open",
+      label: "Open",
+      pill: "bg-yellow-50 border-yellow-300 text-yellow-800",
     };
   }
 
@@ -63,9 +74,9 @@ export function getTicketStatusBadge(
   }
 
   // Default to "open" badge
-  let openPill = "bg-[#fae8ee] border-[#f2c6d4] text-[#801336]";
-  if (portalTheme === "doctor") {
-    openPill = "bg-sky-50 border-sky-200 text-sky-800";
+  let openPill = "bg-yellow-50 border-yellow-300 text-yellow-800";
+  if (portalTheme === "patient") {
+    openPill = "bg-[#fae8ee] border-[#f2c6d4] text-[#801336]";
   } else if (portalTheme === "clinic") {
     openPill = "bg-pink-50 border-pink-200 text-[#c0166a]";
   }

@@ -186,6 +186,9 @@ export type HelpdeskTicketStatus =
 
 export type HelpdeskTicket = {
   id: string;
+  ticketNumber?: string;
+  ticketCode?: string;
+  code?: string;
   userId?: string;
   user: string;
   email: string;
@@ -250,26 +253,73 @@ export function saveLocalHelpdeskTickets(tickets: HelpdeskTicket[]): void {
 }
 
 // GET helpdesk tickets (Strictly real data from Supabase + localStorage)
-export async function getHelpdeskTicketsAsync(userId?: string, options?: { requireDatabase?: boolean }): Promise<HelpdeskTicket[]> {
+export async function getHelpdeskTicketsAsync(
+  userId?: string | string[],
+  options?: { requireDatabase?: boolean; doctorId?: string }
+): Promise<HelpdeskTicket[]> {
   const localTickets = getLocalHelpdeskTickets();
   let dbTickets: HelpdeskTicket[] = [];
 
+  const candidateIds = (
+    Array.isArray(userId)
+      ? userId
+      : [userId, options?.doctorId]
+  ).filter(Boolean) as string[];
+
   try {
     // Fetch real tickets from Supabase without fragile join syntax
-    let query = supabase
-      .from("user_support_ticket")
-      .select("*")
-      .order("created_at", { ascending: false });
+    const tableCandidates = ["user_support_ticket", "support_ticket", "helpdesk_ticket"];
+    let data: any[] | null = null;
+    let error: any = null;
 
-    if (userId) {
-      query = query.eq("user_id", userId);
+    for (const tableName of tableCandidates) {
+      // 1. Try querying with user_id
+      let query = supabase
+        .from(tableName)
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (candidateIds.length === 1) {
+        query = query.eq("user_id", candidateIds[0]);
+      } else if (candidateIds.length > 1) {
+        query = query.in("user_id", candidateIds);
+      }
+
+      let res = await query;
+
+      // 2. If column user_id doesn't exist, fallback to submitted_by
+      if (res.error && (res.error.code === "42703" || res.error.message?.includes("user_id"))) {
+        let altQuery = supabase
+          .from(tableName)
+          .select("*")
+          .order("created_at", { ascending: false });
+
+        if (candidateIds.length === 1) {
+          altQuery = altQuery.eq("submitted_by", candidateIds[0]);
+        } else if (candidateIds.length > 1) {
+          altQuery = altQuery.in("submitted_by", candidateIds);
+        }
+        res = await altQuery;
+      }
+
+      if (!res.error && res.data) {
+        data = res.data;
+        error = null;
+        break;
+      }
+
+      // If table does not exist, try next candidate
+      if (res.error?.code === "42P01" || res.error?.message?.toLowerCase().includes("does not exist")) {
+        continue;
+      }
+
+      error = res.error;
+      break;
     }
-
-    const { data, error } = await query;
 
     if (!error && data && data.length > 0) {
       // Fetch sender profiles safely
-      const userIds = Array.from(new Set(data.map((t: any) => t.user_id).filter(Boolean))) as string[];
+      const userIds = Array.from(new Set(data.map((t: any) => t.user_id || t.submitted_by).filter(Boolean))) as string[];
       const userMap = new Map<string, { full_name: string; email: string; role?: string; avatar_url?: string }>();
       const doctorPhotoMap = new Map<string, string>(); // user_id or lower(email) -> photo_url
       const clinicLogoMap = new Map<string, string>(); // owner_user_id or lower(email) -> logo_url
@@ -333,7 +383,8 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
       }
 
       dbTickets = data.map((t: any) => {
-        const userInfo = userMap.get(t.user_id);
+        const ownerId = t.user_id || t.submitted_by;
+        const userInfo = ownerId ? userMap.get(ownerId) : undefined;
         const rawStatus = (t.status || "pending").toLowerCase();
         const localMatch = localTickets.find(
           (lt) => lt.id === (t.ticket_id || t.id)
@@ -357,8 +408,8 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
         const category = t.category || "General Support";
 
         // Resolve avatar URL with priority hierarchy
-        const docPhoto = (t.user_id && doctorPhotoMap.get(t.user_id)) || (userEmail ? doctorPhotoMap.get(userEmail) : undefined);
-        const clLogo = (t.user_id && clinicLogoMap.get(t.user_id)) || (userEmail ? clinicLogoMap.get(userEmail) : undefined);
+        const docPhoto = (ownerId && doctorPhotoMap.get(ownerId)) || (userEmail ? doctorPhotoMap.get(userEmail) : undefined);
+        const clLogo = (ownerId && clinicLogoMap.get(ownerId)) || (userEmail ? clinicLogoMap.get(userEmail) : undefined);
         const uAvatar = userInfo?.avatar_url || t.avatarUrl || t.avatar_url;
 
         let resolvedAvatar: string | undefined = undefined;
@@ -374,16 +425,19 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
           resolvedAvatar = withCacheBuster(resolvedAvatar);
         }
 
-        const effectiveResponse = t.response || localMatch?.response || undefined;
+        const effectiveResponse = t.response || t.admin_response || localMatch?.response || undefined;
 
         return {
           id: t.ticket_id || t.id,
-          userId: t.user_id,
+          ticketNumber: t.ticket_number || t.ticket_code || t.code || undefined,
+          ticketCode: t.ticket_code || t.ticket_number || t.code || undefined,
+          code: t.code || t.ticket_number || t.ticket_code || undefined,
+          userId: ownerId,
           user: userInfo?.full_name || t.user_name || t.user || "Platform User",
           email: userInfo?.email || t.email || "",
           avatarUrl: resolvedAvatar || undefined,
-          subject: t.subject || "Support Inquiry",
-          message: t.message || "",
+          subject: t.subject || t.title || "Support Inquiry",
+          message: t.message || t.description || "",
           status: mappedStatus,
           category,
           priority: (t.priority as any) || "medium",
@@ -412,7 +466,7 @@ export async function getHelpdeskTicketsAsync(userId?: string, options?: { requi
   localTickets.forEach((t) => {
     if (t && t.id) {
       if (!ticketMap.has(t.id)) {
-        if (!userId || t.userId === userId) {
+        if (candidateIds.length === 0 || (t.userId && candidateIds.includes(t.userId))) {
           ticketMap.set(t.id, t);
         }
       }
@@ -456,10 +510,6 @@ export async function createHelpdeskTicketAsync(input: {
 
   if (!effectiveUserId) {
     throw new Error("Please sign in again before submitting a support ticket.");
-  }
-
-  if (sessionUserId && input.userId && sessionUserId !== input.userId) {
-    throw new Error("The signed-in account does not match the ticket account.");
   }
 
   const ticketCategory = input.category || "General Support";
