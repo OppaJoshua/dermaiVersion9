@@ -214,14 +214,50 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
   const items: NotificationItem[] = [];
 
   try {
-    // 1. Direct user_notification records for this patient
-    const { data: dbNotifs } = await supabase
-      .from("user_notification")
-      .select("notif_id, type, subtype, title, body, is_read, metadata, created_at")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(40);
+    // ── Pre-fetch both DB notifications and appointments in parallel so we can
+    //    enrich appointment-completed DB records with real clinic name + logo.
+    const [{ data: dbNotifs }, { data: appointments }] = await Promise.all([
+      supabase
+        .from("user_notification")
+        .select("notif_id, type, subtype, title, body, is_read, metadata, created_at")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(40),
+      supabase
+        .from("patient_appointment")
+        .select(`
+          appointment_id,
+          date,
+          time,
+          status,
+          doctor_status,
+          doctor_note,
+          clinic_note,
+          created_at,
+          assigned_doctor_id,
+          doctor_reviewed_at,
+          clinic:clinic_id (name, logo_url)
+        `)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(20),
+    ]);
 
+    // Build a lookup map: appointment_id → { name, logo }
+    // This lets us enrich appointment-completed DB notification records with the
+    // correct clinic name and logo_url, even when the user_notification row only
+    // stores a bare subtype like "reviewed" and no sender_name in metadata.
+    const clinicByApptId = new Map<string, { name: string; logo: string | null }>();
+    (appointments || []).forEach((appt: any) => {
+      if (!appt.appointment_id) return;
+      const cObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
+      clinicByApptId.set(appt.appointment_id, {
+        name: cObj?.name || "Clinic",
+        logo: cObj?.logo_url || null,
+      });
+    });
+
+    // 1. Direct user_notification records for this patient
     if (dbNotifs) {
       dbNotifs.forEach((n) => {
         const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
@@ -236,12 +272,71 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           (n as any).metadata?.category === "support" ||
           (n as any).metadata?.category === "ticket";
         const isAdminSystem = isBroadcast || isMaintenance;
+        // Detect appointment-completed regardless of which field carries the signal
+        const isApptCompleted =
+          n.type === "appointment-completed" ||
+          n.type === "appointment_completed" ||
+          n.subtype === "reviewed" ||
+          n.subtype === "appointment-completed";
         const ticketIdMatch = n.body?.match(/ticket #([^ ')]+)/i)?.[1];
+
+        // For completed-consultation DB records, resolve the real clinic name + logo.
+        //
+        // Strategy (in order of precision):
+        //   1. metadata.appointment_id → exact lookup in clinicByApptId map
+        //   2. No appointment_id in metadata → find completed appointment whose
+        //      doctor_reviewed_at/created_at is closest to this notification's timestamp.
+        //      This handles triggers that store no appointment_id in the payload.
+        //   3. Ultimate fallback: undefined (component will show initials from senderName)
+        const apptId = (n as any).metadata?.appointment_id as string | undefined;
+
+        let clinicEnrichment: { name: string; logo: string | null } | undefined;
+
+        if (isApptCompleted) {
+          if (apptId) {
+            // Path 1: exact match by appointment_id
+            clinicEnrichment = clinicByApptId.get(apptId);
+          }
+
+          if (!clinicEnrichment) {
+            // Path 2: no appointment_id in metadata — find the completed appointment
+            // whose timestamp is closest to this notification's created_at.
+            const notifTime = new Date(n.created_at).getTime();
+            const completedAppts = (appointments || []).filter(
+              (a: any) => a.status === "completed"
+            );
+
+            if (completedAppts.length > 0) {
+              const closest = completedAppts.reduce((best: any, appt: any) => {
+                const apptTime = new Date(
+                  appt.doctor_reviewed_at || appt.created_at || 0
+                ).getTime();
+                const bestTime = new Date(
+                  best.doctor_reviewed_at || best.created_at || 0
+                ).getTime();
+                return Math.abs(apptTime - notifTime) < Math.abs(bestTime - notifTime)
+                  ? appt
+                  : best;
+              });
+
+              const cObj = Array.isArray(closest.clinic)
+                ? closest.clinic[0]
+                : closest.clinic;
+
+              if (cObj?.name) {
+                clinicEnrichment = {
+                  name: cObj.name,
+                  logo: cObj.logo_url || null,
+                };
+              }
+            }
+          }
+        }
 
         items.push({
           id: n.notif_id,
-          type: n.type || "system",
-          category: n.type?.includes("appointment")
+          type: isApptCompleted ? "appointment-completed" : (n.type || "system"),
+          category: (n.type?.includes("appointment") || isApptCompleted)
             ? "appointment"
             : isTicket
               ? "ticket"
@@ -250,10 +345,22 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
                 : "system",
           title: n.title,
           message: n.body || "",
+          // Completed consultations: use real clinic name from the appointment join.
+          // Other types: fall through to metadata.sender_name then role defaults.
           senderName:
+            (isApptCompleted && clinicEnrichment?.name) ||
             (n as any).metadata?.sender_name ||
-            (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : (n.subtype as any) || "DERMAI Support"),
-          senderType: isTicket || isAdminSystem ? "admin" : (n.subtype as any) || "system",
+            (isTicket ? "DERMAI Support" : isAdminSystem ? "Platform Administrator" : undefined),
+          // Completed consultations: attach clinic logo so the <img> avatar renders.
+          // null means "no logo URL" — component will render initials fallback instead.
+          senderAvatar: isApptCompleted
+            ? (clinicEnrichment?.logo ?? null)
+            : undefined,
+          senderType: isApptCompleted
+            ? "clinic"
+            : isTicket || isAdminSystem
+            ? "admin"
+            : (n.subtype as any) || "system",
           link: (n as any).metadata?.link || (isTicket ? "/patient/support" : undefined),
           timestamp: n.created_at,
           isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
@@ -267,24 +374,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     }
 
     // 2. Live Patient Appointments (with Clinic Name joined)
-    const { data: appointments } = await supabase
-      .from("patient_appointment")
-      .select(`
-        appointment_id,
-        date,
-        time,
-        status,
-        doctor_status,
-        doctor_note,
-        clinic_note,
-        created_at,
-        assigned_doctor_id,
-        doctor_reviewed_at,
-        clinic:clinic_id (name, logo_url)
-      `)
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(20);
+    // appointments already fetched above in the parallel Promise.all — reuse it.
 
     if (appointments) {
       appointments.forEach((appt: any) => {

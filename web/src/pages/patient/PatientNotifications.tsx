@@ -188,6 +188,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
         ) : (
           filtered.map((item) => {
             const isRejected = item.type === "appointment-rejected";
+            const isCompleted = item.type === "appointment-completed";
             const isMaintenance =
               item.metadata?.subtype === "maintenance_alert" ||
               item.type === "maintenance_alert" ||
@@ -196,6 +197,34 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
               item.category === "broadcast" ||
               item.type === "broadcast" ||
               item.metadata?.subtype === "admin_announcement";
+
+            // Resolve appointment_id for "Consultation Completed" deep-link
+            const completedApptId = isCompleted
+              ? item.metadata?.appointment_id ||
+                (item.id.startsWith("appt-completed-")
+                  ? item.id.replace("appt-completed-", "")
+                  : null)
+              : null;
+
+            // Resolve the display name for completed consultation cards.
+            // item.senderName is the clinic name set by the service (e.g. "DerMA").
+            // Fallback to "Clinic" only if the service couldn't resolve it — this keeps
+            // initials meaningful ("D" / "SC") and avoids leaking "Clinic Update" into
+            // the avatar circle.
+            const resolvedClinicName: string = isCompleted
+              ? (item.senderName || "Clinic")
+              : (item.senderName || "");
+
+            // Derive initials from the real clinic name, never from display fallback strings.
+            // "DerMA" → "D" | "Skin Care Clinic" → "SC"
+            const clinicInitials = resolvedClinicName
+              ? resolvedClinicName
+                  .split(" ")
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map((w: string) => w[0].toUpperCase())
+                  .join("")
+              : "C";
 
             return (
               <div
@@ -222,12 +251,18 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                 {/* Sender Avatar / Icon */}
                 <div className="shrink-0">
                   {item.senderAvatar ? (
+                    /* Has an explicit avatar/logo URL — show it */
                     <img
                       src={item.senderAvatar}
                       alt={item.senderName || "Clinic"}
                       referrerPolicy="no-referrer"
                       className="w-10 h-10 rounded-full object-cover border border-gray-200 bg-white"
                     />
+                  ) : isCompleted ? (
+                    /* Consultation Completed: show clinic initials (graceful fallback) */
+                    <div className="w-10 h-10 rounded-full bg-magenta-600 flex items-center justify-center shrink-0">
+                      <span className="text-white text-xs font-bold leading-none">{clinicInitials}</span>
+                    </div>
                   ) : item.senderType === "clinic" ? (
                     <div className="w-10 h-10 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center">
                       <Building2 className="w-5 h-5 text-magenta-600" />
@@ -257,7 +292,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                           isMaintenance ? "text-amber-800" : "text-magenta-700"
                         )}
                       >
-                        {item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : "Clinic Update")}
+                        {isCompleted ? resolvedClinicName : (item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : "Clinic Update"))}
                       </span>
                       {isMaintenance && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
@@ -286,6 +321,26 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
 
                   <p className="text-sm font-semibold text-gray-900 mt-0.5">{item.title}</p>
                   <p className="text-sm text-gray-600 leading-relaxed mt-0.5 break-words">{item.message}</p>
+
+                  {/* "View Details" button — Consultation Completed only */}
+                  {isCompleted && (
+                    <div className="mt-3">
+                      <Link
+                        to={
+                          completedApptId
+                            ? `/dashboard/appointment-status?appointment=${completedApptId}`
+                            : "/dashboard/appointment-status"
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClose?.();
+                        }}
+                        className="inline-flex items-center px-4 py-1.5 rounded-lg bg-[#A21D5C] hover:bg-[#88184d] text-white text-xs font-semibold transition-colors shadow-sm"
+                      >
+                        View Details
+                      </Link>
+                    </div>
+                  )}
 
                   {/* Dynamic 24-Hour Re-selection Banner for Rejections */}
                   {isRejected && (() => {
@@ -328,8 +383,8 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                     );
                   })()}
 
-                  {/* Action Link for general notifications */}
-                  {item.link && !isRejected && (
+                  {/* Action Link for general notifications (not completed, not rejected) */}
+                  {item.link && !isRejected && !isCompleted && (
                     <Link
                       to={item.link}
                       onClick={onClose}
