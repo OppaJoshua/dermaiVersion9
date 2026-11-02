@@ -5,6 +5,7 @@
 
 import { supabase } from "./supabaseClient";
 import { broadcastSlotChange } from "./slotAvailabilityRealtime";
+import { isDefinitiveReleaseDenial, normalizeSlotTime } from "./slotAvailabilityState";
 import { getManilaCalendarDate } from "./schedulingService";
 
 export type AppointmentPaymentStatus =
@@ -359,7 +360,7 @@ export async function cancelAppointmentSlotHold(
     doctorId?: string | null;
     slotTime?: string;
   }
-): Promise<{ success: boolean; message?: string }> {
+): Promise<{ success: boolean; message?: string; code?: string }> {
   if (!appointmentId) return { success: false, message: "Missing appointment ID." };
 
   try {
@@ -367,13 +368,17 @@ export async function cancelAppointmentSlotHold(
       p_appointment_id: appointmentId,
     });
 
+    // `hold_released` is broadcast ONLY after the database confirms the caller's own hold was released
+    // and only when authoritative/retained slot coordinates (date + slotTime) are known.
     if (!error && data?.success) {
       const targetClinicId = clinicId || data.clinic_id;
-      if (targetClinicId) {
+      const cleanDate = slotDetails?.date ? getManilaCalendarDate(slotDetails.date) : "";
+      const cleanTime = normalizeSlotTime(slotDetails?.slotTime);
+      if (targetClinicId && cleanDate && cleanTime) {
         broadcastSlotChange(targetClinicId, {
-          date: slotDetails?.date,
+          date: cleanDate,
           doctorId: slotDetails?.doctorId,
-          slotTime: slotDetails?.slotTime,
+          slotTime: cleanTime,
           type: "hold_released",
         });
       }
@@ -382,6 +387,7 @@ export async function cancelAppointmentSlotHold(
 
     return {
       success: false,
+      code: data?.code || data?.error || error?.code,
       message: data?.message || error?.message || "Failed to cancel hold.",
     };
   } catch (err: any) {
@@ -498,6 +504,20 @@ export interface ReleaseHoldSlotDetails {
   slotTime?: string;
 }
 
+export interface ReleaseHoldResult {
+  success: boolean;
+  message?: string;
+  code?: string;
+  alreadyPaid?: boolean;
+  alreadyInactive?: boolean;
+  releasedSlot?: {
+    clinicId?: string;
+    date?: string;
+    doctorId?: string | null;
+    slotTime?: string;
+  };
+}
+
 // ============================================================================
 // Checkout Redirect Record & Lifecycle Utilities (PayMongo 3DS / E-Wallet)
 // ============================================================================
@@ -606,7 +626,7 @@ export async function releaseAppointmentHoldSafely(
   appointmentId: string | null | undefined,
   reason: string = "Hold released after failed payment authorization.",
   slotDetails?: ReleaseHoldSlotDetails
-): Promise<{ success: boolean; message?: string }> {
+): Promise<ReleaseHoldResult> {
   if (!appointmentId) {
     return { success: true, message: "No appointment ID to release." };
   }
@@ -632,25 +652,71 @@ export async function releaseAppointmentHoldSafely(
       console.warn("[appointmentPaymentService] Hold pre-check warning:", checkErr.message);
     }
 
+    const dbClinicId = currentAppt?.clinic_id ? String(currentAppt.clinic_id) : undefined;
+    const dbDate = currentAppt?.date ? getManilaCalendarDate(currentAppt.date) : undefined;
+    const dbDoctorId = currentAppt ? (currentAppt.assigned_doctor_id ?? null) : undefined;
+    const dbTime = normalizeSlotTime(currentAppt?.time || currentAppt?.batch_time);
+
+    const providedClinicId = slotDetails?.clinicId ? String(slotDetails.clinicId) : undefined;
+    const providedDate = slotDetails?.date ? getManilaCalendarDate(slotDetails.date) : undefined;
+    const providedDoctorId = slotDetails?.doctorId !== undefined ? slotDetails.doctorId : undefined;
+    const providedTime = normalizeSlotTime(slotDetails?.slotTime);
+
+    // Prefer authoritative DB appointment details when available, falling back to retained metadata.
+    // Never invent or assume a fallback slot time.
+    const targetClinicId = dbClinicId || providedClinicId;
+    const targetDate = dbDate || providedDate || undefined;
+    const targetDoctorId = dbDoctorId !== undefined ? dbDoctorId : providedDoctorId;
+    const targetTime = dbTime || providedTime || undefined;
+
+    const resolvedSlotMeta =
+      targetDate && targetTime
+        ? {
+            clinicId: targetClinicId,
+            date: targetDate,
+            doctorId: targetDoctorId ?? null,
+            slotTime: targetTime,
+          }
+        : undefined;
+
     if (currentAppt) {
       // Critical Guard: NEVER release or cancel an appointment that has been marked paid
       if (currentAppt.payment_status === "paid") {
         console.warn(`[appointmentPaymentService] Appointment ${appointmentId} is already paid; skipping release.`);
-        return { success: false, message: "Appointment is already paid." };
+        return {
+          success: false,
+          code: "ERR_ALREADY_PAID",
+          alreadyPaid: true,
+          message: "Appointment is already paid.",
+        };
       }
 
-      // If already cancelled or expired, nothing more to do (idempotence)
-      if (currentAppt.payment_status === "cancelled" || currentAppt.status === "cancelled") {
-        return { success: true, message: "Hold is already cancelled." };
+      // If already cancelled or expired, nothing more to do (idempotence). The database already
+      // reports this slot as free, and an owner-readable row confirms the hold is no longer active.
+      if (
+        currentAppt.payment_status === "cancelled" ||
+        currentAppt.payment_status === "expired" ||
+        currentAppt.status === "cancelled"
+      ) {
+        if (typeof window !== "undefined") {
+          try {
+            if (sessionStorage.getItem("dermai_pending_appointment_id") === appointmentId) {
+              sessionStorage.removeItem("dermai_pending_appointment_id");
+              sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+            }
+            clearCheckoutRedirectRecord(appointmentId, "Hold already inactive");
+          } catch {}
+        }
+        return {
+          success: true,
+          alreadyInactive: true,
+          message: "Hold is already cancelled.",
+          releasedSlot: resolvedSlotMeta,
+        };
       }
     }
 
-    const targetClinicId = slotDetails?.clinicId || currentAppt?.clinic_id;
-    const targetDate = slotDetails?.date || (currentAppt?.date ? getManilaCalendarDate(currentAppt.date) : undefined);
-    const targetDoctorId = slotDetails?.doctorId !== undefined ? slotDetails.doctorId : currentAppt?.assigned_doctor_id;
-    const targetTime = (slotDetails?.slotTime || currentAppt?.time || currentAppt?.batch_time || "").slice(0, 5);
-
-    // 2. Attempt RPC cancel_appointment_hold
+    // 2. Attempt RPC cancel_appointment_hold (ownership + paid guard enforced by the database)
     const rpcRes = await cancelAppointmentSlotHold(appointmentId, targetClinicId, {
       date: targetDate,
       doctorId: targetDoctorId,
@@ -666,11 +732,27 @@ export async function releaseAppointmentHoldSafely(
           clearCheckoutRedirectRecord(appointmentId, "Hold released");
         } catch {}
       }
-      return rpcRes;
+      return {
+        ...rpcRes,
+        releasedSlot: resolvedSlotMeta,
+      };
     }
 
-    // 3. Fallback scoped update: strictly requires payment_status in ('pending_hold', 'failed') to prevent overwriting paid slots
-    const { error: updateErr } = await supabase
+    // A deterministic business denial (not the owner, already paid, not found, wrong state...) is FINAL.
+    // Retrying through a direct table update would be silently filtered by RLS (0 rows, no error) and
+    // used to be reported as a successful release + a false `hold_released` broadcast.
+    if (isDefinitiveReleaseDenial(rpcRes.code)) {
+      return {
+        success: false,
+        code: rpcRes.code,
+        alreadyPaid: String(rpcRes.code || "").toUpperCase() === "ERR_ALREADY_PAID",
+        message: rpcRes.message,
+      };
+    }
+
+    // 3. Infrastructure failure only (RPC missing/unreachable): scoped fallback update. It must prove
+    //    that a row was actually changed before anything is reported or broadcast.
+    const { data: updatedRows, error: updateErr } = await supabase
       .from("patient_appointment")
       .update({
         status: "cancelled",
@@ -678,14 +760,19 @@ export async function releaseAppointmentHoldSafely(
         clinic_note: reason,
       })
       .eq("appointment_id", appointmentId)
-      .in("payment_status", ["pending_hold", "failed"]);
+      .in("payment_status", ["pending_hold", "failed"])
+      .select("appointment_id");
 
     if (updateErr) {
       console.warn("[appointmentPaymentService] Fallback cancellation warning:", updateErr.message);
       return { success: false, message: updateErr.message };
     }
 
-    if (targetClinicId) {
+    if (!updatedRows || updatedRows.length === 0) {
+      return { success: false, message: "No active hold owned by this account was released." };
+    }
+
+    if (targetClinicId && targetDate && targetTime) {
       broadcastSlotChange(targetClinicId, {
         date: targetDate,
         doctorId: targetDoctorId,
@@ -704,7 +791,11 @@ export async function releaseAppointmentHoldSafely(
       } catch {}
     }
 
-    return { success: true, message: "Hold released via scoped update." };
+    return {
+      success: true,
+      message: "Hold released via scoped update.",
+      releasedSlot: resolvedSlotMeta,
+    };
   } catch (err: any) {
     console.warn("[appointmentPaymentService] Safe release exception:", err?.message);
     return { success: false, message: err?.message };
@@ -749,12 +840,55 @@ export function extractClinicCancellationReason(rawNote?: string | null): string
 }
 
 /**
- * Detects online payment method (GCash or Maya) from clinic notes or metadata
+ * Detects online payment method (GCash, Maya) from clinic notes, payment reference, or payment ledger method
  */
-export function detectOnlinePaymentMethod(clinicNote?: string | null, _reference?: string | null): string | undefined {
-  if (clinicNote) {
-    if (/Paid Online\s*\(\s*gcash/i.test(clinicNote)) return "GCash";
-    if (/Paid Online\s*\(\s*maya/i.test(clinicNote)) return "Maya";
+export function detectOnlinePaymentMethod(
+  clinicNote?: string | null,
+  reference?: string | null,
+  rawMethod?: string | null
+): string | undefined {
+  if (rawMethod) {
+    const rm = String(rawMethod).trim().toLowerCase();
+    if (rm.includes("maya") || rm.includes("paymaya")) return "Maya";
+    if (rm.includes("gcash")) return "GCash";
+    if (rm.includes("card") || rm.includes("credit") || rm.includes("debit")) return "Card";
   }
+
+  if (clinicNote) {
+    // Check for Maya/PayMaya variations (e.g., 'Paid Online (paymaya Ref: ...)', 'Paid Online (Maya Ref: ...)', 'via paymaya', 'via Maya')
+    if (
+      /Paid Online\s*\(\s*(?:pay)?maya/i.test(clinicNote) ||
+      /(?:via|by|with)\s*(?:pay)?maya/i.test(clinicNote) ||
+      /\b(?:pay)?maya\s+(?:ref|payment|transaction|checkout)/i.test(clinicNote) ||
+      /\b(?:pay)?maya\b/i.test(clinicNote)
+    ) {
+      return "Maya";
+    }
+
+    // Check for GCash variations (e.g., 'Paid Online (GCash Ref: ...)', 'via GCash')
+    if (
+      /Paid Online\s*\(\s*gcash/i.test(clinicNote) ||
+      /(?:via|by|with)\s*gcash/i.test(clinicNote) ||
+      /\bgcash\s+(?:ref|payment|transaction|checkout)/i.test(clinicNote) ||
+      /\bgcash\b/i.test(clinicNote)
+    ) {
+      return "GCash";
+    }
+
+    // Check for Card
+    if (
+      /Paid Online\s*\(\s*(?:card|credit|debit)/i.test(clinicNote) ||
+      /\b(?:card|credit|debit)\b/i.test(clinicNote)
+    ) {
+      return "Card";
+    }
+  }
+
+  if (reference) {
+    const refLower = String(reference).toLowerCase();
+    if (refLower.includes("maya") || refLower.includes("paymaya")) return "Maya";
+    if (refLower.includes("gcash")) return "GCash";
+  }
+
   return undefined;
 }

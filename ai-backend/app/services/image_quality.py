@@ -23,7 +23,7 @@ from PIL import Image
 # Real photos in good lighting: typically 100-1000+
 # Slightly blurry: 40-100
 # Very blurry / out of focus: < 40
-BLUR_THRESHOLD = 40.0
+BLUR_THRESHOLD = 30.0  
 
 # Brightness: mean pixel value (0-255)
 BRIGHTNESS_MIN = 30.0
@@ -104,8 +104,8 @@ def check_image_quality(img: Image.Image) -> dict:
         issues.append({
             "type": "blur",
             "message": (
-                f"Image appears blurry (sharpness score: {blur_score:.1f}, "
-                f"minimum: {BLUR_THRESHOLD}). Please retake with the camera steady."
+                "The photo looks a bit blurry. For the best results, please make sure the "
+                "area is well-lit and hold your camera steady before taking the picture."
             ),
         })
 
@@ -115,16 +115,16 @@ def check_image_quality(img: Image.Image) -> dict:
         issues.append({
             "type": "dark",
             "message": (
-                f"Image is too dark (brightness: {brightness:.1f}, "
-                f"minimum: {BRIGHTNESS_MIN}). Please retake in better lighting."
+                "The photo is too dark. Please move to a brighter area or turn on more lights, "
+                "then try taking the photo again."
             ),
         })
     elif brightness > BRIGHTNESS_MAX:
         issues.append({
             "type": "bright",
             "message": (
-                f"Image is too bright or overexposed (brightness: {brightness:.1f}, "
-                f"maximum: {BRIGHTNESS_MAX}). Avoid direct flash or sunlight."
+                "The photo is too bright or washed out. Please avoid using a camera flash "
+                "or standing in direct, harsh sunlight."
             ),
         })
 
@@ -134,8 +134,8 @@ def check_image_quality(img: Image.Image) -> dict:
         issues.append({
             "type": "contrast",
             "message": (
-                f"Image has very low contrast (score: {contrast:.1f}, "
-                f"minimum: {CONTRAST_MIN}). Please retake in better lighting."
+                "It's hard to see the details clearly in this photo. Please retake it "
+                "in better lighting and make sure the skin area is clearly visible."
             ),
         })
 
@@ -146,7 +146,6 @@ def check_image_quality(img: Image.Image) -> dict:
         "contrast": round(contrast, 2),
         "issues": issues,
     }
-
 
 # ============================================
 # FORMAT FOR API RESPONSE

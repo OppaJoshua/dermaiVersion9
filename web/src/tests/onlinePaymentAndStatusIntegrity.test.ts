@@ -166,7 +166,7 @@ function simulateFulfillAppointmentPaymentAtomic(
 // Simulates frontend appointment mapping for AppointmentStatusPage
 function mapAppointmentForDisplay(
   appt: MockAppointmentRecord,
-  userPayment?: MockUserPaymentRecord
+  userPayment?: Partial<MockUserPaymentRecord>
 ) {
   const isDocRejected = appt.doctor_status === "rejected";
   const rawStatus = (appt.status || "").toLowerCase();
@@ -183,8 +183,7 @@ function mapAppointmentForDisplay(
 
   // Detect online payment method
   const detectedMethod =
-    userPayment?.method ||
-    detectOnlinePaymentMethod(appt.clinic_note, appt.payment_reference) ||
+    detectOnlinePaymentMethod(appt.clinic_note, appt.payment_reference, userPayment?.method) ||
     undefined;
 
   // Resolve payment display string (strict online-only rules)
@@ -663,7 +662,47 @@ async function runIntegrityTests() {
     const mayaDisplay = mapAppointmentForDisplay(mayaAppt);
     assert(mayaDisplay.paymentDisplay === "Paid Online via Maya (₱100.00)", `Expected Maya display, got '${mayaDisplay.paymentDisplay}'`);
 
-    console.log("✓ 8. GCash and Maya payment methods are correctly detected and displayed.");
+    // 8c. PayMaya alias (paymaya in clinic note)
+    const paymayaAppt: MockAppointmentRecord = {
+      appointment_id: "appt-1008-paymaya",
+      user_id: "user-patient-1",
+      clinic_id: "clinic-derm-1",
+      date: "2026-11-01T16:30:00+08:00",
+      time: "16:30:00",
+      status: "scheduled",
+      payment_status: "paid",
+      payment_amount: 100,
+      payment_reference: "pay_pm_maya_778",
+      clinic_note: "Paid Online (paymaya Ref: pay_pm_maya_778)",
+    };
+    const paymayaDisplay = mapAppointmentForDisplay(paymayaAppt);
+    assert(paymayaDisplay.paymentDisplay === "Paid Online via Maya (₱100.00)", `Expected Maya display for paymaya note, got '${paymayaDisplay.paymentDisplay}'`);
+
+    // 8d. PayMaya alias (user_payment method = 'paymaya')
+    const paymayaUserPayAppt: MockAppointmentRecord = {
+      appointment_id: "appt-1008-userpay-paymaya",
+      user_id: "user-patient-1",
+      clinic_id: "clinic-derm-1",
+      date: "2026-11-01T16:30:00+08:00",
+      time: "16:30:00",
+      status: "scheduled",
+      payment_status: "paid",
+      payment_amount: 100,
+      payment_reference: "pay_pm_maya_779",
+      clinic_note: "Assigned to Dr. Bayutas for review.",
+    };
+    const paymayaUserPayDisplay = mapAppointmentForDisplay(paymayaUserPayAppt, {
+      payment_id: "pay-1008-maya",
+      appointment_id: "appt-1008-userpay-paymaya",
+      user_id: "user-patient-1",
+      amount: 100,
+      status: "success",
+      method: "paymaya",
+      reference_number: "pay_pm_maya_779",
+    });
+    assert(paymayaUserPayDisplay.paymentDisplay === "Paid Online via Maya (₱100.00)", `Expected Maya display for user_payment paymaya, got '${paymayaUserPayDisplay.paymentDisplay}'`);
+
+    console.log("✓ 8. GCash and Maya (including paymaya) payment methods are correctly detected and displayed.");
   }
 
   // ── Scenario 9: Missing payment method does not display Pay at Counter ──

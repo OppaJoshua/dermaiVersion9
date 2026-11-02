@@ -104,8 +104,8 @@ function StatusBadge({ app }: { app: Appointment }) {
     const declinedTimestamp = app.doctorReviewedAt
       ? new Date(app.doctorReviewedAt).getTime()
       : app.createdAt
-      ? new Date(app.createdAt).getTime()
-      : Date.now();
+        ? new Date(app.createdAt).getTime()
+        : Date.now();
     const isExpired = Date.now() - (isNaN(declinedTimestamp) ? Date.now() : declinedTimestamp) > 24 * 3600 * 1000;
 
     return (
@@ -172,7 +172,13 @@ function StatusTracker({ app }: { app: Appointment }) {
     <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
       <div className="flex items-center justify-between mb-4">
         <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Appointment Progress</p>
-        <StatusBadge app={app} />
+        <span className="text-[11px] font-semibold text-gray-500">
+          {activeStep >= 0 && activeStep < STEPS.length
+            ? `Step ${activeStep + 1} of 4: ${STEPS[activeStep]}`
+            : isCancelled
+              ? "Status: Inactive"
+              : "Review"}
+        </span>
       </div>
 
       {isCancelled ? (
@@ -411,8 +417,8 @@ function StatusTracker({ app }: { app: Appointment }) {
                 const declinedTimestamp = app.doctorReviewedAt
                   ? new Date(app.doctorReviewedAt).getTime()
                   : app.createdAt
-                  ? new Date(app.createdAt).getTime()
-                  : Date.now();
+                    ? new Date(app.createdAt).getTime()
+                    : Date.now();
                 const remainingMs = Math.max(0, declinedTimestamp + 24 * 3600 * 1000 - Date.now());
                 const is24HourExpired = remainingMs <= 0;
                 const hoursLeft = Math.floor(remainingMs / (1000 * 60 * 60));
@@ -487,6 +493,8 @@ function StatusTracker({ app }: { app: Appointment }) {
 
 function AppointmentCard({
   app,
+  index = 0,
+  totalCount = 1,
   onCancel,
   onReschedule,
   onWithdrawReschedule,
@@ -494,6 +502,8 @@ function AppointmentCard({
   onViewDetails,
 }: {
   app: Appointment;
+  index?: number;
+  totalCount?: number;
   onCancel?: (app: Appointment) => void;
   onReschedule?: (app: Appointment) => void;
   onWithdrawReschedule?: (app: Appointment) => void;
@@ -520,25 +530,53 @@ function AppointmentCard({
   const declinedTimestamp = app.doctorReviewedAt
     ? new Date(app.doctorReviewedAt).getTime()
     : app.createdAt
-    ? new Date(app.createdAt).getTime()
-    : Date.now();
+      ? new Date(app.createdAt).getTime()
+      : Date.now();
   const is24HourExpired = Date.now() - (isNaN(declinedTimestamp) ? Date.now() : declinedTimestamp) > 24 * 3600 * 1000;
   const canChooseAlternateDoctor = isDeclined && !is24HourExpired;
 
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white shadow-xs hover:border-gray-200 transition-all duration-200 overflow-hidden">
-      <div className="p-5">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
-          <div>
+    <div className="rounded-2xl border border-gray-200/90 bg-white shadow-xs hover:border-pink-300 hover:shadow-sm transition-all duration-200 overflow-hidden">
+      {/* Distinct Appointment Identifier Header Bar */}
+      <div className="px-4 sm:px-5 py-3 sm:py-3.5 bg-gradient-to-r from-pink-50/70 via-rose-50/25 to-white border-b border-gray-100 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-[#801336] text-white flex items-center justify-center font-bold text-xs sm:text-sm shadow-xs shrink-0">
+            {index + 1}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
+            <h3 className="text-xs sm:text-sm font-bold text-gray-900 tracking-tight">
+              Appointment {index + 1}
+            </h3>
+            {totalCount > 1 && (
+              <span className="text-[11px] font-medium text-gray-400">
+                of {totalCount}
+              </span>
+            )}
+            <span className="text-gray-300">•</span>
+            <span className="text-[10px] sm:text-[11px] font-mono font-medium text-gray-600 bg-gray-100/90 px-2 py-0.5 rounded-md border border-gray-200/60">
+              Ref #{app.id ? app.id.slice(0, 8).toUpperCase() : `APT-${index + 1}`}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <StatusBadge app={app} />
+        </div>
+      </div>
+
+      <div className="p-4 sm:p-5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-5 gap-y-4 items-start">
+          <div className="min-w-0">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Clinic</p>
-            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-              <p className="text-sm font-semibold text-gray-900">{app.clinicName}</p>
-              <VerifiedBadge size={15} className="w-3.5 h-3.5" title="Verified Clinic" />
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+              <p className="text-sm font-semibold text-gray-900 truncate">{app.clinicName}</p>
+              <VerifiedBadge size={15} className="w-3.5 h-3.5 shrink-0" title="Verified Clinic" />
             </div>
           </div>
-          <div>
+
+          <div className="min-w-0">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Doctor</p>
-            <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
+            <div className="flex items-center gap-1.5 mt-1 min-w-0">
               {app.assignedDoctorId && app.doctor !== "To be assigned" ? (
                 <DoctorAvatar
                   doctorId={app.assignedDoctorId}
@@ -549,37 +587,43 @@ function AppointmentCard({
               <p className="text-sm font-semibold text-gray-900 truncate">{app.doctor || "To be assigned"}</p>
             </div>
           </div>
-          <div>
+
+          <div className="min-w-0">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
               {isConfirmed ? "Confirmed Date" : "Requested Date"}
             </p>
-            <p className="text-sm font-semibold text-gray-900 mt-0.5">{app.date}</p>
+            <p className="text-sm font-semibold text-gray-900 mt-1 truncate">{app.date}</p>
           </div>
-          <div>
+
+          <div className="min-w-0">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
               {isConfirmed ? "Confirmed Time" : "Requested Time"}
             </p>
-            <p className="text-sm font-semibold text-gray-900 mt-0.5">{app.time}</p>
+            <p className="text-sm font-semibold text-gray-900 mt-1 truncate">{app.time}</p>
           </div>
-          <div>
+
+          <div className="min-w-0">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Payment</p>
-            {app.paymentStatus === "paid" ? (
-              <p className="text-xs font-semibold text-emerald-700 mt-0.5">
-                Paid Online {app.paymentMethod ? `via ${app.paymentMethod}` : ""} {app.paymentAmount ? `(₱${app.paymentAmount.toFixed(2)})` : ""}
-              </p>
-            ) : app.paymentStatus === "exempt" ? (
-              <p className="text-xs font-semibold text-emerald-700 mt-0.5">Exempt</p>
-            ) : app.paymentStatus === "failed" ? (
-              <p className="text-xs font-semibold text-rose-700 mt-0.5">Payment Failed</p>
-            ) : app.paymentStatus === "expired" ? (
-              <p className="text-xs font-semibold text-rose-700 mt-0.5">Hold Expired</p>
-            ) : app.paymentStatus === "pending_hold" ? (
-              <p className="text-xs font-semibold text-amber-700 mt-0.5">Payment Pending</p>
-            ) : app.paymentStatus === "cancelled" ? (
-              <p className="text-xs font-semibold text-gray-500 mt-0.5">Cancelled (Unpaid)</p>
-            ) : (
-              <p className="text-xs font-semibold text-gray-600 mt-0.5">Online Payment (PayMongo)</p>
-            )}
+            <div className="mt-1">
+              {app.paymentStatus === "paid" ? (
+                <p className="text-xs font-semibold text-emerald-700 leading-snug">
+                  Paid Online{app.paymentMethod ? ` via ${app.paymentMethod}` : ""}
+                  {app.paymentAmount ? ` (₱${app.paymentAmount.toFixed(2)})` : ""}
+                </p>
+              ) : app.paymentStatus === "exempt" ? (
+                <p className="text-xs font-semibold text-emerald-700 leading-snug">Exempt</p>
+              ) : app.paymentStatus === "failed" ? (
+                <p className="text-xs font-semibold text-rose-700 leading-snug">Payment Failed</p>
+              ) : app.paymentStatus === "expired" ? (
+                <p className="text-xs font-semibold text-rose-700 leading-snug">Hold Expired</p>
+              ) : app.paymentStatus === "pending_hold" ? (
+                <p className="text-xs font-semibold text-amber-700 leading-snug">Payment Pending</p>
+              ) : app.paymentStatus === "cancelled" ? (
+                <p className="text-xs font-semibold text-gray-500 leading-snug">Cancelled (Unpaid)</p>
+              ) : (
+                <p className="text-xs font-semibold text-gray-600 leading-snug">Online Payment (PayMongo)</p>
+              )}
+            </div>
           </div>
         </div>
 
@@ -588,7 +632,7 @@ function AppointmentCard({
         {/* Action Controls */}
         <div className="mt-4 pt-3 border-t border-gray-100 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2 flex-wrap">
-                        {/* View Consultation Details Button */}
+            {/* View Consultation Details Button */}
             <button
               type="button"
               onClick={() => onViewDetails && onViewDetails(app)}
@@ -772,7 +816,12 @@ function ConsultationDetailsModal({
           {/* Header */}
           <div className="flex items-start justify-between gap-3 pb-4 border-b border-gray-100">
             <div>
-              <h3 className="text-base sm:text-lg font-bold text-gray-900">Consultation Details</h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-base sm:text-lg font-bold text-gray-900">Consultation Details</h3>
+                <span className="text-[10px] font-mono font-medium text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md border border-gray-200">
+                  Ref #{app.id ? app.id.slice(0, 8).toUpperCase() : ""}
+                </span>
+              </div>
               <p className="text-xs text-gray-500 mt-0.5">
                 {app.clinicName} • {app.date} at {app.time}
               </p>
@@ -1036,6 +1085,11 @@ function getCachedAppointments(): Appointment[] {
           paymentStatus: (localItem.paymentStatus as Appointment["paymentStatus"]) || undefined,
           paymentAmount: localItem.paymentAmount ? Number(localItem.paymentAmount) : undefined,
           paymentReference: localItem.paymentReference || undefined,
+          paymentMethod: detectOnlinePaymentMethod(
+            localItem.clinicNote || localItem.clinic_note,
+            localItem.paymentReference || localItem.payment_reference,
+            localItem.paymentMethod || localItem.payment_method
+          ),
           paidAt: localItem.paidAt || undefined,
         };
       })
@@ -1199,6 +1253,30 @@ const AppointmentStatusPage: React.FC = () => {
           } catch { }
         }
 
+        // Batch-resolve user_payment records for precise payment method resolution
+        const paymentMap = new Map<string, string>();
+        if (userId) {
+          try {
+            const { data: payRows } = await supabase
+              .from("user_payment")
+              .select("appointment_id, method, reference_number, paymongo_payment_id")
+              .eq("user_id", userId);
+            if (payRows) {
+              payRows.forEach((p: any) => {
+                if (p.appointment_id && p.method) {
+                  paymentMap.set(String(p.appointment_id), p.method);
+                }
+                if (p.paymongo_payment_id && p.method) {
+                  paymentMap.set(String(p.paymongo_payment_id), p.method);
+                }
+                if (p.reference_number && p.method) {
+                  paymentMap.set(String(p.reference_number), p.method);
+                }
+              });
+            }
+          } catch { }
+        }
+
         const mapped: Appointment[] = data.map((a: any) => {
           const apptDate = a.date ? new Date(a.date) : null;
           const isValidDate = apptDate && !isNaN(apptDate.getTime());
@@ -1303,7 +1381,15 @@ const AppointmentStatusPage: React.FC = () => {
             paymentStatus: (a.payment_status as Appointment["paymentStatus"]) || undefined,
             paymentAmount: a.payment_amount ? Number(a.payment_amount) : undefined,
             paymentReference: a.payment_reference || undefined,
-            paymentMethod: detectOnlinePaymentMethod(a.clinic_note, a.payment_reference),
+            paymentMethod: detectOnlinePaymentMethod(
+              a.clinic_note,
+              a.payment_reference,
+              paymentMap.get(String(a.appointment_id)) ||
+                (a.payment_reference ? paymentMap.get(String(a.payment_reference)) : undefined) ||
+                (a.questionnaire_answers && typeof a.questionnaire_answers === "object"
+                  ? a.questionnaire_answers.paymentMethod || a.questionnaire_answers.payment_method
+                  : undefined)
+            ),
             paidAt: a.paid_at || undefined,
           };
         });
@@ -1375,7 +1461,14 @@ const AppointmentStatusPage: React.FC = () => {
                     paymentStatus: (localItem.paymentStatus as Appointment["paymentStatus"]) || undefined,
                     paymentAmount: localItem.paymentAmount ? Number(localItem.paymentAmount) : undefined,
                     paymentReference: localItem.paymentReference || undefined,
-                    paymentMethod: detectOnlinePaymentMethod(localItem.clinicNote, localItem.paymentReference),
+                    paymentMethod: detectOnlinePaymentMethod(
+                      localItem.clinicNote,
+                      localItem.paymentReference,
+                      localItem.paymentMethod ||
+                        localItem.payment_method ||
+                        (localItem.id ? paymentMap.get(String(localItem.id)) : undefined) ||
+                        (localItem.paymentReference ? paymentMap.get(String(localItem.paymentReference)) : undefined)
+                    ),
                     rejectionReason: extractClinicCancellationReason(localItem.clinicNote) || undefined,
                     paidAt: localItem.paidAt || undefined,
                   });
@@ -1748,8 +1841,8 @@ const AppointmentStatusPage: React.FC = () => {
     const declinedTimestamp = a.doctorReviewedAt
       ? new Date(a.doctorReviewedAt).getTime()
       : a.createdAt
-      ? new Date(a.createdAt).getTime()
-      : Date.now();
+        ? new Date(a.createdAt).getTime()
+        : Date.now();
     const is24HourExpired = Date.now() - (isNaN(declinedTimestamp) ? Date.now() : declinedTimestamp) > 24 * 3600 * 1000;
 
     if (isDeclined && !is24HourExpired) return true;
@@ -1783,8 +1876,8 @@ const AppointmentStatusPage: React.FC = () => {
     const declinedTimestamp = a.doctorReviewedAt
       ? new Date(a.doctorReviewedAt).getTime()
       : a.createdAt
-      ? new Date(a.createdAt).getTime()
-      : Date.now();
+        ? new Date(a.createdAt).getTime()
+        : Date.now();
     const is24HourExpired = Date.now() - (isNaN(declinedTimestamp) ? Date.now() : declinedTimestamp) > 24 * 3600 * 1000;
 
     // If declined but still within 24h, it's active in Upcoming, not Past
@@ -1813,11 +1906,13 @@ const AppointmentStatusPage: React.FC = () => {
       );
     }
     return (
-      <div className="space-y-4">
-        {apps.map((app) => (
+      <div className="space-y-5">
+        {apps.map((app, index) => (
           <AppointmentCard
             key={app.id}
             app={app}
+            index={index}
+            totalCount={apps.length}
             onCancel={(item) => setCancellingAppt(item)}
             onReschedule={(item) => handleOpenRescheduleModal(item)}
             onWithdrawReschedule={(item) => setWithdrawModalAppt(item)}
@@ -1830,9 +1925,9 @@ const AppointmentStatusPage: React.FC = () => {
   };
 
   return (
-    <div className="container mx-auto p-4 md:p-6 lg:p-8 max-w-4xl">
+    <div className="w-full px-4 sm:px-6 lg:px-8 xl:px-10 py-6 lg:py-8 max-w-[1200px] mx-auto">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-800 tracking-tight">Appointment Status</h1>
+        <h1 className="text-2xl lg:text-3xl font-bold text-gray-800 tracking-tight">Appointment Status</h1>
         <p className="text-sm text-gray-500 mt-1">Track and manage your physical consultation appointments</p>
       </div>
 
@@ -1900,189 +1995,189 @@ const AppointmentStatusPage: React.FC = () => {
         {rescheduleModalAppt && (
           <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
             <div className="relative z-[9999] bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-gray-100 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-magenta-50 text-magenta-600 flex items-center justify-center">
-                  <Calendar className="w-5 h-5" />
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-magenta-50 text-magenta-600 flex items-center justify-center">
+                    <Calendar className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900">
+                      Request Appointment Reschedule
+                    </h3>
+                    <p className="text-xs text-gray-500">
+                      Clinic: <strong className="text-gray-800">{rescheduleModalAppt.clinicName}</strong>
+                    </p>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setRescheduleModalAppt(null)}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Current Schedule Info Box */}
+              <div className="mt-4 p-3 rounded-2xl bg-slate-50 border border-gray-200/80 text-xs text-gray-700 flex items-center justify-between">
                 <div>
-                  <h3 className="text-base font-bold text-gray-900">
-                    Request Appointment Reschedule
-                  </h3>
-                  <p className="text-xs text-gray-500">
-                    Clinic: <strong className="text-gray-800">{rescheduleModalAppt.clinicName}</strong>
-                  </p>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block mb-0.5">Current Schedule</span>
+                  <span className="font-semibold text-gray-900">{rescheduleModalAppt.date} at {rescheduleModalAppt.time}</span>
                 </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  Reserved
+                </span>
               </div>
-              <button
-                type="button"
-                onClick={() => setRescheduleModalAppt(null)}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            {/* Current Schedule Info Box */}
-            <div className="mt-4 p-3 rounded-2xl bg-slate-50 border border-gray-200/80 text-xs text-gray-700 flex items-center justify-between">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block mb-0.5">Current Schedule</span>
-                <span className="font-semibold text-gray-900">{rescheduleModalAppt.date} at {rescheduleModalAppt.time}</span>
+              {/* Rule 1 & Rule 2 Protection Guarantee */}
+              <div className="mt-3 p-3 rounded-2xl bg-purple-50/80 border border-purple-200/70 text-purple-900 text-[11px] leading-relaxed">
+                <strong>Patient Protection:</strong> Submitting this request does not alter your existing scheduled date or time without mutual clinic agreement. Your slot remains reserved until the clinic reviews and approves your requested slot.
               </div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                Reserved
-              </span>
-            </div>
 
-            {/* Rule 1 & Rule 2 Protection Guarantee */}
-            <div className="mt-3 p-3 rounded-2xl bg-purple-50/80 border border-purple-200/70 text-purple-900 text-[11px] leading-relaxed">
-              <strong>Patient Protection:</strong> Submitting this request does not alter your existing scheduled date or time without mutual clinic agreement. Your slot remains reserved until the clinic reviews and approves your requested slot.
-            </div>
+              {rescheduleError && (
+                <div className="mt-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                  {rescheduleError}
+                </div>
+              )}
 
-            {rescheduleError && (
-              <div className="mt-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
-                {rescheduleError}
+              {/* Date Picker */}
+              <div className="mt-4">
+                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                  New Preferred Date <span className="text-magenta-600">*</span>
+                </label>
+                <input
+                  type="date"
+                  value={rescheduleDate}
+                  min={minRescheduleDate}
+                  onChange={(e) => {
+                    setRescheduleDate(e.target.value);
+                    setRescheduleError("");
+                  }}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 font-semibold focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 outline-none bg-white"
+                />
               </div>
-            )}
 
-            {/* Date Picker */}
-            <div className="mt-4">
-              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
-                New Preferred Date <span className="text-magenta-600">*</span>
-              </label>
-              <input
-                type="date"
-                value={rescheduleDate}
-                min={minRescheduleDate}
-                onChange={(e) => {
-                  setRescheduleDate(e.target.value);
-                  setRescheduleError("");
-                }}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs text-gray-900 font-semibold focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 outline-none bg-white"
-              />
-            </div>
-
-            {/* Preferred Time Slot Grid */}
-            <div className="mt-4">
-              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
-                New Preferred Time <span className="text-magenta-600">*</span>
-              </label>
-              <div className="grid grid-cols-4 sm:grid-cols-4 gap-2">
-                {[
-                  { value: "08:30", label: "8:30 AM" },
-                  { value: "09:00", label: "9:00 AM" },
-                  { value: "09:30", label: "9:30 AM" },
-                  { value: "10:00", label: "10:00 AM" },
-                  { value: "10:30", label: "10:30 AM" },
-                  { value: "11:00", label: "11:00 AM" },
-                  { value: "11:30", label: "11:30 AM" },
-                  { value: "13:00", label: "1:00 PM" },
-                  { value: "13:30", label: "1:30 PM" },
-                  { value: "14:00", label: "2:00 PM" },
-                  { value: "14:30", label: "2:30 PM" },
-                  { value: "15:00", label: "3:00 PM" },
-                  { value: "15:30", label: "3:30 PM" },
-                  { value: "16:00", label: "4:00 PM" },
-                  { value: "16:30", label: "4:30 PM" },
-                  { value: "17:00", label: "5:00 PM" },
-                ].map((slot) => {
-                  const isSelected = rescheduleTime === slot.value;
-                  return (
-                    <button
-                      key={slot.value}
-                      type="button"
-                      onClick={() => {
-                        setRescheduleTime(slot.value);
-                        setRescheduleError("");
-                      }}
-                      className={`py-2 px-1 text-center rounded-xl text-xs font-semibold transition border cursor-pointer ${isSelected
+              {/* Preferred Time Slot Grid */}
+              <div className="mt-4">
+                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                  New Preferred Time <span className="text-magenta-600">*</span>
+                </label>
+                <div className="grid grid-cols-4 sm:grid-cols-4 gap-2">
+                  {[
+                    { value: "08:30", label: "8:30 AM" },
+                    { value: "09:00", label: "9:00 AM" },
+                    { value: "09:30", label: "9:30 AM" },
+                    { value: "10:00", label: "10:00 AM" },
+                    { value: "10:30", label: "10:30 AM" },
+                    { value: "11:00", label: "11:00 AM" },
+                    { value: "11:30", label: "11:30 AM" },
+                    { value: "13:00", label: "1:00 PM" },
+                    { value: "13:30", label: "1:30 PM" },
+                    { value: "14:00", label: "2:00 PM" },
+                    { value: "14:30", label: "2:30 PM" },
+                    { value: "15:00", label: "3:00 PM" },
+                    { value: "15:30", label: "3:30 PM" },
+                    { value: "16:00", label: "4:00 PM" },
+                    { value: "16:30", label: "4:30 PM" },
+                    { value: "17:00", label: "5:00 PM" },
+                  ].map((slot) => {
+                    const isSelected = rescheduleTime === slot.value;
+                    return (
+                      <button
+                        key={slot.value}
+                        type="button"
+                        onClick={() => {
+                          setRescheduleTime(slot.value);
+                          setRescheduleError("");
+                        }}
+                        className={`py-2 px-1 text-center rounded-xl text-xs font-semibold transition border cursor-pointer ${isSelected
                           ? "bg-magenta-600 border-magenta-600 text-white shadow-2xs"
                           : "bg-gray-50 border-gray-200 text-gray-700 hover:bg-magenta-50 hover:border-magenta-200"
-                        }`}
-                    >
-                      {slot.label}
-                    </button>
-                  );
-                })}
+                          }`}
+                      >
+                        {slot.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
 
-            {/* Quick Reason Presets */}
-            <div className="mt-4">
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
-                Quick Reason Suggestions
-              </label>
-              <div className="space-y-1">
-                {[
-                  "Schedule or work conflict",
-                  "Personal or family emergency",
-                  "Transportation or distance constraint",
-                  "Doctor availability preference",
-                ].map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => {
-                      setRescheduleReason(preset);
-                      setRescheduleError("");
-                    }}
-                    className={`w-full text-left px-3 py-1.5 rounded-xl text-xs transition border cursor-pointer ${rescheduleReason === preset
+              {/* Quick Reason Presets */}
+              <div className="mt-4">
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                  Quick Reason Suggestions
+                </label>
+                <div className="space-y-1">
+                  {[
+                    "Schedule or work conflict",
+                    "Personal or family emergency",
+                    "Transportation or distance constraint",
+                    "Doctor availability preference",
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setRescheduleReason(preset);
+                        setRescheduleError("");
+                      }}
+                      className={`w-full text-left px-3 py-1.5 rounded-xl text-xs transition border cursor-pointer ${rescheduleReason === preset
                         ? "bg-magenta-50 border-magenta-200 text-magenta-800 font-semibold"
                         : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
-                      }`}
-                  >
-                    • {preset}
-                  </button>
-                ))}
+                        }`}
+                    >
+                      • {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Reason Textarea */}
+              <div className="mt-3">
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                  Note for Clinic (Optional)
+                </label>
+                <textarea
+                  value={rescheduleReason}
+                  onChange={(e) => {
+                    setRescheduleReason(e.target.value);
+                    setRescheduleError("");
+                  }}
+                  rows={2}
+                  placeholder="Add any specific context or time flexibility for the clinic triage team..."
+                  className="w-full px-3.5 py-2 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 bg-white"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="mt-6 flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={rescheduleSaving}
+                  onClick={() => setRescheduleModalAppt(null)}
+                  className="flex-1 py-2.5 px-4 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition cursor-pointer"
+                >
+                  Keep Current Schedule
+                </button>
+                <button
+                  type="button"
+                  disabled={rescheduleSaving || !rescheduleDate || !rescheduleTime}
+                  onClick={handleConfirmPatientReschedule}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {rescheduleSaving ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                      <span>Submitting...</span>
+                    </>
+                  ) : (
+                    <span>Send Reschedule Request</span>
+                  )}
+                </button>
               </div>
             </div>
-
-            {/* Reason Textarea */}
-            <div className="mt-3">
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                Note for Clinic (Optional)
-              </label>
-              <textarea
-                value={rescheduleReason}
-                onChange={(e) => {
-                  setRescheduleReason(e.target.value);
-                  setRescheduleError("");
-                }}
-                rows={2}
-                placeholder="Add any specific context or time flexibility for the clinic triage team..."
-                className="w-full px-3.5 py-2 text-xs rounded-xl border border-gray-200 text-gray-900 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/10 bg-white"
-              />
-            </div>
-
-            {/* Action Buttons */}
-            <div className="mt-6 flex items-center gap-3">
-              <button
-                type="button"
-                disabled={rescheduleSaving}
-                onClick={() => setRescheduleModalAppt(null)}
-                className="flex-1 py-2.5 px-4 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition cursor-pointer"
-              >
-                Keep Current Schedule
-              </button>
-              <button
-                type="button"
-                disabled={rescheduleSaving || !rescheduleDate || !rescheduleTime}
-                onClick={handleConfirmPatientReschedule}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-semibold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                {rescheduleSaving ? (
-                  <>
-                    <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                    <span>Submitting...</span>
-                  </>
-                ) : (
-                  <span>Send Reschedule Request</span>
-                )}
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
       </ModalPortal>
 
       {/* Withdraw Reschedule Request Modal */}
@@ -2090,49 +2185,49 @@ const AppointmentStatusPage: React.FC = () => {
         {withdrawModalAppt && (
           <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
             <div className="relative z-[9999] bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in fade-in zoom-in-95">
-            <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 mb-4 mx-auto">
-              <RotateCcw className="w-6 h-6" />
-            </div>
-            <h3 className="text-base font-bold text-gray-900 text-center">
-              Withdraw Reschedule Request?
-            </h3>
-            <p className="text-xs text-gray-600 text-center mt-2 leading-relaxed">
-              Are you sure you want to withdraw your request to reschedule your consultation with <strong className="text-gray-900">{withdrawModalAppt.clinicName}</strong>?
-            </p>
-            <div className="mt-4 p-3 bg-slate-50 rounded-xl border border-gray-200 text-gray-700 text-[11px] leading-relaxed">
-              ✅ Your confirmed schedule (<strong className="text-gray-900">{withdrawModalAppt.date} at {withdrawModalAppt.time}</strong>) will remain completely active and unaffected.
-            </div>
-            <div className="mt-6 flex items-center gap-3">
-              <button
-                type="button"
-                disabled={withdrawSaving}
-                onClick={() => setWithdrawModalAppt(null)}
-                className="flex-1 py-2.5 px-4 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition cursor-pointer"
-              >
-                Back
-              </button>
-              <button
-                type="button"
-                disabled={withdrawSaving}
-                onClick={() => executeWithdrawReschedule(withdrawModalAppt)}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                {withdrawSaving ? (
-                  <>
-                    <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                    <span>Withdrawing...</span>
-                  </>
-                ) : (
-                  <span>Yes, Withdraw Request</span>
-                )}
-              </button>
+              <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 mb-4 mx-auto">
+                <RotateCcw className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-bold text-gray-900 text-center">
+                Withdraw Reschedule Request?
+              </h3>
+              <p className="text-xs text-gray-600 text-center mt-2 leading-relaxed">
+                Are you sure you want to withdraw your request to reschedule your consultation with <strong className="text-gray-900">{withdrawModalAppt.clinicName}</strong>?
+              </p>
+              <div className="mt-4 p-3 bg-slate-50 rounded-xl border border-gray-200 text-gray-700 text-[11px] leading-relaxed">
+                ✅ Your confirmed schedule (<strong className="text-gray-900">{withdrawModalAppt.date} at {withdrawModalAppt.time}</strong>) will remain completely active and unaffected.
+              </div>
+              <div className="mt-6 flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={withdrawSaving}
+                  onClick={() => setWithdrawModalAppt(null)}
+                  className="flex-1 py-2.5 px-4 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition cursor-pointer"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  disabled={withdrawSaving}
+                  onClick={() => executeWithdrawReschedule(withdrawModalAppt)}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {withdrawSaving ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                      <span>Withdrawing...</span>
+                    </>
+                  ) : (
+                    <span>Yes, Withdraw Request</span>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
       </ModalPortal>
 
-      
+
       {/* Consultation Details Modal */}
       <ModalPortal isOpen={Boolean(selectedDetailsAppt)}>
         {selectedDetailsAppt && (
@@ -2148,46 +2243,46 @@ const AppointmentStatusPage: React.FC = () => {
         {cancellingAppt && (
           <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
             <div className="relative z-[9999] bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in fade-in zoom-in-95">
-            <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 mb-4 mx-auto">
-              <AlertTriangle className="w-6 h-6" />
-            </div>
-            <h3 className="text-base font-bold text-gray-900 text-center">
-              Cancel {cancellingAppt.status === "Scheduled" ? "Appointment" : "Consultation Request"}?
-            </h3>
-            <p className="text-xs text-gray-600 text-center mt-2 leading-relaxed">
-              Are you sure you want to cancel your consultation with <strong className="text-gray-900">{cancellingAppt.clinicName}</strong> on <strong className="text-gray-900">{cancellingAppt.date}</strong> at <strong className="text-gray-900">{cancellingAppt.time}</strong>?
-            </p>
-            <div className="mt-4 p-3 bg-amber-50 rounded-xl border border-amber-200/70 text-amber-900 text-[11px] leading-relaxed">
-              ⚠️ This action cannot be undone. Your reserved appointment slot will be released.
-            </div>
-            <div className="mt-6 flex items-center gap-3">
-              <button
-                type="button"
-                disabled={cancelLoading}
-                onClick={() => setCancellingAppt(null)}
-                className="flex-1 py-2.5 px-4 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition cursor-pointer"
-              >
-                Keep Appointment
-              </button>
-              <button
-                type="button"
-                disabled={cancelLoading}
-                onClick={() => executeCancel(cancellingAppt)}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                {cancelLoading ? (
-                  <>
-                    <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                    <span>Cancelling...</span>
-                  </>
-                ) : (
-                  <span>Yes, Cancel</span>
-                )}
-              </button>
+              <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 mb-4 mx-auto">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-bold text-gray-900 text-center">
+                Cancel {cancellingAppt.status === "Scheduled" ? "Appointment" : "Consultation Request"}?
+              </h3>
+              <p className="text-xs text-gray-600 text-center mt-2 leading-relaxed">
+                Are you sure you want to cancel your consultation with <strong className="text-gray-900">{cancellingAppt.clinicName}</strong> on <strong className="text-gray-900">{cancellingAppt.date}</strong> at <strong className="text-gray-900">{cancellingAppt.time}</strong>?
+              </p>
+              <div className="mt-4 p-3 bg-amber-50 rounded-xl border border-amber-200/70 text-amber-900 text-[11px] leading-relaxed">
+                ⚠️ This action cannot be undone. Your reserved appointment slot will be released.
+              </div>
+              <div className="mt-6 flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={cancelLoading}
+                  onClick={() => setCancellingAppt(null)}
+                  className="flex-1 py-2.5 px-4 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition cursor-pointer"
+                >
+                  Keep Appointment
+                </button>
+                <button
+                  type="button"
+                  disabled={cancelLoading}
+                  onClick={() => executeCancel(cancellingAppt)}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {cancelLoading ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                      <span>Cancelling...</span>
+                    </>
+                  ) : (
+                    <span>Yes, Cancel</span>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
       </ModalPortal>
     </div>
   );

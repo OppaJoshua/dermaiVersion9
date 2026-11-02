@@ -13,6 +13,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import { getManilaCalendarDate } from "./schedulingService";
+import { createRealtimeStatusHandler, doctorScopesOverlap } from "./slotAvailabilityState";
 
 export interface OccupiedSlotRecord {
   appointment_id?: string;
@@ -26,7 +27,14 @@ export interface OccupiedSlotRecord {
   doctor_status?: string | null;
   payment_status: string;
   occupancy_type: "reserved" | "booked";
+  /** Real database value, passed through untouched (never invented by the frontend). */
   payment_hold_expires_at?: string | null;
+  /** Database clock returned by the RPC; used only to judge expiry on database time. */
+  db_now?: string | null;
+  /** Real DB expiry preserved after the tracker neutralises browser-clock re-judging. */
+  db_hold_expires_at?: string | null;
+  /** True for a Realtime hint that no authoritative fetch has confirmed yet. */
+  provisional?: boolean;
 }
 
 export interface BroadcastSlotChangePayload {
@@ -114,11 +122,12 @@ export function broadcastSlotChange(
             event: "slot_change",
             payload,
           }).then(() => {
-            setTimeout(() => {
+            const timer = setTimeout(() => {
               try {
-                supabase.removeChannel(channel);
+                Promise.resolve(supabase.removeChannel(channel)).catch(() => {});
               } catch {}
             }, 3000);
+            (timer as any)?.unref?.();
           }).catch(() => {});
         }
       });
@@ -191,11 +200,22 @@ export function subscribeToClinicSlotChanges(
       }
     );
 
-    channel.subscribe((status) => {
-      if (status === "SUBSCRIBED") {
-        console.debug(`[slotAvailabilityRealtime] Subscribed to realtime availability for clinic ${clinicId}`);
-      }
-    });
+    // Status handling: the first successful join AND every re-join after a disconnect
+    // trigger an authoritative resync (callbacks without a payload => full DB refetch),
+    // so broadcasts missed while offline are recovered from the database instead of
+    // being assumed delivered. `ack:true` only confirms the SERVER received a send; it is
+    // never treated as proof that another browser received the event.
+    channel.subscribe(
+      createRealtimeStatusHandler((reason) => {
+        console.debug(`[slotAvailabilityRealtime] Channel ${reason} for clinic ${clinicId}: resyncing from database`);
+        const cbs = clinicCallbacks.get(clinicId);
+        if (cbs) {
+          cbs.forEach((cb) => {
+            try { cb(); } catch {}
+          });
+        }
+      })
+    );
   }
 
   entry.refCount++;
@@ -261,8 +281,65 @@ export function subscribeToClinicSlotChanges(
 }
 
 /**
- * Authoritatively retrieves occupied appointment slots for a clinic and date.
- * Strictly differentiates between 'reserved' (active temporary checkout hold) and 'booked' (confirmed/paid).
+ * Raised when the authoritative availability RPC could not be read. Callers MUST keep
+ * their previous snapshot (unknown is NOT the same as free) and never fabricate
+ * occupancy or availability from local caches or RLS-filtered table reads.
+ */
+export class AuthoritativeSlotsUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthoritativeSlotsUnavailableError";
+  }
+}
+
+/**
+ * Pure mapping of `get_occupied_appointment_slots` rows to client records.
+ * - `payment_hold_expires_at` / `db_now` are passed through EXACTLY as the database
+ *   returned them. Nothing is invented: when absent (older RPC version) they stay
+ *   null and the row is trusted because the RPC already excludes expired holds.
+ * - A row is `reserved` only when the database says so; anything else is `booked`.
+ */
+export function mapOccupiedSlotRows(rows: any[], clinicId: string, cleanDate: string): OccupiedSlotRecord[] {
+  const bySlotAndDoc = new Map<string, OccupiedSlotRecord>();
+  for (const s of rows || []) {
+    const slotTimeClean = String(s.slot_time || "").slice(0, 5);
+    if (!slotTimeClean) continue;
+    const occType: "reserved" | "booked" = s.occupancy_type === "reserved" ? "reserved" : "booked";
+    const docId = s.assigned_doctor_id ?? null;
+    const key = `${slotTimeClean}|${docId ?? ""}`;
+    const existing = bySlotAndDoc.get(key);
+    // Enforce BOOKED > RESERVED priority if duplicate rows exist for the same slot & doctor scope
+    if (existing && existing.occupancy_type === "booked" && occType === "reserved") {
+      continue;
+    }
+    bySlotAndDoc.set(key, {
+      date: s.slot_date ? String(s.slot_date).slice(0, 10) : cleanDate,
+      time: slotTimeClean,
+      batch_time: slotTimeClean,
+      assigned_doctor_id: docId,
+      clinic_id: s.clinic_id || clinicId,
+      status: occType === "reserved" ? "pending" : "scheduled",
+      doctor_status: "approved",
+      payment_status: occType === "reserved" ? "pending_hold" : "paid",
+      occupancy_type: occType,
+      payment_hold_expires_at: s.payment_hold_expires_at ?? null,
+      db_now: s.db_now ?? null,
+    });
+  }
+  return Array.from(bySlotAndDoc.values());
+}
+
+/**
+ * Authoritatively retrieves occupied appointment slots for a clinic and Manila date from
+ * the database RPC `get_occupied_appointment_slots` (privacy-preserving: no patient data).
+ *
+ * - Queries `p_doctor_id: null` so clinic-wide unassigned holds (`assigned_doctor_id IS NULL`)
+ *   are always included alongside doctor-specific holds, then filters by `doctorScopesOverlap`
+ *   when `doctorId` is provided.
+ * - THROWS `AuthoritativeSlotsUnavailableError` when the RPC cannot be read. There is
+ *   deliberately NO table / localStorage fallback: patients can only read their own
+ *   appointment rows (RLS), so any fallback would silently show other patients' slots
+ *   as available.
  */
 export async function fetchAuthoritativeOccupiedSlots({
   clinicId,
@@ -277,165 +354,22 @@ export async function fetchAuthoritativeOccupiedSlots({
 
   const cleanDate = getManilaCalendarDate(date);
   const cleanDocId = isValidUuid(doctorId) ? doctorId : null;
-  const cleanClinicId = isValidUuid(clinicId) ? clinicId : null;
-  const bookingsList: OccupiedSlotRecord[] = [];
-  let rpcSucceeded = false;
-
-  // 1. Authoritative privacy-preserving RPC call
-  if (cleanClinicId) {
-    try {
-      const { data: rpcSlots, error: rpcErr } = await (supabase.rpc as any)(
-        "get_occupied_appointment_slots",
-        {
-          p_clinic_id: cleanClinicId,
-          p_date: cleanDate,
-          p_doctor_id: cleanDocId,
-        }
-      );
-
-      if (!rpcErr && rpcSlots && Array.isArray(rpcSlots)) {
-        rpcSucceeded = true;
-        for (const s of rpcSlots) {
-          const slotTimeClean = (s.slot_time || "").slice(0, 5);
-          if (!slotTimeClean) continue;
-
-          const occType: "reserved" | "booked" =
-            s.occupancy_type === "reserved" || s.payment_status === "pending_hold"
-              ? "reserved"
-              : "booked";
-
-          bookingsList.push({
-            date: cleanDate,
-            time: slotTimeClean,
-            batch_time: slotTimeClean,
-            assigned_doctor_id: s.assigned_doctor_id,
-            clinic_id: s.clinic_id || cleanClinicId,
-            status: occType === "reserved" ? "pending" : "scheduled",
-            doctor_status: "approved",
-            payment_status: occType === "reserved" ? "pending_hold" : "paid",
-            occupancy_type: occType,
-            payment_hold_expires_at: s.payment_hold_expires_at || null,
-          });
-        }
-      } else if (rpcErr) {
-        console.debug("[slotAvailabilityRealtime] RPC query response:", rpcErr.message || rpcErr);
-      }
-    } catch (rpcEx) {
-      console.debug("[slotAvailabilityRealtime] RPC query fallback:", rpcEx);
-    }
+  if (!isValidUuid(clinicId)) {
+    throw new AuthoritativeSlotsUnavailableError("Clinic id is not a valid UUID; availability cannot be verified.");
   }
 
-  // 2. Direct table fallback ONLY if RPC failed / threw an error
-  if (!rpcSucceeded && cleanClinicId) {
-    try {
-      let query = supabase
-        .from("patient_appointment")
-        .select("appointment_id, date, time, batch_time, queue_number, status, doctor_status, assigned_doctor_id, clinic_id, payment_status, payment_hold_expires_at")
-        .eq("clinic_id", cleanClinicId)
-        .neq("status", "cancelled")
-        .neq("status", "rejected");
+  const { data, error } = await (supabase.rpc as any)("get_occupied_appointment_slots", {
+    p_clinic_id: clinicId,
+    p_date: cleanDate,
+    p_doctor_id: null,
+  });
 
-      const { data, error } = await query;
-      if (!error && Array.isArray(data)) {
-        const nowMs = Date.now();
-        const matched = data.filter((row: any) => {
-          if (!row.date) return false;
-          const st = String(row.status || "").toLowerCase().trim();
-          if (st === "cancelled" || st === "rejected" || st === "declined") return false;
-          const docSt = String(row.doctor_status || "").toLowerCase().trim();
-          if (docSt === "rejected" || docSt === "declined") return false;
-
-          const paySt = String(row.payment_status || "").toLowerCase().trim();
-          if (paySt === "cancelled" || paySt === "expired" || paySt === "failed") return false;
-          if (paySt === "pending_hold" && row.payment_hold_expires_at) {
-            const exp = new Date(row.payment_hold_expires_at).getTime();
-            if (!isNaN(exp) && exp <= nowMs) return false;
-          }
-
-          return getManilaCalendarDate(row.date) === cleanDate;
-        });
-
-        for (const m of matched) {
-          const mTime = (m.time || m.batch_time || "").slice(0, 5);
-          const mDocId = m.assigned_doctor_id;
-          const exists = bookingsList.some((b) => {
-            const bTime = (b.time || b.batch_time || "").slice(0, 5);
-            const bDocId = b.assigned_doctor_id;
-            return bTime === mTime && (!mDocId || !bDocId || String(bDocId) === String(mDocId));
-          });
-
-          if (!exists) {
-            const occType: "reserved" | "booked" =
-              m.payment_status === "pending_hold" ? "reserved" : "booked";
-
-            bookingsList.push({
-              appointment_id: m.appointment_id,
-              date: cleanDate,
-              time: mTime,
-              batch_time: mTime,
-              assigned_doctor_id: mDocId,
-              clinic_id: m.clinic_id || cleanClinicId,
-              status: m.status || "scheduled",
-              doctor_status: m.doctor_status || "approved",
-              payment_status: m.payment_status || "paid",
-              occupancy_type: occType,
-              payment_hold_expires_at: m.payment_hold_expires_at,
-            });
-          }
-        }
-      }
-    } catch (tabEx) {
-      console.debug("[slotAvailabilityRealtime] Table query fallback:", tabEx);
-    }
+  if (error || !Array.isArray(data)) {
+    throw new AuthoritativeSlotsUnavailableError(error?.message || "get_occupied_appointment_slots returned no data.");
   }
-
-  // 3. Merge local demo/cached bookings ONLY if RPC failed / unavailable
-  if (!rpcSucceeded) {
-    try {
-      const rawLocal = localStorage.getItem("dermai_clinic_appointments");
-    if (rawLocal) {
-      const parsed = JSON.parse(rawLocal);
-      if (Array.isArray(parsed)) {
-        for (const loc of parsed) {
-          const locClinicId = String(loc.clinic_id || loc.clinicId || "");
-          if (locClinicId === String(clinicId)) {
-            const locDateStr = getManilaCalendarDate(loc.date);
-            if (locDateStr === cleanDate) {
-              const locTime = (loc.time || loc.batch_time || loc.batchTime || "").slice(0, 5);
-              const locDocId = loc.assigned_doctor_id || loc.assignedDoctorId;
-              const exists = bookingsList.some((b) => {
-                const bTime = (b.time || b.batch_time || "").slice(0, 5);
-                const bDocId = b.assigned_doctor_id;
-                return bTime === locTime && (!locDocId || !bDocId || String(bDocId) === String(locDocId));
-              });
-
-              if (!exists) {
-                const paySt = String(loc.payment_status || loc.paymentStatus || "").toLowerCase();
-                const occType: "reserved" | "booked" = paySt === "pending_hold" ? "reserved" : "booked";
-
-                bookingsList.push({
-                  appointment_id: loc.appointment_id || loc.id,
-                  date: cleanDate,
-                  time: locTime,
-                  batch_time: locTime,
-                  assigned_doctor_id: locDocId,
-                  clinic_id: clinicId,
-                  status: loc.status || "scheduled",
-                  doctor_status: loc.doctor_status || "approved",
-                  payment_status: loc.payment_status || "paid",
-                  occupancy_type: occType,
-                  payment_hold_expires_at: loc.payment_hold_expires_at || loc.paymentHoldExpiresAt,
-                });
-              }
-            }
-          }
-        }
-      }
-    }
-    } catch {}
-  }
-
-  return bookingsList;
+  const allSlots = mapOccupiedSlotRows(data, clinicId, cleanDate);
+  if (!cleanDocId) return allSlots;
+  return allSlots.filter((r) => doctorScopesOverlap(r.assigned_doctor_id, cleanDocId));
 }
 
 /**
@@ -466,6 +400,10 @@ export function useSlotAvailabilityRealtime({
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const onRefreshRef = useRef(onRefresh);
   onRefreshRef.current = onRefresh;
+  // The viewed date is read through a ref so a date change never tears down and
+  // re-creates the clinic channel (which would open a gap where events are missed).
+  const selectedDateRef = useRef(selectedDate);
+  selectedDateRef.current = selectedDate;
 
   const triggerDebouncedRefresh = useCallback((payload?: BroadcastSlotChangePayload) => {
     if (debounceTimerRef.current) {
@@ -490,10 +428,11 @@ export function useSlotAvailabilityRealtime({
     if (!enabled || !clinicId) return;
 
     const unsubscribe = subscribeToClinicSlotChanges(clinicId, (payload) => {
-      // If date is provided in payload and doesn't match selectedDate, ignore ONLY if it's strictly a DIFFERENT Manila calendar date
-      if (payload?.date && selectedDate) {
+      // Ignore ONLY events for a strictly DIFFERENT Manila calendar date than the one being viewed
+      const viewedDate = selectedDateRef.current;
+      if (payload?.date && viewedDate) {
         const payloadDate = getManilaCalendarDate(payload.date);
-        const currentDate = getManilaCalendarDate(selectedDate);
+        const currentDate = getManilaCalendarDate(viewedDate);
         if (payloadDate !== currentDate) {
           return;
         }
@@ -507,7 +446,7 @@ export function useSlotAvailabilityRealtime({
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [clinicId, selectedDate, enabled, triggerDebouncedRefresh]);
+  }, [clinicId, enabled, triggerDebouncedRefresh]);
 
   // 2. Tab Visibility & Focus Listener (Refresh immediately when user returns to tab)
   useEffect(() => {

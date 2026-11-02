@@ -1271,7 +1271,10 @@ export function generateSlotsForShift({
     return apptMin >= startMin && apptMin < endMin;
   });
 
-  const totalBookedInShift = activeBookingsInShift.length;
+  const distinctShiftSlotTimes = new Set(
+    activeBookingsInShift.map((appt) => (appt.time || appt.batch_time || "").slice(0, 5))
+  );
+  const totalBookedInShift = distinctShiftSlotTimes.size;
   const isShiftCapacityReached = totalBookedInShift >= capacity;
 
   const slots: ConsultationSlot[] = [];
@@ -1288,21 +1291,33 @@ export function generateSlotsForShift({
 
     const isPast = isToday && slotStart <= currentMinutesNow;
 
-    const matchedBooking = activeBookingsInShift.find((appt) => {
+    const matchingBookings = activeBookingsInShift.filter((appt) => {
       const bTime = (appt.time || appt.batch_time || "").slice(0, 5);
       return bTime === slotTimeStr;
     });
 
-    const isOccupied = !!matchedBooking;
+    const isOccupied = matchingBookings.length > 0;
     let isReserved = false;
     let isBooked = isOccupied;
 
-    if (matchedBooking) {
-      const paySt = String(matchedBooking.payment_status || matchedBooking.paymentStatus || "").toLowerCase().trim();
-      const occType = String(matchedBooking.occupancy_type || matchedBooking.occupancyType || "").toLowerCase().trim();
-      if (occType === "reserved" || paySt === "pending_hold") {
-        isReserved = true;
-      }
+    if (isOccupied) {
+      // Priority rule: BOOKED > RESERVED > AVAILABLE.
+      // A slot is 'reserved' only if no matching record is a confirmed booking.
+      const hasConfirmedBooking = matchingBookings.some((b) => {
+        const paySt = String(b.payment_status || b.paymentStatus || "").toLowerCase().trim();
+        const occType = String(b.occupancy_type || b.occupancyType || "").toLowerCase().trim();
+        if (occType === "booked" || paySt === "paid") return true;
+        if (occType === "reserved" || paySt === "pending_hold") return false;
+        const rawExp = b.payment_hold_expires_at || b.paymentHoldExpiresAt || b.db_hold_expires_at;
+        if (rawExp) {
+          const expMs = new Date(rawExp).getTime();
+          if (!isNaN(expMs) && expMs > Date.now()) {
+            return false;
+          }
+        }
+        return true;
+      });
+      isReserved = !hasConfirmedBooking;
     }
 
     const isCapacityFull = isShiftCapacityReached;

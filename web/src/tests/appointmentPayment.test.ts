@@ -530,8 +530,24 @@ async function runPhase3ContractAndSecurityTests() {
   console.log("-------------------------------------------------------");
 
   const originalRpc = supabase.rpc.bind(supabase);
+  const originalChannel = supabase.channel.bind(supabase);
+  const originalRemoveChannel = supabase.removeChannel.bind(supabase);
 
   try {
+    (supabase as any).channel = () => ({
+      on() {
+        return this;
+      },
+      subscribe(cb?: (status: string) => void) {
+        if (cb) cb("SUBSCRIBED");
+        return this;
+      },
+      send: async () => "ok",
+      unsubscribe: async () => "ok",
+      teardown: () => {},
+    });
+    (supabase as any).removeChannel = async () => "ok";
+
     // ── Scenario 18: Exact RPC Argument Contract for acquire_appointment_slot_hold
     console.log("\n[Scenario 18] [MOCK RPC] Testing acquire_appointment_slot_hold argument mapping...");
     {
@@ -794,8 +810,11 @@ async function runPhase3ContractAndSecurityTests() {
     }
 
   } finally {
-    // Restore original supabase.rpc
+    // Restore original supabase methods and clean up any channels
     supabase.rpc = originalRpc;
+    (supabase as any).channel = originalChannel;
+    (supabase as any).removeChannel = originalRemoveChannel;
+    await supabase.removeAllChannels();
   }
 
   console.log("\n=======================================================");

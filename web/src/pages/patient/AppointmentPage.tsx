@@ -1,4 +1,4 @@
-import React, { type FormEvent, useState, useEffect, useMemo, useRef } from "react";
+import React, { type FormEvent, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   HeartPulse,
   AlertCircle,
   Camera,
@@ -23,6 +24,7 @@ import {
   ShieldCheck,
   Lock,
   RefreshCw,
+  HelpCircle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
@@ -59,9 +61,16 @@ import {
   useSlotAvailabilityRealtime,
   broadcastSlotChange,
   fetchAuthoritativeOccupiedSlots,
-  type OccupiedSlotRecord,
   type BroadcastSlotChangePayload,
 } from "@/lib/slotAvailabilityRealtime";
+import {
+  SlotAvailabilityTracker,
+  HeldSlotTracker,
+  type HeldSlotMetadata,
+  classifyHoldFailure,
+  doctorScopesOverlap,
+  normalizeSlotTime,
+} from "@/lib/slotAvailabilityState";
 import {
   acquireAppointmentSlotHold,
   extractEdgeFunctionError,
@@ -107,6 +116,7 @@ export type ClinicDoctorItem = {
   id: string;
   name: string;
   specialization: string;
+  specializations?: string[];
   photo?: string;
   dutyDays: string[];
   dutyStartTime: string;
@@ -396,6 +406,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   const [availableClinics, setAvailableClinics] = useState<{ id: string; name: string; district?: string }[]>([]);
   const [loadingClinic, setLoadingClinic] = useState(true);
   const [showClinicDetailsModal, setShowClinicDetailsModal] = useState(false);
+  const [showInstructionsModal, setShowInstructionsModal] = useState(false);
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -429,6 +440,25 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return `${tmrw.getFullYear()}-${String(tmrw.getMonth() + 1).padStart(2, "0")}-${String(tmrw.getDate()).padStart(2, "0")}`;
   });
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>(() => (isDraftValid ? draft?.selectedDoctorId : "") || "");
+  const [isDoctorDropdownOpen, setIsDoctorDropdownOpen] = useState(false);
+  const doctorDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close doctor dropdown when clicking outside or changing date
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (doctorDropdownRef.current && !doctorDropdownRef.current.contains(e.target as Node)) {
+        setIsDoctorDropdownOpen(false);
+      }
+    }
+    if (isDoctorDropdownOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [isDoctorDropdownOpen]);
+
+  useEffect(() => {
+    setIsDoctorDropdownOpen(false);
+  }, [selectedDate]);
   const [selectedTime, setSelectedTime] = useState<string>(() => (isDraftValid ? draft?.selectedTime : "") || "09:00");
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
     const now = new Date();
@@ -713,17 +743,21 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     return age >= 0 ? age : null;
   }, [patientBirthdate]);
 
-  // Active chosen doctor on duty
+  // Active chosen doctor on duty (only when explicitly selected or if clinic has exactly 1 doctor)
   const activeDutyDoctor = useMemo<ClinicDoctorItem | null>(() => {
     const docs = selectedClinic?.doctors || [];
     if (docs.length === 0) return null;
+    if (!selectedDoctorId) {
+      if (docs.length === 1) return docs[0];
+      return null;
+    }
     const found = docs.find((d) => d.id === selectedDoctorId);
-    return found || docs[0];
+    return found || null;
   }, [selectedClinic?.doctors, selectedDoctorId]);
 
-  // Keep selectedDoctorId initialized when doctors load
+  // Only auto-initialize selectedDoctorId if the clinic has exactly 1 doctor
   useEffect(() => {
-    if (!selectedDoctorId && selectedClinic?.doctors && selectedClinic.doctors.length > 0) {
+    if (!selectedDoctorId && selectedClinic?.doctors && selectedClinic.doctors.length === 1) {
       setSelectedDoctorId(selectedClinic.doctors[0].id);
     }
   }, [selectedClinic?.doctors, selectedDoctorId]);
@@ -739,36 +773,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       return "";
     }
   }, [selectedDate]);
-
-  // Automatically advance selectedDate to doctor's next duty day if the current date is not on duty
-  useEffect(() => {
-    if (!activeDutyDoctor || !selectedDate) return;
-    try {
-      const [y, m, d] = selectedDate.split("-").map(Number);
-      const dt = new Date(y, m - 1, d);
-      const currentDayOfWeek = dt.toLocaleDateString("en-US", { weekday: "long" });
-
-      const clinicSchedule = {
-        openTime: selectedClinic?.openTime,
-        closeTime: selectedClinic?.closeTime,
-        operatingDays: selectedClinic?.operatingDays,
-      };
-
-      if (!isDoctorOnDutyOnDay(activeDutyDoctor, currentDayOfWeek, clinicSchedule)) {
-        const start = new Date();
-        for (let i = 1; i <= 45; i++) {
-          const cand = new Date(start);
-          cand.setDate(start.getDate() + i);
-          const candDay = cand.toLocaleDateString("en-US", { weekday: "long" });
-          if (isDoctorOnDutyOnDay(activeDutyDoctor, candDay, clinicSchedule)) {
-            const candStr = `${cand.getFullYear()}-${String(cand.getMonth() + 1).padStart(2, "0")}-${String(cand.getDate()).padStart(2, "0")}`;
-            setSelectedDate(candStr);
-            break;
-          }
-        }
-      }
-    } catch { }
-  }, [activeDutyDoctor?.id, selectedClinic?.openTime, selectedClinic?.closeTime, selectedClinic?.operatingDays]);
 
   // Generate calendar days for the current calendarMonth (42 cells to support full 6 weeks)
   const calendarDays = useMemo(() => {
@@ -857,14 +861,151 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       .join(", ");
   }, [activeDutyDoctor, dayOfWeekForSelectedDate]);
 
-  const [existingBookings, setExistingBookings] = useState<any[]>([]);
-  const [_loadingBookings, setLoadingBookings] = useState(false);
-  const [realtimeRefreshTick, setRealtimeRefreshTick] = useState(0);
-  const [slotConflictWarning, setSlotConflictWarning] = useState<string | null>(null);
+  // Doctor specializations helper
+  const getDoctorSpecializations = useCallback((doc: ClinicDoctorItem | null | undefined): string[] => {
+    if (!doc) return [];
+    if (doc.specializations && doc.specializations.length > 0) {
+      return doc.specializations;
+    }
+    if (doc.specialization && typeof doc.specialization === "string") {
+      const parts = doc.specialization.split(",").map((s) => s.trim()).filter(Boolean);
+      if (parts.length > 0) return parts;
+    }
+    return ["General Dermatology"];
+  }, []);
 
-  // Stale polling race condition guard & active session conflict cache
+  const activeDoctorSpecializations = useMemo(() => {
+    return getDoctorSpecializations(activeDutyDoctor);
+  }, [activeDutyDoctor, getDoctorSpecializations]);
+
+  const clinicDoctors = useMemo(() => {
+    return selectedClinic?.doctors || [];
+  }, [selectedClinic?.doctors]);
+
+  const handleDoctorSelect = useCallback(
+    (doc: ClinicDoctorItem) => {
+      setSelectedDoctorId(doc.id);
+      setIsDoctorDropdownOpen(false);
+    },
+    []
+  );
+
+  const [existingBookings, setExistingBookings] = useState<any[]>([]);
+  const [loadingBookings, setLoadingBookings] = useState(false);
+  const [hasAuthoritativeOccupancy, setHasAuthoritativeOccupancy] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
+  const [realtimeRefreshTick, setRealtimeRefreshTick] = useState(0);
+  const [, setSlotConflictWarning] = useState<string | null>(null);
+
+  // Authoritative slot availability tracker (database is single source of truth;
+  // Realtime broadcasts are short-lived hints superseded only by fetches started after the event)
   const fetchBookingsSeqRef = useRef<number>(0);
-  const sessionConflictSlotsRef = useRef<Map<string, OccupiedSlotRecord>>(new Map());
+  const availabilityTrackerRef = useRef<SlotAvailabilityTracker>(new SlotAvailabilityTracker());
+  const heldSlotTrackerRef = useRef<HeldSlotTracker>(new HeldSlotTracker());
+  const [myActiveHold, setMyActiveHold] = useState<HeldSlotMetadata | null>(() => heldSlotTrackerRef.current.get());
+
+  // Discover and synchronize current authenticated patient's own active hold securely
+  useEffect(() => {
+    let isCancelled = false;
+
+    const syncMyActiveHold = async () => {
+      if (!user?.id) {
+        setMyActiveHold(null);
+        return;
+      }
+
+      try {
+        // 1. Authoritative check via security definer get_my_active_appointment_hold RPC
+        const { data: holdRows, error: rpcErr } = await supabase.rpc(
+          "get_my_active_appointment_hold",
+          { p_clinic_id: selectedClinic?.id ? String(selectedClinic.id) : null }
+        );
+
+        if (!isCancelled && !rpcErr && Array.isArray(holdRows) && holdRows.length > 0) {
+          const row = holdRows[0];
+          const rec = heldSlotTrackerRef.current.record({
+            appointmentId: row.appointment_id,
+            clinicId: String(row.clinic_id),
+            date: row.slot_date,
+            doctorId: row.assigned_doctor_id,
+            slotTime: row.slot_time,
+          });
+          setMyActiveHold(rec);
+          if (typeof window !== "undefined") {
+            sessionStorage.setItem("dermai_pending_appointment_id", row.appointment_id);
+          }
+          if (row.slot_date && (!selectedDate || selectedDate === row.slot_date)) {
+            setSelectedDate(row.slot_date);
+            setSelectedTime(row.slot_time);
+          }
+          return;
+        }
+
+        // 2. Fallback check: verify session pending appointment id against patient_appointment
+        const pendingSessionId = typeof window !== "undefined" ? sessionStorage.getItem("dermai_pending_appointment_id") : null;
+        if (!isCancelled && pendingSessionId && isValidUuid(pendingSessionId)) {
+          const { data: appt, error: apptErr } = await supabase
+            .from("patient_appointment")
+            .select("appointment_id, payment_status, payment_hold_expires_at, clinic_id, assigned_doctor_id, date, time, batch_time, user_id")
+            .eq("appointment_id", pendingSessionId)
+            .eq("user_id", user.id)
+            .maybeSingle();
+
+          if (!isCancelled && !apptErr && appt && appt.payment_status === "pending_hold") {
+            const exp = appt.payment_hold_expires_at ? new Date(appt.payment_hold_expires_at).getTime() : 0;
+            if (exp > Date.now()) {
+              const rowDate = appt.date ? getManilaCalendarDate(appt.date) : "";
+              const rowTime = normalizeSlotTime(appt.time || appt.batch_time);
+              const rec = heldSlotTrackerRef.current.record({
+                appointmentId: appt.appointment_id,
+                clinicId: String(appt.clinic_id),
+                date: rowDate,
+                doctorId: appt.assigned_doctor_id,
+                slotTime: rowTime,
+              });
+              setMyActiveHold(rec);
+              if (rowDate && (!selectedDate || selectedDate === rowDate)) {
+                setSelectedDate(rowDate);
+                setSelectedTime(rowTime);
+              }
+              return;
+            }
+          }
+
+          if (typeof window !== "undefined") {
+            sessionStorage.removeItem("dermai_pending_appointment_id");
+          }
+        }
+
+        if (!isCancelled) {
+          const currentHeld = heldSlotTrackerRef.current.get();
+          if (currentHeld) {
+            heldSlotTrackerRef.current.clearConfirmedInactive(currentHeld.appointmentId);
+            setMyActiveHold(null);
+          }
+        }
+      } catch (err) {
+        console.warn("[AppointmentPage] Error checking active hold:", err);
+      }
+    };
+
+    syncMyActiveHold();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [user?.id, selectedClinic?.id]);
+
+  // Keep tracker view synchronized with selected clinic, date, and doctor
+  useEffect(() => {
+    if (!selectedDate) return;
+    availabilityTrackerRef.current.setView(
+      selectedDate,
+      activeDutyDoctor?.id,
+      String(selectedClinic?.id || "")
+    );
+    setExistingBookings(availabilityTrackerRef.current.visible());
+  }, [selectedDate, activeDutyDoctor?.id, selectedClinic?.id]);
 
   // Clear slot conflict warning when date or doctor changes
   useEffect(() => {
@@ -879,38 +1020,65 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     enabled: !!selectedClinic?.id && !!selectedDate,
     pollingIntervalMs: 5000,
     onRefresh: (payload?: BroadcastSlotChangePayload) => {
+      if (selectedDate) {
+        availabilityTrackerRef.current.setView(
+          selectedDate,
+          activeDutyDoctor?.id,
+          String(selectedClinic?.id || "")
+        );
+      }
+
       if (payload && payload.slotTime && payload.date) {
         const payloadDate = getManilaCalendarDate(payload.date);
         const timeClean = payload.slotTime.slice(0, 5);
 
+        heldSlotTrackerRef.current.onRealtimeEvent({
+          date: payloadDate,
+          slotTime: timeClean,
+          doctorId: payload.doctorId,
+          changeType: payload.changeType,
+          timestamp: payload.timestamp,
+        });
+
+        const isOwnHold = heldSlotTrackerRef.current.matches(payloadDate, timeClean, payload.doctorId);
+
         if (payload.changeType === "hold_acquired") {
-          // If current patient had this exact slot selected, clear immediately and show notification
-          if (
-            selectedDate === payloadDate &&
-            selectedTime === timeClean &&
-            (!payload.doctorId || !activeDutyDoctor?.id || String(payload.doctorId) === String(activeDutyDoctor.id))
-          ) {
-            setSelectedTime("");
-            const timeLabel = formatTime12h(timeClean);
-            setSlotConflictWarning(`The ${timeLabel} consultation slot was just reserved by another patient. Please choose another available consultation slot.`);
+          if (!isOwnHold) {
+            if (
+              selectedDate === payloadDate &&
+              selectedTime === timeClean &&
+              doctorScopesOverlap(payload.doctorId, activeDutyDoctor?.id)
+            ) {
+              setSelectedTime("");
+              const timeLabel = formatTime12h(timeClean);
+              setSlotConflictWarning(`The ${timeLabel} consultation slot was just reserved by another patient. Please select another available time.`);
+            }
           }
         } else if (payload.changeType === "payment_completed") {
-          if (
-            selectedDate === payloadDate &&
-            selectedTime === timeClean &&
-            (!payload.doctorId || !activeDutyDoctor?.id || String(payload.doctorId) === String(activeDutyDoctor.id))
-          ) {
-            setSelectedTime("");
-            const timeLabel = formatTime12h(timeClean);
-            setSlotConflictWarning(`The ${timeLabel} consultation slot was just booked by another patient. Please choose another available consultation slot.`);
+          const held = heldSlotTrackerRef.current.get();
+          const isMyPaid = Boolean(held && held.date === payloadDate && held.slotTime === timeClean && doctorScopesOverlap(held.doctorId, payload.doctorId));
+          if (!isMyPaid) {
+            if (
+              selectedDate === payloadDate &&
+              selectedTime === timeClean &&
+              doctorScopesOverlap(payload.doctorId, activeDutyDoctor?.id)
+            ) {
+              setSelectedTime("");
+              const timeLabel = formatTime12h(timeClean);
+              setSlotConflictWarning(`The ${timeLabel} consultation slot was just booked by another patient. Please select another available time.`);
+            }
           }
-        } else if (payload.changeType === "hold_released" || payload.changeType === "cancelled") {
-          setExistingBookings((prev) =>
-            prev.filter((b) => {
-              const bTime = (b.time || b.batch_time || "").slice(0, 5);
-              return bTime !== timeClean;
-            })
-          );
+        }
+
+        const changed = availabilityTrackerRef.current.applyEvent({
+          date: payloadDate,
+          slotTime: timeClean,
+          doctorId: payload.doctorId,
+          changeType: payload.changeType,
+          timestamp: payload.timestamp,
+        });
+        if (changed) {
+          setExistingBookings(availabilityTrackerRef.current.visible());
         }
       }
 
@@ -933,19 +1101,20 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   // Tab unload / navigate away checkout hold cleanup
   useEffect(() => {
     const handleUnload = () => {
-      const pendingApptId = sessionStorage.getItem("dermai_pending_appointment_id");
+      const held = heldSlotTrackerRef.current.get();
+      const pendingApptId = held?.appointmentId || sessionStorage.getItem("dermai_pending_appointment_id");
       try {
         if (isCheckoutRedirectActiveForAppointment(pendingApptId)) {
           return; // PayMongo checkout redirect in progress for this specific appointment; NEVER release or cancel hold!
         }
-      } catch {}
+      } catch { }
       if (pendingApptId && showDemoCheckoutModal) {
-        const timeClean = (selectedTime || "08:00").slice(0, 5);
+        const slotTime = held?.slotTime || normalizeSlotTime(selectedTime) || undefined;
         releaseAppointmentHoldSafely(pendingApptId, "Checkout abandoned on tab close.", {
-          clinicId: selectedClinic?.id,
-          date: selectedDate,
-          doctorId: activeDutyDoctor?.id,
-          slotTime: timeClean,
+          clinicId: held?.clinicId || (selectedClinic?.id ? String(selectedClinic.id) : undefined),
+          date: held?.date || selectedDate || undefined,
+          doctorId: held ? held.doctorId : activeDutyDoctor?.id,
+          slotTime,
         });
       }
     };
@@ -957,77 +1126,63 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     };
   }, [showDemoCheckoutModal, selectedClinic?.id, selectedDate, selectedTime, activeDutyDoctor?.id]);
 
+  const handleRetryAvailability = useCallback(() => {
+    setAvailabilityError(null);
+    setRealtimeRefreshTick((t) => t + 1);
+  }, []);
+
   // Fetch real-time active bookings for the clinic and chosen date
   useEffect(() => {
     let cancelled = false;
     const currentSeq = ++fetchBookingsSeqRef.current;
 
     async function fetchBookings() {
-      if (!selectedDate) return;
+      if (!selectedDate) {
+        setHasAuthoritativeOccupancy(false);
+        setAvailabilityError(null);
+        return;
+      }
+      const clinicId = selectedClinic?.id;
+      if (!clinicId) {
+        setHasAuthoritativeOccupancy(false);
+        setAvailabilityError(null);
+        return;
+      }
+
+      const scopeKey = String(clinicId);
+      availabilityTrackerRef.current.setView(selectedDate, activeDutyDoctor?.id, scopeKey);
+      const fetchStartedAt = Date.now();
       setLoadingBookings(true);
+
       try {
-        const clinicId = selectedClinic?.id;
-        let bookingsList: any[] = [];
-        let rpcCompleted = false;
-
-        // Try the privacy-preserving get_occupied_appointment_slots RPC first
-        if (clinicId) {
-          try {
-            const authoritativeSlots = await fetchAuthoritativeOccupiedSlots({
-              clinicId,
-              date: selectedDate,
-              doctorId: activeDutyDoctor?.id,
-            });
-            if (!cancelled && currentSeq === fetchBookingsSeqRef.current) {
-              bookingsList = authoritativeSlots;
-              rpcCompleted = true;
-            }
-          } catch (rpcErr) {
-            console.debug("[AppointmentPage] authoritative slots fetch note:", rpcErr);
-          }
+        // Query clinic-wide occupied slots for the date; SlotAvailabilityTracker.visible()
+        // filters per selected doctor while keeping unassigned clinic-wide holds active.
+        const authoritativeSlots = await fetchAuthoritativeOccupiedSlots({
+          clinicId,
+          date: selectedDate,
+          doctorId: null,
+        });
+        if (!cancelled) {
+          const nextVisible = availabilityTrackerRef.current.applyAuthoritative(
+            authoritativeSlots,
+            fetchStartedAt,
+            { forDate: selectedDate, scopeKey }
+          );
+          setExistingBookings(nextVisible);
+          setHasAuthoritativeOccupancy(true);
+          setAvailabilityError(null);
         }
-
-        // Direct table query fallback ONLY if RPC failed / threw an error
-        if (!rpcCompleted && bookingsList.length === 0) {
-          let query = supabase
-            .from("patient_appointment")
-            .select("appointment_id, date, time, batch_time, queue_number, status, doctor_status, assigned_doctor_id, clinic_id, payment_status, payment_hold_expires_at")
-            .neq("status", "cancelled")
-            .neq("status", "rejected");
-
-          if (clinicId) {
-            query = query.eq("clinic_id", clinicId);
-          }
-
-          const { data, error } = await query;
-          if (!cancelled && currentSeq === fetchBookingsSeqRef.current && data && !error && Array.isArray(data)) {
-            const matched = data.filter((row: any) => {
-              if (!row.date) return false;
-              const st = String(row.status || "").toLowerCase().trim();
-              if (st === "cancelled" || st === "rejected" || st === "declined") return false;
-              return getManilaCalendarDate(row.date) === selectedDate;
-            });
-
-            for (const m of matched) {
-              const mTime = (m.time || m.batch_time || "").slice(0, 5);
-              const mDocId = m.assigned_doctor_id;
-              const exists = bookingsList.some((b) => {
-                const bTime = (b.time || b.batch_time || "").slice(0, 5);
-                const bDocId = b.assigned_doctor_id;
-                return bTime === mTime && (!mDocId || !bDocId || String(bDocId) === String(mDocId));
-              });
-              if (!exists) {
-                bookingsList.push(m);
-              }
-            }
-          }
+      } catch (rpcErr) {
+        // On transient RPC failure, preserve the existing tracker state (unknown != free;
+        // never overwrite known reservations with an RLS-filtered table query).
+        console.debug("[AppointmentPage] authoritative slots fetch note:", rpcErr);
+        if (!cancelled) {
+          setExistingBookings(availabilityTrackerRef.current.visible());
+          setHasAuthoritativeOccupancy(false);
+          setAvailabilityError(
+            "Unable to verify real-time slot availability for this date. Booking is paused to prevent double-booking."
+          );
         }
-
-        if (!cancelled && currentSeq === fetchBookingsSeqRef.current) {
-          setExistingBookings(bookingsList);
-        }
-      } catch (e) {
-        console.warn("Could not query existing doctor bookings:", e);
       } finally {
         if (!cancelled && currentSeq === fetchBookingsSeqRef.current) {
           setLoadingBookings(false);
@@ -1086,21 +1241,41 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   useEffect(() => {
     if (!selectedTime || consultationSlots.length === 0) return;
     const currentSlot = consultationSlots.find((s) => s.slotTime === selectedTime);
-    if (currentSlot && !currentSlot.isAvailable) {
-      const timeLabel = currentSlot.label || formatTime12h(selectedTime);
-      const conflictMsg = currentSlot.isReserved
-        ? `The ${timeLabel} consultation slot was just reserved by another patient. Please select another available time.`
-        : `The ${timeLabel} consultation slot was just booked by another patient. Please select another available time.`;
-      // Immediately clear the selected time and remove selection styling
+    if (!currentSlot) return;
+
+    const isOwnHold = Boolean(
+      myActiveHold &&
+      myActiveHold.clinicId === String(selectedClinic?.id) &&
+      myActiveHold.date === selectedDate &&
+      myActiveHold.slotTime === selectedTime &&
+      doctorScopesOverlap(myActiveHold.doctorId, activeDutyDoctor?.id)
+    );
+
+    if (!currentSlot.isAvailable && !isOwnHold) {
+      // Immediately clear the selected time if taken by someone else and notify
       setSelectedTime("");
-      setSlotConflictWarning(conflictMsg);
+      const timeLabel = currentSlot.label || formatTime12h(selectedTime);
+      const isSlotReserved = Boolean(currentSlot.occupancyType === "reserved" || currentSlot.isReserved);
+      setSlotConflictWarning(
+        `The ${timeLabel} consultation slot was just ${isSlotReserved ? "reserved" : "booked"} by another patient. Please select another available time.`
+      );
     }
-  }, [consultationSlots, selectedTime]);
+  }, [consultationSlots, selectedTime, myActiveHold, selectedClinic?.id, selectedDate, activeDutyDoctor?.id]);
 
   const selectedSlot = useMemo<ConsultationSlot | null>(() => {
     if (consultationSlots.length === 0) return null;
     return consultationSlots.find((s) => s.slotTime === selectedTime) || null;
   }, [consultationSlots, selectedTime]);
+
+  const isSelectedSlotOwnHold = useMemo<boolean>(() => {
+    return Boolean(
+      myActiveHold &&
+      myActiveHold.clinicId === String(selectedClinic?.id) &&
+      myActiveHold.date === selectedDate &&
+      myActiveHold.slotTime === selectedTime &&
+      doctorScopesOverlap(myActiveHold.doctorId, activeDutyDoctor?.id)
+    );
+  }, [myActiveHold, selectedClinic?.id, selectedDate, selectedTime, activeDutyDoctor?.id]);
 
 
   const isDailyCapacityReached = useMemo(() => {
@@ -1199,19 +1374,48 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         try {
           const { data: docRows1, error: err1 } = await supabase
             .from("clinic_doctor")
-            .select("*")
+            .select(`
+              *,
+              doctor_specializations (
+                specialization_id,
+                specializations (
+                  id,
+                  name
+                )
+              )
+            `)
             .eq("clinic_id", targetClinicId);
 
           if (!err1 && Array.isArray(docRows1) && docRows1.length > 0) {
             rawDoctorRows = docRows1;
           } else if (data?.clinic_id && String(data.clinic_id) !== String(clinicIdFromUrl)) {
-            const { data: docRows2 } = await supabase
+            const { data: docRows2, error: err2 } = await supabase
               .from("clinic_doctor")
-              .select("*")
+              .select(`
+                *,
+                doctor_specializations (
+                  specialization_id,
+                  specializations (
+                    id,
+                    name
+                  )
+                )
+              `)
               .eq("clinic_id", data.clinic_id);
 
-            if (Array.isArray(docRows2) && docRows2.length > 0) {
+            if (!err2 && Array.isArray(docRows2) && docRows2.length > 0) {
               rawDoctorRows = docRows2;
+            }
+          }
+
+          // Fallback to select("*") if relation query failed
+          if (rawDoctorRows.length === 0) {
+            const { data: fallbackRows } = await supabase
+              .from("clinic_doctor")
+              .select("*")
+              .eq("clinic_id", targetClinicId);
+            if (Array.isArray(fallbackRows) && fallbackRows.length > 0) {
+              rawDoctorRows = fallbackRows;
             }
           }
         } catch (docErr) {
@@ -1221,33 +1425,41 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         // Fallback to local storage cache if database returned no doctors
         if (rawDoctorRows.length === 0) {
           try {
-            const rawDocs = localStorage.getItem("dermai_clinic_doctors");
-            if (rawDocs) {
-              const parsedDocs = JSON.parse(rawDocs);
-              if (Array.isArray(parsedDocs) && parsedDocs.length > 0) {
-                const targetClinicName = (data?.name || "").toLowerCase().trim();
-                const targetClinicId = String(data?.clinic_id || clinicIdFromUrl || "").toLowerCase().trim();
-
-                const matched = parsedDocs.filter((d: any) => {
-                  const statusLower = String(d.status || "active").toLowerCase();
-                  if (statusLower === "inactive") return false;
-                  if (!d.name && !d.doctor_name) return false;
-
-                  const docClinicName = (d.clinicName || d.clinic_name || "").toLowerCase().trim();
-                  if (targetClinicName && docClinicName && targetClinicName === docClinicName) return true;
-
-                  const docClinicId = String(d.clinicId || d.clinic_id || "").toLowerCase().trim();
-                  if (targetClinicId && docClinicId && targetClinicId === docClinicId) return true;
-
-                  return true;
-                });
-
-
-                if (matched.length > 0) {
-                  rawDoctorRows = matched;
-                } else {
-                  rawDoctorRows = parsedDocs.filter((d: any) => String(d.status || "active").toLowerCase() !== "inactive");
+            const allCachedDocs: any[] = [];
+            for (let i = 0; i < localStorage.length; i++) {
+              const k = localStorage.key(i);
+              if (k && k.startsWith("dermai_clinic_doctors")) {
+                const val = localStorage.getItem(k);
+                if (val) {
+                  const parsed = JSON.parse(val);
+                  if (Array.isArray(parsed)) {
+                    allCachedDocs.push(...parsed);
+                  }
                 }
+              }
+            }
+            if (allCachedDocs.length > 0) {
+              const targetClinicName = (data?.name || "").toLowerCase().trim();
+              const targetClinicId = String(data?.clinic_id || clinicIdFromUrl || "").toLowerCase().trim();
+
+              const matched = allCachedDocs.filter((d: any) => {
+                const statusLower = String(d.status || "active").toLowerCase();
+                if (statusLower === "inactive") return false;
+                if (!d.name && !d.doctor_name) return false;
+
+                const docClinicName = (d.clinicName || d.clinic_name || "").toLowerCase().trim();
+                if (targetClinicName && docClinicName && targetClinicName === docClinicName) return true;
+
+                const docClinicId = String(d.clinicId || d.clinic_id || "").toLowerCase().trim();
+                if (targetClinicId && docClinicId && targetClinicId === docClinicId) return true;
+
+                return true;
+              });
+
+              if (matched.length > 0) {
+                rawDoctorRows = matched;
+              } else {
+                rawDoctorRows = allCachedDocs.filter((d: any) => String(d.status || "active").toLowerCase() !== "inactive");
               }
             }
           } catch { }
@@ -1282,36 +1494,44 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             let maxPatients = weeklySched.maxPatientsPerShift || 10;
             let slotInterval = weeklySched.slotIntervalMinutes || 30;
 
-            // Live synchronization with clinic roster settings
+            // Live synchronization with clinic roster settings (from ClinicDoctorsPage)
+            let localMatch: any = null;
             try {
-              const rawDocs = localStorage.getItem("dermai_clinic_doctors");
-              if (rawDocs) {
-                const parsed = JSON.parse(rawDocs);
-                if (Array.isArray(parsed)) {
-                  const match = parsed.find((cd: any) => isDoctorMatch(cd, d));
-                  if (match) {
-                    const localWeekly = parseDoctorSchedule(
-                      match.dutySchedule || match.duty_schedule || (match.weeklyShifts ? match : undefined),
-                      match.dutyDays || match.duty_days,
-                      match.dutyStartTime || "08:00",
-                      match.dutyEndTime || "17:00"
-                    );
-                    const localActiveDays = Object.keys(localWeekly.weeklyShifts).filter(
-                      (day) => localWeekly.weeklyShifts[day] && localWeekly.weeklyShifts[day].length > 0
-                    );
-                    if (localActiveDays.length > 0) {
-                      weeklySched = localWeekly;
-                      pDays = localActiveDays;
-                    }
-                    if (match.dutyStartTime) startT = match.dutyStartTime;
-                    if (match.dutyEndTime) endT = match.dutyEndTime;
-                    if (match.maxPatientsPerDay || match.maxPatientsPerShift) {
-                      maxPatients = Number(match.maxPatientsPerDay || match.maxPatientsPerShift);
-                      weeklySched.maxPatientsPerShift = maxPatients;
-                    }
-                    if (match.slotIntervalMinutes) {
-                      slotInterval = Number(match.slotIntervalMinutes);
-                      weeklySched.slotIntervalMinutes = slotInterval;
+              for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith("dermai_clinic_doctors")) {
+                  const val = localStorage.getItem(k);
+                  if (val) {
+                    const parsed = JSON.parse(val);
+                    if (Array.isArray(parsed)) {
+                      const match = parsed.find((cd: any) => isDoctorMatch(cd, d));
+                      if (match) {
+                        localMatch = match;
+                        const localWeekly = parseDoctorSchedule(
+                          match.dutySchedule || match.duty_schedule || (match.weeklyShifts ? match : undefined),
+                          match.dutyDays || match.duty_days,
+                          match.dutyStartTime || "08:00",
+                          match.dutyEndTime || "17:00"
+                        );
+                        const localActiveDays = Object.keys(localWeekly.weeklyShifts).filter(
+                          (day) => localWeekly.weeklyShifts[day] && localWeekly.weeklyShifts[day].length > 0
+                        );
+                        if (localActiveDays.length > 0) {
+                          weeklySched = localWeekly;
+                          pDays = localActiveDays;
+                        }
+                        if (match.dutyStartTime) startT = match.dutyStartTime;
+                        if (match.dutyEndTime) endT = match.dutyEndTime;
+                        if (match.maxPatientsPerDay || match.maxPatientsPerShift) {
+                          maxPatients = Number(match.maxPatientsPerDay || match.maxPatientsPerShift);
+                          weeklySched.maxPatientsPerShift = maxPatients;
+                        }
+                        if (match.slotIntervalMinutes) {
+                          slotInterval = Number(match.slotIntervalMinutes);
+                          weeklySched.slotIntervalMinutes = slotInterval;
+                        }
+                        break;
+                      }
                     }
                   }
                 }
@@ -1323,12 +1543,51 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               pDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
             }
 
-            let specStr = "General Dermatology";
-            if (d.specialization && typeof d.specialization === "string") {
-              specStr = d.specialization;
-            } else if (Array.isArray(d.specializations) && d.specializations.length > 0) {
-              specStr = d.specializations.map((s: any) => s.name || s).filter(Boolean).join(", ");
+            // Real specializations extraction (junction table, local cache, or fields)
+            let resolvedSpecializations: string[] = [];
+
+            // 1. From doctor_specializations junction table join
+            if (Array.isArray(d.doctor_specializations) && d.doctor_specializations.length > 0) {
+              resolvedSpecializations = d.doctor_specializations
+                .map((ds: any) => ds.specializations?.name || ds.name)
+                .filter(Boolean);
             }
+
+            // 2. From localMatch (Clinic roster cache from ClinicDoctorsPage)
+            if (resolvedSpecializations.length === 0 && localMatch) {
+              if (Array.isArray(localMatch.specializations) && localMatch.specializations.length > 0) {
+                resolvedSpecializations = localMatch.specializations
+                  .map((s: any) => (typeof s === "string" ? s : s.name))
+                  .filter(Boolean);
+              } else if (localMatch.specialization && typeof localMatch.specialization === "string") {
+                resolvedSpecializations = localMatch.specialization
+                  .split(",")
+                  .map((s: string) => s.trim())
+                  .filter(Boolean);
+              }
+            }
+
+            // 3. From d.specializations array
+            if (resolvedSpecializations.length === 0 && Array.isArray(d.specializations) && d.specializations.length > 0) {
+              resolvedSpecializations = d.specializations
+                .map((s: any) => (typeof s === "string" ? s : s.name))
+                .filter(Boolean);
+            }
+
+            // 4. From d.specialization string
+            if (resolvedSpecializations.length === 0 && d.specialization && typeof d.specialization === "string") {
+              resolvedSpecializations = d.specialization
+                .split(",")
+                .map((s: string) => s.trim())
+                .filter(Boolean);
+            }
+
+            // 5. Default fallback
+            if (resolvedSpecializations.length === 0) {
+              resolvedSpecializations = ["General Dermatology"];
+            }
+
+            const specStr = resolvedSpecializations.join(", ");
 
             let resolvedPhoto = d.photo_url || d.photo || d.photoUrl || d.user?.avatar_url || d.avatar_url;
             if (!resolvedPhoto) {
@@ -1339,6 +1598,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               id: String(d.doctor_id || d.id || `doc-${docName}`),
               name: docName,
               specialization: specStr,
+              specializations: resolvedSpecializations,
               photo: resolvedPhoto || undefined,
               dutyDays: pDays,
               dutyStartTime: startT,
@@ -1576,7 +1836,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       try {
         try {
           clearCheckoutRedirectRecord(returnedApptId, "Payment return verification initiated");
-        } catch {}
+        } catch { }
         setIsVerifyingReturn(true);
         setReturnVerificationError(null);
         setSubmitting(true);
@@ -1607,14 +1867,16 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           let apptDate = meta.appointment_date || formattedPreviewDate;
           let apptTime = meta.appointment_time || formattedPreviewTime;
 
+          let dbApptRow: any = null;
           if (returnedApptId) {
             const { data: dbAppt } = await supabase
               .from("patient_appointment")
-              .select("patient_name, date, time, clinic_id, assigned_doctor_id, clinic_note")
+              .select("patient_name, date, time, batch_time, clinic_id, assigned_doctor_id, clinic_note")
               .eq("appointment_id", returnedApptId)
               .maybeSingle();
 
             if (dbAppt) {
+              dbApptRow = dbAppt;
               if (dbAppt.patient_name) apptPatientName = dbAppt.patient_name;
               if (dbAppt.date) {
                 const parsedD = new Date(dbAppt.date);
@@ -1631,7 +1893,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           setPaymentConfirmedDetails({
             reference: payId,
             amount: feePaid || Number(selectedClinic?.consultationFee || 0),
-            method: meta.payment_method === "maya" ? "maya" : "gcash",
+            method: (meta.payment_method === "maya" || meta.payment_method === "paymaya") ? "maya" : "gcash",
             mobileNumber: meta.patient_contact || patientContact,
             patientName: apptPatientName,
             clinicName: apptClinicName,
@@ -1640,18 +1902,29 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             time: apptTime,
           });
 
+          const completedHold = heldSlotTrackerRef.current.get();
+          heldSlotTrackerRef.current.clearOnPaymentSuccess(returnedApptId);
+          setMyActiveHold(null);
           setSubmitted(true);
           setIsVerifyingReturn(false);
           sessionStorage.removeItem("dermai_appointment_draft");
           sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
           sessionStorage.removeItem("dermai_pending_appointment_id");
 
-          const targetClinic = selectedClinic?.id || searchParams.get("clinic");
+          const targetClinic = dbApptRow?.clinic_id || completedHold?.clinicId || selectedClinic?.id || searchParams.get("clinic");
           if (targetClinic) {
+            const completedDate = dbApptRow?.date
+              ? getManilaCalendarDate(dbApptRow.date)
+              : (completedHold?.date || selectedDate || apptDate);
+            const completedTime =
+              normalizeSlotTime(dbApptRow?.time || dbApptRow?.batch_time) ||
+              completedHold?.slotTime ||
+              normalizeSlotTime(selectedTime) ||
+              apptTime;
             broadcastSlotChange(targetClinic, {
-              date: selectedDate || apptDate,
-              doctorId: activeDutyDoctor?.id,
-              slotTime: selectedTime || apptTime,
+              date: completedDate,
+              doctorId: dbApptRow?.assigned_doctor_id ?? completedHold?.doctorId ?? activeDutyDoctor?.id,
+              slotTime: completedTime,
               type: "payment_completed",
             });
             setRealtimeRefreshTick((t) => t + 1);
@@ -1902,25 +2175,77 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         const validScanId = isValidUuid(selectedScanId) ? selectedScanId : undefined;
         const validCondId = (selectedScan && isValidUuid(selectedScan.conditionId)) ? selectedScan.conditionId : undefined;
 
+        const requestedSlotTime = normalizeSlotTime(selectedTime);
+        if (!requestedSlotTime) {
+          setSubmitError("Please select an available consultation time slot.");
+          setSubmitting(false);
+          return;
+        }
+        const holdDoctorId = resolvedDoctorId || activeDutyDoctor?.id || null;
+
         let existingHoldId: string | null = null;
-        const pendingSessionApptId = typeof window !== "undefined" ? sessionStorage.getItem("dermai_pending_appointment_id") : null;
+        const pendingSessionApptId =
+          heldSlotTrackerRef.current.get()?.appointmentId ||
+          (typeof window !== "undefined" ? sessionStorage.getItem("dermai_pending_appointment_id") : null);
         if (pendingSessionApptId && isValidUuid(pendingSessionApptId)) {
           try {
             const { data: existingAppt } = await supabase
               .from("patient_appointment")
-              .select("appointment_id, payment_status, payment_hold_expires_at, clinic_id")
+              .select("appointment_id, payment_status, payment_hold_expires_at, clinic_id, assigned_doctor_id, date, time, batch_time")
               .eq("appointment_id", pendingSessionApptId)
               .maybeSingle();
+
+            const existingDate = existingAppt?.date ? getManilaCalendarDate(existingAppt.date) : "";
+            const existingTime = normalizeSlotTime(existingAppt?.time || existingAppt?.batch_time);
+            const existingDocId = existingAppt?.assigned_doctor_id ?? null;
+            const isSameSlot =
+              existingDate === selectedDate &&
+              existingTime === requestedSlotTime &&
+              String(existingDocId || "") === String(holdDoctorId || "");
 
             if (
               existingAppt &&
               existingAppt.payment_status === "pending_hold" &&
               existingAppt.clinic_id === String(selectedClinic?.id) &&
+              isSameSlot &&
               (!existingAppt.payment_hold_expires_at || new Date(existingAppt.payment_hold_expires_at) > new Date())
             ) {
               existingHoldId = existingAppt.appointment_id;
+              const rec = heldSlotTrackerRef.current.record({
+                appointmentId: existingAppt.appointment_id,
+                clinicId: String(existingAppt.clinic_id),
+                date: existingDate || selectedDate,
+                doctorId: existingDocId,
+                slotTime: existingTime || requestedSlotTime,
+              });
+              setMyActiveHold(rec);
             } else if (existingAppt && existingAppt.payment_status === "pending_hold") {
-              await releaseAppointmentHoldSafely(pendingSessionApptId, "Released to acquire fresh hold for checkout.");
+              const relOld = await releaseAppointmentHoldSafely(pendingSessionApptId, "Released to acquire fresh hold for checkout.");
+              if (relOld.success) {
+                heldSlotTrackerRef.current.clearOnReleaseResult(relOld);
+                setMyActiveHold(null);
+                sessionStorage.removeItem("dermai_pending_appointment_id");
+                if (relOld.releasedSlot?.date && relOld.releasedSlot?.slotTime) {
+                  availabilityTrackerRef.current.applyEvent({
+                    date: relOld.releasedSlot.date,
+                    slotTime: relOld.releasedSlot.slotTime,
+                    doctorId: relOld.releasedSlot.doctorId,
+                    changeType: "hold_released",
+                  });
+                  setExistingBookings(availabilityTrackerRef.current.visible());
+                }
+              }
+            } else if (
+              !existingAppt ||
+              existingAppt.payment_status === "cancelled" ||
+              existingAppt.payment_status === "expired"
+            ) {
+              heldSlotTrackerRef.current.clearConfirmedInactive(pendingSessionApptId);
+              setMyActiveHold(null);
+              sessionStorage.removeItem("dermai_pending_appointment_id");
+            } else if (existingAppt.payment_status === "paid") {
+              heldSlotTrackerRef.current.clearOnPaymentSuccess(pendingSessionApptId);
+              setMyActiveHold(null);
               sessionStorage.removeItem("dermai_pending_appointment_id");
             }
           } catch { }
@@ -1931,9 +2256,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           const holdRes = await acquireAppointmentSlotHold({
             clinicId: String(selectedClinic.id),
             doctorId: resolvedDoctorId,
-            date: `${selectedDate}T${selectedTime || "08:00"}:00+08:00`,
-            time: `${selectedTime || "08:00"}:00`,
-            batchTime: selectedTime || "08:00",
+            date: `${selectedDate}T${requestedSlotTime}:00+08:00`,
+            time: `${requestedSlotTime}:00`,
+            batchTime: requestedSlotTime,
             patientName: patientName.trim() || user?.user_metadata?.full_name || "Patient",
             patientEmail: patientEmail.trim() || user?.email || undefined,
             patientContact: patientContact.trim() || undefined,
@@ -1957,74 +2282,67 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
           if (holdRes.success && holdRes.appointmentId) {
             holdApptId = holdRes.appointmentId;
-            const timeClean = (selectedTime || "08:00").slice(0, 5);
-            broadcastSlotChange(selectedClinic?.id, {
+            // Preserve the exact held slot details independently of `selectedTime`
+            // (`acquireAppointmentSlotHold` already broadcasted `hold_acquired`).
+            const rec = heldSlotTrackerRef.current.record({
+              appointmentId: holdRes.appointmentId,
+              clinicId: String(selectedClinic.id),
               date: selectedDate,
-              doctorId: resolvedDoctorId || activeDutyDoctor?.id,
-              slotTime: timeClean,
-              type: "hold_acquired",
+              doctorId: holdDoctorId,
+              slotTime: requestedSlotTime,
             });
+            setMyActiveHold(rec);
             setRealtimeRefreshTick((t) => t + 1);
-          } else if (!holdRes.success && (holdRes.code === "ERR_SCHEDULE_CONFIG" || holdRes.message?.includes("ERR_SCHEDULE_CONFIG") || holdRes.message?.includes("appointment interval"))) {
+          } else if (classifyHoldFailure(holdRes.code, holdRes.message) === "schedule_config") {
             const docName = activeDutyDoctor?.name ? formatCleanDoctorTitle(activeDutyDoctor.name) : "This doctor";
             const failureMsg = `${docName}'s consultation schedule has not been configured with appointment intervals by the clinic. Please select another available doctor or contact the clinic.`;
             setSubmitError(failureMsg);
             setSubmitting(false);
             return;
-          } else if (
-            !holdRes.success &&
-            (holdRes.code === "ERR_SLOT_UNAVAILABLE" ||
-             holdRes.code === "ERR_DUPLICATE_SLOT" ||
-             holdRes.message?.includes("ERR_SLOT_UNAVAILABLE") ||
-             holdRes.message?.includes("ERR_DUPLICATE_SLOT") ||
-             holdRes.message?.includes("already reserved") ||
-             holdRes.message?.includes("already booked") ||
-             holdRes.message?.includes("reserved by another patient") ||
-             holdRes.message?.includes("booked by another patient"))
-          ) {
-            const timeClean = (selectedTime || "08:00").slice(0, 5);
-            const conflictRecord: OccupiedSlotRecord = {
+          } else if (!holdRes.success && classifyHoldFailure(holdRes.code, holdRes.message) === "slot_conflict") {
+            // Slot conflict: another patient owns this slot.
+            // Never release a hold we do not own, never invent expiration timestamps,
+            // and never broadcast on behalf of another patient; refresh from database truth.
+            const isBookedConflict =
+              Boolean(holdRes.message?.toLowerCase().includes("booked")) &&
+              !holdRes.message?.toLowerCase().includes("reserved");
+            availabilityTrackerRef.current.applyEvent({
               date: selectedDate,
-              time: timeClean,
-              batch_time: timeClean,
-              assigned_doctor_id: resolvedDoctorId,
-              clinic_id: selectedClinic?.id,
-              status: "scheduled",
-              doctor_status: "approved",
-              payment_status: "paid",
-              occupancy_type: "booked",
-              payment_hold_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-            };
-            const docKey = resolvedDoctorId || "any";
-            sessionConflictSlotsRef.current.set(`${selectedDate}_${docKey}_${timeClean}`, conflictRecord);
-            broadcastSlotChange(selectedClinic?.id, {
-              date: selectedDate,
-              doctorId: resolvedDoctorId,
-              slotTime: timeClean,
-              type: "hold_acquired",
+              slotTime: requestedSlotTime,
+              doctorId: holdDoctorId,
+              changeType: isBookedConflict ? "payment_completed" : "hold_acquired",
             });
-            setExistingBookings((prev) => {
-              const exists = prev.some((b) => {
-                const bTime = (b.time || b.batch_time || "").slice(0, 5);
-                const bDocId = b.assigned_doctor_id;
-                return bTime === timeClean && (!resolvedDoctorId || !bDocId || String(bDocId) === String(resolvedDoctorId));
-              });
-              return exists ? prev : [...prev, conflictRecord];
-            });
-            const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
-            const failureMsg = `The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`;
-            setSubmitError(failureMsg);
+            setExistingBookings(availabilityTrackerRef.current.visible());
+            setRealtimeRefreshTick((t) => t + 1);
+            setSelectedTime("");
+            const timeLabel = formatTime12h(requestedSlotTime);
+            setSlotConflictWarning(`The ${timeLabel} consultation slot was just ${isBookedConflict ? "booked" : "reserved"} by another patient. Please select another available time.`);
+            setSubmitError(null);
             setSubmitting(false);
             return;
           } else {
             const fallbackRes = await executeAppointmentCreation();
             if (fallbackRes.success && fallbackRes.appointmentId) {
               holdApptId = fallbackRes.appointmentId;
+              const rec = heldSlotTrackerRef.current.record({
+                appointmentId: fallbackRes.appointmentId,
+                clinicId: String(selectedClinic.id),
+                date: selectedDate,
+                doctorId: holdDoctorId,
+                slotTime: requestedSlotTime,
+              });
+              setMyActiveHold(rec);
             } else {
               const rawFailure = fallbackRes.error || holdRes.message || "Unable to reserve this consultation slot. Please choose another available slot.";
-              const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
-              const failureMsg = formatUserFriendlyBookingError(rawFailure, slotRange);
-              setSubmitError(failureMsg);
+              const isSlotTaken = rawFailure.toLowerCase().includes("reserved") || rawFailure.toLowerCase().includes("booked") || rawFailure.toLowerCase().includes("exclusive_doctor_slot") || rawFailure.toLowerCase().includes("err_slot_unavailable");
+              if (isSlotTaken) {
+                setSelectedTime("");
+                setSubmitError(null);
+              } else {
+                const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
+                const failureMsg = formatUserFriendlyBookingError(rawFailure, slotRange);
+                setSubmitError(failureMsg);
+              }
               setSubmitting(false);
               return;
             }
@@ -2160,7 +2478,14 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
       // 2. Prepare appointment payload with valid UUID clinic ID
       const targetClinicId = String(selectedClinic.id);
-      const scheduledDateTimeIso = `${selectedDate}T${selectedTime || "09:00"}:00+08:00`;
+      const targetSlotTime = heldSlotTrackerRef.current.get()?.slotTime || normalizeSlotTime(selectedTime);
+      if (!targetSlotTime) {
+        const err = "Please select an available consultation time slot.";
+        setSubmitError(err);
+        setSubmitting(false);
+        return { success: false, error: err };
+      }
+      const scheduledDateTimeIso = `${selectedDate}T${targetSlotTime}:00+08:00`;
 
       const isValidUuid = (val?: string | null): boolean =>
         Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(val).trim()));
@@ -2237,7 +2562,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         }
       }
 
-      const reqStartM = timeToMinutes(selectedTime || "08:00");
+      const reqStartM = timeToMinutes(targetSlotTime);
       const matchedShift = doctorShifts.find((s) => {
         const sStart = timeToMinutes(s.startTime);
         const sEnd = timeToMinutes(s.endTime);
@@ -2245,7 +2570,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       });
 
       if (activeDutyDoctor && doctorShifts.length > 0 && !matchedShift) {
-        const err = `The selected time (${formatTime12h(selectedTime)}) is outside ${formatCleanDoctorTitle(activeDutyDoctor.name)}'s scheduled shifts on ${dayOfWeekForSelectedDate}. Please choose a valid slot.`;
+        const err = `The selected time (${formatTime12h(targetSlotTime)}) is outside ${formatCleanDoctorTitle(activeDutyDoctor.name)}'s scheduled shifts on ${dayOfWeekForSelectedDate}. Please choose a valid slot.`;
         setSubmitError(err);
         setSubmitting(false);
         return { success: false, error: err };
@@ -2275,7 +2600,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         const clinicCloseM = timeToMinutes(selectedClinic.closeTime);
         const interval = effectiveSettings.interval;
         if (reqStartM < clinicOpenM || reqStartM + interval > clinicCloseM) {
-          const err = `The selected appointment time (${formatTime12h(selectedTime)}) is outside the clinic's operating hours (${formatTime12h(selectedClinic.openTime)} – ${formatTime12h(selectedClinic.closeTime)}).`;
+          const err = `The selected appointment time (${formatTime12h(targetSlotTime)}) is outside the clinic's operating hours (${formatTime12h(selectedClinic.openTime)} – ${formatTime12h(selectedClinic.closeTime)}).`;
           setSubmitError(err);
           setSubmitting(false);
           return { success: false, error: err };
@@ -2287,7 +2612,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         const shiftEndM = timeToMinutes(matchedShift.endTime);
 
         if (reqStartM + effectiveSettings.interval > shiftEndM) {
-          const err = `The selected consultation slot (${formatTime12h(selectedTime)}) exceeds the shift end time (${formatTime12h(matchedShift.endTime)}). Please choose a valid slot.`;
+          const err = `The selected consultation slot (${formatTime12h(targetSlotTime)}) exceeds the shift end time (${formatTime12h(matchedShift.endTime)}). Please choose a valid slot.`;
           setSubmitError(err);
           setSubmitting(false);
           return { success: false, error: err };
@@ -2320,7 +2645,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       const nowCheck = new Date();
       const todayIsoStr = `${nowCheck.getFullYear()}-${String(nowCheck.getMonth() + 1).padStart(2, "0")}-${String(nowCheck.getDate()).padStart(2, "0")}`;
       if (selectedDate === todayIsoStr && reqStartM <= nowCheck.getHours() * 60 + nowCheck.getMinutes()) {
-        const err = `The selected consultation slot (${formatTime12h(selectedTime)}) has already passed today.`;
+        const err = `The selected consultation slot (${formatTime12h(targetSlotTime)}) has already passed today.`;
         setSubmitError(err);
         setSubmitting(false);
         return { success: false, error: err };
@@ -2383,7 +2708,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             return false;
           }
           const bTime = (b.time || b.batch_time || "").slice(0, 5);
-          if (bTime === (selectedTime || "08:00").slice(0, 5)) return true;
+          if (bTime === targetSlotTime) return true;
           if (b.date) {
             const d = new Date(b.date);
             if (!isNaN(d.getTime())) {
@@ -2393,47 +2718,25 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 minute: "2-digit",
                 hour12: false,
               }).format(d);
-              if (timeParts === (selectedTime || "08:00").slice(0, 5)) return true;
+              if (timeParts === targetSlotTime) return true;
             }
           }
           return false;
         });
 
         if (isSlotTaken) {
-          const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
-          const err = `The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`;
-          const timeClean = (selectedTime || "08:00").slice(0, 5);
-          const conflictRecord: OccupiedSlotRecord = {
+          availabilityTrackerRef.current.applyEvent({
             date: selectedDate,
-            time: timeClean,
-            batch_time: timeClean,
-            assigned_doctor_id: assignedDocId,
-            clinic_id: targetClinicId,
-            status: "scheduled",
-            doctor_status: "approved",
-            payment_status: "paid",
-            occupancy_type: "booked",
-            payment_hold_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-          };
-          const docKey = assignedDocId || "any";
-          sessionConflictSlotsRef.current.set(`${selectedDate}_${docKey}_${timeClean}`, conflictRecord);
-          broadcastSlotChange(targetClinicId, {
-            date: selectedDate,
+            slotTime: targetSlotTime,
             doctorId: assignedDocId,
-            slotTime: timeClean,
-            type: "hold_acquired",
+            changeType: "hold_acquired",
           });
-          setExistingBookings((prev) => {
-            const exists = prev.some((b) => {
-              const bTime = (b.time || b.batch_time || "").slice(0, 5);
-              const bDocId = b.assigned_doctor_id;
-              return bTime === timeClean && (!assignedDocId || !bDocId || String(bDocId) === String(assignedDocId));
-            });
-            return exists ? prev : [...prev, conflictRecord];
-          });
-          setSubmitError(err);
+          setExistingBookings(availabilityTrackerRef.current.visible());
+          setRealtimeRefreshTick((t) => t + 1);
+          setSelectedTime("");
+          setSubmitError(null);
           setSubmitting(false);
-          return { success: false, error: err };
+          return { success: false };
         }
       } catch (capErr) {
         console.warn("[AppointmentPage] Capacity pre-check warning:", capErr);
@@ -2471,7 +2774,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         : null;
 
       if (paymentData) {
-        const payMethodLabel = paymentData.method === "maya" ? "MAYA" : "GCASH";
+        const payMethodLabel = (paymentData.method === "maya" || (paymentData.method as string) === "paymaya") ? "Maya" : "GCash";
         const paySummary = `Paid Online (${payMethodLabel} Ref: ${paymentData.reference})`;
         initialClinicNote = docDispName
           ? `Assigned to ${docDispName} for pre-consultation review. | ${paySummary}`
@@ -2486,7 +2789,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         user_id: activeUserId,
         clinic_id: targetClinicId,
         date: scheduledDateTimeIso,
-        time: `${selectedTime || "08:00"}:00`,
+        time: `${targetSlotTime}:00`,
         status: "pending",
         patient_name: payerName,
         patient_email: (demoCheckoutData?.payerEmail || patientEmail).trim() || user?.email || null,
@@ -2509,7 +2812,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         doctor_status: "pending-review",
         schedule_sent_to_doctor: true,
         queue_number: assignedQueueNum,
-        batch_time: selectedTime || "08:00",
+        batch_time: targetSlotTime,
         check_in_status: "scheduled",
       };
 
@@ -2551,48 +2854,21 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
         // Handle duplicate booking error gracefully
         if (
-          insertError.message.includes("ERR_DUPLICATE_SLOT") ||
-          insertError.message.includes("ERR_SLOT_UNAVAILABLE") ||
-          insertError.message.includes("exclusive_doctor_slot") ||
-          insertError.message.includes("already reserved") ||
-          insertError.message.includes("already booked") ||
-          insertError.message.includes("reserved by another patient") ||
+          classifyHoldFailure(insertError.code, insertError.message) === "slot_conflict" ||
           insertError.message.includes("duplicate")
         ) {
-          const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
-          const err = `The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`;
-          const timeClean = (selectedTime || "08:00").slice(0, 5);
-          const conflictRecord: OccupiedSlotRecord = {
+          availabilityTrackerRef.current.applyEvent({
             date: selectedDate,
-            time: timeClean,
-            batch_time: timeClean,
-            assigned_doctor_id: assignedDocId,
-            clinic_id: targetClinicId,
-            status: "scheduled",
-            doctor_status: "approved",
-            payment_status: "paid",
-            occupancy_type: "booked",
-            payment_hold_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-          };
-          const docKey = assignedDocId || "any";
-          sessionConflictSlotsRef.current.set(`${selectedDate}_${docKey}_${timeClean}`, conflictRecord);
-          broadcastSlotChange(targetClinicId, {
-            date: selectedDate,
+            slotTime: targetSlotTime,
             doctorId: assignedDocId,
-            slotTime: timeClean,
-            type: "hold_acquired",
+            changeType: "hold_acquired",
           });
-          setExistingBookings((prev) => {
-            const exists = prev.some((b) => {
-              const bTime = (b.time || b.batch_time || "").slice(0, 5);
-              const bDocId = b.assigned_doctor_id;
-              return bTime === timeClean && (!assignedDocId || !bDocId || String(bDocId) === String(assignedDocId));
-            });
-            return exists ? prev : [...prev, conflictRecord];
-          });
-          setSubmitError(err);
+          setExistingBookings(availabilityTrackerRef.current.visible());
+          setRealtimeRefreshTick((t) => t + 1);
+          setSelectedTime("");
+          setSubmitError(null);
           setSubmitting(false);
-          return { success: false, error: err };
+          return { success: false };
         }
 
         // Dynamic Foreign Key Protection: If doctor or scan reference fails in remote schema, strip and retry
@@ -2690,7 +2966,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           await supabase.from("user_payment").insert({
             user_id: activeUserId,
             amount: feeAmount,
-            method: paymentData.method === "maya" ? "Maya" : "GCash",
+            method: (paymentData.method === "maya" || (paymentData.method as string) === "paymaya") ? "Maya" : "GCash",
             status: "success",
             reference_number: paymentData.reference,
             paymongo_payment_id: paymentData.reference,
@@ -2710,7 +2986,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             .eq("assigned_doctor_id", assignedDocId)
             .gte("date", `${selectedDate}T00:00:00+08:00`)
             .lte("date", `${selectedDate}T23:59:59+08:00`)
-            .or(`time.eq.${selectedTime || "08:00"}:00,batch_time.eq.${selectedTime || "08:00"}`)
+            .or(`time.eq.${targetSlotTime}:00,batch_time.eq.${targetSlotTime}`)
             .neq("status", "cancelled")
             .neq("status", "rejected")
             .order("created_at", { ascending: true });
@@ -2718,25 +2994,24 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           if (collisionCheck && collisionCheck.length > 1 && String(collisionCheck[0].appointment_id) !== insertedApptId) {
             // Concurrent race collision: another patient booked first, rollback this one
             await supabase.from("patient_appointment").delete().eq("appointment_id", insertedApptId);
-            const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
-            const err = `The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`;
-            const timeClean = (selectedTime || "08:00").slice(0, 5);
             setExistingBookings((prev) => [
               ...prev,
               {
                 date: selectedDate,
-                time: timeClean,
-                batch_time: timeClean,
+                time: targetSlotTime,
+                batch_time: targetSlotTime,
                 assigned_doctor_id: assignedDocId,
                 clinic_id: targetClinicId,
-                status: "scheduled",
+                status: "pending",
                 doctor_status: "approved",
-                payment_status: "paid",
+                payment_status: "pending_hold",
+                occupancy_type: "reserved",
               },
             ]);
-            setSubmitError(err);
+            setSelectedTime("");
+            setSubmitError(null);
             setSubmitting(false);
-            return { success: false, error: err };
+            return { success: false };
           }
         } catch (colErr) {
           console.warn("[AppointmentPage] Concurrency check warning:", colErr);
@@ -2930,15 +3205,24 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     const validCondId = (selectedScan && isValidUuid(selectedScan.conditionId)) ? selectedScan.conditionId : undefined;
 
     let insertedApptId: string | null = null;
+    const initialRetainedHold = heldSlotTrackerRef.current.get();
+    const effectiveClinicId = initialRetainedHold?.clinicId || String(selectedClinic?.id || "");
+    const effectiveDate = initialRetainedHold?.date || selectedDate;
+    const effectiveDoctorId = initialRetainedHold
+      ? initialRetainedHold.doctorId
+      : (resolvedDoctorId || activeDutyDoctor?.id || null);
+    const effectiveSlotTime = initialRetainedHold?.slotTime || normalizeSlotTime(selectedTime);
 
     try {
       // Check for existing active hold in session storage to avoid duplicate holds on retry
-      const pendingSessionApptId = typeof window !== "undefined" ? sessionStorage.getItem("dermai_pending_appointment_id") : null;
+      const pendingSessionApptId =
+        initialRetainedHold?.appointmentId ||
+        (typeof window !== "undefined" ? sessionStorage.getItem("dermai_pending_appointment_id") : null);
       if (pendingSessionApptId && isValidUuid(pendingSessionApptId)) {
         try {
           const { data: existingAppt } = await supabase
             .from("patient_appointment")
-            .select("appointment_id, payment_status, payment_hold_expires_at, clinic_id")
+            .select("appointment_id, payment_status, payment_hold_expires_at, clinic_id, assigned_doctor_id, date, time, batch_time")
             .eq("appointment_id", pendingSessionApptId)
             .maybeSingle();
 
@@ -2949,8 +3233,36 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             (!existingAppt.payment_hold_expires_at || new Date(existingAppt.payment_hold_expires_at) > new Date())
           ) {
             insertedApptId = existingAppt.appointment_id;
+            const dbDate = existingAppt.date ? getManilaCalendarDate(existingAppt.date) : effectiveDate;
+            const dbTime = normalizeSlotTime(existingAppt.time || existingAppt.batch_time) || effectiveSlotTime;
+            if (dbDate && dbTime) {
+              const rec = heldSlotTrackerRef.current.record({
+                appointmentId: existingAppt.appointment_id,
+                clinicId: String(existingAppt.clinic_id),
+                date: dbDate,
+                doctorId: existingAppt.assigned_doctor_id ?? effectiveDoctorId,
+                slotTime: dbTime,
+              });
+              setMyActiveHold(rec);
+            }
           } else if (existingAppt && existingAppt.payment_status === "pending_hold") {
-            await releaseAppointmentHoldSafely(pendingSessionApptId, "Released to acquire fresh hold for checkout.");
+            const relOld = await releaseAppointmentHoldSafely(pendingSessionApptId, "Released to acquire fresh hold for checkout.");
+            if (relOld.success) {
+              heldSlotTrackerRef.current.clearOnReleaseResult(relOld);
+              setMyActiveHold(null);
+              sessionStorage.removeItem("dermai_pending_appointment_id");
+            }
+          } else if (
+            !existingAppt ||
+            existingAppt.payment_status === "cancelled" ||
+            existingAppt.payment_status === "expired"
+          ) {
+            heldSlotTrackerRef.current.clearConfirmedInactive(pendingSessionApptId);
+            setMyActiveHold(null);
+            sessionStorage.removeItem("dermai_pending_appointment_id");
+          } else if (existingAppt.payment_status === "paid") {
+            heldSlotTrackerRef.current.clearOnPaymentSuccess(pendingSessionApptId);
+            setMyActiveHold(null);
             sessionStorage.removeItem("dermai_pending_appointment_id");
           }
         } catch (checkErr) {
@@ -2961,13 +3273,16 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
       // 1. Acquire an atomic temporary slot hold via Postgres RPC to prevent race conditions and duplicate slots
       let creationFailureMessage = "";
       if (!insertedApptId) {
+        if (!effectiveSlotTime) {
+          throw new Error("Please select an available consultation time slot.");
+        }
         try {
           const holdRes = await acquireAppointmentSlotHold({
-            clinicId: String(selectedClinic?.id),
+            clinicId: effectiveClinicId,
             doctorId: resolvedDoctorId,
-            date: `${selectedDate}T${selectedTime || "08:00"}:00+08:00`,
-            time: `${selectedTime || "08:00"}:00`,
-            batchTime: selectedTime || "08:00",
+            date: `${effectiveDate}T${effectiveSlotTime}:00+08:00`,
+            time: `${effectiveSlotTime}:00`,
+            batchTime: effectiveSlotTime,
             patientName: payer,
             patientEmail: payerEmail,
             patientContact: userPhone,
@@ -2991,63 +3306,46 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
           if (holdRes.success && holdRes.appointmentId) {
             insertedApptId = holdRes.appointmentId;
-            const timeClean = (selectedTime || "08:00").slice(0, 5);
-            broadcastSlotChange(selectedClinic?.id, {
-              date: selectedDate,
-              doctorId: resolvedDoctorId || activeDutyDoctor?.id,
-              slotTime: timeClean,
-              type: "hold_acquired",
+            // Preserve the exact held slot details independently of `selectedTime`
+            // (`acquireAppointmentSlotHold` already broadcasted `hold_acquired`).
+            const rec = heldSlotTrackerRef.current.record({
+              appointmentId: holdRes.appointmentId,
+              clinicId: effectiveClinicId,
+              date: effectiveDate,
+              doctorId: effectiveDoctorId,
+              slotTime: effectiveSlotTime,
             });
+            setMyActiveHold(rec);
             setRealtimeRefreshTick((t) => t + 1);
-          } else if (
-            !holdRes.success &&
-            (holdRes.code === "ERR_SLOT_UNAVAILABLE" ||
-             holdRes.code === "ERR_DUPLICATE_SLOT" ||
-             holdRes.message?.includes("ERR_SLOT_UNAVAILABLE") ||
-             holdRes.message?.includes("ERR_DUPLICATE_SLOT") ||
-             holdRes.message?.includes("already reserved") ||
-             holdRes.message?.includes("already booked") ||
-             holdRes.message?.includes("reserved by another patient") ||
-             holdRes.message?.includes("booked by another patient"))
-          ) {
-            const timeClean = (selectedTime || "08:00").slice(0, 5);
-            const conflictRecord: OccupiedSlotRecord = {
-              date: selectedDate,
-              time: timeClean,
-              batch_time: timeClean,
-              assigned_doctor_id: resolvedDoctorId,
-              clinic_id: selectedClinic?.id,
-              status: "scheduled",
-              doctor_status: "approved",
-              payment_status: "paid",
-              occupancy_type: "booked",
-              payment_hold_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-            };
-            const docKey = resolvedDoctorId || "any";
-            sessionConflictSlotsRef.current.set(`${selectedDate}_${docKey}_${timeClean}`, conflictRecord);
-            broadcastSlotChange(selectedClinic?.id, {
-              date: selectedDate,
-              doctorId: resolvedDoctorId,
-              slotTime: timeClean,
-              type: "hold_acquired",
+          } else if (!holdRes.success && classifyHoldFailure(holdRes.code, holdRes.message) === "slot_conflict") {
+            const isBookedConflict =
+              Boolean(holdRes.message?.toLowerCase().includes("booked")) &&
+              !holdRes.message?.toLowerCase().includes("reserved");
+            availabilityTrackerRef.current.applyEvent({
+              date: effectiveDate,
+              slotTime: effectiveSlotTime,
+              doctorId: effectiveDoctorId,
+              changeType: isBookedConflict ? "payment_completed" : "hold_acquired",
             });
-            setExistingBookings((prev) => {
-              const exists = prev.some((b) => {
-                const bTime = (b.time || b.batch_time || "").slice(0, 5);
-                const bDocId = b.assigned_doctor_id;
-                return bTime === timeClean && (!resolvedDoctorId || !bDocId || String(bDocId) === String(resolvedDoctorId));
-              });
-              return exists ? prev : [...prev, conflictRecord];
-            });
-            const slotRange = selectedSlot?.timeRange || (selectedTime ? formatTime12h(selectedTime) : "selected");
+            setExistingBookings(availabilityTrackerRef.current.visible());
+            setRealtimeRefreshTick((t) => t + 1);
+            const slotRange = selectedSlot?.timeRange || (effectiveSlotTime ? formatTime12h(effectiveSlotTime) : "selected");
             throw new Error(`The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`);
-          } else if (!holdRes.success && (holdRes.code === "ERR_SCHEDULE_CONFIG" || holdRes.message?.includes("ERR_SCHEDULE_CONFIG") || holdRes.message?.includes("appointment interval"))) {
+          } else if (!holdRes.success && classifyHoldFailure(holdRes.code, holdRes.message) === "schedule_config") {
             throw new Error(holdRes.message || "This doctor's consultation schedule has not been configured with appointment intervals by the clinic. Please select another available doctor or contact the clinic.");
           } else {
             if (holdRes.message) creationFailureMessage = holdRes.message;
             const fallbackRes = await executeAppointmentCreation();
             if (fallbackRes.success && fallbackRes.appointmentId) {
               insertedApptId = fallbackRes.appointmentId;
+              const rec = heldSlotTrackerRef.current.record({
+                appointmentId: fallbackRes.appointmentId,
+                clinicId: effectiveClinicId,
+                date: effectiveDate,
+                doctorId: effectiveDoctorId,
+                slotTime: effectiveSlotTime,
+              });
+              setMyActiveHold(rec);
               creationFailureMessage = "";
             } else if (fallbackRes.error) {
               creationFailureMessage = fallbackRes.error;
@@ -3068,6 +3366,13 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           const fallbackRes = await executeAppointmentCreation();
           if (fallbackRes.success && fallbackRes.appointmentId) {
             insertedApptId = fallbackRes.appointmentId;
+            heldSlotTrackerRef.current.record({
+              appointmentId: fallbackRes.appointmentId,
+              clinicId: effectiveClinicId,
+              date: effectiveDate,
+              doctorId: effectiveDoctorId,
+              slotTime: effectiveSlotTime,
+            });
             creationFailureMessage = "";
           } else if (fallbackRes.error) {
             creationFailureMessage = fallbackRes.error;
@@ -3184,7 +3489,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 if (redirectUrl) {
                   try {
                     setCheckoutRedirectRecord(insertedApptId);
-                  } catch {}
+                  } catch { }
                   setShowDemoCheckoutModal(false);
                   window.location.href = redirectUrl;
                   return;
@@ -3199,6 +3504,13 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   },
                 });
 
+                const completedHold = heldSlotTrackerRef.current.get();
+                heldSlotTrackerRef.current.clearOnPaymentSuccess(insertedApptId);
+                setMyActiveHold(null);
+                try {
+                  sessionStorage.removeItem("dermai_pending_appointment_id");
+                  sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+                } catch { }
 
                 setPaymentConfirmedDetails({
                   reference: paymentIntentId,
@@ -3212,11 +3524,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   time: formattedPreviewTime,
                 });
 
-
-                broadcastSlotChange(selectedClinic?.id, {
-                  date: selectedDate,
-                  doctorId: activeDutyDoctor?.id,
-                  slotTime: selectedTime,
+                broadcastSlotChange(completedHold?.clinicId || selectedClinic?.id, {
+                  date: completedHold?.date || effectiveDate,
+                  doctorId: completedHold ? completedHold.doctorId : activeDutyDoctor?.id,
+                  slotTime: completedHold?.slotTime || effectiveSlotTime,
                   type: "payment_completed",
                 });
 
@@ -3238,51 +3549,86 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     } catch (err: any) {
       console.error("[AppointmentPage] Payment failure:", err);
 
-      // Clean up the temporary hold created for this failed checkout attempt before redirect occurred
-      const holdToRelease = insertedApptId || (typeof window !== "undefined" ? sessionStorage.getItem("dermai_pending_appointment_id") : null);
-      const timeClean = (selectedTime || "08:00").slice(0, 5);
-      const docKey = resolvedDoctorId || activeDutyDoctor?.id || "any";
-      const slotKey = `${selectedDate}_${docKey}_${timeClean}`;
+      const held = heldSlotTrackerRef.current.get();
+      const targetClinicId = held?.clinicId || (selectedClinic?.id ? String(selectedClinic.id) : undefined);
+      const targetDate = held?.date || selectedDate || undefined;
+      const targetDoctorId = held ? held.doctorId : (resolvedDoctorId || activeDutyDoctor?.id || null);
+      const targetTime = held?.slotTime || normalizeSlotTime(selectedTime) || undefined;
+      const isSlotConflict = classifyHoldFailure(err?.code, err?.message) === "slot_conflict";
 
-      if (holdToRelease) {
-        try {
-          clearCheckoutRedirectRecord(holdToRelease, "Checkout initialization failed");
-          await releaseAppointmentHoldSafely(holdToRelease, "Hold released after failed payment authorization.", {
-            clinicId: selectedClinic?.id,
-            date: selectedDate,
-            doctorId: resolvedDoctorId || activeDutyDoctor?.id,
-            slotTime: timeClean,
-          });
-        } catch (cleanupErr: any) {
-          console.warn("[AppointmentPage] Non-fatal hold cleanup error:", cleanupErr?.message);
+      if (!isSlotConflict) {
+        // Clean up the temporary hold created for this failed checkout attempt before redirect occurred
+        const holdToRelease =
+          held?.appointmentId ||
+          insertedApptId ||
+          (typeof window !== "undefined" ? sessionStorage.getItem("dermai_pending_appointment_id") : null);
+        let released = false;
+        let releasedSlot: { date?: string; doctorId?: string | null; slotTime?: string } | undefined;
+        if (holdToRelease) {
+          try {
+            clearCheckoutRedirectRecord(holdToRelease, "Checkout initialization failed");
+            // releaseAppointmentHoldSafely broadcasts hold_released if and only if the database release succeeds
+            const releaseRes = await releaseAppointmentHoldSafely(
+              holdToRelease,
+              "Hold released after failed payment authorization.",
+              {
+                clinicId: targetClinicId,
+                date: targetDate,
+                doctorId: targetDoctorId,
+                slotTime: targetTime,
+              }
+            );
+            released = Boolean(releaseRes?.success);
+            releasedSlot = releaseRes?.releasedSlot;
+            if (releaseRes?.alreadyPaid) {
+              heldSlotTrackerRef.current.clearOnPaymentSuccess(holdToRelease);
+              setMyActiveHold(null);
+              try {
+                sessionStorage.removeItem("dermai_pending_appointment_id");
+                sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+              } catch { }
+            } else if (heldSlotTrackerRef.current.clearOnReleaseResult(releaseRes)) {
+              setMyActiveHold(null);
+              try {
+                sessionStorage.removeItem("dermai_pending_appointment_id");
+                sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+              } catch { }
+            }
+          } catch (cleanupErr: any) {
+            console.warn("[AppointmentPage] Non-fatal hold cleanup error:", cleanupErr?.message);
+          }
         }
-        try {
-          sessionStorage.removeItem("dermai_pending_appointment_id");
-          sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
-        } catch { }
+
+        const finalReleasedDate = releasedSlot?.date || targetDate;
+        const finalReleasedTime = releasedSlot?.slotTime || targetTime;
+        const finalReleasedDoctorId = releasedSlot?.doctorId !== undefined ? releasedSlot.doctorId : targetDoctorId;
+        if (released && finalReleasedDate && finalReleasedTime) {
+          availabilityTrackerRef.current.applyEvent({
+            date: finalReleasedDate,
+            slotTime: finalReleasedTime,
+            doctorId: finalReleasedDoctorId,
+            changeType: "hold_released",
+          });
+          setExistingBookings(availabilityTrackerRef.current.visible());
+        }
+        setRealtimeRefreshTick((t) => t + 1);
+      } else {
+        // Slot is reserved/booked by another patient!
+        // Never release a hold we do not own, never broadcast hold_released or a fake hold_acquired,
+        // and immediately refresh authoritative occupancy from the database.
+        if (targetDate && targetTime) {
+          availabilityTrackerRef.current.applyEvent({
+            date: targetDate,
+            slotTime: targetTime,
+            doctorId: targetDoctorId,
+            changeType: "hold_acquired",
+          });
+          setExistingBookings(availabilityTrackerRef.current.visible());
+        }
+        setRealtimeRefreshTick((t) => t + 1);
       }
 
-      sessionConflictSlotsRef.current.delete(slotKey);
-      setExistingBookings((prev) =>
-        prev.filter((b) => {
-          const bTime = (b.time || b.batch_time || "").slice(0, 5);
-          const bDocId = b.assigned_doctor_id;
-          const matches = bTime === timeClean && (!resolvedDoctorId || !bDocId || String(bDocId) === String(resolvedDoctorId));
-          return !matches;
-        })
-      );
-      broadcastSlotChange(selectedClinic?.id, {
-        date: selectedDate,
-        doctorId: resolvedDoctorId || activeDutyDoctor?.id,
-        slotTime: timeClean,
-        type: "hold_released",
-      });
-      setRealtimeRefreshTick((t) => t + 1);
-
-      const isSchedErr =
-        err?.message?.includes("ERR_SCHEDULE_CONFIG") ||
-        err?.message?.includes("appointment interval") ||
-        err?.message?.includes("duty schedule");
+      const isSchedErr = classifyHoldFailure(err?.code, err?.message) === "schedule_config";
       const cleanErrMsg = isSchedErr
         ? "This doctor's consultation schedule has not been configured with appointment intervals by the clinic. Please select another available doctor or contact the clinic."
         : (err?.message || "Payment authorization failed. Please try again or select another payment method.");
@@ -3298,43 +3644,61 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   };
 
   const handleDemoCancelPayment = async () => {
-    const pendingApptId = sessionStorage.getItem("dermai_pending_appointment_id");
-    const timeClean = (selectedTime || "08:00").slice(0, 5);
+    const held = heldSlotTrackerRef.current.get();
+    const pendingApptId = held?.appointmentId || sessionStorage.getItem("dermai_pending_appointment_id");
+    const targetClinicId = held?.clinicId || (selectedClinic?.id ? String(selectedClinic.id) : undefined);
+    const targetDate = held?.date || selectedDate || undefined;
+    const targetDoctorId = held ? held.doctorId : (activeDutyDoctor?.id || selectedDoctorId || null);
+    const targetTime = held?.slotTime || normalizeSlotTime(selectedTime) || undefined;
+    let released = false;
+    let releasedSlot: { date?: string; doctorId?: string | null; slotTime?: string } | undefined;
 
     if (pendingApptId) {
       try {
-        await releaseAppointmentHoldSafely(pendingApptId, "Reservation hold cancelled by patient.", {
-          clinicId: selectedClinic?.id,
-          date: selectedDate,
-          doctorId: activeDutyDoctor?.id || selectedDoctorId,
-          slotTime: timeClean,
-        });
+        // releaseAppointmentHoldSafely broadcasts hold_released only when the DB release succeeds
+        const releaseRes = await releaseAppointmentHoldSafely(
+          pendingApptId,
+          "Reservation hold cancelled by patient.",
+          {
+            clinicId: targetClinicId,
+            date: targetDate,
+            doctorId: targetDoctorId,
+            slotTime: targetTime,
+          }
+        );
+        released = Boolean(releaseRes?.success);
+        releasedSlot = releaseRes?.releasedSlot;
+        if (releaseRes?.alreadyPaid) {
+          heldSlotTrackerRef.current.clearOnPaymentSuccess(pendingApptId);
+          setMyActiveHold(null);
+          try {
+            sessionStorage.removeItem("dermai_pending_appointment_id");
+            sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+          } catch { }
+        } else if (heldSlotTrackerRef.current.clearOnReleaseResult(releaseRes)) {
+          setMyActiveHold(null);
+          try {
+            sessionStorage.removeItem("dermai_pending_appointment_id");
+            sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+          } catch { }
+        }
       } catch (err: any) {
         console.warn("[AppointmentPage] Cancel hold error:", err?.message);
       }
-      try {
-        sessionStorage.removeItem("dermai_pending_appointment_id");
-        sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
-      } catch { }
     }
 
-    for (const [k, v] of sessionConflictSlotsRef.current.entries()) {
-      if (v.date === selectedDate && (v.time || v.batch_time || "").slice(0, 5) === timeClean) {
-        sessionConflictSlotsRef.current.delete(k);
-      }
+    const finalReleasedDate = releasedSlot?.date || targetDate;
+    const finalReleasedTime = releasedSlot?.slotTime || targetTime;
+    const finalReleasedDoctorId = releasedSlot?.doctorId !== undefined ? releasedSlot.doctorId : targetDoctorId;
+    if (released && finalReleasedDate && finalReleasedTime) {
+      availabilityTrackerRef.current.applyEvent({
+        date: finalReleasedDate,
+        slotTime: finalReleasedTime,
+        doctorId: finalReleasedDoctorId,
+        changeType: "hold_released",
+      });
+      setExistingBookings(availabilityTrackerRef.current.visible());
     }
-    setExistingBookings((prev) =>
-      prev.filter((b) => {
-        const bTime = (b.time || b.batch_time || "").slice(0, 5);
-        return bTime !== timeClean;
-      })
-    );
-    broadcastSlotChange(selectedClinic?.id, {
-      date: selectedDate,
-      doctorId: activeDutyDoctor?.id || selectedDoctorId,
-      slotTime: timeClean,
-      type: "hold_released",
-    });
     setRealtimeRefreshTick((t) => t + 1);
 
     setShowDemoCheckoutModal(false);
@@ -3342,44 +3706,62 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   };
 
   const handleDemoReturnToBooking = async () => {
-    const pendingApptId = sessionStorage.getItem("dermai_pending_appointment_id");
+    const held = heldSlotTrackerRef.current.get();
+    const pendingApptId = held?.appointmentId || sessionStorage.getItem("dermai_pending_appointment_id");
     clearCheckoutRedirectRecord(pendingApptId, "Modal closed / cancelled before redirect");
-    const timeClean = (selectedTime || "08:00").slice(0, 5);
+    const targetClinicId = held?.clinicId || (selectedClinic?.id ? String(selectedClinic.id) : undefined);
+    const targetDate = held?.date || selectedDate || undefined;
+    const targetDoctorId = held ? held.doctorId : (activeDutyDoctor?.id || selectedDoctorId || null);
+    const targetTime = held?.slotTime || normalizeSlotTime(selectedTime) || undefined;
+    let released = false;
+    let releasedSlot: { date?: string; doctorId?: string | null; slotTime?: string } | undefined;
 
     if (pendingApptId) {
       try {
-        await releaseAppointmentHoldSafely(pendingApptId, "Reservation hold released on exit.", {
-          clinicId: selectedClinic?.id,
-          date: selectedDate,
-          doctorId: activeDutyDoctor?.id || selectedDoctorId,
-          slotTime: timeClean,
-        });
+        // releaseAppointmentHoldSafely broadcasts hold_released only when the DB release succeeds
+        const releaseRes = await releaseAppointmentHoldSafely(
+          pendingApptId,
+          "Reservation hold released on exit.",
+          {
+            clinicId: targetClinicId,
+            date: targetDate,
+            doctorId: targetDoctorId,
+            slotTime: targetTime,
+          }
+        );
+        released = Boolean(releaseRes?.success);
+        releasedSlot = releaseRes?.releasedSlot;
+        if (releaseRes?.alreadyPaid) {
+          heldSlotTrackerRef.current.clearOnPaymentSuccess(pendingApptId);
+          setMyActiveHold(null);
+          try {
+            sessionStorage.removeItem("dermai_pending_appointment_id");
+            sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+          } catch { }
+        } else if (heldSlotTrackerRef.current.clearOnReleaseResult(releaseRes)) {
+          setMyActiveHold(null);
+          try {
+            sessionStorage.removeItem("dermai_pending_appointment_id");
+            sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
+          } catch { }
+        }
       } catch (err: any) {
         console.warn("[AppointmentPage] Release hold error:", err?.message);
       }
-      try {
-        sessionStorage.removeItem("dermai_pending_appointment_id");
-        sessionStorage.removeItem("dermai_pending_payment_intent_client_key");
-      } catch { }
     }
 
-    for (const [k, v] of sessionConflictSlotsRef.current.entries()) {
-      if (v.date === selectedDate && (v.time || v.batch_time || "").slice(0, 5) === timeClean) {
-        sessionConflictSlotsRef.current.delete(k);
-      }
+    const finalReleasedDate = releasedSlot?.date || targetDate;
+    const finalReleasedTime = releasedSlot?.slotTime || targetTime;
+    const finalReleasedDoctorId = releasedSlot?.doctorId !== undefined ? releasedSlot.doctorId : targetDoctorId;
+    if (released && finalReleasedDate && finalReleasedTime) {
+      availabilityTrackerRef.current.applyEvent({
+        date: finalReleasedDate,
+        slotTime: finalReleasedTime,
+        doctorId: finalReleasedDoctorId,
+        changeType: "hold_released",
+      });
+      setExistingBookings(availabilityTrackerRef.current.visible());
     }
-    setExistingBookings((prev) =>
-      prev.filter((b) => {
-        const bTime = (b.time || b.batch_time || "").slice(0, 5);
-        return bTime !== timeClean;
-      })
-    );
-    broadcastSlotChange(selectedClinic?.id, {
-      date: selectedDate,
-      doctorId: activeDutyDoctor?.id || selectedDoctorId,
-      slotTime: timeClean,
-      type: "hold_released",
-    });
     setRealtimeRefreshTick((t) => t + 1);
 
     setShowDemoCheckoutModal(false);
@@ -3533,7 +3915,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           role="status"
           aria-live="polite"
           aria-label="Verifying consultation payment"
-          className="w-full max-w-[440px] rounded-3xl border border-pink-100 bg-white px-6 pb-8 pt-10 text-center shadow-[0_24px_48px_-28px_rgba(128,19,54,0.28)] sm:px-9"
+          className="w-full max-w-[420px] rounded-3xl border border-pink-100/90 bg-white p-7 sm:p-9 text-center shadow-[0_20px_45px_-20px_rgba(128,19,54,0.22)]"
         >
           {/* Spinner with credit card icon */}
           <div className="relative mx-auto mb-6 h-[76px] w-[76px]" aria-hidden="true">
@@ -3544,29 +3926,16 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             </span>
           </div>
 
-          <h1 className="text-2xl font-bold tracking-tight text-gray-900">Verifying consultation payment</h1>
-          <p className="mt-2.5 text-[15px] leading-relaxed text-gray-500">
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900">
+            Verifying consultation payment
+          </h1>
+          <p className="mt-2.5 text-sm sm:text-[15px] leading-relaxed text-gray-500 max-w-sm mx-auto">
             Please wait while we confirm your payment with PayMongo and prepare your consultation receipt.
           </p>
 
-          {/* Indeterminate progress bar */}
-          <div
-            role="progressbar"
-            aria-label="Verifying payment"
-            className="relative mx-auto mt-6 h-1.5 max-w-[300px] overflow-hidden rounded-full bg-pink-100/70"
-          >
-            <span className="animate-payment-indeterminate absolute inset-y-0 left-0 w-2/5 rounded-full bg-[#801336]" />
-          </div>
-
-          {/* Status line */}
-          <p className="mt-2.5 inline-flex items-center gap-2 text-sm font-semibold text-[#801336]">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />
-            Connecting to PayMongo
-          </p>
-
           {/* Footer note */}
-          <div className="mt-6 flex items-center justify-center gap-2 border-t border-pink-50 pt-4 text-[13px] text-gray-500">
-            <Lock className="h-[15px] w-[15px] text-emerald-600" aria-hidden="true" />
+          <div className="mt-7 pt-4 border-t border-pink-100/60 flex items-center justify-center gap-2 text-xs sm:text-[13px] text-gray-500">
+            <Lock className="h-3.5 w-3.5 text-emerald-600 shrink-0" aria-hidden="true" />
             <span>Secure payment · Please don’t close or refresh this page</span>
           </div>
         </section>
@@ -3728,7 +4097,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         </div>
 
         {/* Global Error Banner */}
-        {submitError && (
+        {submitError && !submitError.toLowerCase().includes("reserved") && !submitError.toLowerCase().includes("exclusive_doctor_slot") && (
           <motion.div
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
@@ -3789,10 +4158,12 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowClinicDetailsModal(true)}
-                  className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-50 border border-gray-200 text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer shrink-0"
+                  onClick={() => setShowInstructionsModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white hover:bg-pink-50 text-[#801336] border border-pink-200 transition-colors cursor-pointer shadow-2xs shrink-0"
+                  title="View appointment booking instructions & guide"
                 >
-                  Clinic Details
+                  <HelpCircle className="w-3.5 h-3.5 text-[#801336]" />
+                  <span>Instructions</span>
                 </button>
               </div>
 
@@ -4160,10 +4531,12 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowClinicDetailsModal(true)}
-                  className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-50 border border-gray-200 text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer shrink-0"
+                  onClick={() => setShowInstructionsModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white hover:bg-pink-50 text-[#801336] border border-pink-200 transition-colors cursor-pointer shadow-2xs shrink-0"
+                  title="View appointment booking instructions & guide"
                 >
-                  Clinic Details
+                  <HelpCircle className="w-3.5 h-3.5 text-[#801336]" />
+                  <span>Instructions</span>
                 </button>
               </div>
 
@@ -4172,8 +4545,153 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
                 {/* Modern Landscape Two-Column Layout */}
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                  {/* ════════ LEFT COLUMN: Minimal Landscape Calendar (7 cols on lg/xl) ════════ */}
-                  <div className="lg:col-span-7 xl:col-span-7 w-full min-w-0 space-y-3">
+                  {/* ════════ LEFT COLUMN: Attending Doctor Selection & Minimal Landscape Calendar (7 cols on lg/xl) ════════ */}
+                  <div className="lg:col-span-7 xl:col-span-7 w-full min-w-0 space-y-3.5">
+                    {/* 1. Attending Doctor Selection Card */}
+                    <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3">
+                      <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
+                        <div>
+                          <h4 className="text-xs sm:text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                            <Stethoscope className="w-3.5 h-3.5 text-magenta-600" />
+                            <span>Attending Dermatologist</span>
+                          </h4>
+                          <p className="text-[10px] text-gray-400 mt-0.5">
+                            {clinicDoctors.length > 1
+                              ? `${clinicDoctors.length} Doctors available`
+                              : `Scheduled for ${formattedPreviewDate}`}
+                          </p>
+                        </div>
+                        {clinicDoctors.length > 1 && (
+                          <span className="text-[10px] font-bold text-magenta-700 bg-magenta-50 px-2 py-0.5 rounded-full border border-magenta-200/60">
+                            Select Doctor
+                          </span>
+                        )}
+                      </div>
+
+                      {clinicDoctors.length === 0 ? (
+                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-dashed border-gray-200 text-center space-y-1 min-h-[76px] flex flex-col justify-center">
+                          <p className="text-xs font-bold text-gray-700">General Clinic Consultation</p>
+                          <p className="text-[11px] text-gray-400">
+                            No specific doctor is scheduled for this clinic. Your consultation will be attended by an on-duty clinic doctor.
+                          </p>
+                        </div>
+                      ) : (
+                        <div ref={doctorDropdownRef} className="relative w-full">
+                          {/* Compact Dropdown Trigger Button */}
+                          <button
+                            type="button"
+                            disabled={clinicDoctors.length <= 1}
+                            onClick={() => setIsDoctorDropdownOpen((prev) => !prev)}
+                            className={`w-full flex items-center justify-between p-3 sm:p-4 rounded-2xl border bg-white transition-all text-left ${isDoctorDropdownOpen
+                              ? "border-[#801336] ring-2 ring-[#801336]/10 shadow-xs"
+                              : clinicDoctors.length > 1
+                                ? "border-pink-200/90 hover:border-pink-300 hover:bg-pink-50/20 cursor-pointer shadow-2xs"
+                                : "border-pink-200/80 shadow-2xs cursor-default"
+                              }`}
+                          >
+                            {activeDutyDoctor ? (
+                              <div className="flex items-center gap-3 sm:gap-3.5 min-w-0 flex-1">
+                                <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full border-2 border-pink-300 p-0.5 shrink-0 flex items-center justify-center bg-white shadow-2xs">
+                                  <DoctorAvatar
+                                    doctorId={activeDutyDoctor.id}
+                                    doctor={activeDutyDoctor}
+                                    name={activeDutyDoctor.name}
+                                    className="w-full h-full rounded-full object-cover"
+                                  />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <span className="font-bold text-gray-900 text-sm sm:text-base block truncate">
+                                    {activeDutyDoctor.name}
+                                  </span>
+                                  <p className="text-[11px] sm:text-xs text-magenta-700 font-medium truncate mt-0.5">
+                                    {activeDoctorSpecializations.join(", ")}
+                                  </p>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-3 sm:gap-3.5 min-w-0 flex-1 py-1">
+                                <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full border-2 border-dashed border-pink-300 p-0.5 shrink-0 flex items-center justify-center bg-pink-50/50 text-[#801336]">
+                                  <Stethoscope className="w-6 h-6" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <span className="font-bold text-gray-800 text-sm sm:text-base block">
+                                    Select an attending doctor
+                                  </span>
+                                  <p className="text-[11px] text-gray-500 mt-0.5">
+                                    {clinicDoctors.length > 0
+                                      ? `${clinicDoctors.length} doctors available · Click to choose`
+                                      : "Click to choose an attending specialist"}
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+
+                            {clinicDoctors.length > 1 && (
+                              <ChevronDown
+                                className={`w-4 h-4 text-gray-400 shrink-0 ml-3 transition-transform duration-200 ${isDoctorDropdownOpen ? "rotate-180 text-[#801336]" : ""
+                                  }`}
+                              />
+                            )}
+                          </button>
+
+                          {/* Dropdown Popover */}
+                          <AnimatePresence>
+                            {isDoctorDropdownOpen && clinicDoctors.length > 0 && (
+                              <motion.div
+                                initial={{ opacity: 0, y: -4 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -4 }}
+                                transition={{ duration: 0.12 }}
+                                className="absolute left-0 right-0 top-full mt-1.5 max-h-64 overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-2xl z-50 p-1.5 divide-y divide-gray-50"
+                              >
+                                {clinicDoctors.map((doc) => {
+                                  const isSelected = activeDutyDoctor?.id === doc.id;
+                                  const docSpecs = getDoctorSpecializations(doc);
+                                  const specsText = docSpecs.join(", ");
+
+                                  return (
+                                    <button
+                                      key={doc.id}
+                                      type="button"
+                                      onClick={() => handleDoctorSelect(doc)}
+                                      className={`w-full flex items-center justify-between p-2.5 rounded-xl transition-all text-left cursor-pointer ${isSelected
+                                        ? "bg-magenta-50/80 text-magenta-900 font-semibold"
+                                        : "hover:bg-gray-50 text-gray-800"
+                                        }`}
+                                    >
+                                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                        <DoctorAvatar
+                                          doctorId={doc.id}
+                                          doctor={doc}
+                                          name={doc.name}
+                                          className="w-9 h-9 rounded-full border border-pink-200 shrink-0"
+                                        />
+                                        <div className="min-w-0 flex-1">
+                                          <p className="text-xs sm:text-sm font-bold text-gray-900 truncate">
+                                            {doc.name}
+                                          </p>
+                                          <p className="text-[11px] text-magenta-700 font-medium truncate mt-0.5">
+                                            {specsText}
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      <div className="w-5 flex items-center justify-end shrink-0 ml-2">
+                                        {isSelected && (
+                                          <Check className="w-4 h-4 text-magenta-600 stroke-[3]" />
+                                        )}
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 2. Minimal Landscape Calendar Card */}
                     <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3.5">
                       {/* Month Title & Prev/Next Navigation */}
                       <div className="flex items-center justify-between gap-3 pb-3 border-b border-gray-100">
@@ -4235,8 +4753,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         {calendarDays.map((cell, idx) => {
                           const isSelected = selectedDate === cell.dateStr;
                           const isToday = cell.isToday;
-                          const isDisabled = cell.isDisabled || !cell.inCurrentMonth;
-                          const hasDoctors = cell.onDutyDocs.length > 0 && cell.inCurrentMonth && !cell.isPast;
+                          const isAvailable = !cell.isPast && cell.inCurrentMonth && cell.hasDoctorsOnDuty;
+                          const isDisabled = cell.isDisabled || !cell.inCurrentMonth || !isAvailable;
 
                           return (
                             <button
@@ -4246,37 +4764,39 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                               onClick={() => {
                                 if (!isDisabled) {
                                   setSelectedDate(cell.dateStr);
-                                  if (cell.onDutyDocs.length > 0) {
-                                    setSelectedDoctorId(cell.onDutyDocs[0].id);
-                                  }
                                 }
                               }}
-                              className={`min-h-[58px] sm:min-h-[64px] p-2 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${isSelected
-                                ? "border-2 border-magenta-600 bg-magenta-50/70 ring-2 ring-magenta-500/20 shadow-xs"
+                              className={`min-h-[58px] sm:min-h-[64px] p-2 sm:p-2.5 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${isSelected
+                                ? "border-2 border-magenta-600 bg-magenta-50/90 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer"
                                 : isDisabled
-                                  ? "border-gray-100 bg-slate-50/40 text-gray-300 cursor-not-allowed"
+                                  ? "border-[#f2e5eb] bg-[#faf4f6] text-[#c4b0b8] cursor-not-allowed select-none"
                                   : isToday
-                                    ? "border-magenta-300 bg-pink-50/20 hover:border-magenta-400 hover:shadow-2xs cursor-pointer"
-                                    : "border-gray-200/80 bg-white hover:border-magenta-300 hover:bg-slate-50/40 hover:shadow-2xs cursor-pointer"
+                                    ? "border-magenta-300 bg-pink-50/40 hover:border-magenta-400 hover:bg-pink-50/60 hover:shadow-2xs cursor-pointer"
+                                    : "border-pink-200/90 bg-white hover:border-magenta-400 hover:bg-pink-50/20 hover:shadow-2xs cursor-pointer"
                                 }`}
                             >
                               {/* Top row: Date Number & Today / Selected indicator */}
                               <div className="flex items-center justify-between w-full">
                                 <span
                                   className={`text-xs sm:text-sm font-bold leading-none ${isSelected
-                                    ? "text-magenta-800"
-                                    : isToday
-                                      ? "text-magenta-600"
-                                      : !cell.inCurrentMonth || cell.isPast
-                                        ? "text-gray-300"
-                                        : "text-gray-800"
+                                    ? "text-magenta-900"
+                                    : isToday && !isDisabled
+                                      ? "text-magenta-700"
+                                      : isDisabled
+                                        ? "text-[#c4b0b8]"
+                                        : "text-gray-900"
                                     }`}
                                 >
                                   {cell.dayNum}
                                 </span>
 
                                 {isToday && (
-                                  <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-magenta-100 text-magenta-700 leading-none">
+                                  <span
+                                    className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full leading-none ${isDisabled
+                                      ? "bg-[#f0e2e8] text-[#aa939d]"
+                                      : "bg-magenta-100 text-magenta-700"
+                                      }`}
+                                  >
                                     Today
                                   </span>
                                 )}
@@ -4286,22 +4806,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                 )}
                               </div>
 
-                              {/* Doctor indicator - only shown when a doctor is actually on duty */}
-                              <div className="w-full mt-1">
-                                {hasDoctors ? (
-                                  <div className={`px-1.5 py-0.5 rounded-lg flex items-center justify-center gap-1 transition-all ${isSelected
-                                    ? "bg-magenta-600 text-white font-semibold"
-                                    : "bg-magenta-50 text-magenta-700 font-semibold border border-magenta-100/80"
-                                    }`}>
-                                    <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
-                                    <span className="text-[9px] font-bold leading-none truncate">
-                                      {cell.onDutyDocs.length === 1
-                                        ? cell.onDutyDocs[0].name.replace(/^Dr\.?\s*/i, "").split(" ")[0] || "Doctor"
-                                        : `${cell.onDutyDocs.length} Docs`}
-                                    </span>
-                                  </div>
-                                ) : null}
-                              </div>
+                              {/* Empty alignment spacer to keep date numbers aligned at top */}
+                              <div className="min-h-[10px]" aria-hidden="true" />
                             </button>
                           );
                         })}
@@ -4311,107 +4817,22 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       <div className="flex items-center justify-between pt-2 border-t border-gray-100 text-[10px] text-gray-500">
                         <div className="flex items-center gap-3">
                           <span className="flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-magenta-500 inline-block" /> Doctor Available
+                            <span className="w-3 h-3 rounded-md border border-pink-200/90 bg-white inline-block shadow-2xs" /> Available
+                          </span>
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-3 h-3 rounded-md border border-[#f2e5eb] bg-[#faf4f6] inline-block" /> Not Available
                           </span>
                         </div>
                         <span className="flex items-center gap-1.5 font-semibold text-magenta-700">
-                          <span className="w-2 h-2 rounded-full bg-magenta-600 inline-block ring-1 ring-magenta-200" /> Selected Date
+                          <span className="w-2.5 h-2.5 rounded-full bg-magenta-600 inline-block ring-1 ring-magenta-200" /> Selected Date
                         </span>
                       </div>
                     </div>
                   </div>
 
-                  {/* ════════ RIGHT COLUMN: Attending Doctor Selection, Summary & Booking (5 cols on lg/xl) ════════ */}
+                  {/* ════════ RIGHT COLUMN: Time Slots & Consultation Summary (5 cols on lg/xl) ════════ */}
                   <div className="lg:col-span-5 xl:col-span-5 w-full min-w-0 space-y-3.5">
-                    {/* 1. Attending Doctor Selection Card */}
-                    <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3">
-                      <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
-                        <div>
-                          <h4 className="text-xs sm:text-sm font-bold text-gray-900 flex items-center gap-1.5">
-                            <Stethoscope className="w-3.5 h-3.5 text-magenta-600" />
-                            <span>Attending Dermatologist</span>
-                          </h4>
-                          <p className="text-[10px] text-gray-400 mt-0.5">
-                            {onDutyDoctorsForDate.length > 1
-                              ? `${onDutyDoctorsForDate.length} Doctors on duty on ${formattedPreviewDate}`
-                              : `Scheduled for ${formattedPreviewDate}`}
-                          </p>
-                        </div>
-                        {onDutyDoctorsForDate.length > 1 && (
-                          <span className="text-[10px] font-bold text-magenta-700 bg-magenta-50 px-2 py-0.5 rounded-full border border-magenta-200/60">
-                            Select Doctor
-                          </span>
-                        )}
-                      </div>
-
-                      {onDutyDoctorsForDate.length === 0 ? (
-                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-dashed border-gray-200 text-center space-y-1 min-h-[76px] flex flex-col justify-center">
-                          <p className="text-xs font-bold text-gray-700">General Clinic Consultation</p>
-                          <p className="text-[11px] text-gray-400">
-                            No specific doctor is scheduled for this date. Your consultation will be attended by an on-duty clinic doctor.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-2.5 max-h-60 overflow-y-auto pr-0.5 no-scrollbar">
-                          {onDutyDoctorsForDate.map((doc) => {
-                            const isDocSelected = activeDutyDoctor?.id === doc.id;
-                            const docWeekly = doc.weeklySchedule || parseDoctorSchedule(doc.dutySchedule, doc.dutyDays);
-                            const docShifts = docWeekly.weeklyShifts[normalizeDayName(dayOfWeekForSelectedDate)] || [];
-                            const shiftSummaryText = docShifts.length > 0
-                              ? docShifts.map((s) => `${formatTime12h(s.startTime)}–${formatTime12h(s.endTime)}`).join(", ")
-                              : `${formatTime12h(doc.dutyStartTime || "08:00")} – ${formatTime12h(doc.dutyEndTime || "17:00")}`;
-
-                            return (
-                              <button
-                                key={doc.id}
-                                type="button"
-                                onClick={() => setSelectedDoctorId(doc.id)}
-                                className={`w-full p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-center gap-3 relative group ${isDocSelected
-                                  ? "bg-magenta-50/90 border-magenta-500 ring-2 ring-magenta-500/20 shadow-xs"
-                                  : "bg-white border-gray-200 hover:border-magenta-300 hover:bg-slate-50/50"
-                                  }`}
-                              >
-                                <DoctorAvatar
-                                  doctorId={doc.id}
-                                  doctor={doc}
-                                  name={doc.name}
-                                  className="w-12 h-12 rounded-2xl border border-magenta-200 shrink-0 shadow-2xs text-base font-bold"
-                                />
-
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center justify-between gap-1">
-                                    <h5 className="text-xs sm:text-sm font-bold text-gray-900 truncate group-hover:text-magenta-700 transition-colors">
-                                      {doc.name}
-                                    </h5>
-                                    {isDocSelected ? (
-                                      <span className="w-4 h-4 rounded-full bg-magenta-600 text-white flex items-center justify-center shrink-0">
-                                        <Check className="w-2.5 h-2.5" />
-                                      </span>
-                                    ) : (
-                                      <span className="w-4 h-4 rounded-full border border-gray-300 shrink-0" />
-                                    )}
-                                  </div>
-                                  <p className="text-[11px] text-magenta-700 font-medium truncate mt-0.5">
-                                    {doc.specialization || "General Dermatology"}
-                                  </p>
-                                  <div className="flex items-center gap-2 mt-1">
-                                    <span className="text-[10px] text-gray-500 flex items-center gap-1 font-medium">
-                                      <Clock className="w-3 h-3 text-magenta-500 shrink-0" />
-                                      <span>{shiftSummaryText}</span>
-                                    </span>
-                                    <span className="text-[9px] px-1.5 py-0.2 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                      Available
-                                    </span>
-                                  </div>
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 2. Dynamic Consultation Time Slots Grouped by Shift */}
+                    {/* 1. Dynamic Consultation Time Slots Grouped by Shift */}
                     <div className="bg-white rounded-3xl border border-gray-200/90 p-4 sm:p-5 shadow-xs space-y-3.5">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-100 pb-2.5 gap-2">
                         <div>
@@ -4419,16 +4840,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                             <Clock className="w-3.5 h-3.5 text-magenta-600" />
                             <span>Select Consultation Time Slot</span>
                           </h4>
-                          <p className="text-[11px] text-gray-500 mt-0.5">
-                            {activeDutyDoctor ? (
-                              <>
-                                Attending: <strong className="text-magenta-700 font-semibold">{activeDutyDoctor.name.startsWith("Dr") ? activeDutyDoctor.name : `Dr. ${activeDutyDoctor.name}`}</strong> •{" "}
-                                <span className="text-gray-700 font-medium">{dayOfWeekForSelectedDate} Shifts</span>
-                              </>
-                            ) : (
-                              <>Clinic Hours: <strong className="text-magenta-700 font-semibold">{activeDoctorHours}</strong></>
-                            )}
-                          </p>
                         </div>
 
                         {/* Overall Day Status */}
@@ -4450,21 +4861,40 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
                       {/* Shift groups rendering */}
                       {dayShiftGroups.length === 0 ? (
-                        <div className="p-5 text-center text-xs border border-dashed border-gray-200 rounded-2xl bg-slate-50/50 space-y-1.5 min-h-[220px] flex flex-col justify-center items-center">
+                        <div className="p-5 text-center text-xs border border-dashed border-gray-200 rounded-2xl bg-slate-50/50 space-y-2 min-h-[220px] flex flex-col justify-center items-center">
                           {activeDutyDoctor && !isDoctorOnDutyOnDay(activeDutyDoctor, dayOfWeekForSelectedDate, {
                             openTime: selectedClinic?.openTime,
                             closeTime: selectedClinic?.closeTime,
                             operatingDays: selectedClinic?.operatingDays,
                           }) ? (
                             <>
-                              <p className="font-bold text-gray-800">
-                                {formatCleanDoctorTitle(activeDutyDoctor.name)} is not on duty on {dayOfWeekForSelectedDate}.
+                              <div className="w-10 h-10 rounded-full bg-pink-50 border border-pink-200 flex items-center justify-center text-[#801336]">
+                                <Calendar className="w-5 h-5" />
+                              </div>
+                              <p className="text-xs sm:text-sm font-bold text-gray-800">
+                                {activeDutyDoctor.name} is not on duty on {dayOfWeekForSelectedDate}.
                               </p>
-                              {onDutyDoctorsForDate.length > 0 && (
-                                <p className="text-[11px] text-magenta-700 font-semibold pt-1">
-                                  Other doctors are on duty on this date. Select an attending doctor above.
+                              {onDutyDoctorsForDate.length > 0 ? (
+                                <p className="text-[11px] text-magenta-700 font-semibold">
+                                  Select an attending doctor from the dropdown above.
+                                </p>
+                              ) : (
+                                <p className="text-[11px] text-gray-500">
+                                  No doctors are on duty for this date. Please pick another day on the calendar.
                                 </p>
                               )}
+                            </>
+                          ) : !activeDutyDoctor ? (
+                            <>
+                              <div className="w-10 h-10 rounded-full bg-pink-50 border border-pink-200 flex items-center justify-center text-[#801336]">
+                                <Stethoscope className="w-5 h-5" />
+                              </div>
+                              <p className="text-xs sm:text-sm font-bold text-gray-800">
+                                Select an attending doctor.
+                              </p>
+                              <p className="text-gray-500 text-[11px] max-w-xs">
+                                Choose an attending doctor from the dropdown above to view available consultation slots.
+                              </p>
                             </>
                           ) : (
                             <p className="text-gray-400">No consultation shifts or slots available for this duty date.</p>
@@ -4472,16 +4902,20 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         </div>
                       ) : (
                         <div className="space-y-4 max-h-[320px] overflow-y-auto pr-1.5">
-                          {slotConflictWarning && (
-                            <div className="mb-3.5 p-3 sm:p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 text-xs sm:text-[13px] flex items-start gap-2.5 shadow-xs animate-in fade-in slide-in-from-top-1 duration-200">
-                              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                              <span className="flex-1 font-medium">{slotConflictWarning}</span>
+                          {availabilityError && (
+                            <div className="mb-3.5 p-3 sm:p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-xs sm:text-[13px] flex items-center justify-between gap-3 shadow-xs">
+                              <div className="flex items-center gap-2">
+                                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                                <span className="font-medium">{availabilityError}</span>
+                              </div>
                               <button
                                 type="button"
-                                onClick={() => setSlotConflictWarning(null)}
-                                className="text-amber-700 hover:text-amber-900 font-bold text-xs cursor-pointer"
+                                onClick={handleRetryAvailability}
+                                disabled={loadingBookings}
+                                className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs cursor-pointer disabled:opacity-50 shrink-0 flex items-center gap-1.5 transition-colors"
                               >
-                                ✕
+                                {loadingBookings && <Loader2 className="w-3 h-3 animate-spin" />}
+                                Retry
                               </button>
                             </div>
                           )}
@@ -4546,57 +4980,83 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                 ) : (
                                   <div className="grid grid-cols-3 gap-2.5 sm:gap-3 mt-3">
                                     {group.slots.map((slot) => {
+                                      const isOwnHold = Boolean(
+                                        myActiveHold &&
+                                        myActiveHold.clinicId === String(selectedClinic?.id) &&
+                                        myActiveHold.date === selectedDate &&
+                                        myActiveHold.slotTime === slot.slotTime &&
+                                        doctorScopesOverlap(myActiveHold.doctorId, activeDutyDoctor?.id)
+                                      );
                                       const isSlotSelected = selectedTime === slot.slotTime;
-                                      const isAvailable = slot.isAvailable;
+                                      const isClickable = ((hasAuthoritativeOccupancy && !availabilityError && slot.isAvailable) || isOwnHold);
+                                      const isSlotReserved = Boolean(!isOwnHold && (slot.occupancyType === "reserved" || slot.isReserved));
+                                      const isSlotBooked = Boolean(!isOwnHold && (slot.occupancyType === "booked" || (slot.isBooked && !slot.isReserved)));
 
                                       return (
                                         <button
                                           key={slot.slotTime}
                                           type="button"
-                                          disabled={!isAvailable}
+                                          disabled={!isClickable}
                                           onClick={() => {
-                                            if (isAvailable) {
+                                            if (isClickable) {
                                               setSelectedTime(slot.slotTime);
                                               setSlotConflictWarning(null);
                                             }
                                           }}
-                                          className={`py-2.5 sm:py-3 px-3 rounded-2xl border text-left transition-all relative flex items-center justify-between gap-1.5 ${
-                                            slot.isReserved
-                                              ? "bg-amber-50/70 border-amber-300 text-amber-900 cursor-not-allowed opacity-80"
-                                              : slot.isBooked
-                                              ? "bg-rose-50/50 border-rose-200 text-rose-900 cursor-not-allowed opacity-70"
-                                              : !isAvailable
-                                              ? "bg-slate-50/70 border-gray-200 text-gray-400 cursor-not-allowed opacity-60"
-                                              : isSlotSelected
-                                              ? "bg-magenta-50/90 border-2 border-magenta-600 text-magenta-950 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer font-bold"
-                                              : "bg-white border-gray-200 text-gray-800 hover:border-magenta-300 hover:bg-magenta-50/30 cursor-pointer shadow-2xs"
-                                          }`}
+                                          className={`py-2.5 sm:py-3 px-3 rounded-2xl border text-left transition-all relative flex items-center justify-between gap-1.5 ${isOwnHold
+                                            ? isSlotSelected
+                                              ? "bg-amber-50 border-2 border-amber-500 text-amber-950 ring-2 ring-amber-400/30 shadow-xs cursor-pointer font-bold"
+                                              : "bg-amber-50/70 border border-amber-400 text-amber-900 hover:bg-amber-100/60 cursor-pointer shadow-2xs font-semibold"
+                                            : isSlotReserved
+                                              ? "bg-amber-50/85 border-amber-300 text-amber-900 cursor-not-allowed select-none pointer-events-none opacity-85 shadow-none"
+                                              : isSlotBooked
+                                                ? "bg-rose-50/60 border-rose-200 text-rose-900 cursor-not-allowed select-none pointer-events-none opacity-75 shadow-none"
+                                                : !slot.isAvailable || (!hasAuthoritativeOccupancy || Boolean(availabilityError))
+                                                  ? "bg-slate-50/70 border-gray-200 text-gray-400 cursor-not-allowed select-none pointer-events-none opacity-60 shadow-none"
+                                                  : isSlotSelected
+                                                    ? "bg-magenta-50/90 border-2 border-magenta-600 text-magenta-950 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer font-bold"
+                                                    : "bg-white border-gray-200 text-gray-800 hover:border-magenta-300 hover:bg-magenta-50/30 cursor-pointer shadow-2xs"
+                                            }`}
                                           title={
-                                            slot.isReserved
-                                              ? "Temporarily reserved by another patient for checkout"
-                                              : slot.isBooked
-                                              ? "Already booked by another patient"
-                                              : slot.isPast
-                                              ? "Time slot has passed"
-                                              : slot.isCapacityFull
-                                              ? "Shift capacity full"
-                                              : `${slot.timeRange} (Available)`
+                                            isOwnHold
+                                              ? "Your reserved slot — pending payment. Click to proceed with booking."
+                                              : isSlotReserved
+                                                ? "Temporarily reserved by another patient for checkout"
+                                                : isSlotBooked
+                                                  ? "Already booked by another patient"
+                                                  : slot.isPast
+                                                    ? "Time slot has passed"
+                                                    : slot.isCapacityFull
+                                                      ? "Shift capacity full"
+                                                      : !hasAuthoritativeOccupancy || Boolean(availabilityError)
+                                                        ? "Slot availability could not be verified"
+                                                        : `${slot.timeRange} (Available)`
                                           }
                                         >
-                                          <span className={`text-xs sm:text-[13px] font-bold leading-tight ${isSlotSelected
-                                            ? "text-magenta-950 font-extrabold"
-                                            : !isAvailable
-                                              ? "text-gray-400"
-                                              : "text-gray-900"
+                                          <span className={`text-xs sm:text-[13px] font-bold leading-tight ${isOwnHold
+                                            ? isSlotSelected
+                                              ? "text-amber-950 font-extrabold"
+                                              : "text-amber-900 font-bold"
+                                            : isSlotReserved
+                                              ? "text-amber-950/70"
+                                              : isSlotSelected
+                                                ? "text-magenta-950 font-extrabold"
+                                                : !slot.isAvailable || (!hasAuthoritativeOccupancy || Boolean(availabilityError))
+                                                  ? "text-gray-400"
+                                                  : "text-gray-900"
                                             }`}>
                                             {slot.label}
                                           </span>
 
-                                          {slot.isReserved ? (
-                                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 uppercase tracking-wide shrink-0">
+                                          {isOwnHold ? (
+                                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-white uppercase tracking-wide shrink-0 shadow-2xs">
+                                              Your Hold
+                                            </span>
+                                          ) : isSlotReserved ? (
+                                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 uppercase tracking-wide shrink-0">
                                               Reserved
                                             </span>
-                                          ) : slot.isBooked ? (
+                                          ) : isSlotBooked ? (
                                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200 uppercase tracking-wide shrink-0">
                                               Booked
                                             </span>
@@ -4607,6 +5067,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                           ) : slot.isCapacityFull ? (
                                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 uppercase tracking-wide shrink-0">
                                               Full
+                                            </span>
+                                          ) : !hasAuthoritativeOccupancy || Boolean(availabilityError) ? (
+                                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200 uppercase tracking-wide shrink-0">
+                                              {loadingBookings ? "Checking..." : "Unavailable"}
                                             </span>
                                           ) : isSlotSelected ? (
                                             <span className="w-4 h-4 rounded-full bg-magenta-600 text-white flex items-center justify-center text-[10px] shrink-0 font-bold shadow-2xs">
@@ -4643,34 +5107,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         </button>
                       </div>
 
-                      {/* Prominent Slot Consultation Details */}
-                      {selectedSlot ? (
-                        <div className="p-3.5 rounded-2xl bg-magenta-50/80 border border-magenta-200/80 space-y-1.5 min-h-[96px] flex flex-col justify-center">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-magenta-800">
-                              Selected Consultation Slot
-                            </span>
-                            <span className="px-2.5 py-0.5 rounded-full bg-magenta-600 text-white font-bold text-xs shadow-2xs">
-                              {selectedSlot.durationMinutes} mins
-                            </span>
-                          </div>
-                          <p className="text-xs font-bold text-gray-900 truncate">
-                            {activeDutyDoctor?.name ? (activeDutyDoctor.name.startsWith("Dr") ? activeDutyDoctor.name : `Dr. ${activeDutyDoctor.name}`) : "Attending Dermatologist"}
-                          </p>
-                          <p className="text-[11px] text-gray-700">
-                            Time Slot: <strong className="text-magenta-900 font-semibold">{selectedSlot.timeRange}</strong>
-                          </p>
-                          <p className="text-[10px] text-gray-500 italic">
-                            Slot #{selectedSlot.slotIndex} of shift • Individual patient consultation
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="p-3.5 rounded-2xl bg-slate-50/80 border border-dashed border-gray-200/90 space-y-1 text-center min-h-[96px] flex flex-col justify-center">
-                          <p className="text-xs font-semibold text-gray-700">No Time Slot Selected</p>
-                          <p className="text-[11px] text-gray-400">Please choose an available consultation slot above.</p>
-                        </div>
-                      )}
-
                       {/* Clean Minimal Schedule Details */}
                       <div className="p-3.5 rounded-2xl bg-slate-50 border border-gray-100 space-y-2 text-xs">
                         <div className="flex items-start gap-3">
@@ -4695,17 +5131,33 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                           </div>
                         </div>
 
-                        <div className="pt-2 border-t border-gray-200/70 space-y-0.5">
-                          <p className="font-bold text-gray-900 text-xs">
-                            {formattedPreviewDate}
-                          </p>
-                          <p className="text-gray-600 text-[11px]">
-                            {activeDoctorHours}
-                          </p>
-                          <p className="text-[10px] text-gray-400 italic">
-                            (By Appointment Only)
-                          </p>
-                        </div>
+                        {/* Prominent Slot Consultation Details */}
+                        {selectedSlot ? (
+                          <div className="p-3.5 rounded-2xl bg-magenta-50/80 border border-magenta-200/80 space-y-1.5 min-h-[96px] flex flex-col justify-center">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-magenta-800">
+                                Selected Consultation Slot
+                              </span>
+                              <span className="px-2.5 py-0.5 rounded-full bg-magenta-600 text-white font-bold text-xs shadow-2xs">
+                                {selectedSlot.durationMinutes} mins
+                              </span>
+                            </div>
+                            <p className="text-xs font-bold text-gray-900 truncate">
+                              {activeDutyDoctor?.name ? (activeDutyDoctor.name.startsWith("Dr") ? activeDutyDoctor.name : `Dr. ${activeDutyDoctor.name}`) : "Attending Dermatologist"}
+                            </p>
+                            <p className="text-[11px] text-gray-700">
+                              Time Slot: <strong className="text-magenta-900 font-semibold">{selectedSlot.timeRange}</strong>
+                            </p>
+                            <p className="text-[10px] text-gray-500 italic">
+                              Slot #{selectedSlot.slotIndex} of shift • Individual patient consultation
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="p-3.5 rounded-2xl bg-slate-50/80 border border-dashed border-gray-200/90 space-y-1 text-center min-h-[96px] flex flex-col justify-center">
+                            <p className="text-xs font-semibold text-gray-700">No Time Slot Selected</p>
+                            <p className="text-[11px] text-gray-400">Please choose an available consultation slot.</p>
+                          </div>
+                        )}
 
                         <div className="pt-2 border-t border-gray-200/70 flex items-center justify-between">
                           <div>
@@ -4717,7 +5169,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                             </span>
                           </div>
                           <span className="text-[10px] text-gray-500 font-medium">
-                            Payable online
+                            Payable Online
                           </span>
                         </div>
                       </div>
@@ -4727,13 +5179,29 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                         <button
                           type="button"
                           onClick={() => handleSubmitAppointment()}
-                          disabled={submitting || (selectedSlot ? !selectedSlot.isAvailable : false) || isDailyCapacityReached}
+                          disabled={
+                            submitting ||
+                            !hasAuthoritativeOccupancy ||
+                            Boolean(availabilityError) ||
+                            (selectedSlot ? !selectedSlot.isAvailable && !isSelectedSlotOwnHold : true) ||
+                            isDailyCapacityReached
+                          }
                           className="w-full py-3 rounded-full font-bold text-xs uppercase tracking-wider shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] bg-magenta-600 hover:bg-magenta-700 text-white"
                         >
                           {submitting ? (
                             <>
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
                               <span>Submitting Appointment...</span>
+                            </>
+                          ) : availabilityError ? (
+                            <>
+                              <AlertCircle className="w-3.5 h-3.5" />
+                              <span>Availability Unavailable</span>
+                            </>
+                          ) : !hasAuthoritativeOccupancy && loadingBookings ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Verifying Availability...</span>
                             </>
                           ) : (
                             <>
@@ -4759,6 +5227,147 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           )}
         </AnimatePresence>
       </div>
+
+      {/* ── Booking Instructions Modal ────────────────────────────── */}
+      <ModalPortal isOpen={Boolean(showInstructionsModal)}>
+        <AnimatePresence>
+          {showInstructionsModal && (
+            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                className="relative z-[9999] w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+              >
+                {/* Header */}
+                <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-gray-100 bg-pink-50/50 shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-2xl bg-magenta-100 text-[#801336] flex items-center justify-center shrink-0 shadow-2xs">
+                      <HelpCircle className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm sm:text-base font-bold text-gray-900">How to Book an Appointment</h3>
+                      <p className="text-[11px] text-gray-500 mt-0.5">Step-by-step patient guide for scheduling consultations</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowInstructionsModal(false)}
+                    className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Body */}
+                <div className="p-6 overflow-y-auto space-y-3.5 text-xs">
+                  {/* Step 1 */}
+                  <div className="flex items-start gap-3 p-3.5 rounded-2xl bg-gray-50/80 border border-gray-100">
+                    <div className="w-6 h-6 rounded-lg bg-[#801336] text-white flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 shadow-2xs">
+                      1
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="font-bold text-gray-900 text-xs sm:text-[13px]">Patient &amp; Clinical Details</h4>
+                      <p className="text-gray-600 leading-relaxed text-[11px]">
+                        Fill in your patient profile and select your primary skin concern. You can attach a past AI skin scan report or take a new scan for your doctor to review beforehand.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Step 2 */}
+                  <div className="flex items-start gap-3 p-3.5 rounded-2xl bg-gray-50/80 border border-gray-100">
+                    <div className="w-6 h-6 rounded-lg bg-gray-200 text-gray-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                      2
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="font-bold text-gray-900 text-xs sm:text-[13px]">Choose Your Attending Dermatologist</h4>
+                      <p className="text-gray-600 leading-relaxed text-[11px]">
+                        Click on the <strong>Attending Dermatologist</strong> dropdown to select which specialist you prefer. You can see their photo, full name, and registered clinical specializations.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Step 3 */}
+                  <div className="flex items-start gap-3 p-3.5 rounded-2xl bg-gray-50/80 border border-gray-100">
+                    <div className="w-6 h-6 rounded-lg bg-gray-200 text-gray-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                      3
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="font-bold text-gray-900 text-xs sm:text-[13px]">Select an Available Date on the Calendar</h4>
+                      <p className="text-gray-600 leading-relaxed text-[11px]">
+                        The calendar updates to show your chosen doctor's schedule:
+                      </p>
+                      <ul className="list-disc pl-4 space-y-1 text-gray-600 text-[11px] mt-1">
+                        <li>
+                          <strong>White boxes with pink borders</strong> indicate available duty days.
+                        </li>
+                        <li>
+                          <strong>Light pink-gray boxes</strong> indicate days when the doctor is not on duty or off-schedule.
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  {/* Step 4 */}
+                  <div className="flex items-start gap-3 p-3.5 rounded-2xl bg-gray-50/80 border border-gray-100">
+                    <div className="w-6 h-6 rounded-lg bg-gray-200 text-gray-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                      4
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="font-bold text-gray-900 text-xs sm:text-[13px]">Pick a Consultation Time Slot</h4>
+                      <p className="text-gray-600 leading-relaxed text-[11px]">
+                        Browse morning or afternoon shifts and click on an available time slot (indicated by a green dot). Slots temporarily held by other patients or already booked will be marked accordingly.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Step 5 */}
+                  <div className="flex items-start gap-3 p-3.5 rounded-2xl bg-gray-50/80 border border-gray-100">
+                    <div className="w-6 h-6 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 shadow-2xs">
+                      5
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="font-bold text-gray-900 text-xs sm:text-[13px]">Review Summary &amp; Confirm</h4>
+                      <p className="text-gray-600 leading-relaxed text-[11px]">
+                        Review your clinic details, selected doctor, consultation fee, and schedule in the <strong>Consultation Summary</strong> card. Click <strong>Proceed to Payment</strong> to finalize your appointment securely.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Clinic details prompt */}
+                  <div className="p-3.5 rounded-2xl bg-pink-50/50 border border-pink-200/80 flex items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <p className="text-[11px] font-bold text-gray-900">Looking for clinic information?</p>
+                      <p className="text-[10px] text-gray-500">View clinic operating hours, services offered, and contact info.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowInstructionsModal(false);
+                        setShowClinicDetailsModal(true);
+                      }}
+                      className="px-3 py-1 rounded-xl bg-white hover:bg-pink-100 text-[#801336] border border-pink-300 text-[11px] font-semibold transition-colors cursor-pointer shrink-0"
+                    >
+                      Clinic Details
+                    </button>
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="px-6 py-3.5 bg-gray-50/80 border-t border-gray-100 flex items-center justify-end shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowInstructionsModal(false)}
+                    className="px-5 py-2 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+                  >
+                    Got It
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+      </ModalPortal>
 
       {/* Clinic Details Modal */}
       <ModalPortal isOpen={Boolean(showClinicDetailsModal)}>
