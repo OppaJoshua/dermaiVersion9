@@ -261,6 +261,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           date,
           time,
           status,
+          check_in_status,
           doctor_status,
           doctor_note,
           clinic_note,
@@ -373,6 +374,15 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     // 1. Direct user_notification records for this patient
     if (dbNotifs) {
       dbNotifs.forEach((n) => {
+        if (
+          n.type === "subscription_expired" ||
+          n.type === "subscription-expired" ||
+          n.subtype === "subscription_expired" ||
+          n.subtype === "subscription-expired" ||
+          /pro subscription has expired|subscription expired/i.test(n.title || "")
+        ) {
+          return;
+        }
         const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
         const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
         const isTicket =
@@ -457,7 +467,24 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             /approved your consultation schedule|schedule.*confirmed|has been confirmed|has been reassigned/i.test(n.body || "")
           );
 
-        const needsClinicEnrichment = !isTicket && !isAdminSystem && (isApptCompleted || isPaymentConfirmed || isApptRejected || isScheduleApproved);
+        // Detect missed / no-show appointment notifications
+        const isApptMissed =
+          n.type === "appointment-missed" ||
+          n.type === "appointment_missed" ||
+          n.type === "appointment-no-show" ||
+          n.type === "appointment_no_show" ||
+          n.type === "no-show" ||
+          n.type === "no_show" ||
+          n.subtype === "appointment-missed" ||
+          n.subtype === "appointment_missed" ||
+          n.subtype === "appointment-no-show" ||
+          n.subtype === "appointment_no_show" ||
+          n.subtype === "no-show" ||
+          n.subtype === "no_show" ||
+          /missed\s*\/\s*no-show|appointment marked as missed|no-show/i.test(n.title || "") ||
+          /recorded as no-show|marked as missed/i.test(n.body || "");
+
+        const needsClinicEnrichment = !isTicket && !isAdminSystem && (isApptCompleted || isPaymentConfirmed || isApptRejected || isScheduleApproved || isApptMissed);
         const ticketIdMatch = n.body?.match(/ticket #([^ ')]+)/i)?.[1];
 
         // For completed consultations, payment confirmations, schedule approvals, and conflict/rejection DB records,
@@ -497,6 +524,11 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
               a.status === "scheduled" ||
               a.status === "approved";
 
+            const missedFilter = (a: any) =>
+              a.check_in_status === "no-show" ||
+              a.status === "no-show" ||
+              /no-show/i.test(a.clinic_note || "");
+
             const candidateAppts = isApptCompleted
               ? ((appointments || []).filter((a: any) => a.status === "completed").length > 0
                   ? (appointments || []).filter((a: any) => a.status === "completed")
@@ -506,6 +538,10 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
               : isScheduleApproved
               ? ((appointments || []).filter(approvedFilter).length > 0
                   ? (appointments || []).filter(approvedFilter)
+                  : (appointments || []))
+              : isApptMissed
+              ? ((appointments || []).filter(missedFilter).length > 0
+                  ? (appointments || []).filter(missedFilter)
                   : (appointments || []))
               : (appointments || []);
 
@@ -563,6 +599,8 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             ? "appointment-rejected"
             : isScheduleApproved
             ? (n.type || "appointment-scheduled")
+            : isApptMissed
+            ? (n.type && n.type !== "system" ? n.type : "appointment-no-show")
             : (n.type || "system"),
           category: (!isTicket && (n.type?.includes("appointment") || needsClinicEnrichment))
             ? "appointment"
@@ -923,6 +961,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           date,
           time,
           status,
+          check_in_status,
           doctor_status,
           patient_name,
           patient_email,
@@ -1042,6 +1081,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           clinic_id,
           date,
           status,
+          check_in_status,
           doctor_status,
           patient_name,
           ai_condition_name,
@@ -2071,6 +2111,7 @@ export async function fetchClinicNotifications(
           date,
           time,
           status,
+          check_in_status,
           doctor_status,
           doctor_note,
           doctor_reviewed_at,

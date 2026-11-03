@@ -541,6 +541,7 @@ Deno.serve(async (req: Request) => {
         timeStyle: "short",
       });
 
+      /* In-app notification disabled (email-only expiration alerts)
       const notificationBody =
         `Your DermAI Pro subscription expired on ${periodLabel}. ` +
         "Your account is now using the Free Plan. You can re-subscribe to Pro " +
@@ -583,6 +584,7 @@ Deno.serve(async (req: Request) => {
           .eq("period_end", periodEnd);
       }
 
+      */
       // 4B. Update subscription status to 'expired'
       stage = "subscription_update";
       const { data: updatedSub, error: updateSubError } = await supabase

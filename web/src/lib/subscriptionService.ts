@@ -188,7 +188,8 @@ export async function validateAndSyncSubscription(
         /* ignore */
       }
 
-      // 3. Insert Patient Notification into public.user_notification
+      // 3. Insert Patient Notification into public.user_notification (Disabled: email-only expiration alerts)
+      /*
       try {
         // Prevent duplicate expiration notifications for the same subscription
         const { data: existingNotif } = await supabase
@@ -220,6 +221,7 @@ export async function validateAndSyncSubscription(
         console.warn("[subscriptionService] Patient notification dispatch warning:", notifErr);
       }
 
+      */
       // 4. Alert the Admin notifications feed regarding the expired patient subscription
       if (!options?.skipAdminAlert) {
         try {

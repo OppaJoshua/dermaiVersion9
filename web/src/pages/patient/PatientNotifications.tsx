@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Link } from "react-router-dom";
 import {
   Bell,
@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
+import { supabase } from "@/lib/supabaseClient";
 import { useRoleNotifications, type NotificationItem } from "@/lib/notificationService";
 
 interface PatientNotificationsProps {
@@ -30,11 +31,90 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
     userId: user?.id,
   });
 
-  const [activeTab, setActiveTab] = useState<"all" | "appointment" | "ticket" | "broadcast">("all");
+  const [activeTab, setActiveTab] = useState<"all" | "appointment" | "ticket" | "broadcast" | "scan">("all");
+  const [scanNotifications, setScanNotifications] = useState<NotificationItem[]>([]);
+  const [loadingScans, setLoadingScans] = useState(false);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    async function fetchScanLogs() {
+      setLoadingScans(true);
+      try {
+        const { data: scanRows } = await supabase
+          .from("ai_scan_result")
+          .select(`
+            analysis_id,
+            confidence_score,
+            body_part,
+            scanned_at,
+            status,
+            skin_condition:condition_id (
+              name,
+              local_name
+            )
+          `)
+          .eq("user_id", user!.id)
+          .eq("status", "completed")
+          .order("scanned_at", { ascending: false })
+          .limit(20);
+
+        if (cancelled || !scanRows) return;
+
+        const mappedScans: NotificationItem[] = scanRows.map((s: any) => {
+          const condObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+          const conditionName = condObj?.name || "Skin Condition";
+          const rawConf = Number(s.confidence_score ?? 0);
+          const confPercent = rawConf <= 1 && rawConf > 0 ? Math.round(rawConf * 100) : Math.round(rawConf);
+          const bodyPartText = s.body_part ? ` on ${s.body_part}` : "";
+          const notifId = `scan-${s.analysis_id}`;
+
+          return {
+            id: notifId,
+            type: "scan_result",
+            category: "scan",
+            title: `AI Skin Assessment: ${conditionName}`,
+            message: `Detected ${conditionName}${bodyPartText} with ${confPercent}% confidence score.`,
+            senderName: "DERMAI AI Scanner",
+            senderType: "system",
+            link: s.analysis_id ? `/dashboard/history?id=${s.analysis_id}` : "/dashboard/history",
+            timestamp: s.scanned_at || new Date().toISOString(),
+            isRead: true,
+            metadata: {
+              analysis_id: s.analysis_id,
+              condition_name: conditionName,
+              confidence_score: confPercent,
+              body_part: s.body_part,
+              category: "skin_scan",
+            },
+          };
+        });
+
+        setScanNotifications(mappedScans);
+      } catch (err) {
+        console.warn("[PatientNotifications] Failed to fetch scan logs:", err);
+      } finally {
+        if (!cancelled) setLoadingScans(false);
+      }
+    }
+    fetchScanLogs();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   const filtered = useMemo(() => {
     let list = notifications;
-    if (activeTab === "broadcast") {
+    if (activeTab === "scan") {
+      list = [...notifications, ...scanNotifications].filter(
+        (n) =>
+          n.type === "scan_result" ||
+          n.type === "scan-completed" ||
+          (n.category as string) === "skin_scan" ||
+          n.category === "scan" ||
+          n.metadata?.category === "skin_scan"
+      );
+    } else if (activeTab === "broadcast") {
       list = notifications.filter(
         (n) =>
           n.category === "broadcast" ||
@@ -64,6 +144,15 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
 
     return list.filter((n) => {
       if (!n || !n.id) return false;
+      if (
+        n.type === "subscription_expired" ||
+        n.type === "subscription-expired" ||
+        n.metadata?.subtype === "subscription_expired" ||
+        n.metadata?.subtype === "subscription-expired" ||
+        /pro subscription has expired|subscription expired/i.test(n.title || "")
+      ) {
+        return false;
+      }
       if (seenIds.has(n.id)) return false;
       seenIds.add(n.id);
 
@@ -91,7 +180,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
       }
       return true;
     });
-  }, [notifications, activeTab]);
+  }, [notifications, scanNotifications, activeTab]);
 
   const timeAgo = (iso: string) => {
     const diff = Date.now() - new Date(iso).getTime();
@@ -172,6 +261,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
             { key: "appointment", label: "Appointments" },
             { key: "ticket", label: "Support" },
             { key: "broadcast", label: "Announcements" },
+            { key: "scan", label: "Scan" },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -192,7 +282,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
 
       {/* List */}
       <div className="flex-1 overflow-y-auto no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden divide-y divide-gray-100">
-        {loading ? (
+        {(loading || (activeTab === "scan" && loadingScans)) ? (
           <div className="py-16 text-center text-gray-500">
             <Loader2 className="w-6 h-6 animate-spin mx-auto mb-3 text-magenta-600" />
             <p className="text-sm">Loading notifications…</p>
@@ -267,6 +357,21 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                 /doctor confirmed schedule|appointment confirmed|schedule confirmed|reschedule request approved/i.test(item.title || "") ||
                 /approved your consultation schedule|schedule.*confirmed|has been confirmed|has been reassigned/i.test(item.message || "")
               );
+            const isMissed =
+              item.type === "appointment-missed" ||
+              item.type === "appointment_missed" ||
+              item.type === "appointment-no-show" ||
+              item.type === "appointment_no_show" ||
+              item.type === "no-show" ||
+              item.type === "no_show" ||
+              item.metadata?.subtype === "appointment-missed" ||
+              item.metadata?.subtype === "appointment_missed" ||
+              item.metadata?.subtype === "appointment-no-show" ||
+              item.metadata?.subtype === "appointment_no_show" ||
+              item.metadata?.subtype === "no-show" ||
+              item.metadata?.subtype === "no_show" ||
+              /missed\s*\/\s*no-show|appointment marked as missed|no-show/i.test(item.title || "") ||
+              /recorded as no-show|marked as missed/i.test(item.message || "");
             const isMaintenance =
               item.metadata?.subtype === "maintenance_alert" ||
               item.type === "maintenance_alert" ||
@@ -284,6 +389,12 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
               item.metadata?.category === "support" ||
               item.metadata?.category === "ticket" ||
               /support ticket|ticket received|ticket resolved|ticket updated/i.test(item.title || "");
+            const isScanResult =
+              item.type === "scan_result" ||
+              item.type === "scan-completed" ||
+              (item.category as string) === "skin_scan" ||
+              item.category === "scan" ||
+              item.metadata?.category === "skin_scan";
 
             // Resolve appointment_id for "Consultation Completed" deep-link
             const completedApptId = isCompleted
@@ -304,6 +415,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                 isPaymentConfirmed ||
                 isRejected ||
                 isScheduleApproved ||
+                isMissed ||
                 item.senderType === "clinic" ||
                 item.category === "appointment");
             const resolvedClinicName: string = isClinicNotif
@@ -380,7 +492,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                     </>
                   ) : loading ? (
                     <div className="w-10 h-10 rounded-full bg-gray-100 animate-pulse border border-gray-200 shrink-0" />
-                  ) : (isCompleted || isPaymentConfirmed || isScheduleApproved || (item.senderType === "clinic" && !isRejected && !isTicket)) ? (
+                  ) : (isCompleted || isPaymentConfirmed || isScheduleApproved || isMissed || (item.senderType === "clinic" && !isRejected && !isTicket)) ? (
                     /* Consultation Completed / Payment Confirmed / Schedule Approved: show clinic initials (graceful fallback) */
                     <div className="w-10 h-10 rounded-full bg-magenta-600 flex items-center justify-center shrink-0">
                       <span className="text-white text-xs font-bold leading-none">{clinicInitials}</span>
@@ -401,6 +513,10 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                   ) : isBroadcast ? (
                     <div className="w-10 h-10 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center">
                       <Megaphone className="w-5 h-5 text-magenta-600" />
+                    </div>
+                  ) : isScanResult ? (
+                    <div className="w-10 h-10 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center">
+                      <Sparkles className="w-5 h-5 text-magenta-600" />
                     </div>
                   ) : (
                     <div className="w-10 h-10 rounded-full bg-magenta-50 border border-magenta-100 flex items-center justify-center">
@@ -434,6 +550,11 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                       {isBroadcast && !isMaintenance && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-magenta-100 text-magenta-800 border border-magenta-200 shrink-0">
                           Announcement
+                        </span>
+                      )}
+                      {isScanResult && item.metadata?.confidence_score != null && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-magenta-50 text-magenta-700 border border-magenta-200 shrink-0">
+                          {item.metadata.confidence_score}% Confidence
                         </span>
                       )}
                     </div>
@@ -543,8 +664,19 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                     );
                   })()}
 
-                  {/* Action Link for schedule approvals ("Doctor Confirmed Schedule", "Reschedule Request Approved", etc.) and general notifications */}
-                  {(() => {
+                  {/* Action Link for schedule approvals ("Doctor Confirmed Schedule", "Reschedule Request Approved", etc.), scan logs, and general notifications */}
+                  {isScanResult ? (
+                    <Link
+                      to={item.link || (item.metadata?.analysis_id ? `/dashboard/history?id=${item.metadata.analysis_id}` : "/dashboard/history")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onClose?.();
+                      }}
+                      className="mt-2 inline-flex items-center text-sm font-medium text-magenta-700 hover:text-magenta-800 transition-colors"
+                    >
+                      View scan details →
+                    </Link>
+                  ) : (() => {
                     const validApptId =
                       item.metadata?.appointment_id ||
                       item.metadata?.appointmentId ||
