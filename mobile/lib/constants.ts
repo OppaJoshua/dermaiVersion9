@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { Platform } from './platform';
 
 export const COLORS = {
   primary: '#85134a',

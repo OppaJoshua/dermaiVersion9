@@ -1619,7 +1619,7 @@ export default function ScanSkinPage() {
                     <div>
                       <p className="text-xs font-bold text-rose-900 mb-0.5">Medical Disclaimer</p>
                       <p className="text-xs text-rose-800 leading-relaxed">
-                        This AI assessment and rule-based questionnaire mapping are intended for educational and pre-screening purposes only. It is NOT a clinical diagnosis and cannot replace an in-person examination by a licensed medical dermatologist.
+                        This AI assessment is for educational and screening purposes only. It is not a medical diagnosis and does not replace an in-person examination by a doctor or dermatologist.
                       </p>
                     </div>
                   </div>

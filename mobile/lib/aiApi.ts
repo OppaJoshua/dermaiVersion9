@@ -1,5 +1,5 @@
-import { Platform } from 'react-native';
-import Constants from 'expo-constants';
+import { Platform } from './platform';
+
 
 export interface EvidencePrediction {
   predicted_class?: string;
@@ -36,11 +36,21 @@ export class AIPredictionError extends Error {
 }
 
 // Dynamically extract host IP from Expo dev server if running via Expo Go / dev client
-const expoHost =
-  Constants.expoConfig?.hostUri?.split(':')[0] ||
-  (Constants as any).manifest?.debuggerHost?.split(':')[0] ||
-  (Constants as any).manifest2?.extra?.expoGo?.debuggerHost?.split(':')[0] ||
-  null;
+const getExpoHost = (): string | null => {
+  try {
+    const mod = 'expo-constants';
+    const Constants = require(mod).default;
+    return (
+      Constants?.expoConfig?.hostUri?.split(':')[0] ||
+      Constants?.manifest?.debuggerHost?.split(':')[0] ||
+      Constants?.manifest2?.extra?.expoGo?.debuggerHost?.split(':')[0] ||
+      null
+    );
+  } catch {
+    return null;
+  }
+};
+const expoHost = getExpoHost();
 
 // Candidate base URLs dynamically resolved
 const CANDIDATE_URLS = [
@@ -115,7 +125,7 @@ export async function predictSkinCondition(
     await appendImageField(formData, 'wide_image', wideImageUri, 'wide.jpg');
   }
 
-  let lastError: any = null;
+  // let lastError: any = null;
 
   for (const baseUrl of UNIQUE_CANDIDATE_URLS) {
     try {
@@ -169,7 +179,7 @@ export async function predictSkinCondition(
         // Immediate failure: the image failed clinical/quality validation, so do NOT retry other URLs
         throw err;
       }
-      lastError = err;
+      // connection error, try next candidate URL
       // Network or connection error, try next candidate URL
     }
   }

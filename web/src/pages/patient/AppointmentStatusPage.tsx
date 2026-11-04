@@ -27,7 +27,7 @@ import { ModalPortal } from "@/components/common/ModalPortal";
 import { SelectAlternateDoctorModal } from "./SelectAlternateDoctorModal";
 import { extractConsultationQuestionnaire } from "@/lib/consultationDetailsService";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
-import { extractClinicCancellationReason, detectOnlinePaymentMethod } from "@/lib/appointmentPaymentService";
+import { extractClinicCancellationReason, detectOnlinePaymentMethod, releaseAppointmentHoldSafely } from "@/lib/appointmentPaymentService";
 
 interface Appointment {
   id: string;
@@ -1675,13 +1675,14 @@ const AppointmentStatusPage: React.FC = () => {
     try {
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId);
       if (isUuid) {
-        const { error } = await supabase
-          .from("patient_appointment")
-          .update({ status: "cancelled", clinic_note: "Cancelled by patient." })
-          .eq("appointment_id", targetId);
-
-        if (error) {
-          console.error("Supabase cancel error:", error);
+        // Safe cancellation routed via authoritative payment verification
+        const cancelRes = await releaseAppointmentHoldSafely(targetId, target.clinicId ? String(target.clinicId) : undefined);
+        if (!cancelRes.success) {
+          console.warn("[AppointmentStatusPage] Cancellation refused:", cancelRes.message);
+          alert(cancelRes.message || "Cannot cancel appointment: payment is currently in progress or already confirmed.");
+          setCancelLoading(false);
+          setCancellingAppt(null);
+          return;
         }
       }
 

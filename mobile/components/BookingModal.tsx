@@ -27,13 +27,25 @@ import {
   recordUserPayment,
   generatePaymentReference,
   addAppNotification,
+  getOccupiedSlotsForDate,
+  acquireAppointmentSlotHold,
+  cancelAppointmentSlotHold,
+  releaseAppointmentHoldSafely,
+  supabase,
   type Appointment,
   type PatientAccount,
   type ClinicRecord,
   type ClinicDoctor,
   type ScanResult,
 } from '@/lib/store';
-import { processPayMongoBookingPayment } from '@/lib/paymongo';
+import {
+  parseDoctorSchedule,
+  generateDaySlotsForDoctor,
+  isDoctorOnDutyOnDay as isDoctorOnDutyScheduling,
+  formatTime12h,
+  type ConsultationSlot,
+} from '@/lib/scheduling';
+import { processPayMongoBookingPayment, PayMongoPaymentError } from '@/lib/paymongo';
 
 const GCASH_LOGO = require('@/assets/images/gcash.png');
 const MAYA_LOGO = require('@/assets/images/maya.png');
@@ -50,13 +62,12 @@ export function normalizeDayName(day: string): string {
   return day;
 }
 
-export function isDoctorOnDutyOnDay(doctor: ClinicDoctor | null | undefined, dayOfWeek: string): boolean {
-  if (!doctor) return true;
-  if (!doctor.dutyDays || !Array.isArray(doctor.dutyDays) || doctor.dutyDays.length === 0) {
-    return true;
-  }
-  const normTarget = normalizeDayName(dayOfWeek);
-  return doctor.dutyDays.some((d) => normalizeDayName(d) === normTarget);
+export function isDoctorOnDutyOnDay(
+  doctor: ClinicDoctor | null | undefined,
+  dayOfWeek: string,
+  clinicSchedule?: { openTime?: string; closeTime?: string; operatingDays?: string } | null
+): boolean {
+  return isDoctorOnDutyScheduling(doctor, dayOfWeek, clinicSchedule);
 }
 
 export function formatDateDisplay(dStr?: string): string {
@@ -191,6 +202,108 @@ export function BookingModal({
   });
 
   const [currentUser, setCurrentUser] = useState<PatientAccount | null>(user || null);
+  const [occupiedSlots, setOccupiedSlots] = useState<any[]>([]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+
+  useEffect(() => {
+    let isCancelled = false;
+    async function fetchSlots() {
+      if (!selectedClinic?.id || !dateStr) {
+        setOccupiedSlots([]);
+        return;
+      }
+      setLoadingSlots(true);
+      try {
+        const occ = await getOccupiedSlotsForDate(
+          selectedClinic.id,
+          dateStr,
+          selectedDoctor?.id
+        );
+        if (!isCancelled) setOccupiedSlots(occ);
+      } catch (err) {
+        if (!isCancelled) setOccupiedSlots([]);
+      } finally {
+        if (!isCancelled) setLoadingSlots(false);
+      }
+    }
+    fetchSlots();
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedClinic?.id, selectedDoctor?.id, dateStr]);
+
+  const computedDaySlots = useMemo<ConsultationSlot[]>(() => {
+    if (!selectedDoctor || !dateStr) {
+      return BATCH_SLOTS.map((b, idx) => ({
+        shiftId: 'default',
+        shiftLabel: 'Consultation',
+        slotIndex: idx + 1,
+        slotTime: b.batchTime,
+        endTime: b.batchTime,
+        timeRange: b.label,
+        label: b.label,
+        durationMinutes: 60,
+        isBooked: false,
+        isReserved: false,
+        isOccupied: false,
+        occupancyType: 'available' as const,
+        isPast: false,
+        isCapacityFull: false,
+        isAvailable: true,
+      }));
+    }
+
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dateObj = new Date(y, m - 1, d);
+    const dayOfWeek = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+
+    const docWeeklySchedule = parseDoctorSchedule(
+      selectedDoctor.dutySchedule,
+      selectedDoctor.dutyDays,
+      selectedDoctor.dutyStartTime || selectedClinic?.openTime || '08:00',
+      selectedDoctor.dutyEndTime || selectedClinic?.closeTime || '17:00'
+    );
+
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const isToday = dateStr === todayStr;
+    const currentMinutesNow = today.getHours() * 60 + today.getMinutes();
+
+    const groups = generateDaySlotsForDoctor({
+      doctorSchedule: docWeeklySchedule,
+      dayOfWeek,
+      doctorId: selectedDoctor.id,
+      clinicDefaults: {
+        openTime: selectedClinic?.openTime || '08:00',
+        closeTime: selectedClinic?.closeTime || '18:00',
+        defaultSlotIntervalMinutes: selectedClinic?.defaultSlotIntervalMinutes || 30,
+      },
+      existingAppointments: occupiedSlots,
+      isToday,
+      currentMinutesNow,
+    });
+
+    const flattened = groups.flatMap((g) => g.slots);
+    if (flattened.length === 0) {
+      return [];
+    }
+    return flattened;
+  }, [selectedDoctor, dateStr, selectedClinic, occupiedSlots]);
+
+  useEffect(() => {
+    if (computedDaySlots.length > 0) {
+      const match = computedDaySlots.find(
+        (s) => s.slotTime === selectedBatch.batchTime && s.isAvailable
+      );
+      if (!match) {
+        const firstAvail = computedDaySlots.find((s) => s.isAvailable) || computedDaySlots[0];
+        setSelectedBatch({
+          batchTime: firstAvail.slotTime,
+          label: firstAvail.timeRange || `${formatTime12h(firstAvail.slotTime)} – ${formatTime12h(firstAvail.endTime)}`,
+        });
+      }
+    }
+  }, [computedDaySlots]);
 
   // Step 1: Patient details state
   const [patientName, setPatientName] = useState('');
@@ -235,6 +348,7 @@ export function BookingModal({
     date: string;
     time: string;
     conditionName?: string;
+    queueNumber?: number;
   } | null>(null);
 
   // Reset state when opening
@@ -337,7 +451,11 @@ export function BookingModal({
       const isToday = cellDateStr === todayStr;
 
       const dayOfWeek = d.toLocaleDateString('en-US', { weekday: 'long' });
-      const isOnDuty = isDoctorOnDutyOnDay(selectedDoctor, dayOfWeek);
+      const clinicSched = selectedClinic ? {
+        openTime: selectedClinic.openTime,
+        closeTime: selectedClinic.closeTime,
+      } : null;
+      const isOnDuty = isDoctorOnDutyOnDay(selectedDoctor, dayOfWeek, clinicSched);
       const isDisabled = isPast || isTooFar || !inCurrentMonth || !isOnDuty;
 
       return {
@@ -485,19 +603,61 @@ export function BookingModal({
       const resolvedPatientEmail = payerEmail.trim() || patientEmail.trim() || activeUser.email || 'patient@dermai.com';
       const resolvedPatientAddress = payerAddress.trim() || patientAddress.trim() || 'Cebu City';
 
-      // 1. Reserve / create appointment in Supabase before launching PayMongo Test Checkout (matches web AppointmentPage)
+      // 1. Authoritative slot hold via Supabase RPC acquire_appointment_slot_hold
       let apptId = reservedApptId;
+
+      // If we already held a slot from a previous attempt, verify authoritative status
+      if (apptId) {
+        try {
+          const { data: existingAppt } = await supabase
+            .from('patient_appointment')
+            .select('appointment_id, payment_status, queue_number, payment_reference')
+            .eq('appointment_id', apptId)
+            .maybeSingle();
+
+          if (existingAppt?.payment_status === 'paid') {
+            // Already fulfilled by background webhook or server!
+            const refNumber = existingAppt.payment_reference || generatePaymentReference();
+            setReservedApptId(null);
+            await addAppNotification(activeUser.id, {
+              type: 'appointment',
+              title: 'Payment Confirmed & Consultation Booked',
+              message: `Payment of ₱${feeNum.toFixed(2)} via ${paymentMethod === 'gcash' ? 'GCash' : 'Maya'} received (Ref: ${refNumber}). Your consultation at ${selectedClinic.name} (${selectedBatch.label}) is confirmed.`,
+              userId: activeUser.id,
+            });
+            setPaymentReceipt({
+              reference: refNumber,
+              amount: feeNum,
+              method: paymentMethod,
+              mobileNumber: cleanedMobile,
+              patientName: resolvedPatientName,
+              clinicName: selectedClinic.name,
+              doctorName: docDispName || 'Attending Dermatologist',
+              date: formatDateDisplay(dateStr),
+              time: selectedBatch.label,
+              conditionName: activeConditionName,
+              queueNumber: existingAppt.queue_number != null ? Number(existingAppt.queue_number) : undefined,
+            });
+            setPaymentProcessing(false);
+            return;
+          }
+
+          if (existingAppt?.payment_status === 'cancelled' || existingAppt?.payment_status === 'expired') {
+            apptId = null;
+            setReservedApptId(null);
+          }
+        } catch (checkErr) {
+          console.warn('[BookingModal] Pre-payment hold check warning:', checkErr);
+        }
+      }
+
       if (!apptId) {
-        apptId = await saveAppointment({
-          userId: activeUser.id,
+        const holdResult = await acquireAppointmentSlotHold({
           clinicId: selectedClinic.id,
-          clinicName: selectedClinic.name,
-          clinicAddress: selectedClinic.address,
-          clinicPhone: selectedClinic.phone,
-          assignedDoctorId: selectedDoctor?.id,
-          doctorName: selectedDoctor?.name,
-          specialty: selectedDoctor?.specialization,
-          consultationType: 'face-to-face',
+          doctorId: selectedDoctor?.id,
+          date: dateStr.trim(),
+          time: selectedBatch.batchTime,
+          batchTime: selectedBatch.label,
           patientName: resolvedPatientName,
           patientEmail: resolvedPatientEmail,
           patientContact: cleanedMobile,
@@ -507,89 +667,110 @@ export function BookingModal({
           emergencyContactName: emergencyName.trim() || undefined,
           emergencyContactPhone: emergencyPhone.trim() || undefined,
           emergencyContactRelationship: emergencyRelationship || undefined,
-          primaryScanId: selectedScanId || undefined,
-          conditionId: (selectedScan as any)?.conditionId || (selectedScan as any)?.condition_id || undefined,
-          conditionName: activeConditionName,
-          confidence: selectedScan?.confidence,
-          questionnaireAnswers: (selectedScan as any)?.answers || (selectedScan as any)?.questionnaire_answers || undefined,
-          date: dateStr.trim(),
-          time: selectedBatch.batchTime,
-          batchTime: selectedBatch.label,
-          checkInStatus: 'scheduled',
-          status: 'pending',
           notes: notes.trim() || undefined,
           clinicNote: docDispName
             ? `Assigned to ${docDispName} for pre-consultation review.`
             : 'Unassigned consultation request.',
-          skinPhotoUri: activePhotoUri || undefined,
-          paymentStatus: 'unpaid',
-          paymentAmount: feeNum,
+          questionnaireAnswers: (selectedScan as any)?.answers || (selectedScan as any)?.questionnaire_answers || undefined,
+          skinPhotoUrl: activePhotoUri || undefined,
+          aiConditionName: activeConditionName,
+          aiConfidence: selectedScan?.confidence != null ? Number(selectedScan.confidence) : undefined,
+          conditionId: (selectedScan as any)?.conditionId || (selectedScan as any)?.condition_id || undefined,
+          primaryScanId: selectedScanId || undefined,
+          userId: activeUser.id,
+          holdDurationMinutes: 10,
         });
+
+        if (!holdResult.success || !holdResult.appointmentId) {
+          Alert.alert(
+            'Slot Unavailable',
+            holdResult.message || 'This consultation slot is no longer available. Please choose another time.'
+          );
+          if (selectedClinic?.id && dateStr) {
+            getOccupiedSlotsForDate(selectedClinic.id, dateStr, selectedDoctor?.id).then(setOccupiedSlots);
+          }
+          setPaymentProcessing(false);
+          return;
+        }
+
+        apptId = holdResult.appointmentId;
         setReservedApptId(apptId);
       }
 
       // 2. Launch PayMongo Test Checkout (GCash / Maya) & verify payment intent
-      const { paymongoPaymentId } = await processPayMongoBookingPayment({
-        amount: feeNum,
-        paymentMethod,
-        clinicId: selectedClinic.id,
-        clinicName: selectedClinic.name,
-        doctorId: selectedDoctor?.id,
-        doctorName: docDispName,
-        appointmentDate: dateStr.trim(),
-        appointmentTime: selectedBatch.batchTime,
-        appointmentId: apptId,
-        patientName: resolvedPatientName,
-        patientEmail: resolvedPatientEmail,
-        patientContact: cleanedMobile,
-        patientAddress: resolvedPatientAddress,
-      });
+      let paymongoPaymentId: string;
+      try {
+        const payRes = await processPayMongoBookingPayment({
+          amount: feeNum,
+          paymentMethod,
+          clinicId: selectedClinic.id,
+          clinicName: selectedClinic.name,
+          doctorId: selectedDoctor?.id,
+          doctorName: docDispName,
+          appointmentDate: dateStr.trim(),
+          appointmentTime: selectedBatch.batchTime,
+          appointmentId: apptId,
+          patientName: resolvedPatientName,
+          patientEmail: resolvedPatientEmail,
+          patientContact: cleanedMobile,
+          patientAddress: resolvedPatientAddress,
+        });
+        paymongoPaymentId = payRes.paymongoPaymentId;
+      } catch (payErr: any) {
+        console.warn('[BookingModal] PayMongo checkout failed or cancelled:', payErr?.message);
+
+        const isTerminalFailure =
+          payErr instanceof PayMongoPaymentError
+            ? payErr.isConfirmedTerminal
+            : false;
+        const isUncertain =
+          payErr instanceof PayMongoPaymentError
+            ? payErr.status === 'uncertain' || payErr.status === 'timeout'
+            : true;
+
+        if (apptId) {
+          if (isTerminalFailure) {
+            try {
+              await releaseAppointmentHoldSafely(apptId, { confirmedCancelledOrFailed: true });
+              setReservedApptId(null);
+            } catch (cancelErr) {
+              console.warn('[BookingModal] Error releasing slot hold:', cancelErr);
+            }
+          } else {
+            console.log('[BookingModal] Payment status is uncertain; preserving slot hold for background fulfillment:', apptId);
+          }
+        }
+
+        if (isUncertain) {
+          Alert.alert(
+            'Payment Verification in Progress',
+            'Your payment verification could not be completed immediately. If you completed payment on GCash or Maya, your consultation will be automatically confirmed once processed. Your reservation hold has been preserved for 10 minutes.'
+          );
+          setPaymentProcessing(false);
+          return;
+        }
+
+        throw payErr;
+      }
 
       const refNumber = paymongoPaymentId || generatePaymentReference();
-      const paySummary = `Paid online via ${paymentMethod.toUpperCase()} (Ref: ${refNumber}, Amount: ₱${feeNum.toFixed(2)})`;
-      const finalClinicNote = docDispName
-        ? `Assigned to ${docDispName} for pre-consultation review. | ${paySummary}`
-        : `Unassigned consultation request. | ${paySummary}`;
 
-      // 3. Finalize appointment payment status in Supabase (Edge Function also fulfills atomically)
-      await saveAppointment({
-        id: apptId,
-        userId: activeUser.id,
-        clinicId: selectedClinic.id,
-        clinicName: selectedClinic.name,
-        clinicAddress: selectedClinic.address,
-        clinicPhone: selectedClinic.phone,
-        assignedDoctorId: selectedDoctor?.id,
-        doctorName: selectedDoctor?.name,
-        specialty: selectedDoctor?.specialization,
-        consultationType: 'face-to-face',
-        patientName: resolvedPatientName,
-        patientEmail: resolvedPatientEmail,
-        patientContact: cleanedMobile,
-        patientAddress: resolvedPatientAddress,
-        patientGender: patientGender || undefined,
-        patientBirthdate: patientBirthdate || undefined,
-        emergencyContactName: emergencyName.trim() || undefined,
-        emergencyContactPhone: emergencyPhone.trim() || undefined,
-        emergencyContactRelationship: emergencyRelationship || undefined,
-        primaryScanId: selectedScanId || undefined,
-        conditionId: (selectedScan as any)?.conditionId || (selectedScan as any)?.condition_id || undefined,
-        conditionName: activeConditionName,
-        confidence: selectedScan?.confidence,
-        questionnaireAnswers: (selectedScan as any)?.answers || (selectedScan as any)?.questionnaire_answers || undefined,
-        date: dateStr.trim(),
-        time: selectedBatch.batchTime,
-        batchTime: selectedBatch.label,
-        checkInStatus: 'scheduled',
-        status: 'pending',
-        notes: notes.trim() ? `${notes.trim()}\n[Payment: ${paySummary}]` : `[Payment: ${paySummary}]`,
-        clinicNote: finalClinicNote,
-        skinPhotoUri: activePhotoUri || undefined,
-        paymentStatus: 'paid',
-        paymentReference: refNumber,
-        paymentAmount: feeNum,
-        paidAt: new Date().toISOString(),
-      });
+      // 3. Atomically fulfilled by Edge Function; query authoritative queue number from DB
+      let authoritativeQueueNumber: number | undefined = undefined;
+      try {
+        const { data: fulfilledRow } = await supabase
+          .from('patient_appointment')
+          .select('queue_number, payment_reference, payment_status')
+          .eq('appointment_id', apptId)
+          .maybeSingle();
+
+        if (fulfilledRow?.queue_number != null) {
+          authoritativeQueueNumber = Number(fulfilledRow.queue_number);
+        }
+      } catch (fetchErr) {
+        console.warn('[BookingModal] Failed to fetch fulfilled appointment queue number:', fetchErr);
+      }
+      setReservedApptId(null);
 
       // 4. Trigger in-app notification
       await addAppNotification(activeUser.id, {
@@ -611,6 +792,7 @@ export function BookingModal({
         date: formatDateDisplay(dateStr),
         time: selectedBatch.label,
         conditionName: activeConditionName,
+        queueNumber: authoritativeQueueNumber,
       });
     } catch (err: any) {
       console.error('[BookingModal] Payment booking error:', err);
@@ -890,6 +1072,14 @@ export function BookingModal({
                       {paymentReceipt.time}
                     </Text>
                   </View>
+                  {paymentReceipt.queueNumber != null && (
+                    <View style={styles.receiptDetailRow}>
+                      <Text style={styles.receiptDetailKey}>Queue Number:</Text>
+                      <Text style={[styles.receiptDetailVal, { color: COLORS.primary, fontWeight: '700' }]}>
+                        #{paymentReceipt.queueNumber}
+                      </Text>
+                    </View>
+                  )}
                   {paymentReceipt.conditionName && (
                     <View style={styles.receiptDetailRow}>
                       <Text style={styles.receiptDetailKey}>Primary Concern:</Text>
@@ -1363,26 +1553,87 @@ export function BookingModal({
                   <Text style={styles.sectionHeading}>3. Arrival Window / Time Slot</Text>
                 </View>
                 <View style={styles.batchGrid}>
-                  {BATCH_SLOTS.map((b) => {
-                    const isSelected = selectedBatch.batchTime === b.batchTime;
-                    return (
-                      <TouchableOpacity
-                        key={b.batchTime}
-                        style={[styles.batchSlot, isSelected && styles.batchSlotSelected]}
-                        onPress={() => setSelectedBatch(b)}
-                        activeOpacity={0.8}
-                      >
-                        <Ionicons
-                          name="time-outline"
-                          size={13}
-                          color={isSelected ? COLORS.primary : COLORS.textSecondary}
-                        />
-                        <Text style={[styles.batchSlotTxt, isSelected && styles.batchSlotTxtSelected]}>
-                          {b.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                  {loadingSlots ? (
+                    <View style={{ padding: 16, alignItems: 'center', width: '100%' }}>
+                      <ActivityIndicator size="small" color={COLORS.primary} />
+                      <Text style={{ fontSize: 12, color: COLORS.textSecondary, marginTop: 6 }}>
+                        Checking doctor schedule & slot availability...
+                      </Text>
+                    </View>
+                  ) : computedDaySlots.length === 0 ? (
+                    <View style={{ padding: 16, alignItems: 'center', width: '100%' }}>
+                      <Text style={{ fontSize: 13, color: COLORS.textSecondary, textAlign: 'center' }}>
+                        No consultation slots available for this doctor on the selected date.
+                      </Text>
+                    </View>
+                  ) : (
+                    computedDaySlots.map((slot) => {
+                      const isSelected = selectedBatch.batchTime === slot.slotTime;
+                      const isDisabled = !slot.isAvailable;
+                      const isOccupied = slot.isOccupied;
+                      const isReserved = slot.isReserved;
+                      const isPast = slot.isPast;
+
+                      return (
+                        <TouchableOpacity
+                          key={slot.slotTime}
+                          style={[
+                            styles.batchSlot,
+                            isSelected && styles.batchSlotSelected,
+                            isDisabled && {
+                              backgroundColor: '#f1f5f9',
+                              borderColor: '#e2e8f0',
+                              opacity: 0.65,
+                            },
+                          ]}
+                          disabled={isDisabled}
+                          onPress={() =>
+                            setSelectedBatch({
+                              batchTime: slot.slotTime,
+                              label: slot.timeRange || `${formatTime12h(slot.slotTime)} – ${formatTime12h(slot.endTime)}`,
+                            })
+                          }
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons
+                            name={isDisabled ? "lock-closed-outline" : "time-outline"}
+                            size={13}
+                            color={
+                              isSelected
+                                ? COLORS.primary
+                                : isDisabled
+                                ? '#94a3b8'
+                                : COLORS.textSecondary
+                            }
+                          />
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Text
+                              style={[
+                                styles.batchSlotTxt,
+                                isSelected && styles.batchSlotTxtSelected,
+                                isDisabled && { color: '#94a3b8' },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {slot.timeRange || `${formatTime12h(slot.slotTime)} – ${formatTime12h(slot.endTime)}`}
+                            </Text>
+                            {isDisabled && (
+                              <Text
+                                style={{
+                                  fontSize: 10,
+                                  fontWeight: '700',
+                                  color: isPast ? '#94a3b8' : isReserved ? '#d97706' : '#e11d48',
+                                  marginTop: 1,
+                                }}
+                              >
+                                {isPast ? 'Passed' : isReserved ? 'Reserved' : 'Booked'}
+                              </Text>
+                            )}
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })
+                  )}
                 </View>
 
                 {/* 4. Consultation Summary Card */}

@@ -643,8 +643,15 @@ async function runTests() {
       console.log("✓ 16. Doctor schedule interval integrity enforced with clean error surfacing without hardcoding.");
     } finally {
       supabase.rpc = originalRpc;
+      try {
+        await supabase.removeAllChannels();
+      } catch {}
     }
   }
+
+  try {
+    await supabase.removeAllChannels();
+  } catch {}
 
   console.log("\n=======================================================");
   console.log("  ALL 16 APPOINTMENT HOLD & CHECKOUT VERIFICATIONS PASSED!");

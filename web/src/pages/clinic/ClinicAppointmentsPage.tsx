@@ -995,6 +995,25 @@ export default function ClinicAppointmentsPage() {
   const rejectRequest = async (id: string, reason?: string) => {
     const rejectionReason = reason?.trim() || "Request declined by clinic scheduling.";
     try {
+      // 1. Authoritative check: ensure appointment is not already paid or in-flight processing
+      const { data: apptCheck } = await supabase
+        .from("patient_appointment")
+        .select("payment_status, payment_reference")
+        .eq("appointment_id", id)
+        .maybeSingle();
+      if (apptCheck?.payment_status === "paid") {
+        alert("Cannot decline an appointment that has already been paid. Please process a clinical refund or reschedule.");
+        return;
+      }
+      // If active gateway intent exists, safely cancel through authoritative flow
+      if (apptCheck?.payment_status === "pending_hold" || (apptCheck?.payment_reference && !apptCheck.payment_reference.startsWith("SIM-"))) {
+        const { releaseAppointmentHoldSafely } = await import("../../lib/appointmentPaymentService");
+        const cancelRes = await releaseAppointmentHoldSafely(id, clinicId || undefined);
+        if (!cancelRes.success) {
+          alert(`Cannot decline appointment: ${cancelRes.message || "Payment is in progress or payment status is uncertain."}`);
+          return;
+        }
+      }
       await supabase
         .from("patient_appointment")
         .update({
@@ -1005,6 +1024,8 @@ export default function ClinicAppointmentsPage() {
         .eq("appointment_id", id);
     } catch (err: any) {
       console.error("Failed to reject appointment in Supabase:", err.message);
+      alert(`Failed to decline appointment: ${err?.message || "Unknown error"}`);
+      return;
     }
 
     const appt = appointments.find((a) => a.id === id);

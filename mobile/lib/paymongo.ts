@@ -1,6 +1,44 @@
-import { Platform } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
-import { supabase } from '@/lib/supabase';
+import { Platform } from './platform';
+const webBrowserModuleName = 'expo-web-browser';
+function getWebBrowser(): {
+  openBrowserAsync: (url: string, options?: any) => Promise<any>;
+  dismissBrowser: () => void;
+} {
+  try {
+    return (globalThis as any).mockWebBrowser || require(webBrowserModuleName);
+  } catch {
+    return {
+      openBrowserAsync: async () => ({ type: 'dismiss' }),
+      dismissBrowser: () => {},
+    };
+  }
+}
+import { supabase } from './supabase';
+
+export type PaymentOutcomeStatus =
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'uncertain'
+  | 'timeout';
+
+export class PayMongoPaymentError extends Error {
+  status: PaymentOutcomeStatus;
+  paymentIntentId?: string;
+  isConfirmedTerminal: boolean;
+
+  constructor(
+    message: string,
+    status: PaymentOutcomeStatus,
+    paymentIntentId?: string
+  ) {
+    super(message);
+    this.name = 'PayMongoPaymentError';
+    this.status = status;
+    this.paymentIntentId = paymentIntentId;
+    this.isConfirmedTerminal = status === 'failed' || status === 'cancelled';
+  }
+}
 
 export const PAYMONGO_PUBLIC_KEY =
   process.env.EXPO_PUBLIC_PAYMONGO_PUBLIC_KEY || 'pk_test_XLaXbV4y3Y4xHzqMXvPuaezd';
@@ -80,7 +118,7 @@ async function createPayMongoPaymentMethod(params: {
   return pmJson.data.id as string;
 }
 
-async function verifyPayMongoIntentOnce(
+export async function verifyPayMongoIntentOnce(
   paymentIntentId: string,
   clientKey: string
 ): Promise<{
@@ -100,7 +138,7 @@ async function verifyPayMongoIntentOnce(
   );
 
   if (verifyError || !verifyData?.success) {
-    return { status: 'pending' };
+    return { status: verifyError ? 'uncertain' : 'pending' };
   }
 
   const intentStatus: string = verifyData?.data?.status || 'pending';
@@ -114,14 +152,15 @@ async function verifyPayMongoIntentOnce(
   };
 }
 
-async function openAndVerifyPayMongoCheckout(params: {
+export async function openAndVerifyPayMongoCheckout(params: {
   redirectUrl: string;
   paymentIntentId: string;
   clientKey: string;
 }): Promise<{
   succeeded: boolean;
   paymongoPaymentId: string;
-  status: string;
+  status: PaymentOutcomeStatus;
+  isConfirmedTerminal: boolean;
 }> {
   const { redirectUrl, paymentIntentId, clientKey } = params;
 
@@ -143,12 +182,13 @@ async function openAndVerifyPayMongoCheckout(params: {
         if (check.status === 'succeeded') {
           resolved = true;
           try {
-            WebBrowser.dismissBrowser();
+            getWebBrowser().dismissBrowser();
           } catch {}
           return {
             succeeded: true,
             paymongoPaymentId: check.paymongoPaymentId || paymentIntentId,
-            status: 'succeeded',
+            status: 'succeeded' as const,
+            isConfirmedTerminal: false,
           };
         }
 
@@ -160,15 +200,17 @@ async function openAndVerifyPayMongoCheckout(params: {
             check.status === 'failed' ||
             check.status === 'cancelled')
         ) {
-          // User clicked "Fail Test Payment" on the PayMongo Test Checkout page
+          // User clicked "Fail Test Payment" or cancelled on the PayMongo Test Checkout page
           resolved = true;
           try {
-            WebBrowser.dismissBrowser();
+            getWebBrowser().dismissBrowser();
           } catch {}
+          const isTerm = check.status === 'failed' || check.status === 'cancelled';
           return {
             succeeded: false,
             paymongoPaymentId: paymentIntentId,
-            status: check.status,
+            status: (isTerm ? check.status : 'cancelled') as PaymentOutcomeStatus,
+            isConfirmedTerminal: true,
           };
         }
       } catch {}
@@ -186,7 +228,7 @@ async function openAndVerifyPayMongoCheckout(params: {
       const webPollResult = await pollPromise;
       if (webPollResult) return webPollResult;
     } else {
-      await WebBrowser.openBrowserAsync(redirectUrl, {
+      await getWebBrowser().openBrowserAsync(redirectUrl, {
         showTitle: true,
         enableBarCollapsing: true,
         dismissButtonStyle: 'done',
@@ -202,14 +244,25 @@ async function openAndVerifyPayMongoCheckout(params: {
     if (pollResult) return pollResult;
   }
 
-  // Browser was closed by the user after clicking "Authorize Test Payment" or "Done" — verify final status
+  // Browser was closed by the user after clicking "Authorize Test Payment" or "Done" — verify authoritative final status
+  let lastKnownStatus = 'uncertain';
   for (let retry = 0; retry < 3; retry++) {
     const finalCheck = await verifyPayMongoIntentOnce(paymentIntentId, clientKey);
+    lastKnownStatus = finalCheck.status;
     if (finalCheck.status === 'succeeded') {
       return {
         succeeded: true,
         paymongoPaymentId: finalCheck.paymongoPaymentId || paymentIntentId,
         status: 'succeeded',
+        isConfirmedTerminal: false,
+      };
+    }
+    if (finalCheck.status === 'failed' || finalCheck.status === 'cancelled') {
+      return {
+        succeeded: false,
+        paymongoPaymentId: paymentIntentId,
+        status: finalCheck.status as PaymentOutcomeStatus,
+        isConfirmedTerminal: true,
       };
     }
     if (retry < 2) {
@@ -217,10 +270,14 @@ async function openAndVerifyPayMongoCheckout(params: {
     }
   }
 
+  // If status is not definitively failed or cancelled, it is UNCERTAIN (e.g. browser dismissed, network lag, processing).
+  // The hold MUST be preserved!
+  const isTerminal = lastKnownStatus === 'failed' || lastKnownStatus === 'cancelled';
   return {
     succeeded: false,
     paymongoPaymentId: paymentIntentId,
-    status: 'cancelled',
+    status: (isTerminal ? lastKnownStatus : 'uncertain') as PaymentOutcomeStatus,
+    isConfirmedTerminal: isTerminal,
   };
 }
 
@@ -327,8 +384,24 @@ export async function processPayMongoBookingPayment(params: {
     });
 
     if (!result.succeeded) {
-      throw new Error(
-        'Payment was not completed or was declined on the PayMongo authorization page.'
+      if (result.status === 'failed') {
+        throw new PayMongoPaymentError(
+          'Payment was declined or failed on PayMongo.',
+          'failed',
+          paymentIntentId
+        );
+      }
+      if (result.status === 'cancelled') {
+        throw new PayMongoPaymentError(
+          'Payment was cancelled on the PayMongo authorization page.',
+          'cancelled',
+          paymentIntentId
+        );
+      }
+      throw new PayMongoPaymentError(
+        'Payment authorization could not be verified immediately. Hold is preserved.',
+        'uncertain',
+        paymentIntentId
       );
     }
 
