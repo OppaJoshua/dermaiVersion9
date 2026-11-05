@@ -109,8 +109,8 @@ export default function ScanScreen() {
   const [scansUsed, setScansUsed] = useState(0);
   const [isPremium, setIsPremium] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const questionScrollRef = useRef<ScrollView>(null);
-  const reviewScrollRef = useRef<ScrollView>(null);
+  const questionScrollRef = useRef<any>(null);
+  const reviewScrollRef = useRef<any>(null);
 
   useEffect(() => {
     questionScrollRef.current?.scrollTo({ y: 0, animated: false });

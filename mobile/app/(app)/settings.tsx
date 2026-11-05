@@ -373,7 +373,7 @@ function HelpModal({
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView
         style={{ flex: 1, backgroundColor: '#FFFFFF' }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}

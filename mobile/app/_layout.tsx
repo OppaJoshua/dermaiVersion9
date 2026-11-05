@@ -23,8 +23,8 @@ import { savePatientAccount } from '@/lib/store';
 export default function RootLayout() {
   const router = useRouter();
   const segments = useSegments();
-  const segmentsRef = useRef(segments);
-  const [ready, setReady] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [user, setUser] = useState<any>(null);
 
   const [fontsLoaded] = useFonts({
     PlusJakartaSans_400Regular,
@@ -65,35 +65,46 @@ export default function RootLayout() {
     }
   }, []);
 
-  useEffect(() => {
-    segmentsRef.current = segments;
-  }, [segments]);
-
-  // Auth state listener -> routing
+  // Auth state listener
   useEffect(() => {
     let mounted = true;
 
-    // Initial check
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    // Safety timeout: ensure loading screen resolves within 2.5s even with slow storage/network
+    const timeout = setTimeout(() => {
+      if (mounted && !authChecked) {
+        setAuthChecked(true);
+      }
+    }, 2500);
+
+    // Initial session check
+    supabase.auth.getSession().then(({ data: { session } }) => {
       if (!mounted) return;
-      await handleRoute(session?.user ?? null);
-      setReady(true);
+      setUser(session?.user ?? null);
+      setAuthChecked(true);
+    }).catch((err) => {
+      console.warn('[RootLayout] getSession error:', err);
+      if (!mounted) return;
+      setAuthChecked(true);
     });
 
     // Realtime auth change listener
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
-      await handleRoute(session?.user ?? null);
+      setUser(session?.user ?? null);
     });
 
     return () => {
       mounted = false;
+      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
 
-  async function handleRoute(user: any) {
-    const seg = segmentsRef.current as string[];
+  // Post-mount route navigation guard: executes ONLY when the navigator is mounted and ready
+  useEffect(() => {
+    if (!authChecked || (!fontsLoaded && Platform.OS !== 'web')) return;
+
+    const seg = segments as string[];
     const inAuth = seg[0] === '(auth)';
     const inLogin = seg[1] === 'login';
     const onRegister = seg[1] === 'register';
@@ -108,7 +119,6 @@ export default function RootLayout() {
         window.location.search.includes('code=') ||
         window.location.hash.includes('error=');
       if (hasAuthTokens && !inCallback) {
-        // Forward to auth callback route to let AuthCallback handle session exchange
         router.replace(`/auth/callback${window.location.search}${window.location.hash}` as any);
         return;
       }
@@ -121,44 +131,47 @@ export default function RootLayout() {
       return;
     }
 
-    try {
-      const { data: profile } = await supabase
-        .from('user')
-        .select('*')
-        .eq('user_id', user.id)
-        .maybeSingle();
+    (async () => {
+      try {
+        const { data: profile } = await supabase
+          .from('user')
+          .select('*')
+          .eq('user_id', user.id)
+          .maybeSingle();
 
-      const googleName = user.user_metadata?.full_name || user.user_metadata?.name;
+        const googleName = user.user_metadata?.full_name || user.user_metadata?.name;
 
-      if (!profile || !profile.full_name || profile.full_name.trim() === '') {
-        if (googleName && googleName.trim() !== '') {
-          // Auto-sync Google user profile to DB
-          try {
-            await savePatientAccount({
-              id: user.id,
-              fullName: googleName.trim(),
-              email: user.email || '',
-              profileImage: user.user_metadata?.avatar_url || user.user_metadata?.picture,
-              createdAt: new Date().toISOString(),
-            });
-            if (inAuthArea && !onSubscription) {
-              router.replace('/(app)');
-              return;
+        if (!profile || !profile.full_name || profile.full_name.trim() === '') {
+          if (googleName && googleName.trim() !== '') {
+            // Auto-sync Google user profile to DB
+            try {
+              await savePatientAccount({
+                id: user.id,
+                fullName: googleName.trim(),
+                email: user.email || '',
+                profileImage: user.user_metadata?.avatar_url || user.user_metadata?.picture,
+                createdAt: new Date().toISOString(),
+              });
+              if (inAuthArea && !onSubscription) {
+                router.replace('/(app)');
+                return;
+              }
+            } catch (e) {
+              console.warn('[RootLayout] Auto-sync profile notice:', e);
             }
-          } catch (e) {
-            console.warn('[RootLayout] Auto-sync profile notice:', e);
           }
+          if (!onRegister) router.replace('/(auth)/register');
+        } else {
+          if (inAuthArea && !onSubscription) router.replace('/(app)');
         }
-        if (!onRegister) router.replace('/(auth)/register');
-      } else {
-        if (inAuthArea && !onSubscription) router.replace('/(app)');
+      } catch {
+        if (inAuthArea && !onSubscription && !onRegister) router.replace('/(app)');
       }
-    } catch {
-      if (inAuthArea && !onSubscription && !onRegister) router.replace('/(app)');
-    }
-  }
+    })();
+  }, [user, authChecked, fontsLoaded, segments]);
 
-  if (!ready || (!fontsLoaded && Platform.OS !== 'web')) {
+  // Loading state return guard strictly ABOVE the main navigator
+  if (!authChecked || (!fontsLoaded && Platform.OS !== 'web')) {
     return <DashboardSkeleton statusMessage="Signing you in..." />;
   }
 

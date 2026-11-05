@@ -240,20 +240,16 @@ export default function LoginScreen() {
         return;
       }
 
-      const isExpoGo =
-        Constants.appOwnership === 'expo' ||
-        Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+      const redirectTo = makeRedirectUri({
+        scheme: 'dermaimobile',
+      });
 
-      const redirectUrl = isExpoGo
-        ? makeRedirectUri({ path: 'auth/callback' })
-        : makeRedirectUri({ scheme: 'dermaimobile', path: 'auth/callback' });
-
-      console.log('[Google Auth] Initiating OAuth with mobile redirectUrl:', redirectUrl, 'isExpoGo:', isExpoGo);
+      console.log('[Google Auth] Initiating OAuth with redirectTo:', redirectTo);
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: redirectUrl,
+          redirectTo,
           skipBrowserRedirect: true,
         },
       });
@@ -262,7 +258,7 @@ export default function LoginScreen() {
 
       if (data?.url) {
         console.log('[Google Auth] Opening auth browser session...');
-        const authResult = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl);
+        const authResult = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
         console.log('[Google Auth] WebBrowser authResult:', authResult);
 
         if (authResult.type === 'success' && authResult.url) {

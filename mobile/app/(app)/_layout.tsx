@@ -70,7 +70,7 @@ export default function AppLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'home' : 'home-outline'} size={24} color={color} />
+            <Ionicons name={focused ? 'home' : 'home-outline'} size={24} color={color as any} />
           ),
         }}
       />
@@ -79,7 +79,7 @@ export default function AppLayout() {
         options={{
           title: 'Find Clinic',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'location' : 'location-outline'} size={24} color={color} />
+            <Ionicons name={focused ? 'location' : 'location-outline'} size={24} color={color as any} />
           ),
         }}
       />
@@ -95,7 +95,7 @@ export default function AppLayout() {
         options={{
           title: 'Appointments',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'calendar' : 'calendar-outline'} size={24} color={color} />
+            <Ionicons name={focused ? 'calendar' : 'calendar-outline'} size={24} color={color as any} />
           ),
         }}
       />
@@ -104,7 +104,7 @@ export default function AppLayout() {
         options={{
           title: 'History',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'clipboard' : 'clipboard-outline'} size={24} color={color} />
+            <Ionicons name={focused ? 'clipboard' : 'clipboard-outline'} size={24} color={color as any} />
           ),
         }}
       />

@@ -8,7 +8,7 @@
     "scheme": "dermaimobile",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "sdkVersion": "57.0.0",
+    "sdkVersion": "58.0.0",
     "ios": {
       "supportsTablet": true,
       "icon": "./assets/images/logo.png"
