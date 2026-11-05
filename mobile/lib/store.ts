@@ -1,46 +1,26 @@
 function getAsyncStorage() {
-
   try {
-
     const modName = '@react-native-async-storage/async-storage';
-
     const mod = require(modName);
-
     return mod.default || mod;
-
   } catch {
-
     return {
-
       getItem: async () => null,
-
       setItem: async () => {},
-
       removeItem: async () => {},
-
     };
-
   }
-
 }
-
 const AsyncStorage = getAsyncStorage();
 
 import { evaluateDiseaseMapping, normalizeAnswers } from './diseaseMappingService';
-
 import { getConditionGuide } from './conditionGuides';
-
 import { getConditionUUID } from './aiApi';
-
 import { supabase } from './supabase';
-
 import { verifyPayMongoIntentOnce } from './paymongo';
-
 export { supabase };
-
 import { SAMPLE_CLINICS } from './constants';
-
-
+import { logAuditEvent } from './auditLogger';
 
 // ─── AsyncStorage key for session helpers ─────────────────────────────────────
 
@@ -537,6 +517,21 @@ export async function getCurrentUserEmail(): Promise<string | null> {
 
 
 export async function clearCurrentUser(): Promise<void> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      logAuditEvent({
+        user_id: user.id,
+        user_type: 'patient',
+        performer_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Patient',
+        action: 'User Logout',
+        log_type: 'user',
+        target: 'Mobile App',
+        details: `Patient logged out via mobile app (${user.email || user.id})`,
+        metadata: { platform: 'Mobile App' },
+      }).catch(() => {});
+    }
+  } catch (_) {}
 
   _cachedUser = null;
 
@@ -1506,9 +1501,30 @@ export async function saveScanResult(userId: string, result: ScanResult): Promis
 
       .maybeSingle();
 
-
-
-    if (error) console.warn('[Store] saveScanResult insert error:', error.message);
+    if (error) {
+      console.warn('[Store] saveScanResult insert error:', error.message);
+    } else {
+      try {
+        const { data: userData } = await supabase.from('user').select('full_name, email').eq('user_id', userId).maybeSingle();
+        const performerName = userData?.full_name || userData?.email?.split('@')[0] || 'Patient';
+        logAuditEvent({
+          user_id: userId,
+          user_type: 'patient',
+          performer_name: performerName,
+          action: 'AI Skin Scan Completed',
+          log_type: 'scan',
+          target: result.condition || 'Skin Assessment',
+          details: `Completed AI skin scan for ${result.condition || 'skin condition'} with ${Math.round((result.confidence || 0) * 100)}% confidence`,
+          metadata: {
+            analysis_id: scanData?.analysis_id,
+            condition: result.condition,
+            confidence: result.confidence,
+            severity: result.severity,
+            platform: 'Mobile App',
+          },
+        }).catch(() => {});
+      } catch (_) {}
+    }
 
 
 
@@ -2329,11 +2345,85 @@ export async function saveAppointment(appt: Partial<Appointment> & { userId: str
 
 
 export async function cancelAppointment(appointmentId: string): Promise<void> {
+  let apptInfo: any = null;
+  try {
+    const { data } = await supabase
+      .from('patient_appointment')
+      .select('appointment_id, user_id, clinic_name, doctor_name, appointment_date, appointment_time, patient_name')
+      .eq('appointment_id', appointmentId)
+      .maybeSingle();
+    apptInfo = data;
+  } catch (_) {}
+
   const result = await releaseAppointmentHoldSafely(appointmentId, {
     confirmedCancelledOrFailed: true,
   });
   if (!result.success && !result.alreadyInactive) {
     throw new Error(result.message || result.code || 'Failed to cancel appointment');
+  }
+
+  if (apptInfo) {
+    logAuditEvent({
+      user_id: apptInfo.user_id,
+      user_type: 'patient',
+      performer_name: apptInfo.patient_name || 'Patient',
+      action: 'Appointment Cancelled',
+      log_type: 'appointment',
+      target: `${apptInfo.clinic_name || 'Clinic'} - ${apptInfo.appointment_date || ''} ${apptInfo.appointment_time || ''}`,
+      details: `Cancelled appointment with ${apptInfo.doctor_name || apptInfo.clinic_name || 'doctor'} scheduled for ${apptInfo.appointment_date || ''}`,
+      metadata: {
+        appointment_id: appointmentId,
+        platform: 'Mobile App',
+      },
+    }).catch(() => {});
+  }
+}
+
+export async function rescheduleAppointment(
+  appointmentId: string,
+  newDate: string,
+  newTime: string,
+  reason?: string
+): Promise<void> {
+  let apptInfo: any = null;
+  try {
+    const { data } = await supabase
+      .from('patient_appointment')
+      .select('appointment_id, user_id, clinic_name, doctor_name, appointment_date, appointment_time, patient_name')
+      .eq('appointment_id', appointmentId)
+      .maybeSingle();
+    apptInfo = data;
+  } catch (_) {}
+
+  const { error } = await supabase
+    .from('patient_appointment')
+    .update({
+      appointment_date: newDate,
+      appointment_time: newTime,
+      batch_time: newTime,
+      status: 'pending',
+      notes: reason ? `Rescheduled: ${reason}` : undefined,
+    })
+    .eq('appointment_id', appointmentId);
+  if (error) throw error;
+
+  if (apptInfo) {
+    logAuditEvent({
+      user_id: apptInfo.user_id,
+      user_type: 'patient',
+      performer_name: apptInfo.patient_name || 'Patient',
+      action: 'Appointment Reschedule Requested',
+      log_type: 'appointment',
+      target: `${apptInfo.clinic_name || 'Clinic'} - ${newDate} ${newTime}`,
+      details: `Requested reschedule for appointment with ${apptInfo.doctor_name || apptInfo.clinic_name || 'doctor'} to ${newDate} at ${newTime}`,
+      metadata: {
+        appointment_id: appointmentId,
+        new_date: newDate,
+        new_time: newTime,
+        reason,
+        platform: 'Mobile App',
+      },
+    }).catch(() => {});
   }
 }
 

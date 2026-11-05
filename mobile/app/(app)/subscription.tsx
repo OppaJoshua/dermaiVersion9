@@ -27,6 +27,7 @@ import {
 } from '@/lib/store';
 import type { PatientAccount, SubscriptionRecord } from '@/lib/store';
 import { processPayMongoSubscriptionPayment } from '@/lib/paymongo';
+import { logAuditEvent } from '@/lib/auditLogger';
 
 const GCASH_LOGO = require('@/assets/images/gcash.png');
 const MAYA_LOGO = require('@/assets/images/maya.png');
@@ -115,6 +116,18 @@ export default function SubscriptionScreen() {
               await setUserSubscription(user.id, freeSub);
               await updatePlatformUserPlan(user.id, 'free');
               setSub(freeSub);
+
+              logAuditEvent({
+                user_id: user.id,
+                user_type: 'patient',
+                performer_name: user.fullName || user.email?.split('@')[0] || 'Patient',
+                action: 'Subscription Cancelled',
+                log_type: 'subscription',
+                target: 'Premium Plan',
+                details: 'Patient cancelled premium subscription on mobile app, reverting to free tier',
+                metadata: { previous_plan: sub?.plan || 'premium', platform: 'Mobile App' },
+              }).catch(() => {});
+
               Alert.alert('Subscription Cancelled', 'Your account has been switched to the Free Plan.');
             } catch (err: any) {
               Alert.alert('Error', err?.message ?? 'Could not cancel subscription.');
@@ -448,6 +461,25 @@ function PaymentModal({
         paymentMethod: paymentMethod === 'maya' ? 'Maya' : 'GCash',
         mobileNumber: cleanedMobile,
       };
+
+      // Log audit event for subscription payment
+      logAuditEvent({
+        user_id: user.id,
+        user_type: 'patient',
+        performer_name: fullName.trim() || user.fullName || 'Patient',
+        action: 'Payment Completed',
+        log_type: 'subscription',
+        target: `Subscription Payment (${paymentMethod.toUpperCase()})`,
+        details: `Subscribed to DermAI Pro Plan (${billingCycle}) for ₱${price.toLocaleString()} via ${paymentMethod.toUpperCase()} (Ref: ${result.paymongoPaymentId})`,
+        metadata: {
+          billing_cycle: billingCycle,
+          plan: 'premium',
+          payment_method: paymentMethod,
+          payment_reference: result.paymongoPaymentId,
+          amount: price,
+          platform: 'Mobile App',
+        },
+      }).catch(() => {});
 
       // Edge Function already fulfilled `user_plan_subscription` and `user_payment`,
       // and we also sync local state & notifications for immediate UI update.

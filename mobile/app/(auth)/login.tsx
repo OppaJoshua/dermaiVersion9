@@ -15,6 +15,7 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { COLORS } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
 import { savePatientAccount } from '@/lib/store';
+import { logAuditEvent } from '@/lib/auditLogger';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -125,6 +126,17 @@ export default function LoginScreen() {
     } catch (saveErr: any) {
       console.warn('[Google Auth] Profile sync notice:', saveErr?.message);
     }
+    const displayName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || 'Patient';
+    logAuditEvent({
+      userId: user.id,
+      role: 'patient',
+      category: 'user',
+      action: 'User Login',
+      target: 'Mobile App',
+      details: `${displayName} (${user.email || 'patient'}) logged in via Google on Mobile App.`,
+      performerName: displayName,
+      metadata: { provider: 'google', platform: 'Mobile App' },
+    }).catch(() => {});
     router.replace('/(app)');
   }
 
@@ -294,11 +306,24 @@ export default function LoginScreen() {
     try {
       const trimmedEmail = email.trim();
       if (mode === 'signin') {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data: authData, error } = await supabase.auth.signInWithPassword({
           email: trimmedEmail,
           password,
         });
         if (error) throw error;
+
+        if (authData?.user) {
+          logAuditEvent({
+            user_id: authData.user.id,
+            user_type: 'patient',
+            performer_name: authData.user.user_metadata?.full_name || trimmedEmail.split("@")[0],
+            action: 'User Login',
+            log_type: 'user',
+            target: 'Mobile App',
+            details: `Patient logged in via mobile app (${trimmedEmail})`,
+            metadata: { provider: 'email', platform: 'Mobile App' },
+          }).catch(() => {});
+        }
       } else {
         const { data, error } = await supabase.auth.signUp({
           email: trimmedEmail,
@@ -315,6 +340,17 @@ export default function LoginScreen() {
         if (error) throw error;
 
         if (data.user) {
+          logAuditEvent({
+            user_id: data.user.id,
+            user_type: 'patient',
+            performer_name: trimmedEmail.split("@")[0],
+            action: 'User Registration',
+            log_type: 'user',
+            target: 'Mobile App',
+            details: `New patient registered via mobile app (${trimmedEmail})`,
+            metadata: { provider: 'email', platform: 'Mobile App' },
+          }).catch(() => {});
+
           try {
             await savePatientAccount({
               id: data.user.id,
@@ -375,6 +411,15 @@ export default function LoginScreen() {
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(trimmed);
       if (error) throw error;
+      logAuditEvent({
+        user_type: 'patient',
+        performer_name: trimmed.split("@")[0],
+        action: 'Password Reset Requested',
+        log_type: 'user',
+        target: 'Mobile App',
+        details: `Password reset requested for email ${trimmed}`,
+        metadata: { email: trimmed, platform: 'Mobile App' },
+      }).catch(() => {});
       Alert.alert('Reset Email Sent', `A password reset link was sent to ${trimmed}. Check your inbox.`);
     } catch (err: any) {
       Alert.alert('Error', err?.message ?? 'Could not send reset email.');

@@ -308,7 +308,7 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
               />
               <div className="min-w-0">
                 <p className="text-base font-bold text-slate-900 truncate">
-                  {docProfile.name || "Doctor"}
+                 Dr.{docProfile.name || "Doctor"}
                 </p>
                 <p className="text-[12px] text-blue-600 truncate font-semibold">
                   {selectedClinicName}
@@ -329,7 +329,7 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
 
       <main className="flex-1 lg:ml-65 min-h-screen flex flex-col min-w-0">
         {/* Top Header */}
-        <div className="bg-white border-b border-slate-200/80 px-5 sm:px-8 h-18 flex items-center justify-between sticky top-0 z-20 shadow-xs">
+        <div className="bg-white border-b border-slate-200/80 px-5 sm:px-8 h-18 flex items-center justify-between sticky top-0 z-[1200] shadow-xs">
           <div className="flex items-center gap-3">
             <button
               className="lg:hidden p-2 rounded-xl hover:bg-slate-50 text-slate-500"
@@ -446,7 +446,7 @@ function DoctorLayoutContent({ children }: DoctorLayoutProps) {
               </button>
 
               {bellOpen && (
-                <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-slate-100 z-[9999] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
                   <DoctorNotifications isDropdown onClose={() => setBellOpen(false)} />
                 </div>
               )}

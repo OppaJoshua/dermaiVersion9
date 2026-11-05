@@ -46,6 +46,7 @@ import {
   type ConsultationSlot,
 } from '@/lib/scheduling';
 import { processPayMongoBookingPayment, PayMongoPaymentError } from '@/lib/paymongo';
+import { logAuditEvent } from '@/lib/auditLogger';
 
 const GCASH_LOGO = require('@/assets/images/gcash.png');
 const MAYA_LOGO = require('@/assets/images/maya.png');
@@ -771,6 +772,45 @@ export function BookingModal({
         console.warn('[BookingModal] Failed to fetch fulfilled appointment queue number:', fetchErr);
       }
       setReservedApptId(null);
+
+      // Log audit events for appointment booking and payment
+      logAuditEvent({
+        user_id: activeUser.id,
+        user_type: 'patient',
+        performer_name: resolvedPatientName,
+        action: 'Appointment Booked',
+        log_type: 'appointment',
+        target: `${selectedClinic.name} - ${dateStr.trim()} ${selectedBatch.label || selectedBatch.batchTime}`,
+        details: `Booked consultation with ${docDispName || selectedClinic.name} on ${dateStr.trim()} at ${selectedBatch.label || selectedBatch.batchTime}`,
+        metadata: {
+          appointment_id: apptId,
+          clinic_id: selectedClinic.id,
+          clinic_name: selectedClinic.name,
+          doctor_id: selectedDoctor?.id,
+          doctor_name: docDispName,
+          appointment_date: dateStr.trim(),
+          batch_time: selectedBatch.label || selectedBatch.batchTime,
+          fee: feeNum,
+          platform: 'Mobile App',
+        },
+      }).catch(() => {});
+
+      logAuditEvent({
+        user_id: activeUser.id,
+        user_type: 'patient',
+        performer_name: resolvedPatientName,
+        action: 'Payment Completed',
+        log_type: 'appointment',
+        target: `Consultation Payment (${paymentMethod.toUpperCase()})`,
+        details: `Completed payment of ₱${feeNum.toFixed(2)} via ${paymentMethod.toUpperCase()} (Ref: ${refNumber})`,
+        metadata: {
+          appointment_id: apptId,
+          payment_method: paymentMethod,
+          payment_reference: refNumber,
+          amount: feeNum,
+          platform: 'Mobile App',
+        },
+      }).catch(() => {});
 
       // 4. Trigger in-app notification
       await addAppNotification(activeUser.id, {

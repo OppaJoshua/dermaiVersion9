@@ -682,7 +682,7 @@ export default function UserLayout({
       <main className="flex-1 lg:ml-64 min-w-0 flex flex-col w-full min-h-screen bg-patient-bg">
         <div className="flex-1 flex flex-col bg-patient-bg min-h-screen">
           {/* Top Header — breadcrumb pill + bell + profile */}
-          <div className="px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-20 bg-white/90 backdrop-blur border-b border-gray-100">
+          <div className="px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-[1200] bg-white/90 backdrop-blur border-b border-gray-100">
             <div className="flex items-center gap-3">
               <button
                 className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500"
@@ -699,7 +699,7 @@ export default function UserLayout({
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3">
-              <div ref={notifRef} className="relative z-50">
+              <div ref={notifRef} className="relative z-[1300]">
                 <button
                   onClick={() => setNotifOpen((o) => !o)}
                   className="relative w-10 h-10 flex items-center justify-center rounded-full border border-gray-200/80 bg-white hover:bg-magenta-50 transition-colors"
@@ -713,7 +713,7 @@ export default function UserLayout({
                 </button>
 
                 {notifOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+                  <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-[9999] overflow-hidden">
                     <PatientNotifications isDropdown onClose={() => setNotifOpen(false)} />
                   </div>
                 )}

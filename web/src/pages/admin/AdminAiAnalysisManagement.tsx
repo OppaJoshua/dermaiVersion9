@@ -2,21 +2,41 @@ import { useMemo, useState, useEffect } from "react";
 import { AlertTriangle, Flag, ShieldX } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { supabase } from "../../lib/supabaseClient";
+
 type AnalysisStatus = "valid" | "flagged" | "invalid";
+
 type AnalysisRecord = {
     id: number;
     patient: string;
     uploadedAt: string;
+    rawTimestamp?: string;
     predictedCondition: string;
     confidence: number;
     status: AnalysisStatus;
     reason?: string;
 };
+
 const badgeClasses: Record<AnalysisStatus, string> = {
     valid: "bg-gray-100 border-gray-300 text-black",
     flagged: "bg-magenta-50 border-magenta-200 text-black",
     invalid: "bg-magenta-100 border-magenta-300 text-black",
 };
+
+function formatScanTimestamp(iso?: string | null): string {
+    if (!iso) return "—";
+    try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return iso;
+        return d.toLocaleDateString("en-PH", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+        });
+    } catch {
+        return iso;
+    }
+}
+
 export default function AdminAiAnalysisManagement() {
     const [records, setRecords] = useState<AnalysisRecord[]>([]);
     const [filter, setFilter] = useState<"all" | "low-confidence" | AnalysisStatus>("all");
@@ -24,36 +44,77 @@ export default function AdminAiAnalysisManagement() {
     useEffect(() => {
         let cancelled = false;
         async function loadRecords() {
-            const { data, error } = await supabase
+            // Query ai_scan_result ordered by created_at descending (newest first)
+            let data: any[] | null = null;
+            const primaryRes = await supabase
                 .from("ai_scan_result")
                 .select(`
                     analysis_id,
                     confidence_score,
                     status,
+                    created_at,
                     scanned_at,
                     skin_condition:condition_id ( name ),
                     user:user_id ( full_name )
                 `)
-                .order("scanned_at", { ascending: false })
+                .order("created_at", { ascending: false })
                 .limit(100);
-            if (cancelled || error || !data) return;
-            setRecords((data as any[]).map((s: any, idx: number) => {
+
+            if (!primaryRes.error && primaryRes.data) {
+                data = primaryRes.data;
+            } else {
+                // Fallback query ordering by scanned_at if created_at is not present in schema
+                const fallbackRes = await supabase
+                    .from("ai_scan_result")
+                    .select(`
+                        analysis_id,
+                        confidence_score,
+                        status,
+                        scanned_at,
+                        skin_condition:condition_id ( name ),
+                        user:user_id ( full_name )
+                    `)
+                    .order("scanned_at", { ascending: false })
+                    .limit(100);
+
+                if (!fallbackRes.error && fallbackRes.data) {
+                    data = fallbackRes.data;
+                }
+            }
+
+            if (cancelled || !data) return;
+
+            const mapped = (data as any[]).map((s: any, idx: number) => {
                 const userObj = Array.isArray(s.user) ? s.user[0] : s.user;
                 const condObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+                const rawTimestamp = s.created_at || s.scanned_at;
                 return {
                     id: idx + 1,
                     _analysisId: s.analysis_id,
                     patient: userObj?.full_name ?? "Unknown",
-                    uploadedAt: new Date(s.scanned_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }),
+                    uploadedAt: formatScanTimestamp(rawTimestamp),
+                    rawTimestamp,
                     predictedCondition: condObj?.name ?? "Unknown",
                     confidence: Math.round(s.confidence_score),
                     status: (["valid", "flagged", "invalid"].includes(s.status) ? s.status : "valid") as AnalysisStatus,
                 };
-            }));
+            });
+
+            // Ensure strictly newest-first ordering
+            mapped.sort(
+                (a, b) =>
+                    new Date(b.rawTimestamp || 0).getTime() - new Date(a.rawTimestamp || 0).getTime()
+            );
+            mapped.forEach((item, i) => {
+                item.id = i + 1;
+            });
+
+            setRecords(mapped);
         }
         loadRecords();
         return () => { cancelled = true; };
     }, []);
+
     const visibleRecords = useMemo(() => {
         if (filter === "all")
             return records;
@@ -61,9 +122,11 @@ export default function AdminAiAnalysisManagement() {
             return records.filter((r) => r.confidence < 60);
         return records.filter((r) => r.status === filter);
     }, [records, filter]);
+
     const lowConfidenceCount = records.filter((r) => r.confidence < 60).length;
     const flaggedCount = records.filter((r) => r.status === "flagged").length;
     const invalidCount = records.filter((r) => r.status === "invalid").length;
+
     const setRecordStatus = async (id: number, status: AnalysisStatus, reason?: string) => {
         const record = records.find((r) => r.id === id) as (AnalysisRecord & { _analysisId?: string }) | undefined;
         setRecords((prev) => prev.map((r) => r.id === id ? { ...r, status, reason } : r));
@@ -75,6 +138,7 @@ export default function AdminAiAnalysisManagement() {
             if (error) console.error("[AiAnalysis] update status error:", error.message);
         }
     };
+
     return (<div className="space-y-8">
       <div>
         <h1 className="text-2xl font-display font-bold text-black">AI Skin Analysis Management</h1>
