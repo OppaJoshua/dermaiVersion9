@@ -223,7 +223,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
     <div
       className={cn(
         "flex flex-col bg-white overflow-hidden rounded-xl border border-gray-200",
-        isDropdown ? "w-full max-h-[560px] shadow-lg" : "w-full shadow-sm"
+        isDropdown ? "relative z-[9999] w-full max-h-[560px] shadow-lg" : "w-full shadow-sm"
       )}
     >
       {/* Header */}

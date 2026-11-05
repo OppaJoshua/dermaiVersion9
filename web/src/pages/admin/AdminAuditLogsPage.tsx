@@ -62,6 +62,16 @@ function formatTimestamp(iso: string) {
   }
 }
 
+function getStartOfDayIso(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? `${dateStr}T00:00:00.000Z` : d.toISOString();
+}
+
+function getEndOfDayIso(dateStr: string): string {
+  const d = new Date(`${dateStr}T23:59:59.999`);
+  return Number.isNaN(d.getTime()) ? `${dateStr}T23:59:59.999Z` : d.toISOString();
+}
+
 const CATEGORIES: AuditEntryType[] = [
   "user",
   "subscription",
@@ -82,6 +92,8 @@ const PAGE_SIZE = 15;
 
 export default function AdminAuditLogsPage() {
   const [actorFilter, setActorFilter] = useState<ActorFilter>("all");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -116,14 +128,24 @@ export default function AdminAuditLogsPage() {
     setPage(1);
   };
 
-  // Fetch live category counts by querying Supabase exact counts
+  // Fetch live category counts by querying Supabase exact counts with date range bounds
   const fetchCategoryCounts = useCallback(async () => {
     try {
       const countsPromises = CATEGORIES.map(async (cat) => {
-        const { count, error } = await supabase
+        let q = supabase
           .from("system_audit_log")
           .select("*", { count: "exact", head: true })
-          .eq("log_type", cat);
+          .eq("log_type", cat)
+          .neq("user_type", "system");
+
+        if (fromDate) {
+          q = q.gte("timestamp", getStartOfDayIso(fromDate));
+        }
+        if (toDate) {
+          q = q.lte("timestamp", getEndOfDayIso(toDate));
+        }
+
+        const { count, error } = await q;
         if (error) return [cat, 0] as const;
         return [cat, count ?? 0] as const;
       });
@@ -134,7 +156,7 @@ export default function AdminAuditLogsPage() {
     } catch (err) {
       console.warn("[AdminAuditLogs] Failed to fetch category counts:", err);
     }
-  }, []);
+  }, [fromDate, toDate]);
 
   // Fetch filtered & paginated audit logs from live Supabase database
   const fetchLogs = useCallback(async (isRefresh = false) => {
@@ -156,6 +178,14 @@ export default function AdminAuditLogsPage() {
       // Apply actor filter across Patient, Doctor, Clinic, Admin
       if (actorFilter !== "all") {
         query = query.eq("user_type", actorFilter);
+      }
+
+      // Apply date range bounds on timestamp column
+      if (fromDate) {
+        query = query.gte("timestamp", getStartOfDayIso(fromDate));
+      }
+      if (toDate) {
+        query = query.lte("timestamp", getEndOfDayIso(toDate));
       }
 
       // Apply search query across action, target, details, and performer_name
@@ -187,21 +217,21 @@ export default function AdminAuditLogsPage() {
             !String(l.action || "").toLowerCase().includes("system initialization")
         )
         .map((l: any) => {
-        const userObj = Array.isArray(l.user) ? l.user[0] : l.user;
-        const fallbackPerformer =
-          l.performer_name || userObj?.full_name || userObj?.email || (l.user_type === "system" ? "System Core" : "User");
+          const userObj = Array.isArray(l.user) ? l.user[0] : l.user;
+          const fallbackPerformer =
+            l.performer_name || userObj?.full_name || userObj?.email || (l.user_type === "system" ? "System Core" : "User");
 
-        return {
-          id: l.log_id,
-          type: (l.log_type || "system") as AuditEntryType,
-          action: l.action || "Action",
-          target: l.target || userObj?.full_name || l.user_type || "System Core",
-          details: l.details || "",
-          performedBy: fallbackPerformer,
-          actorType: (l.user_type as AuditActorType) || (userObj?.role as AuditActorType) || "system",
-          timestamp: l.timestamp || new Date().toISOString(),
-        };
-      });
+          return {
+            id: l.log_id,
+            type: (l.log_type || "system") as AuditEntryType,
+            action: l.action || "Action",
+            target: l.target || userObj?.full_name || l.user_type || "System Core",
+            details: l.details || "",
+            performedBy: fallbackPerformer,
+            actorType: (l.user_type as AuditActorType) || (userObj?.role as AuditActorType) || "system",
+            timestamp: l.timestamp || new Date().toISOString(),
+          };
+        });
 
       setLogs(mapped);
       setTotalCount(count ?? 0);
@@ -211,7 +241,7 @@ export default function AdminAuditLogsPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [actorFilter, debouncedSearch, page]);
+  }, [actorFilter, debouncedSearch, page, fromDate, toDate]);
 
   // Initial and reactive data load
   useEffect(() => {
@@ -241,6 +271,12 @@ export default function AdminAuditLogsPage() {
           // Check if new record matches current actor filter
           const matchesActor =
             actorFilter === "all" || newRecord.user_type === actorFilter;
+
+          // Check if new record matches active date range bounds
+          const logTime = new Date(newRecord.timestamp).getTime();
+          const matchesFrom = !fromDate || logTime >= new Date(`${fromDate}T00:00:00`).getTime();
+          const matchesTo = !toDate || logTime <= new Date(`${toDate}T23:59:59.999`).getTime();
+          const matchesDate = matchesFrom && matchesTo;
 
           // Extract performer display name
           let performerName = newRecord.performer_name;
@@ -273,15 +309,15 @@ export default function AdminAuditLogsPage() {
             timestamp: newRecord.timestamp || new Date().toISOString(),
           };
 
-          // Immediately prepend to audit log table without requiring a page refresh
-          if (matchesActor) {
+          // Immediately prepend to audit log table if matching actor and date filters
+          if (matchesActor && matchesDate) {
             setLogs((prev) => [newEntry, ...prev.filter((item) => item.id !== newEntry.id)]);
             setTotalCount((c) => c + 1);
           }
 
-          // Immediately update category count
+          // Immediately update category count if matching date filters
           const cat = newRecord.log_type as AuditEntryType;
-          if (cat && CATEGORIES.includes(cat)) {
+          if (cat && CATEGORIES.includes(cat) && matchesDate) {
             setCategoryCounts((prev) => ({
               ...prev,
               [cat]: (prev[cat] || 0) + 1,
@@ -294,7 +330,7 @@ export default function AdminAuditLogsPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [actorFilter]);
+  }, [actorFilter, fromDate, toDate]);
 
   const handleManualRefresh = () => {
     fetchLogs(true);
@@ -304,7 +340,7 @@ export default function AdminAuditLogsPage() {
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 w-full max-w-full overflow-x-hidden">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -332,8 +368,8 @@ export default function AdminAuditLogsPage() {
         </button>
       </div>
 
-      {/* Category Metric Cards (Live dynamic count from Supabase) */}
-      <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-5 gap-4 sm:gap-6">
+      {/* Category Metric Cards (Live dynamic count from Supabase filtered by date range) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-5 gap-4 sm:gap-6 w-full max-w-full">
         {CATEGORIES.map((type) => {
           const Icon = typeIcon[type];
           const count = categoryCounts[type] ?? 0;
@@ -352,56 +388,118 @@ export default function AdminAuditLogsPage() {
                 <p className="text-3xl sm:text-4xl font-bold text-black tabular-nums tracking-tight">
                   {count.toLocaleString()}
                 </p>
-                <p className="mt-1 text-xs text-gray-500 font-medium">live log entries</p>
+                <p className="mt-1 text-xs text-gray-500 font-medium">
+                  {fromDate || toDate ? "filtered entries" : "live log entries"}
+                </p>
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Filter and Search Bar */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-xs p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        {/* 'Performed by' Filters */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs sm:text-sm font-semibold text-black mr-1 uppercase tracking-wider">
-            Performed by:
-          </span>
-          {ACTORS.map((a) => (
-            <button
-              key={a.key}
-              type="button"
-              onClick={() => handleActorChange(a.key)}
-              className={cn(
-                "px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-semibold capitalize transition-all cursor-pointer shadow-2xs",
-                actorFilter === a.key
-                  ? "bg-magenta-600 text-white shadow-xs"
-                  : "bg-gray-100 text-gray-700 hover:bg-gray-200 hover:text-black"
-              )}
-            >
-              {a.label}
-            </button>
-          ))}
+      {/* Filter and Search Bar with Date Pickers */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-xs p-5 sm:p-6 space-y-5 w-full max-w-full">
+        {/* Date Pickers Row (Matched to Reports page design) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+          <div>
+            <label className="block text-xs sm:text-sm font-medium text-black mb-1.5">
+              From date <span className="text-xs font-normal text-gray-500">(Optional)</span>
+            </label>
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => {
+                setFromDate(e.target.value);
+                setPage(1);
+              }}
+              className="w-full px-3.5 py-2.5 rounded-lg border border-gray-300 text-xs sm:text-sm text-black outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/15 bg-white transition-all shadow-2xs"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs sm:text-sm font-medium text-black mb-1.5">
+              To date <span className="text-xs font-normal text-gray-500">(Optional)</span>
+            </label>
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => {
+                setToDate(e.target.value);
+                setPage(1);
+              }}
+              className="w-full px-3.5 py-2.5 rounded-lg border border-gray-300 text-xs sm:text-sm text-black outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/15 bg-white transition-all shadow-2xs"
+            />
+          </div>
+
+          {(fromDate || toDate) && (
+            <div className="flex items-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setFromDate("");
+                  setToDate("");
+                  setPage(1);
+                }}
+                className="px-4 py-2.5 rounded-lg border border-gray-300 bg-white text-xs sm:text-sm font-semibold text-black hover:bg-gray-50 transition-colors cursor-pointer shadow-2xs"
+              >
+                Clear dates
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Search Input with Icon */}
-        <div className="relative w-full lg:w-80">
-          <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Search action, target, performer..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-gray-300 bg-white text-xs sm:text-sm text-black placeholder:text-gray-400 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/15 transition-all shadow-2xs"
-          />
+        {/* Divider */}
+        <div className="border-t border-gray-100" />
+
+        {/* 'Performed by' and Search Row */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* 'Performed by' Filters */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs sm:text-sm font-semibold text-black mr-1 uppercase tracking-wider">
+              Performed by:
+            </span>
+            {ACTORS.map((a) => (
+              <button
+                key={a.key}
+                type="button"
+                onClick={() => handleActorChange(a.key)}
+                className={cn(
+                  "px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-semibold capitalize transition-all cursor-pointer shadow-2xs",
+                  actorFilter === a.key
+                    ? "bg-magenta-600 text-white shadow-xs"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200 hover:text-black"
+                )}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Search Input with Icon */}
+          <div className="relative w-full lg:w-80">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search action, target, performer..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-gray-300 bg-white text-xs sm:text-sm text-black placeholder:text-gray-400 outline-none focus:border-magenta-500 focus:ring-2 focus:ring-magenta-500/15 transition-all shadow-2xs"
+            />
+          </div>
         </div>
       </div>
 
       {/* Logs Table with Live Data */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden w-full max-w-full">
         <div className="px-6 py-4.5 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-base font-bold text-black tracking-tight">Activity Log</h2>
           <span className="text-xs sm:text-sm text-gray-500 font-medium">
             {totalCount.toLocaleString()} total recorded {totalCount === 1 ? "event" : "events"}
+            {(fromDate || toDate) && (
+              <span className="ml-1 text-magenta-600 font-semibold">
+                (in selected date range)
+              </span>
+            )}
           </span>
         </div>
 
@@ -414,22 +512,22 @@ export default function AdminAuditLogsPage() {
           <div className="px-7 py-16 text-center text-sm text-gray-500">
             <p className="font-semibold text-gray-700">No log entries found.</p>
             <p className="text-xs text-gray-400 mt-1">
-              {debouncedSearch || actorFilter !== "all"
-                ? "Try adjusting your search query or actor filter."
+              {debouncedSearch || actorFilter !== "all" || fromDate || toDate
+                ? "Try adjusting your search query, actor filter, or date range."
                 : "Real user lifecycle events (logins, bookings, consults) will appear here in real time."}
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-black">
+          <div className="overflow-x-auto w-full max-w-full">
+            <table className="w-full text-black min-w-[850px]">
               <thead>
                 <tr className="bg-gray-50/80 border-b border-gray-200 text-left text-[11px] font-bold text-gray-600 uppercase tracking-wider">
-                  <th className="px-6 py-3.5">Timestamp</th>
-                  <th className="px-6 py-3.5">Category</th>
-                  <th className="px-6 py-3.5">Action</th>
-                  <th className="px-6 py-3.5">Target</th>
-                  <th className="px-6 py-3.5">Details</th>
-                  <th className="px-6 py-3.5">Performed by</th>
+                  <th className="px-6 py-3.5 whitespace-nowrap">Timestamp</th>
+                  <th className="px-6 py-3.5 whitespace-nowrap">Category</th>
+                  <th className="px-6 py-3.5 whitespace-nowrap">Action</th>
+                  <th className="px-6 py-3.5 whitespace-nowrap">Target</th>
+                  <th className="px-6 py-3.5 whitespace-nowrap">Details</th>
+                  <th className="px-6 py-3.5 whitespace-nowrap">Performed by</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">

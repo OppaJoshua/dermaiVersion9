@@ -41,14 +41,9 @@ const priorityLabel: Record<string, { label: string; cls: string }> = {
 };
 
 const CATEGORIES = [
-  "General Support",
   "Patient Support",
   "Clinic Support",
   "Doctor Clinical Support",
-  "Billing & Subscription",
-  "AI Skin Scan Issue",
-  "Clinic Booking",
-  "Technical Support",
 ];
 
 function StatusPill({ status }: { status?: string }) {
@@ -201,20 +196,15 @@ export default function AdminHelpdeskPage() {
 
   // Derived category list
   const categories = useMemo(() => {
-    const set = new Set<string>();
-    CATEGORIES.forEach((c) => set.add(c));
-    tickets.forEach((t) => {
-      if (t.category) set.add(t.category);
-    });
-    return Array.from(set);
-  }, [tickets]);
+    return CATEGORIES;
+  }, []);
 
   // Filtered tickets
   const filteredTickets = useMemo(() => {
     return tickets.filter((ticket) => {
       if (!ticket) return false;
       const status = ticket.status || "pending";
-      const category = ticket.category || "General Support";
+      const category = ticket.category || "";
       const subject = ticket.subject || "";
       const message = ticket.message || "";
       const user = ticket.user || "Platform User";

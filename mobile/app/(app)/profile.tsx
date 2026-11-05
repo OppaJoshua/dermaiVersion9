@@ -22,6 +22,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, CEBU_DISTRICTS } from '@/lib/constants';
+import { logAuditEvent } from '@/lib/auditLogger';
 import { supabase } from '@/lib/supabase';
 import {
   getCurrentUser,
@@ -142,6 +143,26 @@ export default function ProfileScreen() {
       const freshUser = await getCurrentUser(true);
       setUser(freshUser ?? updated);
       setEditing(false);
+
+      logAuditEvent({
+        user_id: user.id,
+        user_type: 'patient',
+        performer_name: updated.fullName || user.fullName || 'Patient',
+        action: 'Profile Updated',
+        log_type: 'user',
+        target: 'Personal Profile',
+        details: `Updated personal information (${[
+          form.fullName !== user.fullName ? 'name' : null,
+          form.phone !== user.phone ? 'phone' : null,
+          form.address !== user.address ? 'address' : null,
+          form.district !== user.district ? 'district' : null,
+        ].filter(Boolean).join(', ') || 'details'})`,
+        metadata: {
+          updated_fields: ['fullName', 'phone', 'address', 'district', 'gender', 'dateOfBirth'],
+          platform: 'Mobile App',
+        },
+      }).catch(() => {});
+
       Alert.alert('Profile Saved', 'Your personal information has been synced with your account.');
     } catch (err: any) {
       console.error('[Profile] Save error:', err?.message);
@@ -192,6 +213,17 @@ export default function ProfileScreen() {
       await savePatientAccount(updated);
       const freshUser = await getCurrentUser(true);
       setUser(freshUser ?? updated);
+
+      logAuditEvent({
+        user_id: user.id,
+        user_type: 'patient',
+        performer_name: user.fullName || 'Patient',
+        action: 'Profile Updated',
+        log_type: 'user',
+        target: 'Profile Photo',
+        details: 'Updated profile picture via mobile app',
+        metadata: { platform: 'Mobile App', field: 'profile_image' },
+      }).catch(() => {});
     } catch (err: any) {
       console.error('[Profile] Image upload error:', err?.message);
       Alert.alert('Upload Failed', err?.message ?? 'Could not upload image. Try again.');

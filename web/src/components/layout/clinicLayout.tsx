@@ -256,7 +256,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
     </aside>
 
     <main className="flex-1 lg:ml-65 min-h-screen bg-patient-bg">
-      <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-20">
+      <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-[1200]">
         <div className="flex items-center gap-3">
           <button className="lg:hidden p-2 rounded-xl hover:bg-gray-50 text-gray-500" onClick={() => setSidebarOpen(true)}>
             <Menu className="w-5 h-5" />
@@ -278,7 +278,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
             </button>
 
             {notifOpen && (
-              <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-50 overflow-hidden">
+              <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-[9999] overflow-hidden">
                 <ClinicNotifications isDropdown onClose={() => setNotifOpen(false)} />
               </div>
             )}

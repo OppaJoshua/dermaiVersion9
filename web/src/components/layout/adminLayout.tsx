@@ -201,7 +201,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   )?.label || "Dashboard";
 
   return (
-    <div className="min-h-screen bg-gray-50/80 flex">
+    <div className="min-h-screen bg-gray-50/80 flex w-full max-w-full overflow-x-hidden">
       {/* Mobile Overlay */}
       {sidebarOpen && (
         <div
@@ -296,7 +296,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 lg:ml-65 min-h-screen">
+      <main className="flex-1 lg:ml-65 min-h-screen min-w-0 w-full max-w-full overflow-x-hidden">
         {/* Top Bar */}
         <div className="bg-white border-b border-gray-100 px-4 sm:px-6 h-16 flex items-center justify-between sticky top-0 z-20">
           <div className="flex items-center gap-3">
@@ -337,7 +337,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           </div>
         </div>
 
-        <div className="p-4 sm:p-6 lg:p-8">{children}</div>
+        <div className="p-4 sm:p-6 lg:p-8 w-full max-w-full overflow-x-hidden">{children}</div>
       </main>
     </div>
   );

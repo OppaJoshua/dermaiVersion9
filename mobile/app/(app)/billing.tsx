@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '@/lib/constants';
+import { logAuditEvent } from '@/lib/auditLogger';
 import {
   getCurrentUser,
   getUserSubscription,
@@ -93,6 +94,18 @@ export default function BillingScreen() {
               };
               await setUserSubscription(user.id, updated);
               setSub(updated);
+
+              logAuditEvent({
+                user_id: user.id,
+                user_type: 'patient',
+                performer_name: user.fullName || user.email?.split('@')[0] || 'Patient',
+                action: 'Subscription Cancelled',
+                log_type: 'subscription',
+                target: 'Premium Plan',
+                details: 'Patient downgraded subscription to free plan on mobile app',
+                metadata: { previous_plan: sub?.plan || 'premium', platform: 'Mobile App' },
+              }).catch(() => {});
+
               Alert.alert('Downgraded', 'You are now on the free plan.', [
                 { text: 'OK', onPress: () => router.back() },
               ]);
