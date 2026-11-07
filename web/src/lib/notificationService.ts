@@ -374,12 +374,22 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     // 1. Direct user_notification records for this patient
     if (dbNotifs) {
       dbNotifs.forEach((n) => {
+        // Suppress all subscription/plan notifications (receipts & confirmations are handled strictly via email)
         if (
           n.type === "subscription_expired" ||
           n.type === "subscription-expired" ||
           n.subtype === "subscription_expired" ||
           n.subtype === "subscription-expired" ||
-          /pro subscription has expired|subscription expired/i.test(n.title || "")
+          n.type === "subscription" ||
+          n.subtype === "subscription" ||
+          n.subtype === "subscription_upgraded" ||
+          (n as any).category === "subscription" ||
+          (n as any).category === "PLAN" ||
+          (n as any).metadata?.category === "subscription" ||
+          (n as any).metadata?.category === "PLAN" ||
+          Boolean(n.subtype?.includes("subscription")) ||
+          Boolean(n.type?.includes("subscription")) ||
+          /pro subscription|subscription|plan activated|welcome to dermai pro/i.test(n.title || "")
         ) {
           return;
         }

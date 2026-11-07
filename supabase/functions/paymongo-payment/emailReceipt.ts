@@ -34,6 +34,7 @@ export interface EmailDispatchResult {
   success: boolean;
   provider: "smtp" | "resend";
   messageId?: string;
+  error?: string;
 }
 
 function escapeHtml(value: string): string {

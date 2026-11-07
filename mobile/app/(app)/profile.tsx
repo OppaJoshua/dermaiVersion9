@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Modal,
@@ -52,6 +53,7 @@ export default function ProfileScreen() {
   });
   const [saving, setSaving] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
+  const [isSigningOut, setIsSigningOut] = useState(false);
   const hasLoadedRef = useRef(false);
 
   useFocusEffect(
@@ -238,27 +240,31 @@ export default function ProfileScreen() {
   }
 
   async function handleLogout() {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out of DermAI?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await clearCurrentUser();
-            router.replace('/(auth)/login');
-          } catch (err: any) {
-            console.error('[Profile] Logout error:', err?.message);
-            Alert.alert('Logout Failed', err?.message ?? 'Could not sign out. Try again.');
-          }
-        },
-      },
-    ]);
+    if (isSigningOut) return;
+    setIsSigningOut(true);
+    try {
+      // 1. Trigger Supabase auth sign-out first
+      await supabase.auth.signOut();
+
+      // 2. Clear cached store state / session
+      await clearCurrentUser();
+
+      // 3. Clear navigation stack and replace with login
+      try {
+        if (router.canDismiss?.()) {
+          router.dismissAll();
+        }
+      } catch {}
+      router.replace('/(auth)/login');
+    } catch (err: any) {
+      console.warn('[Profile] Error during sign-out:', err?.message || err);
+      router.replace('/(auth)/login');
+    }
   }
 
   const isPremium = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
 
-  if (!loadingData && !user) {
+  if (!loadingData && !user && !isSigningOut) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.guestContainer}>
@@ -350,7 +356,7 @@ export default function ProfileScreen() {
             {user?.fullName || 'Patient'}
           </Text>
           <Text style={styles.heroUserRole}>
-            {isPremium ? 'Premium Plan Member' : 'Free Plan Patient'}
+            {sub?.statusLabel || (isPremium ? 'Premium Active' : 'No Active Subscription')}
           </Text>
 
           {/* 2-Column Inline Stats Row with Center Divider (Like "1000 Followers | 1200 Following") */}
@@ -433,7 +439,7 @@ export default function ProfileScreen() {
           <ProfileDetailItem
             icon="star-outline"
             label="Subscription Plan"
-            value={isPremium ? 'DermAI Premium Plan (Active)' : 'Free Tier Plan'}
+            value={sub?.statusLabel || (isPremium ? 'Premium Active' : 'No Active Subscription')}
             onPress={() =>
               router.push({ pathname: '/(app)/subscription', params: { from: 'profile' } })
             }
@@ -448,17 +454,25 @@ export default function ProfileScreen() {
 
           {/* Sign Out Row */}
           <TouchableOpacity
-            style={styles.signOutRow}
+            style={[
+              styles.signOutRow,
+              Platform.OS === 'web' && ({ cursor: 'pointer' } as any),
+              isSigningOut && { opacity: 0.6 },
+            ]}
             onPress={handleLogout}
+            disabled={isSigningOut}
             activeOpacity={0.75}
           >
             <View style={styles.detailIconCol}>
-              <Ionicons name="log-out-outline" size={21} color="#dc2626" />
+              {isSigningOut ? (
+                <ActivityIndicator size="small" color="#dc2626" />
+              ) : (
+                <Ionicons name="log-out-outline" size={21} color="#dc2626" />
+              )}
             </View>
             <View style={styles.detailTextCol}>
-              <Text style={[styles.detailLabel, { color: '#ef4444' }]}>Account Session</Text>
               <Text style={[styles.detailValue, { color: '#dc2626', fontWeight: '700' }]}>
-                Sign Out of DermAI
+                {isSigningOut ? 'Signing Out...' : 'Sign Out'}
               </Text>
             </View>
           </TouchableOpacity>
@@ -474,6 +488,14 @@ export default function ProfileScreen() {
         onSave={handleSave}
         onClose={() => setEditing(false)}
       />
+
+      {/* Smooth Sign-Out Loading Overlay to eliminate blank flashes */}
+      {isSigningOut && (
+        <View style={styles.signingOutOverlay}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.signingOutTxt}>Signing out...</Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -1124,4 +1146,23 @@ const styles = StyleSheet.create({
   districtItemActive: { backgroundColor: COLORS.primaryXLight },
   districtItemTxt: { fontSize: 13, color: '#1e293b', fontWeight: '500' },
   districtItemTxtActive: { color: COLORS.primary, fontWeight: '700' },
+
+  // Sign-Out Loading Overlay
+  signingOutOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.88)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  signingOutTxt: {
+    marginTop: 12,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#475569',
+  },
 });

@@ -29,6 +29,11 @@ function ScanIcon({ focused }: { focused: boolean }) {
   );
 }
 
+const HIDDEN_TAB_OPTIONS = {
+  tabBarButton: () => null,
+  tabBarItemStyle: { display: 'none' as const, width: 0 },
+};
+
 export default function AppLayout() {
   const insets = useSafeAreaInsets();
   const isWeb = Platform.OS === 'web';
@@ -109,12 +114,12 @@ export default function AppLayout() {
         }}
       />
       {/* Hidden from tab bar but accessible via navigation */}
-      <Tabs.Screen name="profile" options={{ href: null }} />
-      <Tabs.Screen name="subscription" options={{ href: null }} />
-      <Tabs.Screen name="notifications" options={{ href: null }} />
-      <Tabs.Screen name="library" options={{ href: null }} />
-      <Tabs.Screen name="settings" options={{ href: null }} />
-      <Tabs.Screen name="billing" options={{ href: null }} />
+      <Tabs.Screen name="profile" options={HIDDEN_TAB_OPTIONS} />
+      <Tabs.Screen name="subscription" options={HIDDEN_TAB_OPTIONS} />
+      <Tabs.Screen name="notifications" options={HIDDEN_TAB_OPTIONS} />
+      <Tabs.Screen name="library" options={HIDDEN_TAB_OPTIONS} />
+      <Tabs.Screen name="settings" options={HIDDEN_TAB_OPTIONS} />
+      <Tabs.Screen name="billing" options={HIDDEN_TAB_OPTIONS} />
     </Tabs>
   );
 }

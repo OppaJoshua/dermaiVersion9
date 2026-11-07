@@ -79,6 +79,7 @@ import {
   isCheckoutRedirectActiveForAppointment,
   clearCheckoutRedirectRecord,
 } from "@/lib/appointmentPaymentService";
+import { resolveAvatarUrl } from "@/utils/storage";
 
 const PAYMONGO_PUBLIC_KEY = import.meta.env.VITE_PAYMONGO_PUBLIC_KEY || "";
 
@@ -1376,6 +1377,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             .from("clinic_doctor")
             .select(`
               *,
+              user:user_id ( avatar_url ),
               doctor_specializations (
                 specialization_id,
                 specializations (
@@ -1393,6 +1395,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               .from("clinic_doctor")
               .select(`
                 *,
+                user:user_id ( avatar_url ),
                 doctor_specializations (
                   specialization_id,
                   specializations (
@@ -1589,8 +1592,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
             const specStr = resolvedSpecializations.join(", ");
 
-            let resolvedPhoto = d.photo_url || d.photo || d.photoUrl || d.user?.avatar_url || d.avatar_url;
-            if (!resolvedPhoto) {
+            const userObj = Array.isArray(d.user) ? d.user[0] : d.user;
+            let resolvedPhoto = d.photo_url || d.photo || d.photoUrl || userObj?.avatar_url || d.avatar_url;
+            if (resolvedPhoto) {
+              resolvedPhoto = resolveAvatarUrl(resolvedPhoto) || resolvedPhoto;
+            } else {
               resolvedPhoto = getDoctorPhoto({ id: d.doctor_id || d.id, name: docName, email: d.email });
             }
 

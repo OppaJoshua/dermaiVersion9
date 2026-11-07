@@ -144,12 +144,21 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
 
     return list.filter((n) => {
       if (!n || !n.id) return false;
+      // Suppress all subscription/plan notifications (receipts & confirmations are handled strictly via email)
       if (
         n.type === "subscription_expired" ||
         n.type === "subscription-expired" ||
+        n.type === "subscription" ||
+        (n.category as string) === "subscription" ||
+        (n.category as string) === "PLAN" ||
+        (n as any).metadata?.category === "subscription" ||
+        (n as any).metadata?.category === "PLAN" ||
         n.metadata?.subtype === "subscription_expired" ||
         n.metadata?.subtype === "subscription-expired" ||
-        /pro subscription has expired|subscription expired/i.test(n.title || "")
+        n.metadata?.subtype === "subscription_upgraded" ||
+        Boolean(n.metadata?.subtype?.includes("subscription")) ||
+        Boolean(n.type?.includes("subscription")) ||
+        /pro subscription|subscription|plan activated|welcome to dermai pro/i.test(n.title || "")
       ) {
         return false;
       }

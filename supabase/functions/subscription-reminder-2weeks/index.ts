@@ -440,35 +440,8 @@ Deno.serve(async (req: Request) => {
 
       const emailOpts = { periodEndLabel, timePhrase };
 
-      // In-app Notification
+      // In-app Notification disabled: subscription reminders handled strictly via email
       stage = "notification";
-      const notificationBody =
-        `Your DermAI Pro subscription is set to end ${timePhrase} on ${periodEndLabel}. ` +
-        "You can renew ahead of time to keep your Pro features active.";
-
-      const { data: existingNotif } = await supabase
-        .from("user_notification")
-        .select("notif_id")
-        .eq("user_id", row.user_id)
-        .eq("subtype", "subscription_reminder_2weeks")
-        .limit(1)
-        .maybeSingle();
-
-      if (!existingNotif) {
-        const { error: notifError } = await supabase
-          .from("user_notification")
-          .insert({
-            user_id: row.user_id,
-            type: "system",
-            subtype: "subscription_reminder_2weeks",
-            title: `Your Pro Subscription Ends ${timePhrase}`,
-            body: notificationBody,
-          });
-
-        if (!notifError) {
-          notificationsCreated++;
-        }
-      }
 
       // Pre-SMTP Marker
       stage = "email_send";

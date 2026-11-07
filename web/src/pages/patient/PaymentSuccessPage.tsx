@@ -43,7 +43,7 @@ export default function PaymentSuccessPage() {
 
       try {
         
-        const { data, error: verifyError } =
+        let { data, error: verifyError } =
           await supabase.functions.invoke("paymongo-payment", {
             body: {
               action: "verify_payment_intent",
@@ -51,6 +51,27 @@ export default function PaymentSuccessPage() {
               clientKey,
             },
           });
+
+        // Maya (paymaya) can still be "processing" right after the redirect returns.
+        // Re-verify (each call also runs server-side fulfillment) before treating it as incomplete.
+        for (
+          let verifyRetry = 0;
+          verifyRetry < 5 &&
+          !verifyError &&
+          (data?.attributes?.status || data?.status) === "processing";
+          verifyRetry++
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const again = await supabase.functions.invoke("paymongo-payment", {
+            body: {
+              action: "verify_payment_intent",
+              paymentIntentId: intentId,
+              clientKey,
+            },
+          });
+          data = again.data;
+          verifyError = again.error;
+        }
 
         if (verifyError) {
           throw new Error(
@@ -189,8 +210,40 @@ export default function PaymentSuccessPage() {
             await validateAndSyncSubscription(targetUserId);
           }
 
+          // Authoritative re-fetch of the signed-in patient's subscription (auth.uid()).
+          // If the row is not Pro yet (e.g. Maya was still settling or client RLS blocked the write),
+          // re-run the server-side fulfillment (identical path for GCash/Maya) and re-check.
+          let confirmed = false;
+          try {
+            confirmed = (await validateAndSyncSubscription(targetUserId)).isPro;
+          } catch {}
+
+          for (let syncAttempt = 0; syncAttempt < 3 && !confirmed; syncAttempt++) {
+            try {
+              await supabase.functions.invoke("paymongo-payment", {
+                body: {
+                  action: "verify_payment_intent",
+                  paymentIntentId: intentId,
+                  clientKey,
+                },
+              });
+            } catch {}
+            try {
+              confirmed = (await validateAndSyncSubscription(targetUserId)).isPro;
+            } catch {}
+            if (!confirmed) {
+              await new Promise((resolve) => setTimeout(resolve, 1500));
+            }
+          }
+
+          if (!confirmed) {
+            console.error("[PaymentSuccessPage] Payment succeeded but the subscription is not active yet.");
+          }
+
           // Clear stale cached plan claims in localStorage so header badge and layout immediately show 'Pro'
           try {
+            // Only claim Pro in the local cache once the database confirms it (same for GCash and Maya).
+            if (!confirmed) throw new Error("Subscription not confirmed as active yet");
             const direct = localStorage.getItem(`derm_profile_${targetUserId}`);
             const parsedDirect = direct ? JSON.parse(direct) : {};
             localStorage.setItem(

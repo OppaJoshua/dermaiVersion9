@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,6 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
-  Switch,
   Image,
   StatusBar,
   Linking,
@@ -19,61 +18,65 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS, APP_NAME, APP_VERSION } from '@/lib/constants';
+import { COLORS } from '@/lib/constants';
+import { supabase } from '@/lib/supabase';
 import {
   getCurrentUser,
   clearCurrentUser,
   addHelpdeskTicket,
-  getNotifPrefs,
-  saveNotifPrefs,
   getUserSubscription,
 } from '@/lib/store';
-import type { PatientAccount, NotifPrefs, SubscriptionRecord } from '@/lib/store';
+import type { PatientAccount, SubscriptionRecord } from '@/lib/store';
+import { getFaqsAsync, PATIENT_FAQS, type FAQItem } from '@/lib/faqData';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const [user, setUser] = useState<PatientAccount | null>(null);
   const [sub, setSub] = useState<SubscriptionRecord | null>(null);
   const [showHelp, setShowHelp] = useState(false);
-  const [notifPrefs, setNotifPrefs] = useState<NotifPrefs>({
-    appointmentReminders: true,
-    scanResultAlerts: true,
-  });
+  const [showFaq, setShowFaq] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       getCurrentUser().then((u) => {
         setUser(u);
         if (u) {
-          getNotifPrefs(u.id).then(setNotifPrefs);
           getUserSubscription(u.id).then(setSub);
         }
       });
     }, [])
   );
 
-  async function toggleNotif(key: keyof NotifPrefs, value: boolean) {
-    if (!user) return;
-    const updated = { ...notifPrefs, [key]: value };
-    setNotifPrefs(updated);
-    await saveNotifPrefs(user.id, updated);
-  }
-
   async function handleLogout() {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out of DermAI?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out',
-        style: 'destructive',
-        onPress: async () => {
-          await clearCurrentUser();
-          router.replace('/(auth)/login');
-        },
-      },
-    ]);
+    if (isSigningOut) return;
+    setIsSigningOut(true);
+    try {
+      // 1. Trigger Supabase auth sign-out first
+      await supabase.auth.signOut();
+
+      // 2. Clear cached store state / session
+      await clearCurrentUser();
+
+      // 3. Clear navigation stack and replace with login
+      try {
+        if (router.canDismiss?.()) {
+          router.dismissAll();
+        }
+      } catch {}
+      router.replace('/(auth)/login');
+    } catch (err: any) {
+      console.warn('[Settings] Error during sign-out:', err?.message || err);
+      router.replace('/(auth)/login');
+    }
   }
 
   const isPremium = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
+  const isBasic = sub?.plan === 'basic';
+  const statusBadge: 'Premium Active' | 'Basic Active' | 'No Active Subscription' =
+    sub?.statusLabel ||
+    (isPremium ? 'Premium Active' : isBasic ? 'Basic Active' : 'No Active Subscription');
+  const hasActiveSubscription = statusBadge === 'Premium Active' || statusBadge === 'Basic Active';
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -111,9 +114,9 @@ export default function SettingsScreen() {
               <Text style={styles.userName} numberOfLines={1}>{user.fullName}</Text>
               <Text style={styles.userEmail} numberOfLines={1}>{user.email}</Text>
             </View>
-            <View style={[styles.planTag, isPremium ? styles.planTagPremium : styles.planTagFree]}>
-              <Text style={[styles.planTagTxt, isPremium ? styles.planTagTxtPremium : styles.planTagTxtFree]}>
-                {isPremium ? 'Premium' : 'Free'}
+            <View style={[styles.planTag, hasActiveSubscription ? styles.planTagPremium : styles.planTagFree]}>
+              <Text style={[styles.planTagTxt, hasActiveSubscription ? styles.planTagTxtPremium : styles.planTagTxtFree]}>
+                {statusBadge}
               </Text>
             </View>
           </View>
@@ -125,80 +128,18 @@ export default function SettingsScreen() {
           <SettingsRow
             icon="star-outline"
             label="Manage Subscription"
-            value={isPremium ? 'Premium Active' : 'Free Plan'}
+            value={statusBadge}
             onPress={() => router.push({ pathname: '/(app)/subscription', params: { from: 'settings' } })}
           />
           <SettingsRow
             icon="receipt-outline"
             label="Billing &amp; Allowance"
-            onPress={() => router.push({ pathname: '/(app)/subscription', params: { from: 'settings' } })}
+            onPress={() => router.push('/(app)/billing')}
             last
           />
         </View>
 
-        {/* Section 2: Notifications */}
-        <SectionHeader title="Notifications &amp; Alerts" />
-        <View style={styles.group}>
-          <View style={styles.row}>
-            <View style={styles.iconCircle}>
-              <Ionicons name="calendar-outline" size={18} color={COLORS.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>Appointment Reminders</Text>
-              <Text style={styles.rowSubLabel}>Get notified before scheduled clinic consultations</Text>
-            </View>
-            <Switch
-              value={notifPrefs.appointmentReminders}
-              onValueChange={(v) => toggleNotif('appointmentReminders', v)}
-              trackColor={{ false: '#e2e8f0', true: COLORS.primary + '80' }}
-              thumbColor={notifPrefs.appointmentReminders ? COLORS.primary : '#f8fafc'}
-            />
-          </View>
-
-          <View style={[styles.row, { borderBottomWidth: 0 }]}>
-            <View style={styles.iconCircle}>
-              <Ionicons name="scan-outline" size={18} color={COLORS.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>Scan Result Alerts</Text>
-              <Text style={styles.rowSubLabel}>Real-time updates when AI finishes skin analysis</Text>
-            </View>
-            <Switch
-              value={notifPrefs.scanResultAlerts}
-              onValueChange={(v) => toggleNotif('scanResultAlerts', v)}
-              trackColor={{ false: '#e2e8f0', true: COLORS.primary + '80' }}
-              thumbColor={notifPrefs.scanResultAlerts ? COLORS.primary : '#f8fafc'}
-            />
-          </View>
-        </View>
-
-        {/* Section 3: Privacy & Compliance */}
-        <SectionHeader title="Privacy &amp; Medical Compliance" />
-        <View style={styles.group}>
-          <SettingsRow
-            icon="shield-checkmark-outline"
-            label="Clinical Data Privacy"
-            onPress={() =>
-              Alert.alert(
-                'Clinical Data Privacy',
-                'DermAI processes skin assessment photos and questionnaire data strictly for clinical screening and licensed dermatologist consultation. Your medical records are encrypted and never disclosed to third parties without authorization.'
-              )
-            }
-          />
-          <SettingsRow
-            icon="document-text-outline"
-            label="Terms of Medical Service"
-            onPress={() =>
-              Alert.alert(
-                'Terms of Medical Service',
-                'DermAI is an AI-assisted clinical pre-screening tool intended for preliminary assessment and dermatologist referral. It is NOT a definitive diagnosis. Always consult a licensed physician or board-certified dermatologist for clinical confirmation and prescription treatments.'
-              )
-            }
-            last
-          />
-        </View>
-
-        {/* Section 4: Support */}
+        {/* Section 2: Support */}
         <SectionHeader title="Help &amp; Support" />
         <View style={styles.group}>
           <SettingsRow
@@ -209,43 +150,37 @@ export default function SettingsScreen() {
           <SettingsRow
             icon="help-circle-outline"
             label="Frequently Asked Questions (FAQ)"
-            onPress={() =>
-              Alert.alert(
-                'DermAI FAQs',
-                '• How does the 15-question pre-screening work?\nIt evaluates clinical symptoms (itching, location, onset) based on AAD and DermNet guidelines.\n\n• Is my data confidential?\nYes, all photo submissions and scan records are encrypted and protected.\n\n• How do I book an appointment?\nGo to Appointments → Book New, select your clinic, attending dermatologist, and arrival window.'
-              )
-            }
+            onPress={() => setShowFaq(true)}
             last
           />
         </View>
 
-        {/* Section 5: App Information */}
-        <SectionHeader title="System &amp; Engine" />
-        <View style={styles.group}>
-          <SettingsRow
-            icon="phone-portrait-outline"
-            label="Application Version"
-            value={`${APP_NAME} v${APP_VERSION}`}
-          />
-          <SettingsRow
-            icon="hardware-chip-outline"
-            label="AI Diagnostic Engine"
-            value="ResNet-50 + Rule Mapping"
-            last
-          />
-        </View>
-
-        {/* Section 6: Danger Zone */}
+        {/* Section 4: Danger Zone */}
         <SectionHeader title="Account Actions" />
         <View style={styles.group}>
-          <TouchableOpacity style={[styles.dangerRow, { borderBottomWidth: 0 }]} onPress={handleLogout} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={[
+              styles.dangerRow,
+              { borderBottomWidth: 0 },
+              Platform.OS === 'web' && ({ cursor: 'pointer' } as any),
+              isSigningOut && { opacity: 0.6 },
+            ]}
+            onPress={handleLogout}
+            disabled={isSigningOut}
+            activeOpacity={0.7}
+          >
             <View style={[styles.iconCircle, { backgroundColor: '#fee2e2' }]}>
-              <Ionicons name="log-out-outline" size={18} color="#dc2626" />
+              {isSigningOut ? (
+                <ActivityIndicator size="small" color="#dc2626" />
+              ) : (
+                <Ionicons name="log-out-outline" size={18} color="#dc2626" />
+              )}
             </View>
-            <Text style={[styles.rowLabel, { color: '#dc2626' }]}>Sign Out</Text>
+            <Text style={[styles.rowLabel, { color: '#dc2626' }]}>
+              {isSigningOut ? 'Signing Out...' : 'Sign Out'}
+            </Text>
             <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
           </TouchableOpacity>
-          
         </View>
 
         <View style={{ height: 40 }} />
@@ -256,6 +191,23 @@ export default function SettingsScreen() {
         user={user}
         onClose={() => setShowHelp(false)}
       />
+
+      <FaqModal
+        visible={showFaq}
+        onClose={() => setShowFaq(false)}
+        onOpenContact={() => {
+          setShowFaq(false);
+          setShowHelp(true);
+        }}
+      />
+
+      {/* Smooth Sign-Out Loading Overlay to eliminate blank flashes */}
+      {isSigningOut && (
+        <View style={styles.signingOutOverlay}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.signingOutTxt}>Signing out...</Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -296,14 +248,6 @@ function SettingsRow({
   );
 }
 
-const SUPPORT_TOPICS = [
-  { id: 'scan', label: 'AI Scan Assessment', icon: 'scan-outline' as const, defaultSubject: 'Question regarding skin scan assessment' },
-  { id: 'billing', label: 'Subscription & Billing', icon: 'card-outline' as const, defaultSubject: 'Subscription and billing inquiry' },
-  { id: 'clinic', label: 'Clinic Consultation', icon: 'calendar-outline' as const, defaultSubject: 'Inquiry regarding clinic consultation booking' },
-  { id: 'bug', label: 'Technical / App Bug', icon: 'bug-outline' as const, defaultSubject: 'Reporting a technical bug or crash in mobile app' },
-  { id: 'general', label: 'General Inquiry', icon: 'help-circle-outline' as const, defaultSubject: 'General inquiry about DermaAI services' },
-];
-
 function HelpModal({
   visible,
   user,
@@ -314,7 +258,6 @@ function HelpModal({
   onClose: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [focusedField, setFocusedField] = useState<'subject' | 'message' | null>(null);
@@ -325,17 +268,6 @@ function HelpModal({
   const topPadding = Platform.OS === 'android'
     ? (StatusBar.currentHeight ?? 24) + 8
     : Math.max(insets.top, 14);
-
-  function handleSelectTopic(topicId: string, defaultSub: string) {
-    if (selectedTopic === topicId) {
-      setSelectedTopic(null);
-    } else {
-      setSelectedTopic(topicId);
-      if (!subject.trim() || SUPPORT_TOPICS.some((t) => t.defaultSubject === subject)) {
-        setSubject(defaultSub);
-      }
-    }
-  }
 
   async function handleSubmit() {
     if (!subject.trim() || !message.trim()) {
@@ -354,6 +286,7 @@ function HelpModal({
         userName: user.fullName,
         subject: subject.trim(),
         message: message.trim(),
+        category: 'General Support',
       });
       setSubmitted(ticket.id);
     } catch (err: any) {
@@ -366,7 +299,6 @@ function HelpModal({
   function handleClose() {
     setSubject('');
     setMessage('');
-    setSelectedTopic(null);
     setSubmitted(null);
     onClose();
   }
@@ -392,10 +324,6 @@ function HelpModal({
 
             <View style={styles.modalHeaderCenter}>
               <Text style={styles.modalTitle}>Contact Support</Text>
-              <View style={styles.onlineBadgeRow}>
-                <View style={styles.onlineDot} />
-                <Text style={styles.onlineTxt}>Active Support · Avg reply &lt; 2h</Text>
-              </View>
             </View>
 
             <View style={{ width: 38 }} />
@@ -427,54 +355,6 @@ function HelpModal({
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              {/* User Account Context Banner */}
-              <View style={styles.userContextCard}>
-                <View style={styles.userContextAvatar}>
-                  <Ionicons name="person" size={16} color={COLORS.primary} />
-                </View>
-                <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={styles.userContextLabel}>SUBMITTING INQUIRY AS</Text>
-                  <Text style={styles.userContextValue} numberOfLines={1}>
-                    {user?.fullName || 'DermaAI Patient'} · {user?.email || 'patient@dermai.ph'}
-                  </Text>
-                </View>
-                <View style={styles.priorityPill}>
-                  <Ionicons name="shield-checkmark" size={11} color="#059669" />
-                  <Text style={styles.priorityPillTxt}>Verified</Text>
-                </View>
-              </View>
-
-              {/* Topic Select Carousel */}
-              <View style={styles.topicsSection}>
-                <Text style={styles.topicsSectionTitle}>Select Topic / Category</Text>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.topicChipsScroll}
-                >
-                  {SUPPORT_TOPICS.map((topic) => {
-                    const isSelected = selectedTopic === topic.id;
-                    return (
-                      <TouchableOpacity
-                        key={topic.id}
-                        style={[styles.topicChip, isSelected && styles.topicChipActive]}
-                        onPress={() => handleSelectTopic(topic.id, topic.defaultSubject)}
-                        activeOpacity={0.75}
-                      >
-                        <Ionicons
-                          name={topic.icon}
-                          size={13}
-                          color={isSelected ? COLORS.primary : '#64748B'}
-                          style={{ marginRight: 5 }}
-                        />
-                        <Text style={[styles.topicChipTxt, isSelected && styles.topicChipTxtActive]}>
-                          {topic.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
 
               {/* Subject Input */}
               <View style={styles.formGroup}>
@@ -548,41 +428,23 @@ function HelpModal({
                 <View style={styles.directCardsGrid}>
                   <TouchableOpacity
                     style={styles.directMiniCard}
-                    onPress={() => Linking.openURL('mailto:support@dermai.ph?subject=DermaAI%20Support%20Inquiry')}
                     activeOpacity={0.7}
                   >
-                    <View style={[styles.directMiniIcon, { backgroundColor: '#EEF2FF' }]}>
-                      <Ionicons name="mail" size={16} color="#4F46E5" />
-                    </View>
                     <View style={{ flex: 1, marginLeft: 10 }}>
                       <Text style={styles.directMiniTitle}>Email Directly</Text>
-                      <Text style={styles.directMiniSub}>support@dermai.ph</Text>
+                      <Text style={styles.directMiniSub}>dermaisupport@gmail.com</Text>
                     </View>
-                    <Ionicons name="open-outline" size={14} color="#94A3B8" />
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     style={styles.directMiniCard}
-                    onPress={() => Linking.openURL('tel:+63322343376')}
                     activeOpacity={0.7}
                   >
-                    <View style={[styles.directMiniIcon, { backgroundColor: '#ECFDF5' }]}>
-                      <Ionicons name="call" size={16} color="#059669" />
-                    </View>
                     <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={styles.directMiniTitle}>Clinic Support Desk</Text>
-                      <Text style={styles.directMiniSub}>Mon–Sat 8AM–6PM</Text>
+                      <Text style={styles.directMiniTitle}>Support Number</Text>
+                      <Text style={styles.directMiniSub}>(032) 888-3472</Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
                   </TouchableOpacity>
-                </View>
-
-                {/* Medical Emergency Warning Callout */}
-                <View style={styles.medicalNoticeCallout}>
-                  <Ionicons name="alert-circle-outline" size={16} color="#B91C1C" style={{ marginTop: 1 }} />
-                  <Text style={styles.medicalNoticeTxt}>
-                    For acute clinical emergencies, intense pain, or severe allergic reactions, do not wait for a support ticket response. Visit an emergency medical facility immediately.
-                  </Text>
                 </View>
               </View>
 
@@ -591,6 +453,140 @@ function HelpModal({
           )}
         </SafeAreaView>
       </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function FaqModal({
+  visible,
+  onClose,
+  onOpenContact,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onOpenContact: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const [faqs, setFaqs] = useState<FAQItem[]>(PATIENT_FAQS);
+  const [openIdx, setOpenIdx] = useState<number | null>(0);
+
+  const topPadding =
+    Platform.OS === 'android'
+      ? (StatusBar.currentHeight ?? 24) + 8
+      : Math.max(insets.top, 14);
+
+  useEffect(() => {
+    if (visible) {
+      let isMounted = true;
+      getFaqsAsync().then((data) => {
+        if (isMounted && data && data.length > 0) {
+          setFaqs(data);
+        }
+      });
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [visible]);
+
+  const toggleAccordion = (index: number) => {
+    setOpenIdx((prev) => (prev === index ? null : index));
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <StatusBar barStyle="dark-content" />
+      <SafeAreaView edges={['left', 'right', 'bottom']} style={[styles.modalSafe, { paddingTop: topPadding }]}>
+        <View style={styles.modalHeader}>
+          <TouchableOpacity
+            onPress={onClose}
+            style={styles.modalCloseBtn}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="close" size={20} color={COLORS.text} />
+          </TouchableOpacity>
+
+          <View style={styles.modalHeaderCenter}>
+            <Text style={styles.modalTitle}>Frequently Asked Questions</Text>
+            <Text style={styles.onlineTxt}>{faqs.length} questions · General Help</Text>
+          </View>
+
+          <View style={{ width: 38 }} />
+        </View>
+
+        <ScrollView
+          contentContainerStyle={[styles.modalContent, { paddingBottom: 40 }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.faqAccordionWrap}>
+            {faqs.map((faq, i) => {
+              const isOpen = openIdx === i;
+              return (
+                <View key={faq.id || i} style={[styles.faqAccordionCard, isOpen && styles.faqAccordionCardOpen]}>
+                  <TouchableOpacity
+                    style={styles.faqAccordionHeader}
+                    onPress={() => toggleAccordion(i)}
+                    activeOpacity={0.75}
+                  >
+                    <Text
+                      style={[
+                        styles.faqAccordionQuestion,
+                        isOpen && styles.faqAccordionQuestionOpen,
+                      ]}
+                    >
+                      {faq.q}
+                    </Text>
+                    <Ionicons
+                      name={isOpen ? 'chevron-up' : 'chevron-down'}
+                      size={18}
+                      color={isOpen ? COLORS.primary : '#94A3B8'}
+                      style={{ marginLeft: 8 }}
+                    />
+                  </TouchableOpacity>
+
+                  {isOpen && (
+                    <View style={styles.faqAccordionBody}>
+                      <Text style={styles.faqAccordionAnswer}>{faq.a}</Text>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+
+          {/* Still need direct assistance card matching Web HelpPage */}
+          <View style={styles.faqAssistanceCard}>
+            <Text style={styles.faqAssistanceTitle}>Still need direct assistance?</Text>
+            <Text style={styles.faqAssistanceSub}>
+              You can reach our official team directly at
+            </Text>
+
+            <TouchableOpacity
+              style={styles.faqEmailBtn}
+              onPress={() => Linking.openURL('mailto:dermaisupport@gmail.com')}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="mail" size={15} color={COLORS.primary} />
+              <Text style={styles.faqEmailBtnTxt}>dermaisupport@gmail.com</Text>
+            </TouchableOpacity>
+
+            <View style={styles.faqPhoneRow}>
+              <Ionicons name="call-outline" size={14} color="#64748B" />
+              <Text style={styles.faqPhoneTxt}>(032) 888-3472</Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.faqContactSubmitBtn}
+              onPress={onOpenContact}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="chatbubbles-outline" size={16} color="#FFFFFF" />
+              <Text style={styles.faqContactSubmitBtnTxt}>Open Support Desk Ticket</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
     </Modal>
   );
 }
@@ -712,7 +708,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   rowLabel: { flex: 1, fontSize: 14, color: '#1e293b', fontWeight: '600' },
-  rowSubLabel: { fontSize: 11, color: '#94a3b8', marginTop: 1 },
   rowRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   rowValue: { fontSize: 12, color: '#64748b', fontWeight: '600' },
 
@@ -814,44 +809,6 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: '700',
     color: '#059669',
-  },
-
-  // Topics Section
-  topicsSection: {
-    marginBottom: 18,
-  },
-  topicsSectionTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#334155',
-    marginBottom: 8,
-  },
-  topicChipsScroll: {
-    gap: 8,
-    paddingBottom: 2,
-  },
-  topicChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 10,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  topicChipActive: {
-    backgroundColor: '#fdf2f7',
-    borderColor: COLORS.primary,
-  },
-  topicChipTxt: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#475569',
-  },
-  topicChipTxtActive: {
-    color: COLORS.primary,
-    fontWeight: '700',
   },
 
   // Form Fields
@@ -1064,5 +1021,141 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 14.5,
+  },
+
+  // ── FAQ Accordion & Modal Styles ──
+  faqAccordionWrap: {
+    gap: 10,
+    marginBottom: 20,
+  },
+  faqAccordionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  faqAccordionCardOpen: {
+    borderColor: '#F4C9DC',
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  faqAccordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  faqAccordionQuestion: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1E293B',
+    lineHeight: 20,
+  },
+  faqAccordionQuestionOpen: {
+    color: COLORS.primary,
+    fontWeight: '700',
+  },
+  faqAccordionBody: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    paddingTop: 4,
+    backgroundColor: '#FAFAFA',
+    borderTopWidth: 1,
+    borderTopColor: '#F8FAFC',
+  },
+  faqAccordionAnswer: {
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 20,
+  },
+  faqAssistanceCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 16,
+    marginTop: 6,
+  },
+  faqAssistanceTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  faqAssistanceSub: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  faqEmailBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FDF2F7',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginTop: 12,
+  },
+  faqEmailBtnTxt: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.primary,
+    textDecorationLine: 'underline',
+  },
+  faqPhoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    paddingLeft: 4,
+  },
+  faqPhoneTxt: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  faqContactSubmitBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: COLORS.primary,
+    borderRadius: 12,
+    paddingVertical: 12,
+    marginTop: 14,
+  },
+  faqContactSubmitBtnTxt: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // Sign-Out Loading Overlay
+  signingOutOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.88)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  signingOutTxt: {
+    marginTop: 12,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#475569',
   },
 });

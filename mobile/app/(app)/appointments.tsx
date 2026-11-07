@@ -84,16 +84,6 @@ function formatDateDisplay(dStr?: string): string {
   return dStr;
 }
 
-const BATCH_SLOTS = [
-  { batchTime: '09:00', label: '09:00 AM – 10:00 AM' },
-  { batchTime: '10:00', label: '10:00 AM – 11:00 AM' },
-  { batchTime: '11:00', label: '11:00 AM – 12:00 PM' },
-  { batchTime: '13:00', label: '01:00 PM – 02:00 PM' },
-  { batchTime: '14:00', label: '02:00 PM – 03:00 PM' },
-  { batchTime: '15:00', label: '03:00 PM – 04:00 PM' },
-  { batchTime: '16:00', label: '04:00 PM – 05:00 PM' },
-];
-
 export default function AppointmentsScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ openBooking?: string; clinicId?: string }>();

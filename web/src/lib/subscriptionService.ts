@@ -527,6 +527,10 @@ export async function upgradeSubscriptionToPro(
 
   if (subErr) {
     console.error("[upgradeSubscriptionToPro] Upsert error:", subErr.message);
+    // Client-side RLS does not let a patient flip an existing expired/cancelled row to 'active'.
+    // Never claim Pro (cache + events) when the row was not persisted; the caller falls back to
+    // server-side fulfillment (paymongo-payment verify_payment_intent), identical for every method.
+    throw new Error(`Subscription activation was not persisted: ${subErr.message}`);
   }
 
   // 3. User Profile Synchronization: Update user table (safely update plan_tier or updated_at)
@@ -549,36 +553,7 @@ export async function upgradeSubscriptionToPro(
     console.warn("[upgradeSubscriptionToPro] Profile sync warning:", profErr);
   }
 
-  // 4. In-App Notification in public.user_notification welcoming user to Pro tier
-  try {
-    const { data: existingNotif } = await supabase
-      .from("user_notification")
-      .select("notif_id")
-      .eq("user_id", userId)
-      .eq("subtype", "subscription_upgraded")
-      .gte("created_at", new Date(Date.now() - 3600000).toISOString())
-      .limit(1)
-      .maybeSingle();
-
-    if (!existingNotif) {
-      const formattedDate = periodEnd.toLocaleDateString("en-PH", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      });
-      await supabase.from("user_notification").insert({
-        user_id: userId,
-        type: "subscription",
-        subtype: "subscription_upgraded",
-        title: "Welcome to DermAI Pro!",
-        body: `Your payment was successful. You now have unlimited AI skin scans and Pro features enabled until ${formattedDate}.`,
-        is_read: false,
-        created_at: new Date().toISOString(),
-      });
-    }
-  } catch (notifErr) {
-    console.warn("[upgradeSubscriptionToPro] Notification dispatch warning:", notifErr);
-  }
+  // 4. In-App Notification in public.user_notification disabled: receipts and payment confirmations are handled strictly via email.
 
   // 5. Audit Logging via logAuditEvent:
   // action: 'Subscription Upgraded', category: 'Subscription', target: 'User #' + userId

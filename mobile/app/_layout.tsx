@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
 import { Platform, View, ActivityIndicator } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import {
   useFonts,
   PlusJakartaSans_400Regular,
@@ -19,6 +20,9 @@ import {
 } from '@expo-google-fonts/poppins';
 import { supabase } from '@/lib/supabase';
 import { savePatientAccount } from '@/lib/store';
+
+// Handle incoming authentication/payment redirects for Expo WebBrowser
+WebBrowser.maybeCompleteAuthSession();
 
 export default function RootLayout() {
   const router = useRouter();
@@ -124,6 +128,12 @@ export default function RootLayout() {
       }
     }
 
+    const inPaymentSuccess = seg[0] === 'payment-success' || seg[0] === 'appointment-success';
+    if (inPaymentSuccess) {
+      // Allow payment success screen to render and display the official receipt
+      return;
+    }
+
     if (!user) {
       if (!inLogin && !onRegister && !inCallback) {
         router.replace('/(auth)/login');
@@ -139,7 +149,16 @@ export default function RootLayout() {
           .eq('user_id', user.id)
           .maybeSingle();
 
-        const googleName = user.user_metadata?.full_name || user.user_metadata?.name;
+        const isGoogleUser =
+          user.app_metadata?.provider === 'google' ||
+          (Array.isArray(user.app_metadata?.providers) &&
+            user.app_metadata.providers.includes('google')) ||
+          Boolean(user.user_metadata?.iss && String(user.user_metadata.iss).includes('google'));
+
+        const googleName =
+          user.user_metadata?.full_name ||
+          user.user_metadata?.name ||
+          (isGoogleUser ? user.email?.split('@')[0] || 'Patient' : undefined);
 
         if (!profile || !profile.full_name || profile.full_name.trim() === '') {
           if (googleName && googleName.trim() !== '') {
@@ -152,13 +171,13 @@ export default function RootLayout() {
                 profileImage: user.user_metadata?.avatar_url || user.user_metadata?.picture,
                 createdAt: new Date().toISOString(),
               });
-              if (inAuthArea && !onSubscription) {
-                router.replace('/(app)');
-                return;
-              }
             } catch (e) {
               console.warn('[RootLayout] Auto-sync profile notice:', e);
             }
+            if (inAuthArea && !onSubscription) {
+              router.replace('/(app)');
+            }
+            return;
           }
           if (!onRegister) router.replace('/(auth)/register');
         } else {
@@ -181,6 +200,8 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(app)" options={{ headerShown: false }} />
         <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
+        <Stack.Screen name="payment-success" options={{ headerShown: false }} />
+        <Stack.Screen name="appointment-success" options={{ headerShown: false }} />
       </Stack>
       <StatusBar style="dark" />
     </View>

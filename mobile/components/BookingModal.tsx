@@ -63,6 +63,20 @@ export function normalizeDayName(day: string): string {
   return day;
 }
 
+function DoctorAvatarImage({ uri, name, size = 36 }: { uri?: string; name: string; size?: number }) {
+  const [loadError, setLoadError] = useState(false);
+  const fallbackUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'Doctor')}&background=fce7f3&color=be185d&bold=true`;
+  const imageSource = (!loadError && uri) ? { uri } : { uri: fallbackUrl };
+
+  return (
+    <Image
+      source={imageSource}
+      style={{ width: size, height: size, borderRadius: size / 2 }}
+      onError={() => setLoadError(true)}
+    />
+  );
+}
+
 export function isDoctorOnDutyOnDay(
   doctor: ClinicDoctor | null | undefined,
   dayOfWeek: string,
@@ -101,17 +115,6 @@ export function formatDateDisplay(dStr?: string): string {
   } catch {}
   return dStr;
 }
-
-export const BATCH_SLOTS = [
-  { batchTime: '08:00', label: '08:00 AM – 09:00 AM' },
-  { batchTime: '09:00', label: '09:00 AM – 10:00 AM' },
-  { batchTime: '10:00', label: '10:00 AM – 11:00 AM' },
-  { batchTime: '11:00', label: '11:00 AM – 12:00 PM' },
-  { batchTime: '13:00', label: '01:00 PM – 02:00 PM' },
-  { batchTime: '14:00', label: '02:00 PM – 03:00 PM' },
-  { batchTime: '15:00', label: '03:00 PM – 04:00 PM' },
-  { batchTime: '16:00', label: '04:00 PM – 05:00 PM' },
-];
 
 export const FILIPINO_ALIASES: Record<string, string> = {
   'Acne': 'Taghiyawat',
@@ -192,7 +195,7 @@ export function BookingModal({
     findMatchingClinic(initialClinicId, clinics)
   );
   const [selectedDoctor, setSelectedDoctor] = useState<ClinicDoctor | null>(null);
-  const [selectedBatch, setSelectedBatch] = useState(BATCH_SLOTS[0]);
+  const [selectedBatch, setSelectedBatch] = useState<{ batchTime: string; label: string }>({ batchTime: '', label: '' });
   const [dateStr, setDateStr] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
@@ -205,7 +208,100 @@ export function BookingModal({
   const [currentUser, setCurrentUser] = useState<PatientAccount | null>(user || null);
   const [occupiedSlots, setOccupiedSlots] = useState<any[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
+  const [clinicScheduleSettings, setClinicScheduleSettings] = useState<{
+    openTime: string;
+    closeTime: string;
+    slotDurationMinutes: number;
+    operatingHours: { day_of_week: string; open_time: string; close_time: string }[];
+  } | null>(null);
 
+  // Fetch dynamic operating hours & slot duration from Supabase for the selected clinic
+  useEffect(() => {
+    let isCancelled = false;
+    async function fetchClinicSchedule() {
+      if (!selectedClinic?.id) return;
+      try {
+        const { data: clinicData } = await supabase
+          .from('clinic')
+          .select(`
+            id,
+            opening_time,
+            closing_time,
+            slot_duration_minutes,
+            clinic_operating_hours (
+              day_of_week,
+              open_time,
+              close_time
+            )
+          `)
+          .eq('id', selectedClinic.id)
+          .maybeSingle();
+
+        if (isCancelled || !clinicData) return;
+
+        const opHours = Array.isArray(clinicData.clinic_operating_hours)
+          ? clinicData.clinic_operating_hours
+          : selectedClinic.operatingHours || [];
+
+        setClinicScheduleSettings({
+          openTime: clinicData.opening_time ? String(clinicData.opening_time).slice(0, 5) : selectedClinic.openTime || '08:00',
+          closeTime: clinicData.closing_time ? String(clinicData.closing_time).slice(0, 5) : selectedClinic.closeTime || '17:00',
+          slotDurationMinutes: Number(clinicData.slot_duration_minutes) || selectedClinic.defaultSlotIntervalMinutes || 20,
+          operatingHours: opHours,
+        });
+      } catch (err) {
+        console.warn('[BookingModal] fetchClinicSchedule notice:', err);
+      }
+    }
+    fetchClinicSchedule();
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedClinic?.id]);
+
+  // Fetch dynamic doctor duty schedule from Supabase for the selected doctor
+  useEffect(() => {
+    let isCancelled = false;
+    async function fetchDoctorSchedule() {
+      if (!selectedClinic?.id || !selectedDoctor?.id) return;
+      try {
+        const { data: docData } = await supabase
+          .from('clinic_doctor')
+          .select(`
+            doctor_id,
+            duty_days,
+            duty_start_time,
+            duty_end_time,
+            duty_schedule,
+            status
+          `)
+          .eq('clinic_id', selectedClinic.id)
+          .eq('doctor_id', selectedDoctor.id)
+          .maybeSingle();
+
+        if (isCancelled || !docData) return;
+
+        setSelectedDoctor((prev) => {
+          if (!prev || prev.id !== docData.doctor_id) return prev;
+          return {
+            ...prev,
+            dutyDays: docData.duty_days || prev.dutyDays,
+            dutyStartTime: docData.duty_start_time ? String(docData.duty_start_time).slice(0, 5) : prev.dutyStartTime,
+            dutyEndTime: docData.duty_end_time ? String(docData.duty_end_time).slice(0, 5) : prev.dutyEndTime,
+            dutySchedule: docData.duty_schedule || prev.dutySchedule,
+          };
+        });
+      } catch (err) {
+        console.warn('[BookingModal] fetchDoctorSchedule notice:', err);
+      }
+    }
+    fetchDoctorSchedule();
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedClinic?.id, selectedDoctor?.id]);
+
+  // Fetch dynamic occupied & booked slots from Supabase
   useEffect(() => {
     let isCancelled = false;
     async function fetchSlots() {
@@ -215,12 +311,36 @@ export function BookingModal({
       }
       setLoadingSlots(true);
       try {
+        // 1. RPC slot holds
         const occ = await getOccupiedSlotsForDate(
           selectedClinic.id,
           dateStr,
           selectedDoctor?.id
         );
-        if (!isCancelled) setOccupiedSlots(occ);
+
+        // 2. Direct query to patient_appointment table for booked appointments
+        let query = supabase
+          .from('patient_appointment')
+          .select('appointment_id, time, batch_time, assigned_doctor_id, status')
+          .eq('clinic_id', selectedClinic.id)
+          .eq('date', dateStr)
+          .not('status', 'in', '("cancelled","declined","rejected")');
+
+        if (selectedDoctor?.id) {
+          query = query.eq('assigned_doctor_id', selectedDoctor.id);
+        }
+
+        const { data: bookedAppts, error: apptErr } = await query;
+        if (apptErr) {
+          console.warn('[BookingModal] patient_appointment query notice:', apptErr.message);
+        }
+
+        const combinedOccupied = [
+          ...(Array.isArray(occ) ? occ : []),
+          ...(Array.isArray(bookedAppts) ? bookedAppts : []),
+        ];
+
+        if (!isCancelled) setOccupiedSlots(combinedOccupied);
       } catch (err) {
         if (!isCancelled) setOccupiedSlots([]);
       } finally {
@@ -233,36 +353,50 @@ export function BookingModal({
     };
   }, [selectedClinic?.id, selectedDoctor?.id, dateStr]);
 
+  // Dynamic Time Slot Generator directly derived from clinic settings, doctor availability & appointments
   const computedDaySlots = useMemo<ConsultationSlot[]>(() => {
-    if (!selectedDoctor || !dateStr) {
-      return BATCH_SLOTS.map((b, idx) => ({
-        shiftId: 'default',
-        shiftLabel: 'Consultation',
-        slotIndex: idx + 1,
-        slotTime: b.batchTime,
-        endTime: b.batchTime,
-        timeRange: b.label,
-        label: b.label,
-        durationMinutes: 60,
-        isBooked: false,
-        isReserved: false,
-        isOccupied: false,
-        occupancyType: 'available' as const,
-        isPast: false,
-        isCapacityFull: false,
-        isAvailable: true,
-      }));
+    if (!selectedDoctor || !dateStr || !selectedClinic) {
+      return [];
     }
 
     const [y, m, d] = dateStr.split('-').map(Number);
     const dateObj = new Date(y, m - 1, d);
     const dayOfWeek = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
 
+    // Determine clinic operating hours for this specific day of week
+    const opHoursList = clinicScheduleSettings?.operatingHours || selectedClinic.operatingHours || [];
+    const daySchedule = opHoursList.find(
+      (h) => normalizeDayName(h.day_of_week) === normalizeDayName(dayOfWeek)
+    );
+
+    const clinicOpenStr = daySchedule?.open_time
+      ? String(daySchedule.open_time).slice(0, 5)
+      : clinicScheduleSettings?.openTime || selectedClinic.openTime || '08:00';
+
+    const clinicCloseStr = daySchedule?.close_time
+      ? String(daySchedule.close_time).slice(0, 5)
+      : clinicScheduleSettings?.closeTime || selectedClinic.closeTime || '17:00';
+
+    const slotInterval =
+      clinicScheduleSettings?.slotDurationMinutes ||
+      selectedClinic.defaultSlotIntervalMinutes ||
+      20;
+
+    // Filter out dates where the doctor is off-duty
+    const isDoctorOnDuty = isDoctorOnDutyOnDay(selectedDoctor, dayOfWeek, {
+      openTime: clinicOpenStr,
+      closeTime: clinicCloseStr,
+    });
+
+    if (!isDoctorOnDuty) {
+      return [];
+    }
+
     const docWeeklySchedule = parseDoctorSchedule(
       selectedDoctor.dutySchedule,
       selectedDoctor.dutyDays,
-      selectedDoctor.dutyStartTime || selectedClinic?.openTime || '08:00',
-      selectedDoctor.dutyEndTime || selectedClinic?.closeTime || '17:00'
+      selectedDoctor.dutyStartTime || clinicOpenStr,
+      selectedDoctor.dutyEndTime || clinicCloseStr
     );
 
     const today = new Date();
@@ -275,34 +409,38 @@ export function BookingModal({
       dayOfWeek,
       doctorId: selectedDoctor.id,
       clinicDefaults: {
-        openTime: selectedClinic?.openTime || '08:00',
-        closeTime: selectedClinic?.closeTime || '18:00',
-        defaultSlotIntervalMinutes: selectedClinic?.defaultSlotIntervalMinutes || 30,
+        openTime: clinicOpenStr,
+        closeTime: clinicCloseStr,
+        defaultSlotIntervalMinutes: slotInterval,
       },
       existingAppointments: occupiedSlots,
       isToday,
       currentMinutesNow,
     });
 
-    const flattened = groups.flatMap((g) => g.slots);
-    if (flattened.length === 0) {
-      return [];
-    }
-    return flattened;
-  }, [selectedDoctor, dateStr, selectedClinic, occupiedSlots]);
+    return groups.flatMap((g) => g.slots);
+  }, [selectedDoctor, dateStr, selectedClinic, occupiedSlots, clinicScheduleSettings]);
 
+  // Synchronize selected batch with dynamic slots
   useEffect(() => {
     if (computedDaySlots.length > 0) {
       const match = computedDaySlots.find(
         (s) => s.slotTime === selectedBatch.batchTime && s.isAvailable
       );
-      if (!match) {
+      if (match) {
+        setSelectedBatch({
+          batchTime: match.slotTime,
+          label: match.timeRange || `${formatTime12h(match.slotTime)} – ${formatTime12h(match.endTime)}`,
+        });
+      } else {
         const firstAvail = computedDaySlots.find((s) => s.isAvailable) || computedDaySlots[0];
         setSelectedBatch({
           batchTime: firstAvail.slotTime,
           label: firstAvail.timeRange || `${formatTime12h(firstAvail.slotTime)} – ${formatTime12h(firstAvail.endTime)}`,
         });
       }
+    } else {
+      setSelectedBatch({ batchTime: '', label: '' });
     }
   }, [computedDaySlots]);
 
@@ -559,6 +697,10 @@ export function BookingModal({
     }
     if (!dateStr.trim()) {
       Alert.alert('Date Required', 'Please select a consultation date from the calendar.');
+      return;
+    }
+    if (!selectedBatch.batchTime) {
+      Alert.alert('Time Slot Required', 'Please select an available consultation time slot before proceeding.');
       return;
     }
 
@@ -1476,7 +1618,11 @@ export function BookingModal({
                           activeOpacity={0.8}
                         >
                           <View style={styles.docAvatar}>
-                            <Ionicons name="person" size={18} color={COLORS.primary} />
+                            <DoctorAvatarImage
+                              uri={doc.avatar_url || doc.avatarUrl}
+                              name={doc.name}
+                              size={36}
+                            />
                           </View>
                           <View style={{ flex: 1, marginLeft: 10 }}>
                             <Text style={[styles.doctorChipName, isSelected && styles.doctorChipNameSelected]}>
@@ -1972,7 +2118,7 @@ export function BookingModal({
                     ) : (
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                         <Ionicons name="lock-closed" size={15} color="#fff" />
-                        <Text style={styles.confirmBtnTxt}>Pay &amp; Confirm ({dynamicFee})</Text>
+                        <Text style={styles.confirmBtnTxt}>Proceed to Payment ({dynamicFee})</Text>
                       </View>
                     )}
                   </TouchableOpacity>

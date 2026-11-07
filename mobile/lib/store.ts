@@ -1,17 +1,5 @@
-function getAsyncStorage() {
-  try {
-    const modName = '@react-native-async-storage/async-storage';
-    const mod = require(modName);
-    return mod.default || mod;
-  } catch {
-    return {
-      getItem: async () => null,
-      setItem: async () => {},
-      removeItem: async () => {},
-    };
-  }
-}
-const AsyncStorage = getAsyncStorage();
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState } from 'react-native';
 
 import { evaluateDiseaseMapping, normalizeAnswers } from './diseaseMappingService';
 import { getConditionGuide } from './conditionGuides';
@@ -246,6 +234,80 @@ export interface SubscriptionRecord {
 
   mobileNumber?: string;
 
+  statusLabel?: 'Premium Active' | 'Basic Active' | 'No Active Subscription';
+  subscriptionId?: string;
+  planId?: string;
+  planName?: string;
+  planDescription?: string;
+  planFeatures?: string[];
+  cancelAtPeriodEnd?: boolean;
+  isExpired?: boolean;
+  remainingDays?: number | null;
+  basePrice?: number;
+  vatAmount?: number;
+  totalPrice?: number;
+  billingAddress?: string;
+}
+
+export interface SubscriptionPlanOption {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  vatAmount: number;
+  totalPrice: number;
+  billingType: 'monthly' | 'yearly';
+  scanLimit: number;
+  features: string[];
+  status: string;
+}
+
+export interface BillingHistoryItem {
+  paymentId: string;
+  paymentDate: string;
+  date: string;
+  amount: string;
+  rawAmount: number;
+  baseAmount: number;
+  vatAmount: number;
+  totalAmount: number;
+  method: string;
+  status: string;
+  description: string;
+  isAppointment: boolean;
+  appointmentId?: string | null;
+  paymentReference?: string | null;
+  paymongoPaymentId?: string | null;
+  billingCycle?: 'monthly' | 'yearly';
+}
+
+export const VAT_RATE = 0.12;
+
+export function calculatePricing(basePrice: number) {
+  const base = Math.round((Number(basePrice) || 0) * 100) / 100;
+  const finalAmount = Math.round(base * (1 + VAT_RATE) * 100) / 100;
+  const vat = Math.round((finalAmount - base) * 100) / 100;
+  return {
+    basePrice: base,
+    vatAmount: vat,
+    totalPrice: finalAmount,
+    amountInCentavos: Math.round(finalAmount * 100),
+  };
+}
+
+export function withVat(net: number): number {
+  return calculatePricing(net).totalPrice;
+}
+
+export function splitVat(gross: number, knownBase?: number) {
+  if (knownBase != null && Number(knownBase) > 0) {
+    const calc = calculatePricing(knownBase);
+    return { net: calc.basePrice, vat: calc.vatAmount };
+  }
+  const total = Number(gross) || 0;
+  const net = Math.round((total / (1 + VAT_RATE)) * 100) / 100;
+  const vat = Math.round((total - net) * 100) / 100;
+  return { net, vat };
 }
 
 
@@ -341,23 +403,15 @@ export interface AdminNotificationEntry {
 
 
 export interface HelpdeskTicket {
-
   id: string;
-
   userId: string;
-
   userEmail: string;
-
   userName: string;
-
   subject: string;
-
   message: string;
-
+  category?: string;
   status: 'open' | 'in-progress' | 'resolved';
-
   createdAt: string;
-
 }
 
 
@@ -441,6 +495,14 @@ export interface ClinicDoctor {
   dutyEndTime?: string;
 
   dutySchedule?: any;
+
+  avatar_url?: string;
+
+  avatarUrl?: string;
+
+  photo_url?: string;
+
+  userId?: string;
 
 }
 
@@ -1610,196 +1672,472 @@ export async function deleteScanResult(_userId: string, scanId: string): Promise
 
 // ─── Subscriptions ────────────────────────────────────────────────────────────
 
-export async function getUserSubscription(userId: string): Promise<SubscriptionRecord | null> {
+const triggeredSubscriptionEmailChecks = new Set<string>();
 
+export async function getActiveSubscriptionPlans(): Promise<SubscriptionPlanOption[]> {
   try {
-
-    // 1. Query active subscription first (prioritize status = 'active')
-
-    let { data, error } = await supabase
-
-      .from('user_plan_subscription')
-
-      .select('*, plan:plan_id(*)')
-
-      .eq('user_id', userId)
-
+    const { data, error } = await supabase
+      .from('plan')
+      .select(`
+        plan_id,
+        name,
+        description,
+        price,
+        billing_type,
+        scan_limit,
+        status,
+        plan_feature (
+          feature_id,
+          feature_text
+        )
+      `)
       .eq('status', 'active')
+      .order('price', { ascending: true });
 
+    if (error || !data) return [];
+
+    return data.map((p: any) => {
+      const basePrice = Number(p.price ?? 0);
+      const calc = calculatePricing(basePrice);
+      const features = Array.isArray(p.plan_feature)
+        ? p.plan_feature.map((f: any) => f.feature_text).filter(Boolean)
+        : [];
+      return {
+        id: String(p.plan_id),
+        name: String(p.name || 'Plan'),
+        description: String(p.description || ''),
+        price: calc.basePrice,
+        vatAmount: calc.vatAmount,
+        totalPrice: calc.totalPrice,
+        billingType: p.billing_type === 'yearly' ? 'yearly' : 'monthly',
+        scanLimit: p.scan_limit != null ? Number(p.scan_limit) : 3,
+        features,
+        status: String(p.status || 'active'),
+      };
+    });
+  } catch (err) {
+    console.warn('[Store] getActiveSubscriptionPlans error:', err);
+    return [];
+  }
+}
+
+export async function getUserSubscription(userId?: string): Promise<SubscriptionRecord | null> {
+  try {
+    let effectiveUserId = userId || '';
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (sessionData?.session?.user?.id) {
+        effectiveUserId = sessionData.session.user.id;
+      }
+    } catch {}
+
+    if (!effectiveUserId) return null;
+
+    // 1. Query active subscription first (prioritize status = 'active' | 'cancelling' | 'pending_downgrade')
+    let { data, error } = await supabase
+      .from('user_plan_subscription')
+      .select(`
+        *,
+        plan:plan_id (
+          plan_id,
+          name,
+          price,
+          scan_limit,
+          billing_type,
+          description,
+          plan_feature (
+            feature_id,
+            feature_text
+          )
+        )
+      `)
+      .eq('user_id', effectiveUserId)
+      .in('status', ['active', 'cancelling', 'pending_downgrade'])
       .order('started_at', { ascending: false })
-
       .limit(1)
-
       .maybeSingle();
 
-
-
     // 2. If no active row found, fetch latest subscription row
-
     if (!data) {
-
       const fallback = await supabase
-
         .from('user_plan_subscription')
-
-        .select('*, plan:plan_id(*)')
-
-        .eq('user_id', userId)
-
+        .select(`
+          *,
+          plan:plan_id (
+            plan_id,
+            name,
+            price,
+            scan_limit,
+            billing_type,
+            description,
+            plan_feature (
+              feature_id,
+              feature_text
+            )
+          )
+        `)
+        .eq('user_id', effectiveUserId)
         .order('started_at', { ascending: false })
-
         .limit(1)
-
         .maybeSingle();
 
       data = fallback.data;
-
       error = fallback.error;
-
     }
 
+    const [userRes, freePlanRes] = await Promise.all([
+      supabase
+        .from('user')
+        .select('email, full_name, free_scans_used')
+        .eq('user_id', effectiveUserId)
+        .maybeSingle(),
+      supabase
+        .from('plan')
+        .select(`
+          plan_id,
+          name,
+          description,
+          scan_limit,
+          plan_feature (
+            feature_id,
+            feature_text
+          )
+        `)
+        .or('price.eq.0,name.ilike.Free')
+        .limit(1)
+        .maybeSingle(),
+    ]);
 
+    const u = userRes.data;
+    const freePlanData = freePlanRes.data;
+    const freeFeatures = Array.isArray(freePlanData?.plan_feature)
+      ? freePlanData.plan_feature.map((f: any) => f.feature_text).filter(Boolean)
+      : [
+          '3 AI Skin Scans per billing cycle',
+          'Limited Nearby Clinic Suggestions',
+          'Limited AI Skin Analysis Results',
+          'Access to Clinic Directory',
+        ];
+    const freeScanLimit =
+      freePlanData?.scan_limit === -1
+        ? -1
+        : freePlanData?.scan_limit ?? 3;
 
-    const { data: u } = await supabase.from('user').select('email, free_scans_used').eq('user_id', userId).maybeSingle();
-
-
+    // Count completed AI scans in the current cycle dynamically (matches Web SubscriptionStatusPage)
+    const defaultCycleStart = new Date(
+      new Date().getFullYear(),
+      new Date().getMonth(),
+      1
+    ).toISOString();
 
     if (!data || error) {
+      let usedScans = u?.free_scans_used ?? 0;
+      try {
+        const { count } = await supabase
+          .from('ai_scan_result')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', effectiveUserId)
+          .eq('status', 'completed')
+          .gte('scanned_at', defaultCycleStart);
+        if (typeof count === 'number') usedScans = count;
+      } catch {}
 
       return {
-
-        userId,
-
+        userId: effectiveUserId,
         email: u?.email || '',
-
         plan: 'free',
-
+        planName: freePlanData?.name || 'Free Plan',
+        planDescription: freePlanData?.description || '',
+        planFeatures: freeFeatures,
         billingCycle: 'monthly',
-
-        scansUsed: u?.free_scans_used ?? 0,
-
-        scanLimit: 3,
-
-        status: 'active',
-
+        scansUsed: usedScans,
+        scanLimit: freeScanLimit,
+        status: 'none',
+        statusLabel: 'No Active Subscription',
+        isExpired: false,
+        cancelAtPeriodEnd: false,
+        remainingDays: null,
+        basePrice: 0,
+        vatAmount: 0,
+        totalPrice: 0,
       };
-
     }
-
-
 
     let planObj: any = Array.isArray(data.plan) ? data.plan[0] : data.plan;
 
-
-
     // Fallback: If join didn't populate planObj, query plan table by plan_id
-
     if (!planObj && data.plan_id) {
-
       try {
-
-        const { data: p } = await supabase.from('plan').select('*').eq('plan_id', data.plan_id).maybeSingle();
-
+        const { data: p } = await supabase
+          .from('plan')
+          .select('*, plan_feature(feature_id, feature_text)')
+          .eq('plan_id', data.plan_id)
+          .maybeSingle();
         if (p) planObj = p;
-
       } catch {}
-
     }
 
-
-
     const pName = (planObj?.name || '').toLowerCase();
-
-    const status = String(data.status || '').toLowerCase();
-
+    let status = String(data.status || '').toLowerCase();
     const periodEndRaw = data.current_period_end || data.renews_at;
-
     const periodEndMs = periodEndRaw ? new Date(periodEndRaw).getTime() : null;
-
     const isLapsed = periodEndMs !== null ? periodEndMs <= Date.now() : false;
+    const wasActive =
+      status === 'active' ||
+      status === 'cancelling' ||
+      status === 'pending_downgrade';
 
-    const isActive = (status === 'active' || status === 'cancelling' || status === 'pending_downgrade') && !isLapsed;
+    // -------------------------------------------------------------------------
+    // LAZY DOWNGRADE & AUTOMATED SUBSCRIPTION EXPIRED EMAIL:
+    // Mirrors Web validateAndSyncSubscription in web/src/lib/subscriptionService.ts
+    // -------------------------------------------------------------------------
+    if (wasActive && isLapsed) {
+      const expCheckKey = `exp_${data.subscription_id}_${periodEndRaw}`;
+      if (!triggeredSubscriptionEmailChecks.has(expCheckKey)) {
+        triggeredSubscriptionEmailChecks.add(expCheckKey);
+        // Trigger background Subscription Expired Email Edge Function
+        supabase.functions
+          .invoke('subscription-expiry', { body: { mode: 'process' } })
+          .catch((e) => console.warn('[Store] subscription-expiry invoke notice:', e));
+      }
 
+      try {
+        await (supabase.rpc as any)('downgrade_expired_subscriptions');
+      } catch {}
 
+      try {
+        const { error: updateErr } = await supabase
+          .from('user_plan_subscription')
+          .update({
+            status: 'expired',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('subscription_id', data.subscription_id);
+
+        if (updateErr) {
+          await supabase
+            .from('user_plan_subscription')
+            .update({
+              status: 'expired',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('user_id', effectiveUserId)
+            .eq('status', 'active');
+        }
+      } catch {}
+
+      status = 'expired';
+      data.status = 'expired';
+
+      try {
+        await supabase
+          .from('user')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('user_id', effectiveUserId);
+      } catch {}
+
+      logAuditEvent({
+        user_id: effectiveUserId,
+        user_type: 'patient',
+        performer_name: u?.full_name || u?.email || 'Patient',
+        action: 'Subscription Expired',
+        log_type: 'subscription',
+        target: `User #${effectiveUserId}`,
+        details: 'Account downgraded from Pro to Free due to period expiration.',
+        metadata: {
+          subscriptionId: data.subscription_id,
+          expiredAt: periodEndRaw,
+          planName: planObj?.name || 'Pro',
+        },
+      }).catch(() => {});
+    }
+
+    const isActive = wasActive && !isLapsed;
 
     // Purely dynamic determination from live Supabase plan attributes
-
     const isProOrPremium =
-
       isActive &&
-
       (planObj?.scan_limit === -1 ||
-
         Number(planObj?.price ?? 0) > 0 ||
-
         pName.includes('pro') ||
-
         pName.includes('premium') ||
+        pName.includes('annual')) &&
+      !pName.includes('basic');
 
-        pName.includes('annual'));
-
-
-
-    const isBasic = isActive && pName.includes('basic') && planObj?.scan_limit !== -1;
-
-
+    const isBasic =
+      isActive &&
+      !isProOrPremium &&
+      (pName.includes('basic') || Number(planObj?.price ?? 0) > 0 || status === 'active');
 
     const planType: 'free' | 'basic' | 'pro' | 'premium' = isProOrPremium
-
       ? 'premium'
-
       : isBasic
-
       ? 'basic'
-
       : 'free';
 
+    const statusLabel: 'Premium Active' | 'Basic Active' | 'No Active Subscription' =
+      isProOrPremium
+        ? 'Premium Active'
+        : isBasic
+        ? 'Basic Active'
+        : 'No Active Subscription';
 
+    const remainingDays =
+      isActive && periodEndMs !== null
+        ? Math.max(0, Math.ceil((periodEndMs - Date.now()) / 86400000))
+        : null;
+
+    // -------------------------------------------------------------------------
+    // 14-DAY EXPIRATION REMINDER EMAIL TRIGGER:
+    // Checks current_period_end and triggers 2-week reminder Edge Function
+    // -------------------------------------------------------------------------
+    if (
+      isActive &&
+      (isProOrPremium || Number(planObj?.price ?? 0) > 0) &&
+      remainingDays !== null &&
+      remainingDays > 0 &&
+      remainingDays <= 14
+    ) {
+      const remCheckKey = `rem14_${data.subscription_id}_${periodEndRaw}`;
+      if (!triggeredSubscriptionEmailChecks.has(remCheckKey)) {
+        triggeredSubscriptionEmailChecks.add(remCheckKey);
+        supabase.functions
+          .invoke('subscription-reminder-2weeks', { body: { mode: 'process' } })
+          .catch((e) => console.warn('[Store] subscription-reminder-2weeks invoke notice:', e));
+      }
+    }
 
     const isYearly =
-
       data.billing_cycle === 'yearly' ||
-
       planObj?.billing_type === 'yearly' ||
-
       pName.includes('annual') ||
-
       pName.includes('yearly');
 
+    const cycleStart = isActive
+      ? data.current_period_start || data.started_at || defaultCycleStart
+      : defaultCycleStart;
 
+    let usedScans = u?.free_scans_used ?? 0;
+    try {
+      const { count } = await supabase
+        .from('ai_scan_result')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', effectiveUserId)
+        .eq('status', 'completed')
+        .gte('scanned_at', cycleStart);
+      if (typeof count === 'number') usedScans = count;
+    } catch {}
+
+    let planFeatures: string[] = Array.isArray(planObj?.plan_feature)
+      ? planObj.plan_feature.map((f: any) => f.feature_text).filter(Boolean)
+      : [];
+
+    if (planFeatures.length === 0 && isActive) {
+      planFeatures = [
+        'Unlimited AI Skin Scans',
+        'Unlimited Nearby Clinic Suggestions',
+        'Unlimited AI Skin Analysis Results',
+        'Access to Clinic Directory',
+      ];
+    } else if (planFeatures.length === 0) {
+      planFeatures = freeFeatures;
+    }
+
+    const rawNetPrice = isActive ? Number(planObj?.price ?? 0) : 0;
+    const pricing = calculatePricing(rawNetPrice);
 
     return {
-
-      userId,
-
-      email: u?.email || '',
-
+      userId: effectiveUserId,
+      email: data.payment_email || u?.email || '',
       plan: planType,
-
+      subscriptionId: data.subscription_id,
+      planId: data.plan_id || planObj?.plan_id,
+      planName: isActive ? (planObj?.name || (isProOrPremium ? 'Pro' : 'Basic')) : 'Free Plan',
+      planDescription: isActive
+        ? (planObj?.description || '')
+        : (freePlanData?.description || ''),
+      planFeatures,
       billingCycle: isYearly ? 'yearly' : 'monthly',
-
-      startDate: data.started_at,
-
+      startDate: data.current_period_start || data.started_at,
       endDate: periodEndRaw || data.renews_at,
-
       status: data.status,
-
-      scansUsed: u?.free_scans_used ?? 0,
-
-      scanLimit: isProOrPremium ? -1 : (planObj?.scan_limit ?? 3),
-
+      statusLabel,
+      cancelAtPeriodEnd: Boolean(data.cancel_at_period_end || status === 'cancelling'),
+      isExpired: isLapsed || status === 'expired',
+      remainingDays,
+      basePrice: pricing.basePrice,
+      vatAmount: pricing.vatAmount,
+      totalPrice: pricing.totalPrice,
+      scansUsed: usedScans,
+      scanLimit: isProOrPremium ? -1 : (planObj?.scan_limit ?? freeScanLimit),
       paymentMethod: data.payment_method || undefined,
-
+      mobileNumber: data.payment_mobile_number || undefined,
+      billingAddress: data.billing_address || undefined,
     };
-
   } catch (err) {
-
     console.warn('[Store] getUserSubscription error:', err);
-
     return null;
-
   }
+}
 
+export async function cancelSubscriptionAtPeriodEnd(
+  userId: string,
+  subscriptionId?: string
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  if (subscriptionId) {
+    const { error } = await supabase
+      .from('user_plan_subscription')
+      .update({
+        cancel_at_period_end: true,
+        cancelled_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq('subscription_id', subscriptionId)
+      .eq('status', 'active');
+    if (error) throw error;
+  } else {
+    const { error } = await supabase
+      .from('user_plan_subscription')
+      .update({
+        cancel_at_period_end: true,
+        cancelled_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq('user_id', userId)
+      .eq('status', 'active');
+    if (error) throw error;
+  }
+}
+
+export async function resumeSubscription(
+  userId: string,
+  subscriptionId?: string
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  if (subscriptionId) {
+    const { error } = await supabase
+      .from('user_plan_subscription')
+      .update({
+        cancel_at_period_end: false,
+        cancelled_at: null,
+        updated_at: nowIso,
+      })
+      .eq('subscription_id', subscriptionId)
+      .eq('status', 'active');
+    if (error) throw error;
+  } else {
+    const { error } = await supabase
+      .from('user_plan_subscription')
+      .update({
+        cancel_at_period_end: false,
+        cancelled_at: null,
+        updated_at: nowIso,
+      })
+      .eq('user_id', userId)
+      .eq('status', 'active');
+    if (error) throw error;
+  }
 }
 
 
@@ -1850,9 +2188,13 @@ export async function setUserSubscription(userId: string, record: SubscriptionRe
 
     const { data: plans } = await supabase.from('plan').select('*');
 
-    let targetPlan: any = null;
+    let targetPlan: any = record.planId
+      ? plans?.find((p: any) => p.plan_id === record.planId) ?? null
+      : null;
 
-    if (record.plan === 'premium' || record.plan === 'pro') {
+    if (targetPlan) {
+      // Plan already resolved from the exact plan the patient paid for (record.planId).
+    } else if (record.plan === 'premium' || record.plan === 'pro') {
 
       if (record.billingCycle === 'yearly') {
 
@@ -2532,35 +2874,21 @@ export async function pushAdminNotification(
 
 
 export async function addHelpdeskTicket(
-
   ticket: Omit<HelpdeskTicket, 'id' | 'createdAt' | 'status'>
-
 ): Promise<{ id: string }> {
-
   const id = `ticket_${Date.now()}`;
-
   try {
-
     await supabase.from('user_support_ticket').insert({
-
       user_id: ticket.userId,
-
       subject: ticket.subject,
-
       message: ticket.message,
-
       status: 'open',
-
+      category: ticket.category || 'General Support',
     });
-
   } catch (err) {
-
     console.warn('[Store] addHelpdeskTicket error:', err);
-
   }
-
   return { id };
-
 }
 
 
@@ -2625,569 +2953,843 @@ export async function saveAllLocalReadIds(userId: string, ids: string[]): Promis
 
 
 
-export async function getAppNotifications(userId: string): Promise<AppNotification[]> {
+export function deduplicateAppNotificationItems(items: AppNotification[]): AppNotification[] {
+  if (!Array.isArray(items) || items.length === 0) return [];
 
+  const isUuid = (str: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
+  const seenIds = new Set<string>();
+  const seenBroadcastIds = new Set<string>();
+  const seenContentKeys = new Set<string>();
+  const seenApptActions = new Set<string>();
+
+  // Sort so persistent database records with UUID IDs take precedence over synthetic fallback IDs
+  const sorted = [...items].sort((a, b) => {
+    const aIsUuid = isUuid(a.id);
+    const bIsUuid = isUuid(b.id);
+    if (aIsUuid && !bIsUuid) return -1;
+    if (!aIsUuid && bIsUuid) return 1;
+    return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+  });
+
+  const unique: AppNotification[] = [];
+
+  for (const item of sorted) {
+    if (!item || !item.id) continue;
+
+    // A. Direct ID check
+    if (seenIds.has(item.id)) continue;
+
+    // B. Broadcast ID check
+    const bId =
+      item.metadata?.broadcast_id ||
+      (item.id.startsWith('broadcast-') ||
+      item.id.startsWith('clinic-broadcast-') ||
+      item.id.startsWith('doc-broadcast-')
+        ? item.id.replace(/^(clinic-|doc-)?broadcast-/, '')
+        : undefined);
+
+    if (bId) {
+      if (seenBroadcastIds.has(bId)) continue;
+      seenBroadcastIds.add(bId);
+    }
+
+    // B2. Appointment + Action deduplication
+    const apptId =
+      item.metadata?.appointment_id ||
+      item.metadata?.appointmentId ||
+      (item.id.startsWith('appt-rejected-')
+        ? item.id.replace('appt-rejected-', '')
+        : item.id.startsWith('appt-completed-')
+        ? item.id.replace('appt-completed-', '')
+        : item.id.startsWith('appt-cancelled-')
+        ? item.id.replace('appt-cancelled-', '')
+        : item.id.startsWith('appt-accepted-')
+        ? item.id.replace('appt-accepted-', '')
+        : undefined);
+
+    const normType = (item.type || item.metadata?.type || '').toLowerCase().replace(/_/g, '-');
+    const isDoctorAction = normType.includes('doctor-');
+
+    const isRejectionAction =
+      normType === 'appointment-rejected' ||
+      normType === 'appointment-declined' ||
+      item.metadata?.subtype === 'doctor-declined' ||
+      item.metadata?.subtype === 'schedule-conflict' ||
+      /review update|schedule conflict|declined|rejected/i.test(item.title || '');
+
+    if (apptId && isRejectionAction) {
+      const rejectKey = `${apptId}:::rejected`;
+      if (seenApptActions.has(rejectKey)) continue;
+      seenApptActions.add(rejectKey);
+    } else if (apptId && (isDoctorAction || normType === 'appointment-cancelled' || normType === 'appointment-request')) {
+      const apptActionKey = `${apptId}:::${normType}`;
+      if (seenApptActions.has(apptActionKey)) continue;
+      seenApptActions.add(apptActionKey);
+    }
+
+    // C. Content Fingerprint: normalized title + body
+    const normTitle = (item.title || '').trim().toLowerCase();
+    const normMsg = (item.message || '').trim().toLowerCase();
+    const contentKey = `${normTitle}:::${normMsg}`;
+
+    if (normTitle && normMsg && seenContentKeys.has(contentKey)) {
+      continue;
+    }
+
+    seenIds.add(item.id);
+    if (normTitle && normMsg) {
+      seenContentKeys.add(contentKey);
+    }
+    unique.push(item);
+  }
+
+  return unique.sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+}
+
+export async function getAppNotifications(userId: string): Promise<AppNotification[]> {
   if (!userId) return [];
 
   const readSet = await getLocalReadIds(userId);
-
   const items: AppNotification[] = [];
 
-
-
   try {
-
-    // Run all 4 notification queries in parallel instead of sequentially
-
+    // Run notification + live clinic/admin avatar queries in parallel
     const [
-
-      { data: dbNotifs },
-
+      { data: dbNotifs, error: dbNotifsErr },
       { data: broadcasts },
-
       { data: appointments },
-
       { data: tickets },
-
+      { data: scanRows },
+      { data: clinicsData },
+      { data: adminUsers },
     ] = await Promise.all([
-
       supabase
-
         .from('user_notification')
-
-        .select('notif_id, type, subtype, title, body, is_read, created_at')
-
+        .select('notif_id, type, subtype, title, body, is_read, metadata, created_at')
         .eq('user_id', userId)
-
         .order('created_at', { ascending: false })
-
         .limit(40),
 
       supabase
-
         .from('admin_broadcast')
-
         .select('broadcast_id, title, message, audience, sent_at')
-
         .in('audience', ['all', 'patients', 'patient'])
-
         .order('sent_at', { ascending: false })
-
         .limit(10),
 
       supabase
-
         .from('patient_appointment')
-
         .select(`
-
           appointment_id,
-
+          clinic_id,
           date,
-
           time,
-
           status,
-
+          check_in_status,
           doctor_status,
-
           doctor_note,
-
           clinic_note,
-
           created_at,
-
-          clinic:clinic_id (name, logo_url)
-
+          assigned_doctor_id,
+          doctor_reviewed_at,
+          questionnaire_answers,
+          clinic:clinic_id (clinic_id, name, logo_url)
         `)
-
         .eq('user_id', userId)
-
         .order('created_at', { ascending: false })
-
         .limit(20),
 
       supabase
-
         .from('user_support_ticket')
-
         .select('ticket_id, subject, response, status, updated_at, created_at')
-
         .eq('user_id', userId)
-
         .order('updated_at', { ascending: false })
-
         .limit(10),
 
+      supabase
+        .from('ai_scan_result')
+        .select(`
+          analysis_id,
+          confidence_score,
+          body_part,
+          scanned_at,
+          status,
+          skin_condition:condition_id (
+            name,
+            local_name
+          )
+        `)
+        .eq('user_id', userId)
+        .eq('status', 'completed')
+        .order('scanned_at', { ascending: false })
+        .limit(20),
+
+      supabase
+        .from('clinic')
+        .select('clinic_id, name, logo_url, clinic_photo (photo_url, sort_order)'),
+
+      supabase
+        .from('user')
+        .select('user_id, full_name, avatar_url, email, role')
+        .or('role.eq.admin,email.eq.dermaisupport@gmail.com,user_id.eq.03c4dbd4-5d15-4c78-872e-93811b3afa23')
+        .limit(10),
     ]);
 
-
-
-    if (dbNotifs) {
-
-      dbNotifs.forEach((n: any) => {
-
-        const isBroadcast = n.type === 'broadcast' || n.subtype === 'admin_announcement';
-
-        const isMaintenance = n.subtype === 'maintenance_alert' || n.type === 'maintenance_alert';
-
-        const isTicket = n.type === 'support_ticket' || n.type?.includes('ticket');
-
-        const isAppt = n.type?.includes('appointment');
-
-        const isScan = n.type === 'scan';
-
-        const isSub = n.type === 'subscription';
-
-
-
-        items.push({
-
-          id: n.notif_id,
-
-          userId,
-
-          type: n.type || 'general',
-
-          subtype: n.subtype || undefined,
-
-          category: isAppt
-
-            ? 'appointment'
-
-            : isScan
-
-            ? 'scan'
-
-            : isTicket
-
-            ? 'ticket'
-
-            : isBroadcast || isMaintenance
-
-            ? 'broadcast'
-
-            : isSub
-
-            ? 'subscription'
-
-            : 'general',
-
-          title: n.title || 'Notification',
-
-          message: n.body || '',
-
-          senderName:
-
-            (n.metadata as any)?.sender_name ||
-
-            (isTicket ? 'DERMAI Support' : isBroadcast || isMaintenance ? 'Platform Administrator' : undefined),
-
-          senderType: isTicket || isBroadcast ? 'admin' : undefined,
-
-          timestamp: n.created_at || new Date().toISOString(),
-
-          read: Boolean(n.is_read || readSet.has(n.notif_id)),
-
-          metadata: n.metadata,
-
-        });
-
-      });
-
+    if (dbNotifsErr) {
+      console.warn('[Store] user_notification query error:', dbNotifsErr.message);
     }
 
-
-
-    // 2. Broadcast announcements sent by administrator
-
-    if (broadcasts) {
-
-      broadcasts.forEach((b: any) => {
-
-        const notifId = `broadcast-${b.broadcast_id}`;
-
-        items.push({
-
-          id: notifId,
-
-          userId,
-
-          type: 'broadcast',
-
-          subtype: 'admin_announcement',
-
-          category: 'broadcast',
-
-          title: b.title,
-
-          message: b.message,
-
-          senderName: 'Platform Administrator',
-
-          senderType: 'admin',
-
-          timestamp: b.sent_at || new Date().toISOString(),
-
-          read: readSet.has(notifId),
-
-          metadata: { broadcast_id: b.broadcast_id },
-
-        });
-
-      });
-
-    }
-
-
-
-    // 3. Live patient appointments from patient_appointment
-
-    if (appointments) {
-
-      appointments.forEach((appt: any) => {
-
-        const clinicObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
-
-        const clinicName = clinicObj?.name || 'Clinic';
-
-        const clinicLogo = clinicObj?.logo_url || null;
-
-        const dateStr = appt.date
-
-          ? new Date(appt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-
-          : 'scheduled date';
-
-        const timeStr = appt.time ? ` at ${appt.time}` : '';
-
-
-
-        // Confirmed / Accepted Appointment
-
-        if (appt.status === 'confirmed' || appt.doctor_status === 'approved') {
-
-          const notifId = `appt-accepted-${appt.appointment_id}`;
-
-          items.push({
-
-            id: notifId,
-
-            userId,
-
-            type: 'appointment',
-
-            subtype: 'appointment-scheduled',
-
-            category: 'appointment',
-
-            title: `Appointment Confirmed`,
-
-            message: `Your appointment at ${clinicName} on ${dateStr}${timeStr} has been confirmed.`,
-
-            senderName: clinicName,
-
-            senderType: 'clinic',
-
-            senderAvatar: clinicLogo,
-
-            timestamp: appt.created_at || new Date().toISOString(),
-
-            read: readSet.has(notifId),
-
-            metadata: { appointment_id: appt.appointment_id },
-
-          });
-
-        }
-
-
-
-        // Cancelled / Rejected Appointment
-
-        if (appt.status === 'cancelled' || appt.doctor_status === 'rejected') {
-
-          const notifId = `appt-rejected-${appt.appointment_id}`;
-
-          const noteText = appt.doctor_note ? ` Note: "${appt.doctor_note}".` : '';
-
-          items.push({
-
-            id: notifId,
-
-            userId,
-
-            type: 'appointment',
-
-            subtype: 'appointment-rejected',
-
-            category: 'appointment',
-
-            title: `Appointment Declined`,
-
-            message: `Your appointment request at ${clinicName} on ${dateStr} was declined.${noteText} You can select another available doctor or schedule.`,
-
-            senderName: clinicName,
-
-            senderType: 'clinic',
-
-            senderAvatar: clinicLogo,
-
-            timestamp: appt.created_at || new Date().toISOString(),
-
-            read: readSet.has(notifId),
-
-            metadata: { appointment_id: appt.appointment_id },
-
-          });
-
-        }
-
-
-
-        // Completed Consultation
-
-        if (appt.status === 'completed') {
-
-          const notifId = `appt-completed-${appt.appointment_id}`;
-
-          items.push({
-
-            id: notifId,
-
-            userId,
-
-            type: 'appointment',
-
-            subtype: 'appointment-completed',
-
-            category: 'appointment',
-
-            title: `Consultation Completed`,
-
-            message: `Your consultation at ${clinicName} has concluded. Your doctor notes and assessment are ready for review.`,
-
-            senderName: clinicName,
-
-            senderType: 'clinic',
-
-            senderAvatar: clinicLogo,
-
-            timestamp: appt.created_at || new Date().toISOString(),
-
-            read: readSet.has(notifId),
-
-            metadata: { appointment_id: appt.appointment_id },
-
-          });
-
-        }
-
-      });
-
-    }
-
-
-
-    // 4. Support Ticket updates
-
-    if (tickets) {
-
-      tickets.forEach((ticket: any) => {
-
-        if (ticket.response || (ticket.status !== 'open' && ticket.status !== 'pending' && ticket.status !== 'submitted')) {
-
-          const notifId = `ticket-update-${ticket.ticket_id}`;
-
-          const replySummary = ticket.response ? ` Response: "${ticket.response}"` : '';
-
-          items.push({
-
-            id: notifId,
-
-            userId,
-
-            type: 'ticket',
-
-            subtype: 'ticket-update',
-
-            category: 'ticket',
-
-            title: `Support Ticket Updated`,
-
-            message: `Your ticket "${ticket.subject}" is now ${ticket.status}.${replySummary}`,
-
-            senderName: 'DERMAI Support',
-
-            senderType: 'admin',
-
-            timestamp: ticket.updated_at || ticket.created_at || new Date().toISOString(),
-
-            read: readSet.has(notifId),
-
-            metadata: { ticket_id: ticket.ticket_id },
-
-          });
-
-        }
-
-      });
-
-    }
-
-  } catch (err) {
-
-    console.warn('[Store] getAppNotifications error:', err);
-
-  }
-
-
-
-  // De-duplicate by ID and broadcast_id, sorting newest first
-
-  const seen = new Set<string>();
-
-  const seenBroadcastIds = new Set<string>();
-
-  const unique = items.filter((item) => {
-
-    if (seen.has(item.id)) return false;
-
-    const bId = item.metadata?.broadcast_id;
-
-    if (bId) {
-
-      if (seenBroadcastIds.has(bId)) return false;
-
-      seenBroadcastIds.add(bId);
-
-    }
-
-    seen.add(item.id);
-
-    return true;
-
-  });
-
-
-
-  return unique.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-}
-
-
-
-export async function addAppNotification(
-
-  userId: string,
-
-  notif: Omit<AppNotification, 'id' | 'timestamp' | 'read'>
-
-): Promise<void> {
-
-  try {
-
-    await supabase.from('user_notification').insert({
-
-      user_id: userId,
-
-      type: notif.type,
-
-      subtype: notif.subtype || null,
-
-      title: notif.title,
-
-      body: notif.message,
-
-      is_read: false,
-
+    // Build live clinic lookup maps by clinic_id, normalized clinic name, and appointment_id
+    const clinicById = new Map<string, { name: string; logo: string | null }>();
+    const clinicByName = new Map<string, { name: string; logo: string | null }>();
+    (clinicsData || []).forEach((c: any) => {
+      const photos = Array.isArray(c.clinic_photo) ? c.clinic_photo : [];
+      const fallbackPhoto = photos.length > 0 ? photos[0]?.photo_url : null;
+      const rawLogo = c.logo_url || c.avatar_url || c.profile_image || fallbackPhoto || null;
+      const resolvedLogo = rawLogo ? (resolveAvatarUrl(rawLogo) || rawLogo) : null;
+      const entry = {
+        name: c.name || 'Clinic',
+        logo: resolvedLogo,
+      };
+      if (c.clinic_id != null) {
+        clinicById.set(String(c.clinic_id), entry);
+      }
+      if (c.name) {
+        clinicByName.set(String(c.name).trim().toLowerCase(), entry);
+      }
     });
 
+    // Build admin avatar lookup for support & broadcast notifications
+    let defaultAdminAvatar: string | null = null;
+    (adminUsers || []).forEach((au: any) => {
+      if (!defaultAdminAvatar && au.avatar_url) {
+        defaultAdminAvatar = resolveAvatarUrl(au.avatar_url) || au.avatar_url || null;
+      }
+    });
+
+    // Build lookup maps for clinic enrichment & reselection status
+    const clinicByApptId = new Map<string, { name: string; logo: string | null }>();
+    const apptById = new Map<string, any>();
+    (appointments || []).forEach((appt: any) => {
+      if (!appt.appointment_id) return;
+      apptById.set(String(appt.appointment_id), appt);
+      const cObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
+      const fromClinicDirectory =
+        (appt.clinic_id != null ? clinicById.get(String(appt.clinic_id)) : undefined) ||
+        (cObj?.name ? clinicByName.get(String(cObj.name).trim().toLowerCase()) : undefined);
+      const rawLogo = cObj?.logo_url || fromClinicDirectory?.logo || null;
+      const resolvedLogo = rawLogo ? (resolveAvatarUrl(rawLogo) || rawLogo) : null;
+      clinicByApptId.set(String(appt.appointment_id), {
+        name: cObj?.name || fromClinicDirectory?.name || 'Clinic',
+        logo: resolvedLogo,
+      });
+    });
+
+    const isApptReselectionResolved = (targetApptId?: string): boolean => {
+      if (!targetApptId) return false;
+      const appt = apptById.get(String(targetApptId));
+      if (!appt) return false;
+      const qa = appt.questionnaire_answers || {};
+      if (
+        qa.reselection_status === 'reselected' ||
+        qa.reselection_required === false ||
+        qa.workflow_status === 'pending_doctor_review'
+      ) {
+        return true;
+      }
+      const docSt = String(appt.doctor_status || '').toLowerCase();
+      if (docSt && docSt !== 'rejected' && docSt !== 'declined' && docSt !== 'reselection_required') {
+        return true;
+      }
+      return false;
+    };
+
+    // 1. Direct user_notification records for this patient
+    if (dbNotifs) {
+      dbNotifs.forEach((n: any) => {
+        // Suppress all subscription/plan notifications (receipts & confirmations are handled strictly via email)
+        if (
+          n.type === 'subscription_expired' ||
+          n.type === 'subscription-expired' ||
+          n.subtype === 'subscription_expired' ||
+          n.subtype === 'subscription-expired' ||
+          n.type === 'subscription' ||
+          n.subtype === 'subscription' ||
+          n.subtype === 'subscription_upgraded' ||
+          n.category === 'subscription' ||
+          n.category === 'PLAN' ||
+          n.metadata?.category === 'subscription' ||
+          n.metadata?.category === 'PLAN' ||
+          n.subtype?.includes('subscription') ||
+          n.type?.includes('subscription') ||
+          /pro subscription|subscription|plan activated|welcome to dermai pro/i.test(n.title || '')
+        ) {
+          return;
+        }
+
+        const isBroadcast = n.type === 'broadcast' || n.subtype === 'admin_announcement';
+        const isMaintenance = n.subtype === 'maintenance_alert' || n.type === 'maintenance_alert';
+        const isTicket =
+          n.type === 'support_ticket' ||
+          n.type === 'support' ||
+          n.type === 'support-ticket-received' ||
+          n.type === 'support_ticket_received' ||
+          n.type === 'support-ticket-resolved' ||
+          n.type === 'support_ticket_resolved' ||
+          n.subtype === 'support' ||
+          n.subtype === 'support_ticket' ||
+          n.subtype === 'support-ticket-received' ||
+          n.subtype === 'support_ticket_received' ||
+          n.subtype === 'support-ticket-resolved' ||
+          n.subtype === 'support_ticket_resolved' ||
+          n.type?.includes('ticket') ||
+          n.type?.includes('support') ||
+          n.subtype?.includes('ticket') ||
+          n.subtype?.includes('support') ||
+          n.metadata?.category === 'support' ||
+          n.metadata?.category === 'ticket' ||
+          /support ticket|ticket received|ticket resolved|ticket updated/i.test(n.title || '');
+
+        const isAdminSystem = isBroadcast || isMaintenance;
+
+        const isApptCompleted =
+          n.type === 'appointment-completed' ||
+          n.type === 'appointment_completed' ||
+          n.subtype === 'reviewed' ||
+          n.subtype === 'appointment-completed';
+
+        const isPaymentConfirmed =
+          n.type === 'payment-confirmed' ||
+          n.type === 'payment_confirmed' ||
+          n.type === 'appointment-payment-confirmed' ||
+          n.subtype === 'payment_confirmed' ||
+          n.subtype === 'payment-confirmed' ||
+          n.subtype === 'payment' ||
+          /payment.*(confirm|verifi|receiv)/i.test(n.title || '') ||
+          /payment.*(confirm|verifi)/i.test(n.subtype || '') ||
+          /payment.*(confirm|verifi)/i.test(n.body || '');
+
+        const isApptRejected =
+          n.type === 'appointment-rejected' ||
+          n.type === 'appointment_rejected' ||
+          n.subtype === 'doctor-declined' ||
+          n.subtype === 'doctor_declined' ||
+          n.subtype === 'rejected' ||
+          n.subtype === 'declined' ||
+          n.subtype === 'schedule-conflict' ||
+          n.subtype === 'schedule_conflict' ||
+          /review update|schedule conflict|declined|rejected/i.test(n.title || '') ||
+          /schedule conflict|consultation will be reassigned|was declined/i.test(n.body || '');
+
+        const isScheduleApproved =
+          !isApptCompleted &&
+          !isApptRejected &&
+          (
+            n.type === 'appointment-scheduled' ||
+            n.type === 'appointment_scheduled' ||
+            n.type === 'appointment-accepted' ||
+            n.type === 'appointment_accepted' ||
+            n.type === 'appointment-approved' ||
+            n.type === 'appointment_approved' ||
+            n.type === 'doctor-confirmed-schedule' ||
+            n.type === 'doctor_confirmed_schedule' ||
+            n.type === 'schedule-confirmed' ||
+            n.type === 'schedule_confirmed' ||
+            n.subtype === 'doctor-confirmed-schedule' ||
+            n.subtype === 'doctor_confirmed_schedule' ||
+            n.subtype === 'appointment-approved' ||
+            n.subtype === 'appointment_approved' ||
+            n.subtype === 'schedule-confirmed' ||
+            n.subtype === 'schedule_confirmed' ||
+            n.subtype === 'confirmed' ||
+            n.subtype === 'doctor-approved' ||
+            n.subtype === 'doctor_approved' ||
+            n.subtype === 'reassigned' ||
+            /doctor confirmed schedule|appointment confirmed|schedule confirmed|reschedule request approved/i.test(n.title || '') ||
+            /approved your consultation schedule|schedule.*confirmed|has been confirmed|has been reassigned/i.test(n.body || '')
+          );
+
+        const isApptMissed =
+          n.type === 'appointment-missed' ||
+          n.type === 'appointment_missed' ||
+          n.type === 'appointment-no-show' ||
+          n.type === 'appointment_no_show' ||
+          n.type === 'no-show' ||
+          n.type === 'no_show' ||
+          n.subtype === 'appointment-missed' ||
+          n.subtype === 'appointment_missed' ||
+          n.subtype === 'appointment-no-show' ||
+          n.subtype === 'appointment_no_show' ||
+          n.subtype === 'no-show' ||
+          n.subtype === 'no_show' ||
+          /missed\s*\/\s*no-show|appointment marked as missed|no-show/i.test(n.title || '') ||
+          /recorded as no-show|marked as missed/i.test(n.body || '');
+
+        const isScan =
+          n.type === 'scan' ||
+          n.type === 'scan_result' ||
+          n.type === 'scan-completed' ||
+          n.category === 'scan' ||
+          n.metadata?.category === 'skin_scan';
+
+        const isSub =
+          n.type === 'subscription' ||
+          n.subtype === 'subscription' ||
+          n.category === 'subscription';
+
+        const needsClinicEnrichment = !isTicket && !isAdminSystem && (isApptCompleted || isPaymentConfirmed || isApptRejected || isScheduleApproved || isApptMissed || n.type?.includes('appointment'));
+
+        const apptId = (n.metadata?.appointment_id || n.metadata?.appointmentId) as string | undefined;
+        const metaClinicId = (n.metadata?.clinic_id || n.metadata?.clinicId) as string | undefined;
+        const metaClinicName = (n.metadata?.clinic_name || n.metadata?.clinicName || n.metadata?.sender_name) as string | undefined;
+        let clinicEnrichment: { name: string; logo: string | null; appointmentId?: string } | undefined;
+
+        if (needsClinicEnrichment) {
+          if (apptId) {
+            const matchedClinic = clinicByApptId.get(String(apptId));
+            if (matchedClinic) {
+              clinicEnrichment = {
+                name: matchedClinic.name,
+                logo: matchedClinic.logo,
+                appointmentId: apptId,
+              };
+            }
+          }
+
+          if (!clinicEnrichment && metaClinicId) {
+            const matchedById = clinicById.get(String(metaClinicId));
+            if (matchedById) {
+              clinicEnrichment = {
+                name: matchedById.name,
+                logo: matchedById.logo,
+                appointmentId: apptId,
+              };
+            }
+          }
+
+          if (!clinicEnrichment && metaClinicName) {
+            const matchedByName = clinicByName.get(String(metaClinicName).trim().toLowerCase());
+            if (matchedByName) {
+              clinicEnrichment = {
+                name: matchedByName.name,
+                logo: matchedByName.logo,
+                appointmentId: apptId,
+              };
+            }
+          }
+
+          if (!clinicEnrichment && clinicByName.size > 0) {
+            const combinedText = `${n.title || ''} ${n.body || ''}`.toLowerCase();
+            for (const [lowerName, entry] of clinicByName.entries()) {
+              if (lowerName.length >= 3 && combinedText.includes(lowerName)) {
+                clinicEnrichment = {
+                  name: entry.name,
+                  logo: entry.logo,
+                  appointmentId: apptId,
+                };
+                break;
+              }
+            }
+          }
+
+          if (!clinicEnrichment && appointments && appointments.length > 0) {
+            const notifTime = new Date(n.created_at).getTime();
+            const closest = appointments.reduce((best: any, appt: any) => {
+              const apptTime = new Date(appt.doctor_reviewed_at || appt.created_at || 0).getTime();
+              const bestTime = new Date(best.doctor_reviewed_at || best.created_at || 0).getTime();
+              return Math.abs(apptTime - notifTime) < Math.abs(bestTime - notifTime) ? appt : best;
+            });
+            const matchedClosest = clinicByApptId.get(String(closest.appointment_id));
+            const cObj = Array.isArray(closest.clinic) ? closest.clinic[0] : closest.clinic;
+            if (matchedClosest || cObj?.name) {
+              clinicEnrichment = {
+                name: matchedClosest?.name || cObj?.name || 'Clinic',
+                logo: matchedClosest?.logo || (cObj?.logo_url ? (resolveAvatarUrl(cObj.logo_url) || cObj.logo_url) : null),
+                appointmentId: closest.appointment_id,
+              };
+            }
+          }
+        }
+
+        const resolvedApptId = apptId || clinicEnrichment?.appointmentId || n.metadata?.appointment_id;
+        const isRejectedResolved =
+          isApptRejected &&
+          (Boolean(n.metadata?.reselection_resolved) || isApptReselectionResolved(resolvedApptId));
+
+        const resolvedSenderName =
+          (needsClinicEnrichment && clinicEnrichment?.name) ||
+          n.metadata?.clinic_name ||
+          n.metadata?.sender_name ||
+          (isTicket ? 'DERMAI Support' : isAdminSystem ? 'Platform Administrator' : undefined);
+
+        const rawMetadataAvatar =
+          n.metadata?.clinic_logo ||
+          n.metadata?.avatar_url ||
+          n.metadata?.logo_url ||
+          n.metadata?.profile_image ||
+          n.metadata?.sender_avatar;
+        const resolvedMetadataAvatar = rawMetadataAvatar
+          ? (resolveAvatarUrl(rawMetadataAvatar) || rawMetadataAvatar)
+          : undefined;
+
+        const resolvedSenderAvatar =
+          (needsClinicEnrichment && clinicEnrichment?.logo) ||
+          resolvedMetadataAvatar ||
+          (resolvedSenderName ? clinicByName.get(String(resolvedSenderName).trim().toLowerCase())?.logo : undefined) ||
+          ((isTicket || isAdminSystem) && defaultAdminAvatar ? defaultAdminAvatar : undefined);
+
+        items.push({
+          id: n.notif_id,
+          userId,
+          type: isApptCompleted
+            ? 'appointment-completed'
+            : isPaymentConfirmed
+            ? (n.type || 'appointment-payment-confirmed')
+            : isApptRejected
+            ? 'appointment-rejected'
+            : isScheduleApproved
+            ? (n.type || 'appointment-scheduled')
+            : isApptMissed
+            ? (n.type && n.type !== 'system' ? n.type : 'appointment-no-show')
+            : isScan
+            ? 'scan'
+            : (n.type || 'general'),
+          subtype: n.subtype || undefined,
+          category: (!isTicket && (n.type?.includes('appointment') || needsClinicEnrichment))
+            ? 'appointment'
+            : isScan
+            ? 'scan'
+            : isTicket
+            ? 'ticket'
+            : isBroadcast || isMaintenance
+            ? 'broadcast'
+            : isSub
+            ? 'subscription'
+            : 'general',
+          title: n.title || 'Notification',
+          message: n.body || '',
+          senderName: resolvedSenderName,
+          senderType: needsClinicEnrichment ? 'clinic' : isTicket || isAdminSystem ? 'admin' : undefined,
+          senderAvatar: resolvedSenderAvatar,
+          timestamp: n.created_at || new Date().toISOString(),
+          read: Boolean(n.is_read || readSet.has(n.notif_id) || isRejectedResolved),
+          metadata: {
+            ...n.metadata,
+            appointment_id: resolvedApptId,
+            reselection_resolved: isRejectedResolved,
+          },
+        });
+      });
+    }
+
+    // 2. Live patient appointments from patient_appointment (synthetic fallback)
+    if (appointments) {
+      appointments.forEach((appt: any) => {
+        const clinicObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
+        const matchedClinic = clinicByApptId.get(String(appt.appointment_id));
+        const clinicName = matchedClinic?.name || clinicObj?.name || 'Clinic';
+        const clinicLogo =
+          matchedClinic?.logo ||
+          (clinicObj?.logo_url ? (resolveAvatarUrl(clinicObj.logo_url) || clinicObj.logo_url) : null);
+        const dateStr = appt.date
+          ? new Date(appt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+          : 'scheduled date';
+        const timeStr = appt.time ? ` at ${appt.time}` : '';
+
+        // A. Confirmed / Accepted Appointment
+        if (appt.status === 'confirmed' || appt.doctor_status === 'approved') {
+          const notifId = `appt-accepted-${appt.appointment_id}`;
+          items.push({
+            id: notifId,
+            userId,
+            type: 'appointment-accepted',
+            subtype: 'appointment-scheduled',
+            category: 'appointment',
+            title: `Appointment Confirmed`,
+            message: `Your appointment at ${clinicName} on ${dateStr}${timeStr} has been confirmed.`,
+            senderName: clinicName,
+            senderType: 'clinic',
+            senderAvatar: clinicLogo,
+            timestamp: appt.created_at || new Date().toISOString(),
+            read: readSet.has(notifId),
+            metadata: { appointment_id: appt.appointment_id },
+          });
+        }
+
+        // B1. Doctor-Initiated Decline
+        if (appt.doctor_status === 'rejected' && appt.status !== 'cancelled' && !isApptReselectionResolved(appt.appointment_id)) {
+          const notifId = `appt-rejected-${appt.appointment_id}`;
+          const noteText = appt.doctor_note ? ` Note: "${appt.doctor_note}".` : '';
+          const rejectMsg = `Your appointment request at ${clinicName} on ${dateStr} was declined.${noteText} You can select another available doctor within 24 hours. If no selection is made within 24 hours, the clinic will automatically assign an available doctor to your booking.`;
+
+          items.push({
+            id: notifId,
+            userId,
+            type: 'appointment-rejected',
+            subtype: 'appointment-rejected',
+            category: 'appointment',
+            title: `Appointment Declined`,
+            message: rejectMsg,
+            senderName: clinicName,
+            senderType: 'clinic',
+            senderAvatar: clinicLogo,
+            timestamp: appt.doctor_reviewed_at || appt.created_at || new Date().toISOString(),
+            read: readSet.has(notifId),
+            metadata: {
+              appointment_id: appt.appointment_id,
+              declined_at: appt.doctor_reviewed_at || appt.created_at || new Date().toISOString(),
+            },
+          });
+        }
+
+        // B2. Patient or Admin Cancellation
+        if (appt.status === 'cancelled') {
+          const notifId = `appt-cancelled-${appt.appointment_id}`;
+          const noteText = appt.clinic_note ? ` Note: "${appt.clinic_note}".` : '';
+          const cancelMsg = `Your consultation request with ${clinicName} on ${dateStr} was cancelled.${noteText}`;
+
+          items.push({
+            id: notifId,
+            userId,
+            type: 'appointment-cancelled',
+            subtype: 'appointment-cancelled',
+            category: 'appointment',
+            title: `Appointment Cancelled`,
+            message: cancelMsg,
+            senderName: clinicName,
+            senderType: 'clinic',
+            senderAvatar: clinicLogo,
+            timestamp: appt.created_at || new Date().toISOString(),
+            read: readSet.has(notifId),
+            metadata: { appointment_id: appt.appointment_id },
+          });
+        }
+
+        // C. Completed Consultation
+        if (appt.status === 'completed') {
+          const notifId = `appt-completed-${appt.appointment_id}`;
+          items.push({
+            id: notifId,
+            userId,
+            type: 'appointment-completed',
+            subtype: 'appointment-completed',
+            category: 'appointment',
+            title: `Consultation Completed`,
+            message: `Your consultation at ${clinicName} has been concluded. Your doctor notes and final diagnosis are ready for review.`,
+            senderName: clinicName,
+            senderType: 'clinic',
+            senderAvatar: clinicLogo,
+            timestamp: appt.created_at || new Date().toISOString(),
+            read: readSet.has(notifId),
+            metadata: { appointment_id: appt.appointment_id },
+          });
+        }
+      });
+    }
+
+    // 3. Support Ticket updates
+    if (tickets) {
+      tickets.forEach((ticket: any) => {
+        const fullTicketId = String(ticket.ticket_id || '').toLowerCase();
+        const shortTicketId = fullTicketId.slice(0, 8);
+        const alreadyNotified = items.some((i) => {
+          const metaTicketId = String(i.metadata?.ticket_id || '').toLowerCase();
+          if (metaTicketId && (metaTicketId === fullTicketId || metaTicketId.includes(shortTicketId))) {
+            return true;
+          }
+          if (i.category === 'ticket' || i.type?.includes('ticket')) {
+            const bodyLower = (i.message || '').toLowerCase();
+            if (shortTicketId && bodyLower.includes(shortTicketId)) return true;
+          }
+          return false;
+        });
+
+        if (
+          !alreadyNotified &&
+          (ticket.response || (ticket.status !== 'open' && ticket.status !== 'pending' && ticket.status !== 'submitted'))
+        ) {
+          const notifId = `ticket-update-${ticket.ticket_id}`;
+          const replySummary = ticket.response ? ` Response: "${ticket.response}"` : '';
+          items.push({
+            id: notifId,
+            userId,
+            type: 'ticket-updated',
+            subtype: 'ticket-update',
+            category: 'ticket',
+            title: `Support Ticket Updated`,
+            message: `Your ticket "${ticket.subject}" is now ${ticket.status}.${replySummary}`,
+            senderName: 'DERMAI Support',
+            senderType: 'admin',
+            senderAvatar: defaultAdminAvatar,
+            timestamp: ticket.updated_at || ticket.created_at || new Date().toISOString(),
+            read: readSet.has(notifId),
+            metadata: { ticket_id: ticket.ticket_id },
+          });
+        }
+      });
+    }
+
+    // 4. Broadcast announcements sent by administrator
+    if (broadcasts) {
+      broadcasts.forEach((b: any) => {
+        const normBTitle = (b.title || '').trim().toLowerCase();
+        const normBMsg = (b.message || '').trim().toLowerCase();
+        const alreadyDelivered = items.some((i) => {
+          if (i.metadata?.broadcast_id === b.broadcast_id) return true;
+          const iTitle = (i.title || '').trim().toLowerCase();
+          const iMsg = (i.message || '').trim().toLowerCase();
+          return iTitle === normBTitle && iMsg === normBMsg;
+        });
+        if (alreadyDelivered) return;
+
+        const notifId = `broadcast-${b.broadcast_id}`;
+        items.push({
+          id: notifId,
+          userId,
+          type: 'broadcast',
+          subtype: 'admin_announcement',
+          category: 'broadcast',
+          title: b.title,
+          message: b.message,
+          senderName: 'Platform Administrator',
+          senderType: 'admin',
+          senderAvatar: defaultAdminAvatar,
+          timestamp: b.sent_at || new Date().toISOString(),
+          read: readSet.has(notifId),
+          metadata: {
+            broadcast_id: b.broadcast_id,
+            subtype: 'admin_announcement',
+          },
+        });
+      });
+    }
+
+    // 5. AI Skin Assessment (Scan) Results
+    if (scanRows) {
+      scanRows.forEach((s: any) => {
+        const condObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+        const conditionName = condObj?.name || 'Skin Condition';
+        const rawConf = Number(s.confidence_score ?? 0);
+        const confPercent = rawConf <= 1 && rawConf > 0 ? Math.round(rawConf * 100) : Math.round(rawConf);
+        const bodyPartText = s.body_part ? ` on ${s.body_part}` : '';
+        const notifId = `scan-${s.analysis_id}`;
+
+        items.push({
+          id: notifId,
+          userId,
+          type: 'scan_result',
+          category: 'scan',
+          title: `AI Skin Assessment: ${conditionName}`,
+          message: `Detected ${conditionName}${bodyPartText} with ${confPercent}% confidence score.`,
+          senderName: 'DERMAI AI Scanner',
+          senderType: 'system',
+          timestamp: s.scanned_at || new Date().toISOString(),
+          read: true,
+          metadata: {
+            analysis_id: s.analysis_id,
+            condition_name: conditionName,
+            confidence_score: confPercent,
+            body_part: s.body_part,
+            category: 'skin_scan',
+          },
+        });
+      });
+    }
   } catch (err) {
-
-    console.warn('[Store] addAppNotification error:', err);
-
+    console.warn('[Store] getAppNotifications error:', err);
   }
 
+  return deduplicateAppNotificationItems(items);
 }
 
-
+export async function addAppNotification(
+  userId: string,
+  notif: Omit<AppNotification, 'id' | 'timestamp' | 'read'>
+): Promise<void> {
+  try {
+    await supabase.from('user_notification').insert({
+      user_id: userId,
+      type: notif.type,
+      subtype: notif.subtype || null,
+      title: notif.title,
+      body: notif.message,
+      is_read: false,
+    });
+  } catch (err) {
+    console.warn('[Store] addAppNotification error:', err);
+  }
+}
 
 export async function markAppNotificationRead(userId: string, id: string): Promise<void> {
-
   try {
-
     await saveLocalReadId(userId, id);
 
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
-
     if (isUuid) {
-
-      await supabase.from('user_notification').update({ is_read: true }).eq('notif_id', id);
-
+      await supabase
+        .from('user_notification')
+        .update({ is_read: true })
+        .eq('notif_id', id)
+        .eq('user_id', userId);
     }
-
   } catch (err) {
-
     console.warn('[Store] markAppNotificationRead error:', err);
-
   }
-
 }
-
-
 
 export async function markAllAppNotificationsRead(userId: string, ids: string[]): Promise<void> {
-
   try {
-
     await saveAllLocalReadIds(userId, ids);
 
-    const uuidIds = ids.filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
-
-    if (uuidIds.length > 0) {
-
-      await supabase.from('user_notification').update({ is_read: true }).in('notif_id', uuidIds);
-
+    // 1. Mark all unread DB notifications for this user in Supabase
+    if (userId) {
+      await supabase
+        .from('user_notification')
+        .update({ is_read: true })
+        .eq('user_id', userId)
+        .eq('is_read', false);
     }
 
+    // 2. Also ensure explicit UUIDs are marked as read
+    const uuidIds = ids.filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+    if (uuidIds.length > 0) {
+      await supabase
+        .from('user_notification')
+        .update({ is_read: true })
+        .in('notif_id', uuidIds)
+        .eq('user_id', userId);
+    }
   } catch (err) {
-
     console.warn('[Store] markAllAppNotificationsRead error:', err);
-
   }
-
 }
-
-
 
 export function subscribeToAppNotifications(userId: string, onUpdate: () => void) {
-
   if (!userId) return () => {};
 
+  // Same tables the website listens to (RLS limits events to this patient's own rows)
   const channel = supabase
-
     .channel(`mobile_notifs_${userId}_${Date.now()}`)
-
     .on('postgres_changes', { event: '*', schema: 'public', table: 'user_notification', filter: `user_id=eq.${userId}` }, () => onUpdate())
-
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'admin_broadcast' }, () => onUpdate())
-
     .on('postgres_changes', { event: '*', schema: 'public', table: 'patient_appointment', filter: `user_id=eq.${userId}` }, () => onUpdate())
-
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'user_support_ticket', filter: `user_id=eq.${userId}` }, () => onUpdate())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'admin_broadcast' }, () => onUpdate())
     .subscribe();
 
-
+  // Fallback refresh whenever the app returns to the foreground
+  const appStateSub = AppState.addEventListener('change', (state) => {
+    if (state === 'active') onUpdate();
+  });
 
   return () => {
-
     supabase.removeChannel(channel);
-
+    appStateSub.remove();
   };
-
 }
-
-
 
 export async function syncAppointmentNotifications(
 
@@ -3214,6 +3816,42 @@ export async function uploadProfileImage(_userId: string, imageUri: string): Pro
 
 
 // ─── Clinics ──────────────────────────────────────────────────────────────────
+
+export function resolveAvatarUrl(path?: string | null): string | undefined {
+  if (!path || typeof path !== 'string') return undefined;
+  const trimmed = path.trim();
+  if (!trimmed) return undefined;
+
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:')
+  ) {
+    return trimmed;
+  }
+
+  try {
+    let bucket = 'avatars';
+    let cleanPath = trimmed;
+
+    if (trimmed.startsWith('avatars/')) {
+      bucket = 'avatars';
+      cleanPath = trimmed.replace(/^avatars\//, '');
+    } else if (trimmed.startsWith('clinic-photos/')) {
+      bucket = 'clinic-photos';
+      cleanPath = trimmed.replace(/^clinic-photos\//, '');
+    } else if (trimmed.startsWith('doctors/')) {
+      bucket = 'clinic-photos';
+    }
+
+    const { data } = supabase.storage.from(bucket).getPublicUrl(cleanPath);
+    return data?.publicUrl || undefined;
+  } catch (err) {
+    console.warn('[Store] Failed to resolve storage publicUrl:', trimmed, err);
+    return undefined;
+  }
+}
 
 export async function getClinics(): Promise<ClinicRecord[]> {
 
@@ -3273,6 +3911,12 @@ export async function getClinics(): Promise<ClinicRecord[]> {
 
           doctor_name,
 
+          email,
+
+          photo_url,
+
+          user_id,
+
           duty_days,
 
           duty_start_time,
@@ -3282,6 +3926,12 @@ export async function getClinics(): Promise<ClinicRecord[]> {
           duty_schedule,
 
           status,
+
+          user:user_id (
+
+            avatar_url
+
+          ),
 
           doctor_specializations (
 
@@ -3367,6 +4017,10 @@ export async function getClinics(): Promise<ClinicRecord[]> {
 
             : '';
 
+          const userObj = Array.isArray(d.user) ? d.user[0] : d.user;
+          const rawPhoto = d.photo_url || userObj?.avatar_url || d.avatar_url;
+          const resolvedAvatar = resolveAvatarUrl(rawPhoto);
+
           return {
 
             id: d.doctor_id,
@@ -3382,6 +4036,14 @@ export async function getClinics(): Promise<ClinicRecord[]> {
             dutyEndTime: d.duty_end_time || '17:00',
 
             dutySchedule: d.duty_schedule,
+
+            avatar_url: resolvedAvatar,
+
+            avatarUrl: resolvedAvatar,
+
+            photo_url: resolvedAvatar,
+
+            userId: d.user_id,
 
           };
 
@@ -3547,56 +4209,205 @@ export async function unsaveClinic(userId: string, clinicId: string | number): P
 
 
 
-export async function getUserPayments(userId: string): Promise<PlatformTransaction[]> {
-
+export async function getBillingHistory(userId?: string): Promise<BillingHistoryItem[]> {
   try {
+    let effectiveUserId = userId || '';
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (sessionData?.session?.user?.id) {
+        effectiveUserId = sessionData.session.user.id;
+      }
+    } catch {}
 
-    const { data, error } = await supabase
+    if (!effectiveUserId) return [];
 
-      .from('user_payment')
+    const [paymentsRes, apptsRes] = await Promise.all([
+      supabase
+        .from('user_payment')
+        .select(`
+          payment_id,
+          amount,
+          payment_date,
+          method,
+          status,
+          plan_id,
+          billing_cycle,
+          reference_number,
+          paymongo_payment_id,
+          plan:plan_id (
+            price,
+            name
+          )
+        `)
+        .eq('user_id', effectiveUserId)
+        .order('payment_date', { ascending: false }),
+      supabase
+        .from('patient_appointment')
+        .select(`
+          appointment_id,
+          date,
+          time,
+          batch_time,
+          status,
+          payment_status,
+          payment_method,
+          payment_reference,
+          payment_amount,
+          patient_name,
+          patient_contact,
+          created_at,
+          ai_condition_name,
+          clinic_id,
+          assigned_doctor_id,
+          clinic:clinic_id ( name )
+        `)
+        .eq('user_id', effectiveUserId)
+        .order('created_at', { ascending: false }),
+    ]);
 
-      .select('*')
+    const payments = paymentsRes.data || [];
+    const userAppts = apptsRes.data || [];
+    const historyList: BillingHistoryItem[] = [];
 
-      .eq('user_id', userId)
+    if (payments.length > 0) {
+      payments.forEach((p: any) => {
+        const planObj = Array.isArray(p.plan) ? p.plan[0] : p.plan;
+        const rawAmount = Number(p.amount ?? 0);
 
-      .order('created_at', { ascending: false });
+        let resolvedTotal = rawAmount;
+        let resolvedBase = 0;
+        let resolvedVat = 0;
 
+        if (planObj?.price != null && Number(planObj.price) > 0) {
+          const planBase = Number(planObj.price);
+          const calc = calculatePricing(planBase);
+          resolvedBase = calc.basePrice;
+          resolvedVat = calc.vatAmount;
+          resolvedTotal = calc.totalPrice;
+        } else if (rawAmount === 177.68) {
+          const calc = calculatePricing(177.68);
+          resolvedBase = calc.basePrice;
+          resolvedVat = calc.vatAmount;
+          resolvedTotal = calc.totalPrice;
+        } else if (rawAmount > 0) {
+          const split = splitVat(rawAmount);
+          resolvedBase = split.net;
+          resolvedVat = split.vat;
+          resolvedTotal = rawAmount;
+        }
 
+        const formattedAmount = `₱${resolvedTotal.toLocaleString('en-PH', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
 
-    if (error || !data) return [];
+        const isAppointment = Boolean(!p.plan_id || !planObj || rawAmount === 500);
+        const description = isAppointment
+          ? 'Book Appointment'
+          : planObj?.name
+          ? `${planObj.name} Subscription`
+          : 'DermAI Subscription';
 
-    return data.map((p: any) => ({
+        const dateIso = p.payment_date || new Date().toISOString();
 
-      id: String(p.payment_id || p.id),
+        historyList.push({
+          paymentId: String(p.payment_id || p.reference_number || p.paymongo_payment_id),
+          paymentDate: dateIso,
+          date: new Date(dateIso).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          }),
+          amount: formattedAmount,
+          rawAmount,
+          baseAmount: resolvedBase,
+          vatAmount: resolvedVat,
+          totalAmount: resolvedTotal,
+          method: p.method || 'GCash',
+          status: p.status === 'success' ? 'Paid' : String(p.status || 'Paid'),
+          description,
+          isAppointment,
+          appointmentId: null,
+          paymentReference: p.reference_number || null,
+          paymongoPaymentId: p.paymongo_payment_id || null,
+          billingCycle: p.billing_cycle === 'yearly' ? 'yearly' : 'monthly',
+        });
+      });
+    }
 
-      userId: p.user_id,
+    if (userAppts.length > 0) {
+      userAppts.forEach((appt: any) => {
+        const alreadyExists = historyList.some(
+          (h) =>
+            h.appointmentId === appt.appointment_id ||
+            (h.paymentReference && h.paymentReference.includes(appt.appointment_id)) ||
+            (appt.payment_reference &&
+              (h.paymongoPaymentId === appt.payment_reference ||
+                h.paymentReference === appt.payment_reference))
+        );
+        if (!alreadyExists) {
+          const dateStr = appt.created_at || appt.date || new Date().toISOString();
+          const fee = Number(appt.payment_amount) > 0 ? Number(appt.payment_amount) : 500;
+          const split = splitVat(fee);
+          historyList.push({
+            paymentId: appt.appointment_id,
+            paymentDate: dateStr,
+            date: new Date(dateStr).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            }),
+            amount: `₱${fee.toLocaleString('en-PH', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}`,
+            rawAmount: fee,
+            baseAmount: split.net,
+            vatAmount: split.vat,
+            totalAmount: fee,
+            method: appt.payment_method || 'GCash',
+            status: appt.status === 'cancelled' ? 'Cancelled' : 'Paid',
+            description: 'Book Appointment',
+            isAppointment: true,
+            appointmentId: appt.appointment_id,
+            paymentReference:
+              appt.payment_reference || `pay_${String(appt.appointment_id).replace(/-/g, '').slice(0, 16)}`,
+            paymongoPaymentId:
+              appt.payment_reference || `pay_${String(appt.appointment_id).replace(/-/g, '').slice(0, 16)}`,
+          });
+        }
+      });
+    }
 
-      amount: Number(p.amount) || 0,
-
-      method: p.method || 'card',
-
-      billingCycle: p.billing_cycle || 'monthly',
-
-      status: p.status === 'success' ? 'paid' : p.status || 'paid',
-
-      date: p.created_at || new Date().toISOString(),
-
-      plan: p.billing_cycle === 'yearly' ? 'DermAI Pro Plan — Annual' : 'DermAI Pro Plan — Monthly',
-
-      userEmail: '',
-
-      userName: '',
-
-    }));
-
+    historyList.sort(
+      (a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime()
+    );
+    return historyList;
   } catch (err) {
-
-    console.warn('[Store] getUserPayments error:', err);
-
+    console.warn('[Store] getBillingHistory error:', err);
     return [];
-
   }
+}
 
+export async function getUserPayments(userId: string): Promise<PlatformTransaction[]> {
+  try {
+    const history = await getBillingHistory(userId);
+    return history.map((item) => ({
+      id: item.paymentId,
+      userId,
+      amount: item.totalAmount,
+      method: item.method,
+      billingCycle: item.billingCycle || 'monthly',
+      status: item.status.toLowerCase() === 'paid' ? 'paid' : (item.status.toLowerCase() as any),
+      date: item.paymentDate,
+      plan: item.description,
+      userEmail: '',
+      userName: '',
+    }));
+  } catch (err) {
+    console.warn('[Store] getUserPayments error:', err);
+    return [];
+  }
 }
 
 

@@ -1,34 +1,30 @@
 import DashboardSkeleton from '@/components/DashboardSkeleton';
 import { useEffect } from 'react';
-import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
+import { Alert, StyleSheet } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as Linking from 'expo-linking';
-import { supabase } from '@/lib/supabase';
+import { supabase, processMobileOAuthCallbackUrl } from '@/lib/supabase';
 import { savePatientAccount } from '@/lib/store';
-import { COLORS } from '@/lib/constants';
 
-function parseParams(url: string): Record<string, string> {
-  const params: Record<string, string> = {};
-  const queryStart = url.indexOf('?');
-  const hashStart = url.indexOf('#');
+function syncGooglePatientProfileInBackground(user: any) {
+  if (!user?.id) return;
+  const displayName =
+    user.user_metadata?.full_name ||
+    user.user_metadata?.name ||
+    user.email?.split('@')[0] ||
+    'Patient';
 
-  const parseString = (str: string) => {
-    str.split('&').forEach((pair) => {
-      const eqIdx = pair.indexOf('=');
-      if (eqIdx !== -1) {
-        const key = decodeURIComponent(pair.slice(0, eqIdx));
-        const val = decodeURIComponent(pair.slice(eqIdx + 1));
-        if (key) params[key] = val;
-      }
+  setTimeout(() => {
+    void savePatientAccount({
+      id: user.id,
+      fullName: displayName,
+      email: user.email || '',
+      profileImage: user.user_metadata?.avatar_url || user.user_metadata?.picture || undefined,
+      createdAt: new Date().toISOString(),
+    }).catch((err: any) => {
+      console.warn('[AuthCallback] Stage: profile sync notice:', err?.message);
     });
-  };
-
-  if (hashStart !== -1) parseString(url.substring(hashStart + 1));
-  if (queryStart !== -1) {
-    const end = hashStart !== -1 && hashStart > queryStart ? hashStart : url.length;
-    parseString(url.substring(queryStart + 1, end));
-  }
-  return params;
+  }, 0);
 }
 
 export default function AuthCallback() {
@@ -37,23 +33,33 @@ export default function AuthCallback() {
 
   useEffect(() => {
     let handled = false;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // Realtime listener for web or background auth session resolution
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const completeSignIn = (user: any) => {
+      if (handled || !user) return;
+      handled = true;
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      console.log('[AuthCallback] Stage: session active for user:', user.id);
+      syncGooglePatientProfileInBackground(user);
+      router.replace('/(app)');
+    };
+
+    // Non-blocking listener so @supabase/auth-js _notifyAllSubscribers never stalls
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user && !handled) {
-        handled = true;
-        try {
-          await savePatientAccount({
-            id: session.user.id,
-            fullName: session.user.user_metadata?.full_name || session.user.user_metadata?.name || '',
-            email: session.user.email || '',
-            profileImage: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || undefined,
-            createdAt: new Date().toISOString(),
-          });
-        } catch (e) {
-          console.warn('[AuthCallback] savePatientAccount notice:', e);
-        }
-        router.replace('/(app)');
+        completeSignIn(session.user);
+      }
+    });
+
+    const urlSubscription = Linking.addEventListener('url', async (event) => {
+      if (handled || !event?.url) return;
+      console.log('[AuthCallback] Stage: callback deep link event received');
+      const result = await processMobileOAuthCallbackUrl(event.url);
+      if (result.user) {
+        completeSignIn(result.user);
       }
     });
 
@@ -61,94 +67,105 @@ export default function AuthCallback() {
       if (handled) return;
 
       try {
-        // 1. Check local search params from expo-router
-        let code = searchParams.code as string | undefined;
-        let accessToken = searchParams.access_token as string | undefined;
-        let refreshToken = searchParams.refresh_token as string | undefined;
-
-        // 2. Check window.location directly on web
-        if (typeof window !== 'undefined' && window.location) {
-          const parsed = parseParams(window.location.href);
-          code = code || parsed.code;
-          accessToken = accessToken || parsed.access_token;
-          refreshToken = refreshToken || parsed.refresh_token;
+        // 1. Check web location first when running on web
+        if (typeof window !== 'undefined' && window.location?.href) {
+          const webResult = await processMobileOAuthCallbackUrl(window.location.href);
+          if (webResult.errorMessage) {
+            handled = true;
+            Alert.alert('Google Sign-In Error', webResult.errorMessage);
+            router.replace('/(auth)/login');
+            return;
+          }
+          if (webResult.user) {
+            completeSignIn(webResult.user);
+            return;
+          }
         }
 
-        // 3. Check full deep link URL from Linking for native hash fragments
+        // 2. Check full deep link URL from Linking (contains hash or query parameters)
         const initialUrl = await Linking.getInitialURL();
         if (initialUrl) {
-          const parsed = parseParams(initialUrl);
-          code = code || parsed.code;
-          accessToken = accessToken || parsed.access_token;
-          refreshToken = refreshToken || parsed.refresh_token;
-        }
-
-        if (code) {
-          const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-          if (!error && data?.user) {
+          const linkResult = await processMobileOAuthCallbackUrl(initialUrl);
+          if (linkResult.errorMessage) {
             handled = true;
-            await savePatientAccount({
-              id: data.user.id,
-              fullName: data.user.user_metadata?.full_name || data.user.user_metadata?.name || '',
-              email: data.user.email || '',
-              profileImage: data.user.user_metadata?.avatar_url || data.user.user_metadata?.picture || undefined,
-              createdAt: new Date().toISOString(),
-            });
-            router.replace('/(app)');
+            Alert.alert('Google Sign-In Error', linkResult.errorMessage);
+            router.replace('/(auth)/login');
+            return;
+          }
+          if (linkResult.user) {
+            completeSignIn(linkResult.user);
             return;
           }
         }
 
-        if (accessToken && refreshToken) {
-          const { data, error } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          });
-          if (!error && data?.user) {
+        // 3. Check local search params parsed by expo-router (if deep link path stripped full URL)
+        const code = typeof searchParams.code === 'string' ? searchParams.code : undefined;
+        const accessToken =
+          typeof searchParams.access_token === 'string' ? searchParams.access_token : undefined;
+        const refreshToken =
+          typeof searchParams.refresh_token === 'string' ? searchParams.refresh_token : undefined;
+        const errorParam =
+          typeof searchParams.error_description === 'string'
+            ? searchParams.error_description
+            : typeof searchParams.error === 'string'
+            ? searchParams.error
+            : undefined;
+
+        if (code || (accessToken && refreshToken) || errorParam) {
+          const syntheticQuery = new URLSearchParams();
+          if (code) syntheticQuery.set('code', code);
+          if (accessToken) syntheticQuery.set('access_token', accessToken);
+          if (refreshToken) syntheticQuery.set('refresh_token', refreshToken);
+          if (errorParam) syntheticQuery.set('error_description', errorParam);
+          const paramResult = await processMobileOAuthCallbackUrl(
+            `dermaimobile://auth/callback?${syntheticQuery.toString()}`
+          );
+          if (paramResult.errorMessage) {
             handled = true;
-            await savePatientAccount({
-              id: data.user.id,
-              fullName: data.user.user_metadata?.full_name || data.user.user_metadata?.name || '',
-              email: data.user.email || '',
-              profileImage: data.user.user_metadata?.avatar_url || data.user.user_metadata?.picture || undefined,
-              createdAt: new Date().toISOString(),
-            });
-            router.replace('/(app)');
+            Alert.alert('Google Sign-In Error', paramResult.errorMessage);
+            router.replace('/(auth)/login');
+            return;
+          }
+          if (paramResult.user) {
+            completeSignIn(paramResult.user);
             return;
           }
         }
 
-        // 4. Fallback: check if session is already active
+        // 4. Fallback: check if LoginScreen already established the session in AsyncStorage
         const { data: sessionData } = await supabase.auth.getSession();
         if (sessionData?.session?.user) {
-          handled = true;
-          await savePatientAccount({
-            id: sessionData.session.user.id,
-            fullName: sessionData.session.user.user_metadata?.full_name || sessionData.session.user.user_metadata?.name || '',
-            email: sessionData.session.user.email || '',
-            profileImage: sessionData.session.user.user_metadata?.avatar_url || sessionData.session.user.user_metadata?.picture || undefined,
-            createdAt: new Date().toISOString(),
-          });
-          router.replace('/(app)');
+          completeSignIn(sessionData.session.user);
           return;
         }
 
-        // 5. If no auth tokens found yet, give a brief grace period before navigating back to login
-        setTimeout(() => {
-          if (!handled) {
+        // 5. Bounded timeout so callback screen never hangs indefinitely on "Signing you in..."
+        fallbackTimer = setTimeout(async () => {
+          if (handled) return;
+          const { data: retryData } = await supabase.auth.getSession();
+          if (retryData?.session?.user) {
+            completeSignIn(retryData.session.user);
+          } else {
+            handled = true;
+            console.warn('[AuthCallback] Stage: no session established within timeout; returning to login');
             router.replace('/(auth)/login');
           }
-        }, 1500);
-      } catch (err) {
-        console.warn('[AuthCallback] Notice:', err);
-        router.replace('/(app)');
+        }, 2500);
+      } catch (err: any) {
+        console.warn('[AuthCallback] Stage: callback exception:', err?.message || 'Unknown error');
+        if (!handled) {
+          handled = true;
+          router.replace('/(auth)/login');
+        }
       }
     }
 
-    handleAuth();
+    void handleAuth();
 
     return () => {
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       subscription.unsubscribe();
+      urlSubscription.remove();
     };
   }, []);
 

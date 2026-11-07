@@ -35,6 +35,20 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 // Carto Voyager Basemap API Key
 const CARTO_API_KEY = 'cb1_4rf0_1_52a456f79acb06df41f3abb6';
 
+function DoctorAvatarImage({ uri, name, size = 36 }: { uri?: string; name: string; size?: number }) {
+  const [loadError, setLoadError] = useState(false);
+  const fallbackUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'Doctor')}&background=fce7f3&color=be185d&bold=true`;
+  const imageSource = (!loadError && uri) ? { uri } : { uri: fallbackUrl };
+
+  return (
+    <Image
+      source={imageSource}
+      style={{ width: size, height: size, borderRadius: size / 2 }}
+      onError={() => setLoadError(true)}
+    />
+  );
+}
+
 // Default map center: Cebu City Capitol / Fuente area
 const DEFAULT_CENTER = { lat: 10.3157, lng: 123.8854 };
 
@@ -1422,7 +1436,11 @@ function ClinicDetailsModal({
                 {clinic.doctors.map((doc, idx) => (
                   <View key={idx} style={styles.doctorItem}>
                     <View style={styles.doctorAvatar}>
-                      <Ionicons name="person" size={18} color={COLORS.primary} />
+                      <DoctorAvatarImage
+                        uri={doc.avatar_url || doc.avatarUrl}
+                        name={doc.name}
+                        size={36}
+                      />
                     </View>
                     <View style={{ flex: 1, marginLeft: 10 }}>
                       <Text style={styles.doctorItemName}>{doc.name}</Text>

@@ -5,9 +5,8 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
-    "scheme": "dermaimobile",
+    "scheme": ["dermaimobile", "dermai"],
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "sdkVersion": "58.0.0",
     "ios": {
       "supportsTablet": true,
@@ -33,9 +32,7 @@
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/images/logo.png"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false,
-      "usesCleartextTraffic": true
+      "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "single",

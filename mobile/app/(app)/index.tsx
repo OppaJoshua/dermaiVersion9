@@ -22,6 +22,7 @@ import {
   getAppNotifications,
   getSavedClinics,
   syncAppointmentNotifications,
+  subscribeToAppNotifications,
 } from '@/lib/store';
 import type { PatientAccount, Appointment, ScanResult } from '@/lib/store';
 
@@ -210,6 +211,15 @@ export default function HomeScreen() {
     }, [])
   );
 
+  // Real-time listener for Supabase notification changes across all tables
+  useEffect(() => {
+    if (!user?.id) return;
+    const unsubscribe = subscribeToAppNotifications(user.id, () => {
+      loadData(true);
+    });
+    return () => unsubscribe();
+  }, [user?.id]);
+
   async function onRefresh() {
     setRefreshing(true);
     await loadData(true);
@@ -231,7 +241,9 @@ export default function HomeScreen() {
           <TouchableOpacity
             style={styles.avatarCircle}
             activeOpacity={0.8}
-            onPress={() => router.push('/(app)/profile')}
+            accessibilityRole="button"
+            accessibilityLabel="Open profile"
+            onPress={() => router.push('/profile')}
           >
             {user?.profileImage ? (
               <Image source={{ uri: user.profileImage }} style={styles.avatarImg} />
@@ -240,25 +252,24 @@ export default function HomeScreen() {
             )}
           </TouchableOpacity>
           <View style={{ flex: 1, marginLeft: 10 }}>
-            <Text style={styles.headerWelcome}>Welcome Back</Text>
-            <Text style={styles.headerName}>{firstName}</Text>
+            <Text style={styles.headerWelcome}>Hello,</Text>
+            <Text style={styles.headerName}>{firstName}!</Text>
           </View>
           <TouchableOpacity
             style={styles.iconBtn}
-            onPress={() => router.push('/(app)/notifications')}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel="Open notifications"
+            onPress={() => router.push('/notifications')}
           >
-            <Ionicons name="notifications-outline" size={20} color={COLORS.text} />
+            <View pointerEvents="none">
+              <Ionicons name="notifications-outline" size={20} color={COLORS.text} />
+            </View>
             {unreadCount > 0 && (
-              <View style={styles.badge}>
+              <View pointerEvents="none" style={styles.badge}>
                 <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : String(unreadCount)}</Text>
               </View>
             )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.iconBtn, { marginLeft: 8 }]}
-            onPress={() => router.push('/(app)/profile')}
-          >
-            <Ionicons name="person-outline" size={20} color={COLORS.text} />
           </TouchableOpacity>
         </View>
 
@@ -604,6 +615,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#f3e8ee',
+    zIndex: 10,
   },
   avatarCircle: {
     width: 44,
@@ -613,6 +625,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    ...(Platform.OS === 'web' ? ({ cursor: 'pointer' } as any) : {}),
   },
   avatarImg: {
     width: 44,
@@ -631,6 +644,7 @@ const styles = StyleSheet.create({
     position: 'relative',
     borderWidth: 1,
     borderColor: '#f3e8ee',
+    ...(Platform.OS === 'web' ? ({ cursor: 'pointer' } as any) : {}),
   },
   badge: {
     position: 'absolute',

@@ -444,7 +444,7 @@ Deno.serve(async (req: Request) => {
                   p_error: dispatchResult.error || "Failed to dispatch email",
                 });
               }
-            } catch (mailErr: any) {
+            } catch (mailErr: unknown) {
               const errText = mailErr instanceof Error ? mailErr.message : String(mailErr);
               console.warn("[webhook] Booking receipt email dispatch warning:", errText);
               await supabase.rpc("finalize_email_outbox", {
@@ -606,7 +606,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!recipientEmail) {
-      throw new Error("Missing recipient email address");
+      console.warn("[webhook] No recipient email resolved yet; subscription is activated before aborting.");
     }
 
     const subscriptionRecord = {
@@ -632,8 +632,25 @@ Deno.serve(async (req: Request) => {
 
     if (subscriptionUpsertError) {
       console.error("user_plan_subscription upsert error:", subscriptionUpsertError);
+
+      // Maya/any method: retry with progressively safer payloads so the account still becomes Pro.
+      const fallbackResult = await activateSubscriptionWithFallback(
+        supabase,
+        subscriptionRecord,
+        "[webhook]",
+      );
+
+      if (!fallbackResult.ok) {
+        // Throwing marks the webhook event as failed so PayMongo retries delivery.
+        throw new Error(`Subscription activation failed: ${fallbackResult.error}`);
+      }
     } else {
       console.log("Subscription activated successfully:", metadata.user_id);
+    }
+
+    // Subscription is now persisted; only then enforce that a receipt recipient exists.
+    if (!recipientEmail) {
+      throw new Error("Missing recipient email address");
     }
 
     // Synchronize User Profile (safely updates plan_tier or updated_at)
@@ -657,43 +674,7 @@ Deno.serve(async (req: Request) => {
       console.warn("[webhook] User profile sync warning:", profErr);
     }
 
-    // In-app notification welcoming patient to Pro tier (prevent duplicate)
-    try {
-      const { data: existingNotif } = await supabase
-        .from("user_notification")
-        .select("notif_id")
-        .eq("user_id", metadata.user_id)
-        .eq("subtype", "subscription_upgraded")
-        .gte("created_at", new Date(Date.now() - 3600000).toISOString())
-        .limit(1)
-        .maybeSingle();
-
-      if (!existingNotif) {
-        const formattedEndDate = periodEnd.toLocaleDateString("en-PH", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        });
-        const { error: notifErr } = await supabase
-          .from("user_notification")
-          .insert({
-            user_id: metadata.user_id,
-            type: "subscription",
-            subtype: "subscription_upgraded",
-            title: "Welcome to DermAI Pro!",
-            body: `Your payment was successful. You now have unlimited AI skin scans and Pro features enabled until ${formattedEndDate}.`,
-            is_read: false,
-            created_at: new Date().toISOString(),
-          });
-        if (notifErr) {
-          console.warn("[webhook] user_notification insert warning:", notifErr.message);
-        } else {
-          console.log("[webhook] user_notification created for Pro upgrade:", metadata.user_id);
-        }
-      }
-    } catch (notifErr) {
-      console.warn("[webhook] user_notification warning:", notifErr);
-    }
+    // In-app subscription notifications disabled: receipts and payment confirmations are handled strictly via email.
 
     // Record 'Subscription Upgraded' in system_audit_log
     await recordAuditLog({
@@ -796,3 +777,95 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: errorMessage }, 500);
   }
 });
+
+
+/**
+ * Resilient activation of public.user_plan_subscription (used by every payment method).
+ *
+ * The caller always tries the normal upsert first (GCash path is unchanged). Only when that
+ * write fails (e.g. a live-DB CHECK constraint on payment_method rejecting "maya"/"paymaya",
+ * a missing optional column, or a stale expired/cancelled row) do we walk down this ladder:
+ *   1. same record + reset cancel flags
+ *   2. same record with every known spelling of the payment method (maya / Maya / paymaya ...)
+ *   3. record without the optional billing columns
+ *   4. plain UPDATE by user_id, then INSERT
+ * so that a successful payment can never leave the account on Free / expired.
+ */
+async function activateSubscriptionWithFallback(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  // deno-lint-ignore no-explicit-any
+  record: Record<string, any>,
+  logTag = "[subscription]",
+): Promise<{ ok: boolean; error: string | null; attempt: string }> {
+  const TABLE = "user_plan_subscription";
+  const rawMethod = String(record.payment_method ?? "").toLowerCase().trim();
+  const isMaya = rawMethod === "maya" || rawMethod === "paymaya";
+  const isGcash = rawMethod === "gcash";
+  const methodVariants: string[] = isMaya
+    ? ["maya", "Maya", "paymaya", "PayMaya"]
+    : isGcash
+    ? ["gcash", "GCash"]
+    : [String(record.payment_method ?? "Online Payment")];
+
+  const optionalKeys = [
+    "payment_method",
+    "payment_full_name",
+    "payment_email",
+    "billing_address",
+    "payment_mobile_number",
+  ];
+  const resetFields = { cancel_at_period_end: false, cancelled_at: null };
+
+  // deno-lint-ignore no-explicit-any
+  const stripped: Record<string, any> = { ...record };
+  for (const key of optionalKeys) delete stripped[key];
+
+  // deno-lint-ignore no-explicit-any
+  const candidates: Array<{ label: string; row: Record<string, any> }> = [
+    { label: "reset-cancel-flags", row: { ...record, ...resetFields } },
+    ...methodVariants.map((m) => ({
+      label: `payment_method=${m}`,
+      row: { ...record, payment_method: m },
+    })),
+    { label: "without-optional-columns+reset", row: { ...stripped, ...resetFields } },
+    { label: "without-optional-columns", row: stripped },
+  ];
+
+  let lastError: string | null = null;
+
+  for (const candidate of candidates) {
+    const { error } = await client
+      .from(TABLE)
+      .upsert(candidate.row, { onConflict: "user_id" });
+    if (!error) {
+      console.log(`${logTag} subscription activated via fallback attempt: ${candidate.label}`);
+      return { ok: true, error: null, attempt: candidate.label };
+    }
+    lastError = error.message || String(error);
+    console.warn(`${logTag} subscription fallback attempt "${candidate.label}" failed:`, lastError);
+  }
+
+  // Last resort: explicit UPDATE of the existing row, then INSERT when there is none.
+  const { data: updatedRows, error: updateError } = await client
+    .from(TABLE)
+    .update(stripped)
+    .eq("user_id", record.user_id)
+    .select("subscription_id");
+
+  if (!updateError && Array.isArray(updatedRows) && updatedRows.length > 0) {
+    console.log(`${logTag} subscription activated via explicit UPDATE fallback`);
+    return { ok: true, error: null, attempt: "update-by-user_id" };
+  }
+  if (updateError) lastError = updateError.message || lastError;
+
+  const { error: insertError } = await client.from(TABLE).insert(stripped);
+  if (!insertError) {
+    console.log(`${logTag} subscription activated via INSERT fallback`);
+    return { ok: true, error: null, attempt: "insert" };
+  }
+  lastError = insertError.message || lastError;
+
+  console.error(`${logTag} all subscription activation fallbacks failed:`, lastError);
+  return { ok: false, error: lastError, attempt: "none" };
+}

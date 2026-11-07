@@ -7,9 +7,11 @@ import {
   StyleSheet,
   RefreshControl,
   ActivityIndicator,
+  Alert,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '@/lib/constants';
 import {
@@ -18,66 +20,126 @@ import {
   markAppNotificationRead,
   markAllAppNotificationsRead,
   subscribeToAppNotifications,
+  resolveAvatarUrl,
 } from '@/lib/store';
 import type { AppNotification } from '@/lib/store';
 
 type FilterTab = 'all' | 'appointment' | 'broadcast' | 'scan' | 'ticket';
 
-interface VisualConfig {
-  icon: React.ComponentProps<typeof Ionicons>['name'];
+interface BadgeConfig {
   color: string;
   badgeLabel: string;
 }
 
-function getNotifVisualConfig(notif: AppNotification): VisualConfig {
-  // 1. Appointment subtypes
-  if (notif.subtype === 'appointment-scheduled' || notif.type === 'appointment-accepted') {
-    return { icon: 'checkmark-circle', color: '#16a34a', badgeLabel: 'CONFIRMED' };
+function getNotifBadgeConfig(notif: AppNotification): BadgeConfig {
+  // 1. Payment confirmation
+  if (
+    notif.subtype === 'payment_confirmed' ||
+    notif.subtype === 'payment-confirmed' ||
+    notif.type === 'payment-confirmed' ||
+    notif.type === 'appointment-payment-confirmed'
+  ) {
+    return { color: '#16a34a', badgeLabel: 'PAID' };
+  }
+
+  // 2. Appointment subtypes
+  if (notif.subtype === 'appointment-scheduled' || notif.type === 'appointment-accepted' || notif.subtype === 'confirmed') {
+    return { color: '#16a34a', badgeLabel: 'CONFIRMED' };
   }
   if (notif.subtype === 'appointment-rejected' || notif.type === 'appointment-rejected') {
-    return { icon: 'close-circle', color: COLORS.danger, badgeLabel: 'DECLINED' };
+    return { color: COLORS.danger, badgeLabel: 'DECLINED' };
+  }
+  if (notif.subtype === 'appointment-cancelled' || notif.type === 'appointment-cancelled') {
+    return { color: COLORS.danger, badgeLabel: 'CANCELLED' };
+  }
+  if (
+    notif.type === 'appointment-no-show' ||
+    notif.type === 'appointment-missed' ||
+    notif.subtype === 'no-show' ||
+    notif.subtype === 'appointment-no-show'
+  ) {
+    return { color: '#ea580c', badgeLabel: 'NO-SHOW' };
   }
   if (notif.subtype === 'appointment-completed' || notif.type === 'appointment-completed') {
-    return { icon: 'medkit', color: '#2563eb', badgeLabel: 'COMPLETED' };
+    return { color: '#2563eb', badgeLabel: 'COMPLETED' };
   }
 
-  // 2. Broadcasts & Maintenance
+  // 3. Broadcasts & Maintenance
   if (notif.subtype === 'maintenance_alert' || notif.type === 'maintenance_alert') {
-    return { icon: 'construct', color: '#ea580c', badgeLabel: 'MAINTENANCE' };
+    return { color: '#ea580c', badgeLabel: 'MAINTENANCE' };
   }
   if (notif.category === 'broadcast' || notif.type === 'broadcast') {
-    return { icon: 'megaphone', color: '#d97706', badgeLabel: 'ANNOUNCEMENT' };
+    return { color: '#d97706', badgeLabel: 'ANNOUNCEMENT' };
   }
 
-  // 3. Scans
-  if (notif.category === 'scan' || notif.type === 'scan') {
-    return { icon: 'flask', color: COLORS.primary, badgeLabel: 'AI SCAN' };
+  // 4. Scans
+  if (notif.category === 'scan' || notif.type === 'scan' || notif.type === 'scan_result') {
+    return { color: COLORS.primary, badgeLabel: 'AI SCAN' };
   }
 
-  // 4. Support Tickets
+  // 5. Support Tickets
   if (notif.category === 'ticket' || notif.type === 'ticket' || notif.type?.includes('ticket')) {
-    return { icon: 'chatbox-ellipses', color: '#8b5cf6', badgeLabel: 'SUPPORT' };
-  }
-
-  // 5. Subscription
-  if (notif.category === 'subscription' || notif.type === 'subscription') {
-    return { icon: 'star', color: '#eab308', badgeLabel: 'PLAN' };
+    return { color: '#8b5cf6', badgeLabel: 'SUPPORT' };
   }
 
   // 6. Appointments general
   if (notif.category === 'appointment' || notif.type === 'appointment') {
-    return { icon: 'calendar', color: '#2563eb', badgeLabel: 'APPOINTMENT' };
+    return { color: '#2563eb', badgeLabel: 'APPOINTMENT' };
   }
 
-  return { icon: 'notifications', color: COLORS.textSecondary, badgeLabel: 'UPDATE' };
+  return { color: COLORS.textSecondary, badgeLabel: 'UPDATE' };
+}
+
+function resolveNotificationAvatarUrl(notif: AppNotification): string | null {
+  const rawUrl =
+    notif.senderAvatar ||
+    notif.metadata?.clinic_logo ||
+    notif.metadata?.avatar_url ||
+    notif.metadata?.logo_url ||
+    notif.metadata?.profile_image ||
+    notif.metadata?.sender_avatar ||
+    null;
+
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  return resolveAvatarUrl(rawUrl) || rawUrl || null;
+}
+
+function isScanNotification(notif: AppNotification, badgeLabel?: string): boolean {
+  return (
+    notif.type === 'scan' ||
+    notif.type === 'scan_result' ||
+    notif.type === 'scan-completed' ||
+    notif.category === 'scan' ||
+    (notif.category as string) === 'AI SCAN' ||
+    notif.metadata?.category === 'skin_scan' ||
+    badgeLabel === 'AI SCAN'
+  );
+}
+
+function getSenderInitials(notif: AppNotification): string {
+  const rawName = (
+    notif.senderName ||
+    notif.metadata?.clinic_name ||
+    notif.metadata?.sender_name ||
+    'Clinic'
+  ).trim();
+
+  if (!rawName || rawName === 'Clinic Update') return 'C';
+
+  const words = rawName.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return 'C';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
 }
 
 export default function NotificationsScreen() {
+  const router = useRouter();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
+  const [failedAvatarIds, setFailedAvatarIds] = useState<Record<string, boolean>>({});
 
   const loadNotifications = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -86,7 +148,17 @@ export default function NotificationsScreen() {
       if (!user) return;
       setUserId(user.id);
       const notifs = await getAppNotifications(user.id);
-      setNotifications(notifs);
+      // Suppress legacy subscription notifications
+      const cleaned = (notifs || []).filter(
+        (n) =>
+          n.category !== 'subscription' &&
+          (n.category as string) !== 'PLAN' &&
+          n.type !== 'subscription' &&
+          n.subtype !== 'subscription_upgraded' &&
+          !n.subtype?.includes('subscription') &&
+          !/pro subscription|subscription|plan activated|welcome to dermai pro/i.test(n.title || '')
+      );
+      setNotifications(cleaned);
     } catch (err) {
       console.warn('[Notifications] Error loading notifications:', err);
     } finally {
@@ -123,6 +195,22 @@ export default function NotificationsScreen() {
     await markAppNotificationRead(userId, notif.id);
   }
 
+  async function handleCardPress(notif: AppNotification) {
+    if (userId && !notif.read) {
+      await handleMarkRead(notif);
+    }
+
+    if (notif.category === 'appointment' || notif.type?.includes('appointment')) {
+      router.push('/(app)/appointments');
+    } else if (notif.category === 'scan' || notif.type === 'scan' || notif.type === 'scan_result') {
+      router.push('/(app)/history');
+    } else if (notif.category === 'ticket' || notif.type === 'ticket' || notif.type?.includes('ticket')) {
+      router.push('/(app)/settings');
+    } else if (notif.category === 'broadcast' || notif.type === 'broadcast') {
+      Alert.alert(notif.title, notif.message, [{ text: 'OK' }]);
+    }
+  }
+
   async function handleMarkAllRead() {
     if (!userId) return;
     const unreadIds = notifications.filter((n) => !n.read).map((n) => n.id);
@@ -131,43 +219,88 @@ export default function NotificationsScreen() {
     await markAllAppNotificationsRead(userId, unreadIds);
   }
 
+  const isSubscriptionNotification = (n: AppNotification) =>
+    n.category === 'subscription' ||
+    (n.category as string) === 'PLAN' ||
+    n.type === 'subscription' ||
+    n.type === 'subscription_expired' ||
+    n.subtype === 'subscription_upgraded' ||
+    Boolean(n.subtype?.includes('subscription')) ||
+    /pro subscription|subscription|plan activated|welcome to dermai pro/i.test(n.title || '');
+
   const unreadCount = useMemo(
-    () => notifications.filter((n) => !n.read).length,
+    () => notifications.filter((n) => !n.read && !isSubscriptionNotification(n)).length,
+    [notifications]
+  );
+
+  const allValidCount = useMemo(
+    () => notifications.filter((n) => !isSubscriptionNotification(n)).length,
     [notifications]
   );
 
   const filteredNotifications = useMemo(() => {
-    if (activeTab === 'all') return notifications;
+    const baseList = notifications.filter((n) => !isSubscriptionNotification(n));
+    if (activeTab === 'all') return baseList;
     if (activeTab === 'appointment') {
-      return notifications.filter((n) => n.category === 'appointment' || n.type?.includes('appointment'));
+      return baseList.filter(
+        (n) => n.category === 'appointment' || n.type?.includes('appointment')
+      );
     }
     if (activeTab === 'broadcast') {
-      return notifications.filter((n) => n.category === 'broadcast' || n.type === 'broadcast' || n.type === 'maintenance_alert');
+      return baseList.filter(
+        (n) =>
+          n.category === 'broadcast' ||
+          n.type === 'broadcast' ||
+          n.type === 'maintenance_alert' ||
+          n.subtype === 'admin_announcement' ||
+          n.subtype === 'maintenance_alert' ||
+          n.metadata?.subtype === 'admin_announcement' ||
+          n.metadata?.subtype === 'maintenance_alert'
+      );
     }
     if (activeTab === 'scan') {
-      return notifications.filter((n) => n.category === 'scan' || n.type === 'scan');
+      return baseList.filter(
+        (n) =>
+          n.category === 'scan' ||
+          n.type === 'scan' ||
+          n.type === 'scan_result' ||
+          n.type === 'scan-completed' ||
+          n.metadata?.category === 'skin_scan'
+      );
     }
     if (activeTab === 'ticket') {
-      return notifications.filter((n) => n.category === 'ticket' || n.type?.includes('ticket'));
+      return baseList.filter(
+        (n) =>
+          n.category === 'ticket' ||
+          n.type === 'support' ||
+          n.type === 'support_ticket' ||
+          n.type?.includes('ticket') ||
+          n.type?.includes('support') ||
+          n.metadata?.category === 'support' ||
+          n.metadata?.category === 'ticket'
+      );
     }
-    return notifications;
+    return baseList;
   }, [notifications, activeTab]);
 
   return (
     <SafeAreaView style={styles.safe}>
       {/* ── Top Header ── */}
       <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          activeOpacity={0.7}
+          onPress={() => (router.canGoBack() ? router.back() : router.push('/(app)'))}
+        >
+          <Ionicons name="arrow-back" size={22} color={COLORS.text} />
+        </TouchableOpacity>
         <View style={styles.avatarCircle}>
           <Ionicons name="notifications" size={20} color={COLORS.primary} />
         </View>
         <View style={{ flex: 1, marginLeft: 12 }}>
           <View style={styles.headerTitleRow}>
             <Text style={styles.headerName}>Notifications</Text>
-            {unreadCount > 0 && (
-              <View style={styles.unreadCountPill}>
-                <Text style={styles.unreadCountPillText}>{unreadCount} NEW</Text>
-              </View>
-            )}
+            {unreadCount > 0}
           </View>
           <Text style={styles.headerWelcome}>
             {unreadCount > 0 ? `${unreadCount} unread update${unreadCount > 1 ? 's' : ''}` : 'All caught up with DERMAI'}
@@ -189,7 +322,7 @@ export default function NotificationsScreen() {
             onPress={() => setActiveTab('all')}
           >
             <Text style={[styles.tabChipText, activeTab === 'all' && styles.tabChipTextActive]}>
-              All ({notifications.length})
+              All ({allValidCount})
             </Text>
           </TouchableOpacity>
 
@@ -267,23 +400,50 @@ export default function NotificationsScreen() {
         >
           <View style={styles.list}>
             {filteredNotifications.map((notif) => {
-              const visual = getNotifVisualConfig(notif);
+              const badge = getNotifBadgeConfig(notif);
+              const isScan = isScanNotification(notif, badge.badgeLabel);
+              const avatarUrl = isScan ? null : resolveNotificationAvatarUrl(notif);
+              const showAvatarImage = Boolean(avatarUrl && !failedAvatarIds[notif.id]);
+              const initials = getSenderInitials(notif);
+
               return (
                 <TouchableOpacity
                   key={notif.id}
                   activeOpacity={0.88}
                   style={[styles.card, !notif.read && styles.cardUnread]}
-                  onPress={() => handleMarkRead(notif)}
+                  onPress={() => handleCardPress(notif)}
                 >
-                  <View style={[styles.iconWrap, { backgroundColor: visual.color + '15' }]}>
-                    <Ionicons name={visual.icon} size={22} color={visual.color} />
-                  </View>
+                  {isScan ? (
+                    <View style={styles.scanAvatarBadge}>
+                      <Ionicons name="sparkles-outline" size={20} color="#831843" />
+                    </View>
+                  ) : (
+                    <View style={styles.avatarWrap}>
+                      {showAvatarImage ? (
+                        <Image
+                          source={{ uri: avatarUrl! }}
+                          style={styles.clinicAvatarImage}
+                          resizeMode="cover"
+                          onError={() =>
+                            setFailedAvatarIds((prev) => ({
+                              ...prev,
+                              [notif.id]: true,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <View style={styles.avatarFallback}>
+                          <Text style={styles.avatarFallbackText}>{initials}</Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
 
                   <View style={{ flex: 1, marginLeft: 12 }}>
                     <View style={styles.cardHeaderRow}>
-                      <View style={[styles.categoryBadge, { backgroundColor: visual.color + '18' }]}>
-                        <Text style={[styles.categoryBadgeText, { color: visual.color }]}>
-                          {visual.badgeLabel}
+                      <View style={[styles.categoryBadge, { backgroundColor: badge.color + '18' }]}>
+                        <Text style={[styles.categoryBadgeText, { color: badge.color }]}>
+                          {badge.badgeLabel}
                         </Text>
                       </View>
                       {notif.senderName && (
@@ -345,12 +505,20 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 12,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
+  },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 6,
   },
   avatarCircle: {
     width: 44,
@@ -491,13 +659,47 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
-  iconWrap: {
+  scanAvatarBadge: {
     width: 44,
     height: 44,
-    borderRadius: 14,
+    borderRadius: 22,
+    backgroundColor: '#FDF2F8',
+    borderWidth: 1,
+    borderColor: '#FCE7F3',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
+  },
+  avatarWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  clinicAvatarImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+  },
+  avatarFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarFallbackText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   cardHeaderRow: {
     flexDirection: 'row',

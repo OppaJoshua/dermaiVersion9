@@ -50,7 +50,7 @@ const corsHeaders = {
 
     "authorization, x-client-info, apikey, content-type",
 
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
 
 };
 
@@ -100,7 +100,8 @@ async function recordAuditLog({
 
   details: string;
 
-  metadata?: Record<string, unknown>;
+  // deno-lint-ignore no-explicit-any
+  metadata?: Record<string, any>;
 
 }) {
 
@@ -223,7 +224,6 @@ async function fulfillPaymentAndSendEmail({
   paymentMethodType: string;
 
   // deno-lint-ignore no-explicit-any
-
   metadata: Record<string, any>;
 
   userAuthEmail?: string | null;
@@ -360,7 +360,7 @@ async function fulfillPaymentAndSendEmail({
 
   if (!recipientEmail) {
 
-    throw new Error("Missing recipient email address");
+    console.warn("[fulfillPayment] No recipient email resolved yet; subscription is activated before aborting.");
 
   }
 
@@ -482,10 +482,26 @@ async function fulfillPaymentAndSendEmail({
 
     console.error("[fulfillPayment] user_plan_subscription upsert error:", subErr);
 
+    // Maya/any method: retry with progressively safer payloads so the account still becomes Pro.
+    const fallbackResult = await activateSubscriptionWithFallback(
+      adminSupabase,
+      subscriptionRecord,
+      "[fulfillPayment]",
+    );
+
+    if (!fallbackResult.ok) {
+      throw new Error(`Subscription activation failed: ${fallbackResult.error}`);
+    }
+
   } else {
 
     console.log("[fulfillPayment] user_plan_subscription activated for user:", userId);
 
+  }
+
+  // Subscription is now persisted; only then enforce that a receipt recipient exists.
+  if (!recipientEmail) {
+    throw new Error("Missing recipient email address");
   }
 
   // 4b. Synchronize User Profile (safely updates plan_tier or updated_at)
@@ -526,77 +542,7 @@ async function fulfillPaymentAndSendEmail({
 
   }
 
-  // 4c. In-app notification welcoming patient to Pro tier (prevent duplicate)
-
-  try {
-
-    const { data: existingNotif } = await adminSupabase
-
-      .from("user_notification")
-
-      .select("notif_id")
-
-      .eq("user_id", userId)
-
-      .eq("subtype", "subscription_upgraded")
-
-      .gte("created_at", new Date(Date.now() - 3600000).toISOString())
-
-      .limit(1)
-
-      .maybeSingle();
-
-    if (!existingNotif) {
-
-      const formattedEndDate = periodEnd.toLocaleDateString("en-PH", {
-
-        month: "short",
-
-        day: "numeric",
-
-        year: "numeric",
-
-      });
-
-      const { error: notifErr } = await adminSupabase
-
-        .from("user_notification")
-
-        .insert({
-
-          user_id: userId,
-
-          type: "subscription",
-
-          subtype: "subscription_upgraded",
-
-          title: "Welcome to DermAI Pro!",
-
-          body: `Your payment was successful. You now have unlimited AI skin scans and Pro features enabled until ${formattedEndDate}.`,
-
-          is_read: false,
-
-          created_at: new Date().toISOString(),
-
-        });
-
-      if (notifErr) {
-
-        console.warn("[fulfillPayment] user_notification insert warning:", notifErr.message);
-
-      } else {
-
-        console.log("[fulfillPayment] user_notification created for Pro upgrade:", userId);
-
-      }
-
-    }
-
-  } catch (notifErr) {
-
-    console.warn("[fulfillPayment] user_notification warning:", notifErr);
-
-  }
+  // 4c. In-app subscription notifications disabled: receipts and payment confirmations are handled strictly via email.
 
   // 4d. Record 'Subscription Upgraded' in system_audit_log
 
@@ -800,6 +746,7 @@ async function fulfillBookingPaymentAndSendEmail({
 
   currency?: string;
 
+  // deno-lint-ignore no-explicit-any
   metadata?: Record<string, any>;
 
   userAuthEmail?: string | null;
@@ -1098,7 +1045,7 @@ async function fulfillBookingPaymentAndSendEmail({
 
         }
 
-      } catch (mailErr: any) {
+      } catch (mailErr: unknown) {
 
         emailErrorMsg = mailErr instanceof Error ? mailErr.message : String(mailErr);
 
@@ -1152,6 +1099,58 @@ Deno.serve(async (req: Request) => {
 
     return new Response("ok", { headers: corsHeaders });
 
+  }
+
+  // Handle browser redirect return for mobile e-wallet payments
+  if (req.method === "GET") {
+    const url = new URL(req.url);
+    const status = url.searchParams.get("status") || "success";
+    const appointmentId = url.searchParams.get("appointment_id") || url.searchParams.get("booking_id") || "";
+    const paymentIntentId = url.searchParams.get("payment_intent") || url.searchParams.get("payment_intent_id") || "";
+    const clientKey = url.searchParams.get("payment_intent_client_key") || url.searchParams.get("client_key") || "";
+
+    const appRedirect = url.searchParams.get("app_redirect") || "";
+
+    let deepLink: string;
+    if (appRedirect) {
+      const joiner = appRedirect.includes("?") ? "&" : "?";
+      deepLink = `${appRedirect}${joiner}status=${encodeURIComponent(status)}&appointment_id=${encodeURIComponent(appointmentId)}&booking_id=${encodeURIComponent(appointmentId)}&payment_intent=${encodeURIComponent(paymentIntentId)}&client_key=${encodeURIComponent(clientKey)}`;
+    } else {
+      deepLink = `dermaimobile://payment-success?status=${encodeURIComponent(status)}&appointment_id=${encodeURIComponent(appointmentId)}&booking_id=${encodeURIComponent(appointmentId)}&payment_intent=${encodeURIComponent(paymentIntentId)}&client_key=${encodeURIComponent(clientKey)}`;
+    }
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="0;url=${deepLink}">
+  <title>Payment Completed - Returning to DermAI</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #fafafa; color: #1e293b; text-align: center; padding: 24px; box-sizing: border-box; }
+    .card { background: #ffffff; padding: 32px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); max-width: 400px; width: 100%; }
+    .btn { display: inline-block; margin-top: 24px; padding: 14px 28px; background: #be185d; color: #ffffff; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2 style="color: #059669; margin-top: 0;">Payment Authorized</h2>
+    <p>Redirecting you back to the DermAI app...</p>
+    <a class="btn" href="${deepLink}">Open DermAI App</a>
+  </div>
+  <script>
+    window.location.href = "${deepLink}";
+  </script>
+</body>
+</html>`;
+
+    return new Response(html, {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "text/html; charset=utf-8",
+      },
+    });
   }
 
   if (req.method !== "POST") {
@@ -1647,7 +1646,7 @@ Deno.serve(async (req: Request) => {
       });
 
       if (claimErr || !claimData?.success) {
-        const errCode = claimData?.code || (claimErr as any)?.code;
+        const errCode = claimData?.code || (claimErr as { code?: string })?.code;
         if (errCode === "ERR_CLAIM_IN_PROGRESS") {
           return jsonResponse(
             {
@@ -1765,8 +1764,6 @@ Deno.serve(async (req: Request) => {
       const basePrice = Math.round((grossAmount / (1 + VAT_RATE)) * 100) / 100;
       const vatAmount = Math.round((grossAmount - basePrice) * 100) / 100;
       const amountInCentavos = Math.round(grossAmount * 100);
-
-      const resolvedEmail = patientEmail || user.email;
 
       // Check existing payment attempt: verify before creating a competing second intent
       const existingIntentId = claimData.payment_reference?.startsWith("pi_") ? claimData.payment_reference : null;
@@ -1898,6 +1895,7 @@ Deno.serve(async (req: Request) => {
       const timeoutId = setTimeout(() => abortController.abort(), INTENT_HTTP_TIMEOUT_MS);
 
       let response: Response;
+      // deno-lint-ignore no-explicit-any
       let data: any;
 
       try {
@@ -1942,8 +1940,8 @@ Deno.serve(async (req: Request) => {
         });
 
         data = await response.json();
-      } catch (fetchErr: any) {
-        const isAbort = fetchErr?.name === "AbortError" || abortController.signal.aborted;
+      } catch (fetchErr: unknown) {
+        const isAbort = (fetchErr as Error)?.name === "AbortError" || abortController.signal.aborted;
         console.warn(`[paymongo-payment] PaymentIntent creation HTTP failure (isAbort: ${isAbort}):`, fetchErr);
 
         // SEC-02 PAYMENT SAFETY:
@@ -2246,7 +2244,7 @@ Deno.serve(async (req: Request) => {
 
       );
 
-      const data = await response.json();
+      let data = await response.json();
 
       if (!response.ok) {
 
@@ -2275,6 +2273,21 @@ Deno.serve(async (req: Request) => {
         );
 
       }
+
+      // Maya (paymaya) intents can still be "processing" for a moment after the redirect
+      // returns. Re-check briefly so fulfillment runs for Maya exactly like it does for GCash.
+      for (let recheckAttempt = 0; recheckAttempt < 5 && data?.data?.attributes?.status === "processing"; recheckAttempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const recheckResponse = await fetch(
+          `${PAYMONGO_API}/payment_intents/${paymentIntentId}?client_key=${encodeURIComponent(clientKey)}`,
+          { method: "GET", headers: authHeaders }
+        );
+        const recheckData = await recheckResponse.json();
+        if (recheckResponse.ok && recheckData?.data) {
+          data = recheckData;
+        }
+      }
+
 
       const intentAttributes = data?.data?.attributes;
 
@@ -2546,6 +2559,7 @@ Deno.serve(async (req: Request) => {
 
         }
 
+        // deno-lint-ignore no-explicit-any
         let pmData: any;
 
         try {
@@ -2568,7 +2582,7 @@ Deno.serve(async (req: Request) => {
 
         }
 
-        const intentStatus = pmData?.data?.attributes?.status;
+        let intentStatus = pmData?.data?.attributes?.status;
 
         if (intentStatus === "succeeded") {
 
@@ -2973,3 +2987,95 @@ Deno.serve(async (req: Request) => {
   }
 
 });
+
+
+/**
+ * Resilient activation of public.user_plan_subscription (used by every payment method).
+ *
+ * The caller always tries the normal upsert first (GCash path is unchanged). Only when that
+ * write fails (e.g. a live-DB CHECK constraint on payment_method rejecting "maya"/"paymaya",
+ * a missing optional column, or a stale expired/cancelled row) do we walk down this ladder:
+ *   1. same record + reset cancel flags
+ *   2. same record with every known spelling of the payment method (maya / Maya / paymaya ...)
+ *   3. record without the optional billing columns
+ *   4. plain UPDATE by user_id, then INSERT
+ * so that a successful payment can never leave the account on Free / expired.
+ */
+async function activateSubscriptionWithFallback(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  // deno-lint-ignore no-explicit-any
+  record: Record<string, any>,
+  logTag = "[subscription]",
+): Promise<{ ok: boolean; error: string | null; attempt: string }> {
+  const TABLE = "user_plan_subscription";
+  const rawMethod = String(record.payment_method ?? "").toLowerCase().trim();
+  const isMaya = rawMethod === "maya" || rawMethod === "paymaya";
+  const isGcash = rawMethod === "gcash";
+  const methodVariants: string[] = isMaya
+    ? ["maya", "Maya", "paymaya", "PayMaya"]
+    : isGcash
+    ? ["gcash", "GCash"]
+    : [String(record.payment_method ?? "Online Payment")];
+
+  const optionalKeys = [
+    "payment_method",
+    "payment_full_name",
+    "payment_email",
+    "billing_address",
+    "payment_mobile_number",
+  ];
+  const resetFields = { cancel_at_period_end: false, cancelled_at: null };
+
+  // deno-lint-ignore no-explicit-any
+  const stripped: Record<string, any> = { ...record };
+  for (const key of optionalKeys) delete stripped[key];
+
+  // deno-lint-ignore no-explicit-any
+  const candidates: Array<{ label: string; row: Record<string, any> }> = [
+    { label: "reset-cancel-flags", row: { ...record, ...resetFields } },
+    ...methodVariants.map((m) => ({
+      label: `payment_method=${m}`,
+      row: { ...record, payment_method: m },
+    })),
+    { label: "without-optional-columns+reset", row: { ...stripped, ...resetFields } },
+    { label: "without-optional-columns", row: stripped },
+  ];
+
+  let lastError: string | null = null;
+
+  for (const candidate of candidates) {
+    const { error } = await client
+      .from(TABLE)
+      .upsert(candidate.row, { onConflict: "user_id" });
+    if (!error) {
+      console.log(`${logTag} subscription activated via fallback attempt: ${candidate.label}`);
+      return { ok: true, error: null, attempt: candidate.label };
+    }
+    lastError = error.message || String(error);
+    console.warn(`${logTag} subscription fallback attempt "${candidate.label}" failed:`, lastError);
+  }
+
+  // Last resort: explicit UPDATE of the existing row, then INSERT when there is none.
+  const { data: updatedRows, error: updateError } = await client
+    .from(TABLE)
+    .update(stripped)
+    .eq("user_id", record.user_id)
+    .select("subscription_id");
+
+  if (!updateError && Array.isArray(updatedRows) && updatedRows.length > 0) {
+    console.log(`${logTag} subscription activated via explicit UPDATE fallback`);
+    return { ok: true, error: null, attempt: "update-by-user_id" };
+  }
+  if (updateError) lastError = updateError.message || lastError;
+
+  const { error: insertError } = await client.from(TABLE).insert(stripped);
+  if (!insertError) {
+    console.log(`${logTag} subscription activated via INSERT fallback`);
+    return { ok: true, error: null, attempt: "insert" };
+  }
+  lastError = insertError.message || lastError;
+
+  console.error(`${logTag} all subscription activation fallbacks failed:`, lastError);
+  return { ok: false, error: lastError, attempt: "none" };
+}
