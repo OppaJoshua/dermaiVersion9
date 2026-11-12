@@ -272,25 +272,32 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    if (
-      (!metadata?.user_id || (!metadata?.plan_id && metadata?.payment_type !== "appointment_booking")) &&
-      paymentIntentId
-    ) {
-      const paymentIntentResponse = await fetch(
-        `${PAYMONGO_API}/payment_intents/${paymentIntentId}`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: "Basic " + btoa(paymongoSecretKey + ":"),
-            "Content-Type": "application/json",
-          },
-        }
-      );
+    // deno-lint-ignore no-explicit-any
+    let paymentIntentAttributes: any = null;
 
-      const paymentIntentJson = await paymentIntentResponse.json();
-      if (paymentIntentResponse.ok && paymentIntentJson?.data?.attributes?.metadata) {
-        metadata = paymentIntentJson.data.attributes.metadata;
-        console.log("[webhook] Metadata retrieved from Payment Intent.");
+    if (paymentIntentId) {
+      try {
+        const paymentIntentResponse = await fetch(
+          `${PAYMONGO_API}/payment_intents/${paymentIntentId}`,
+          {
+            method: "GET",
+            headers: {
+              Authorization: "Basic " + btoa(paymongoSecretKey + ":"),
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        const paymentIntentJson = await paymentIntentResponse.json();
+        if (paymentIntentResponse.ok && paymentIntentJson?.data?.attributes) {
+          paymentIntentAttributes = paymentIntentJson.data.attributes;
+          if (paymentIntentJson.data.attributes.metadata) {
+            metadata = { ...paymentIntentJson.data.attributes.metadata, ...metadata };
+            console.log("[webhook] Metadata retrieved from Payment Intent.");
+          }
+        }
+      } catch (piErr) {
+        console.warn("[webhook] Failed to fetch PaymentIntent for cross-verification:", piErr);
       }
     }
 
@@ -502,9 +509,65 @@ Deno.serve(async (req: Request) => {
       throw new Error("PayMongo payment amount is missing or invalid");
     }
 
+    // Authoritative Expected Amount Validation:
+    // Must verify from at least one trusted source: PaymentIntent authoritative amount or checkout snapshot
+    let authoritativeExpectedCentavos: number | null = null;
+
+    if (
+      typeof paymentIntentAttributes?.amount === "number" &&
+      Number.isFinite(paymentIntentAttributes.amount) &&
+      paymentIntentAttributes.amount > 0
+    ) {
+      authoritativeExpectedCentavos = paymentIntentAttributes.amount;
+    } else {
+      const snapshotAmountStr = metadata?.amount_paid || metadata?.total_amount;
+      if (snapshotAmountStr) {
+        const parsed = Math.round(Number(snapshotAmountStr) * 100);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          authoritativeExpectedCentavos = parsed;
+        }
+      }
+    }
+
+    // Reject activation if no authoritative expected amount can be established
+    if (authoritativeExpectedCentavos === null || !Number.isFinite(authoritativeExpectedCentavos) || authoritativeExpectedCentavos <= 0) {
+      throw new Error(
+        `Cannot verify payment amount for webhook payment ${paymongoPaymentId}: authoritative expected transaction amount is missing or malformed.`
+      );
+    }
+
+    // Strict equality check: paid amount MUST match authoritative expected amount
+    if (amountInCentavos !== authoritativeExpectedCentavos) {
+      throw new Error(
+        `Payment amount mismatch: payment has ${amountInCentavos} centavos, but authoritative expected transaction amount is ${authoritativeExpectedCentavos} centavos`
+      );
+    }
+
+    // Cross-verify both sources if both are present
+    const snapshotStr = metadata?.amount_paid || metadata?.total_amount;
+    if (
+      typeof paymentIntentAttributes?.amount === "number" &&
+      Number.isFinite(paymentIntentAttributes.amount) &&
+      paymentIntentAttributes.amount > 0 &&
+      snapshotStr
+    ) {
+      const snapshotParsed = Math.round(Number(snapshotStr) * 100);
+      if (Number.isFinite(snapshotParsed) && snapshotParsed > 0 && snapshotParsed !== paymentIntentAttributes.amount) {
+        throw new Error(
+          `Authoritative amount conflict: PaymentIntent amount (${paymentIntentAttributes.amount}) does not match checkout snapshot (${snapshotParsed})`
+        );
+      }
+    }
+
+    if (paymentAttributes?.currency && paymentAttributes.currency.toUpperCase() !== "PHP") {
+      throw new Error(`Invalid payment currency: ${paymentAttributes.currency}, expected PHP`);
+    }
+
     // Gross amount actually charged by PayMongo
     const amount = amountInCentavos / 100;
-    const paymentDateIso = new Date().toISOString();
+    // Authoritative gateway timestamp resolution & fail-safe cancellation guard
+    const hasTrustedTime = typeof paymentAttributes?.paid_at === "number" && Number.isFinite(paymentAttributes.paid_at) && paymentAttributes.paid_at > 0;
+    const paymentTimeMs = hasTrustedTime ? paymentAttributes.paid_at * 1000 : null;
 
     const paymentMethodType: string =
       paymentAttributes?.source?.type ||
@@ -536,45 +599,62 @@ Deno.serve(async (req: Request) => {
     // Check if user_payment is already recorded
     const { data: existingPayment } = await supabase
       .from("user_payment")
-      .select("payment_id")
+      .select("payment_id, payment_date")
       .eq("paymongo_payment_id", paymongoPaymentId)
       .maybeSingle();
 
-    if (!existingPayment) {
-      const paymentRecord = {
-        amount: finalAmountPaid,
-        payment_date: paymentDateIso,
-        method: paymentMethodType,
-        status: "success",
-        user_id: metadata.user_id,
-        plan_id: metadata.plan_id,
-        billing_cycle: billingCycle,
-        reference_number: paymongoPaymentId,
-        paymongo_payment_id: paymongoPaymentId,
-        paymongo_payment_intent_id: paymentIntentId,
-      };
+    // Query existing subscription early for exact-payment idempotency & cancellation guard
+    const { data: existingSub } = await supabase
+      .from("user_plan_subscription")
+      .select("subscription_id, plan_id, status, started_at, current_period_start, current_period_end, cancel_at_period_end, cancelled_at")
+      .eq("user_id", metadata.user_id)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-      const { error: paymentInsertError } = await supabase
-        .from("user_payment")
-        .insert(paymentRecord);
+    // Validate existing payment_date if present
+    const existingPaymentDateMs = existingPayment?.payment_date
+      ? new Date(existingPayment.payment_date).getTime()
+      : null;
+    const validExistingDateMs =
+      typeof existingPaymentDateMs === "number" &&
+      Number.isFinite(existingPaymentDateMs) &&
+      existingPaymentDateMs > 0
+        ? existingPaymentDateMs
+        : null;
 
-      if (paymentInsertError) {
-        console.error("user_payment insert error:", paymentInsertError);
-      } else {
-        console.log("Successful payment recorded in user_payment:", paymongoPaymentId);
-      }
-    } else {
-      console.log("user_payment already exists for reference:", paymongoPaymentId);
+    // Authoritative reference payment timestamp (gateway paid_at first, then recorded payment_date)
+    const refPaymentTimeMs = paymentTimeMs ?? validExistingDateMs;
+
+    // Strict Fail-Closed Safety Gate:
+    // If an incoming payment has NO verifiable payment timestamp from PayMongo or existing payment record:
+    // DO NOT manufacture a timestamp using new Date() or Date.now().
+    // DO NOT grant an arbitrary subscription period.
+    // Reject safely with an explicit, recoverable error requiring verification.
+    if (refPaymentTimeMs === null || !Number.isFinite(refPaymentTimeMs) || refPaymentTimeMs <= 0) {
+      throw new Error(
+        `Cannot safely fulfill payment ${paymongoPaymentId}: authoritative payment timestamp is missing or invalid. Client re-verification required.`
+      );
     }
 
-    // Activate subscription
-    const periodStart = new Date();
-    const periodEnd = new Date(periodStart);
+    const paymentDateIso = new Date(refPaymentTimeMs).toISOString();
 
-    if (billingCycle === "yearly") {
-      periodEnd.setFullYear(periodEnd.getFullYear() + 1);
-    } else {
-      periodEnd.setMonth(periodEnd.getMonth() + 1);
+    // Scenario C Check: If reference payment time is older than the current subscription's start,
+    // do NOT overwrite the newer subscription! (Preserves newer subscription and cancellation state)
+    const existingStartedMs = existingSub?.started_at ? new Date(existingSub.started_at).getTime() : 0;
+    const isOlderPayment = Boolean(
+      existingSub &&
+      existingStartedMs > 0 &&
+      existingStartedMs > refPaymentTimeMs + 5000
+    );
+
+    if (isOlderPayment) {
+      console.log(
+        "[webhook] Incoming payment timestamp is older than current subscription started_at:",
+        { paymentTime: refPaymentTimeMs, existingStartedAt: existingSub?.started_at },
+        "- Preserving newer subscription. Idempotent skip."
+      );
+      return jsonResponse({ received: true, idempotentSkip: true, reason: "older_payment_ignored" }, 200);
     }
 
     // Recipient: account email first (auth.users, then public.user), then the
@@ -609,6 +689,95 @@ Deno.serve(async (req: Request) => {
       console.warn("[webhook] No recipient email resolved yet; subscription is activated before aborting.");
     }
 
+    // Scenario A Check: Exact-payment fulfillment idempotency
+    // If this exact PayMongo payment is already recorded in user_payment AND the subscription is
+    // already active on this plan with period start anchored to this payment, do NOT recalculate dates or re-upsert.
+    const subPeriodStartMs = existingSub?.current_period_start ? new Date(existingSub.current_period_start).getTime() : 0;
+
+    const isAlreadyFullyFulfilled = Boolean(
+      existingPayment &&
+      existingSub &&
+      existingSub.status === "active" &&
+      existingSub.plan_id === metadata.plan_id &&
+      Math.abs(subPeriodStartMs - refPaymentTimeMs) < 10000
+    );
+
+    if (isAlreadyFullyFulfilled) {
+      console.log("[webhook] Exact payment already fulfilled (anchored start matches):", paymongoPaymentId, "- Idempotent skip.");
+
+      // Check if receipt email has already been sent (using .limit(1) to avoid PGRST116 multi-row error)
+      let emailAlreadySent = false;
+      try {
+        const { data: auditLogRows, error: auditErr } = await supabase
+          .from("system_audit_log")
+          .select("log_id")
+          .eq("action", "Receipt Email Sent")
+          .ilike("details", `%${paymongoPaymentId}%`)
+          .limit(1);
+
+        if (!auditErr && Array.isArray(auditLogRows) && auditLogRows.length > 0) {
+          emailAlreadySent = true;
+        }
+      } catch {
+        // Non-blocking check
+      }
+
+      if (emailAlreadySent) {
+        return jsonResponse({ received: true, idempotentSkip: true }, 200);
+      }
+      console.log("[webhook] Subscription fulfilled but receipt not recorded as sent. Proceeding to atomic email delivery.");
+    }
+
+    if (!isAlreadyFullyFulfilled) {
+    if (!existingPayment) {
+      const paymentRecord = {
+        amount: finalAmountPaid,
+        payment_date: paymentDateIso,
+        method: paymentMethodType,
+        status: "success",
+        user_id: metadata.user_id,
+        plan_id: metadata.plan_id,
+        billing_cycle: billingCycle,
+        reference_number: paymongoPaymentId,
+        paymongo_payment_id: paymongoPaymentId,
+        paymongo_payment_intent_id: paymentIntentId,
+      };
+
+      const { error: paymentInsertError } = await supabase
+        .from("user_payment")
+        .insert(paymentRecord);
+
+      if (paymentInsertError) {
+        console.error("user_payment insert error:", paymentInsertError);
+      } else {
+        console.log("Successful payment recorded in user_payment:", paymongoPaymentId);
+      }
+    } else {
+      console.log("user_payment already exists; completing subscription activation for:", paymongoPaymentId);
+    }
+
+    // Activate subscription anchored to authoritative payment timestamp
+    const periodStart = new Date(refPaymentTimeMs);
+    const periodEnd = new Date(periodStart);
+
+    if (billingCycle === "yearly") {
+      periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+    } else {
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
+    }
+
+
+
+    const cancelledTime = existingSub?.cancelled_at ? new Date(existingSub.cancelled_at).getTime() : 0;
+
+    // Fail-safe rule: If the user currently has a cancellation scheduled (cancel_at_period_end: true),
+    // ONLY clear it if we have an authoritative gateway timestamp proving the payment occurred AFTER the cancellation.
+    // If the timestamp is missing, invalid, unverified, or equal/older than cancelledTime, preserve the cancellation.
+    const isNewerCancellation = Boolean(
+      existingSub?.cancel_at_period_end &&
+      (paymentTimeMs === null || cancelledTime >= paymentTimeMs)
+    );
+
     const subscriptionRecord = {
       user_id: metadata.user_id,
       plan_id: metadata.plan_id,
@@ -618,6 +787,8 @@ Deno.serve(async (req: Request) => {
       renews_at: periodEnd.toISOString(),
       current_period_start: periodStart.toISOString(),
       current_period_end: periodEnd.toISOString(),
+      cancel_at_period_end: isNewerCancellation ? true : false,
+      cancelled_at: isNewerCancellation ? (existingSub?.cancelled_at ?? null) : null,
       payment_method: metadata.payment_method || paymentMethodType,
       payment_full_name: metadata.payment_full_name || null,
       payment_email: recipientEmail,
@@ -693,54 +864,125 @@ Deno.serve(async (req: Request) => {
         currentPeriodEnd: periodEnd.toISOString(),
       },
     });
+    }
 
-    // Check if receipt email was already sent
-    const { data: alreadySentLog } = await supabase
-      .from("system_audit_log")
-      .select("log_id")
-      .eq("action", "Receipt Email Sent")
-      .ilike("details", `%${paymongoPaymentId}%`)
-      .maybeSingle();
+    // 5. Send Receipt Email (Atomic Outbox Claim with system_audit_log defense-in-depth)
+    let alreadySentLog = null;
+    try {
+      const { data: auditLogRows, error: auditErr } = await supabase
+        .from("system_audit_log")
+        .select("log_id, details")
+        .eq("action", "Receipt Email Sent")
+        .ilike("details", `%${paymongoPaymentId}%`)
+        .limit(1);
+
+      if (auditErr) {
+        console.warn("[Webhook] system_audit_log query warning (falling back to email_outbox claim):", auditErr.message);
+      } else if (Array.isArray(auditLogRows) && auditLogRows.length > 0) {
+        alreadySentLog = auditLogRows[0];
+      }
+    } catch (auditCatchErr) {
+      console.warn("[Webhook] system_audit_log exception:", auditCatchErr);
+    }
 
     if (alreadySentLog) {
       console.log("[Webhook] Receipt email already sent previously for payment:", paymongoPaymentId);
-    } else {
-      try {
-        const emailResult = await sendReceiptEmail({
-          patientEmail: recipientEmail,
-          paymentMethod: paymentMethodLabel,
-          amount,
-          planName,
-          billingCycle,
-          paymentDate: paymentDateIso,
-          paymongoPaymentId,
-        });
+    } else if (recipientEmail && paymongoPaymentId && paymongoPaymentId.startsWith("pay_")) {
+      const idempotencyKey = `subscription_receipt:${paymongoPaymentId}`;
 
-        await recordAuditLog({
-          userId: metadata.user_id,
-          action: "Receipt Email Sent",
-          target: recipientEmail,
-          details: `Receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${amount.toFixed(2)}).`,
-          metadata: {
-            provider: emailResult.provider,
-            messageId: emailResult.messageId,
+      const { data: claimResult, error: claimErr } = await supabase.rpc(
+        "claim_email_outbox",
+        {
+          p_idempotency_key: idempotencyKey,
+          p_email_type: "subscription_payment_receipt",
+          p_recipient_email: recipientEmail,
+          p_user_id: metadata.user_id,
+          p_appointment_id: null,
+          p_payload: {
+            patientEmail: recipientEmail,
+            patientName: metadata.patient_name || "Patient",
+            paymentMethod: paymentMethodLabel,
             amount,
-            transactionId: paymongoPaymentId,
+            planName,
+            billingCycle,
+            paymentDate: paymentDateIso,
+            paymongoPaymentId,
           },
-        });
+          p_lease_seconds: 120,
+        }
+      );
 
-        console.log("[Webhook] Receipt email sent successfully.");
-      } catch (emailError) {
-        const errMessage = emailError instanceof Error ? emailError.message : String(emailError);
-        console.error("[Webhook] Receipt email delivery failed:", errMessage);
+      if (claimErr) {
+        console.error("[Webhook] Failed to claim email outbox for subscription receipt:", claimErr);
+      } else if (claimResult?.claim_acquired) {
+        const outboxId = claimResult.outbox_id;
+        try {
+          const emailResult = await sendReceiptEmail({
+            patientEmail: recipientEmail,
+            paymentMethod: paymentMethodLabel,
+            amount,
+            planName,
+            billingCycle,
+            paymentDate: paymentDateIso,
+            paymongoPaymentId,
+          });
 
-        await recordAuditLog({
-          userId: metadata.user_id,
-          action: "Receipt Email Failed",
-          target: recipientEmail || "Unresolved recipient",
-          details: `Failed to deliver receipt email for payment ${paymongoPaymentId}: ${errMessage}`,
-          metadata: { error: errMessage, amount, transactionId: paymongoPaymentId },
-        });
+          if (emailResult.success) {
+            await supabase.rpc("finalize_email_outbox", {
+              p_outbox_id: outboxId,
+              p_success: true,
+            });
+
+            await recordAuditLog({
+              userId: metadata.user_id,
+              action: "Receipt Email Sent",
+              target: recipientEmail,
+              details: `Receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${amount.toFixed(2)}).`,
+              metadata: {
+                provider: emailResult.provider,
+                messageId: emailResult.messageId,
+                amount,
+                transactionId: paymongoPaymentId,
+              },
+            });
+
+            console.log("[Webhook] Receipt email sent successfully.");
+          } else {
+            const errMessage = emailResult.error || "Email provider dispatch failed";
+            console.error("[Webhook] Receipt email delivery failed:", errMessage);
+            await supabase.rpc("finalize_email_outbox", {
+              p_outbox_id: outboxId,
+              p_success: false,
+              p_error: errMessage,
+            });
+
+            await recordAuditLog({
+              userId: metadata.user_id,
+              action: "Receipt Email Failed",
+              target: recipientEmail || "Unresolved recipient",
+              details: `Failed to deliver receipt email for payment ${paymongoPaymentId}: ${errMessage}`,
+              metadata: { error: errMessage, amount, transactionId: paymongoPaymentId },
+            });
+          }
+        } catch (emailError) {
+          const errMessage = emailError instanceof Error ? emailError.message : String(emailError);
+          console.error("[Webhook] Receipt email delivery exception:", errMessage);
+          await supabase.rpc("finalize_email_outbox", {
+            p_outbox_id: outboxId,
+            p_success: false,
+            p_error: errMessage,
+          });
+
+          await recordAuditLog({
+            userId: metadata.user_id,
+            action: "Receipt Email Failed",
+            target: recipientEmail || "Unresolved recipient",
+            details: `Failed to deliver receipt email for payment ${paymongoPaymentId}: ${errMessage}`,
+            metadata: { error: errMessage, amount, transactionId: paymongoPaymentId },
+          });
+        }
+      } else {
+        console.log(`[Webhook] Subscription receipt email outbox claim skipped (status: ${claimResult?.status})`);
       }
     }
 

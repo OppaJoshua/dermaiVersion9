@@ -143,19 +143,6 @@ function renderExpiryEmailHtml(opts: {
             </td>
           </tr>
 
-          <!-- Highlight box -->
-          <tr>
-            <td style="padding:8px 40px 28px;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${pinkSoft};border-left:4px solid ${pink};border-radius:8px;">
-                <tr>
-                  <td style="padding:16px 20px;font-size:14px;line-height:1.6;color:#4a3640;">
-                    To restore unlimited scans, priority clinic booking, and full condition tracking, you can upgrade to Pro at any time.
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
 
           <!-- Sign-off -->
           <tr>
@@ -424,7 +411,7 @@ Deno.serve(async (req: Request) => {
   });
 
   let subscriptionUpdates = 0;
-  let notificationsCreated = 0;
+  const notificationsCreated = 0;
   let emailsSent = 0;
   let skipped = 0;
   const failures: string[] = [];
@@ -516,7 +503,7 @@ Deno.serve(async (req: Request) => {
 
       // Check delivery record state
       stage = "delivery_lookup";
-      const { data: delivery } = await supabase
+      const { data: _delivery } = await supabase
         .from("subscription_expiry_delivery")
         .select("notification_created")
         .eq("subscription_id", row.subscription_id)

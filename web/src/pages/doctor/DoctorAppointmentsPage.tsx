@@ -24,6 +24,7 @@ import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
+import { sanitizePatientSymptoms } from "@/lib/appointmentPaymentService";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -130,6 +131,7 @@ function formatRequestedDate(createdAtStr?: string): string {
 }
 
 function formatPatientId(appt: AppointmentRecord): string {
+  if (appt.patientId) return appt.patientId;
   const year = appt.createdAt ? new Date(appt.createdAt).getFullYear() : 2026;
   const digits = appt.id.replace(/\D/g, "");
   const num = digits.length >= 4
@@ -250,7 +252,8 @@ export default function DoctorAppointmentsPage() {
     setSearchParams(nextParams, { replace: true });
   }, [searchParams, loading, allAppointments, reviewModal, setSearchParams]);
 
-  const submitReview = async () => {
+  const submitReview = async (e?: React.FormEvent | React.MouseEvent) => {
+    e?.preventDefault?.();
     if (!reviewModal) return;
     if (!reviewModal.decision) {
       setSubmitError("Please choose whether to accept or decline this patient referral.");
@@ -298,8 +301,15 @@ export default function DoctorAppointmentsPage() {
 
   useEffect(() => {
     // A branch switch must not leave another clinic's patient open.
-    if (reviewModal && reviewModal.appointment.clinicId !== activeClinicId) setReviewModal(null);
-  }, [activeClinicId, reviewModal]);
+    if (activeClinicId && activeClinicId !== "all") {
+      setReviewModal((current) => {
+        if (current && current.appointment.clinicId && current.appointment.clinicId !== activeClinicId) {
+          return null;
+        }
+        return current;
+      });
+    }
+  }, [activeClinicId]);
 
   const filteredList = useMemo(() => {
     const list = [...(tab === "pending" ? pendingReview : reviewed)];
@@ -520,7 +530,7 @@ export default function DoctorAppointmentsPage() {
                   {/* Reason */}
                   <td className="py-4 px-3 sm:px-4">
                     <p className="text-slate-700 max-w-50 line-clamp-2 leading-relaxed">
-                      {appt.notes ||
+                      {sanitizePatientSymptoms(appt.notes) ||
                         appt.conditionName ||
                         appt.aiConditionName ||
                         "Consultation Request"}
@@ -800,7 +810,7 @@ export default function DoctorAppointmentsPage() {
                         Patient Notes
                       </p>
                       <div className="text-sm text-gray-700 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2.5">
-                        {reviewModal.appointment.notes}
+                        {sanitizePatientSymptoms(reviewModal.appointment.notes) || "No symptoms or notes provided."}
                       </div>
                     </div>
                   )}

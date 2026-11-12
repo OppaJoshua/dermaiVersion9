@@ -357,8 +357,7 @@ export default function ClinicDashboardPage() {
             docRows.forEach((d: any) => {
               docMap.set(d.doctor_id, d.doctor_name);
               const specs = d.doctor_specializations?.map((ds: any) => ds.specializations).filter(Boolean) || [];
-              const userObj = Array.isArray(d.user) ? d.user[0] : d.user;
-              const resolvedPhoto = resolveAvatarUrl(d.photo_url || userObj?.avatar_url);
+              const resolvedPhoto = resolveAvatarUrl(d.photo_url);
               loadedDoctors.push({
                 id: d.doctor_id,
                 name: d.doctor_name,

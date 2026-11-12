@@ -292,11 +292,9 @@ export default function AdminUserManagement() {
                 <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-6 py-4 whitespace-nowrap">User</th>
                 <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Role</th>
                 <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Email</th>
-                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Plan</th>
-                <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Scans</th>
                 <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Joined</th>
                 <th className="text-left text-xs font-semibold text-black uppercase tracking-wider px-5 py-4 whitespace-nowrap">Status</th>
-                <th className="text-right text-xs font-semibold text-black uppercase tracking-wider px-6 py-4 whitespace-nowrap">Actions</th>
+                <th className="text-right text-xs font-semibold text-black uppercase tracking-wider px-6 py-4 whitespace-nowrap">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -332,33 +330,6 @@ export default function AdminUserManagement() {
                     </td>
 
                     <td className="px-5 py-5 text-sm text-black whitespace-nowrap">{user.email}</td>
-
-                    <td className="px-5 py-5 whitespace-nowrap">
-                      <span
-                        className={cn(
-                          "inline-block px-3 py-1 rounded-full border text-xs font-semibold text-black whitespace-nowrap shrink-0",
-                          user.plan === "Admin Access" || user.plan === "Premium"
-                            ? "bg-magenta-50 border-magenta-200"
-                            : "bg-gray-100 border-gray-200"
-                        )}
-                      >
-                        {user.plan}
-                      </span>
-                    </td>
-
-                    <td className="px-5 py-5 text-sm text-black whitespace-nowrap">
-                      {user.role === "admin" ? (
-                        <span className="text-gray-600 text-xs">N/A (Admin)</span>
-                      ) : user.role === "clinic" ? (
-                        <span className="text-gray-600 text-xs">N/A (Clinic)</span>
-                      ) : user.role === "doctor" ? (
-                        <span className="text-gray-600 text-xs">N/A (Staff)</span>
-                      ) : user.plan === "Premium" || user.scansLimit === 999 ? (
-                        <span className="text-magenta-700 font-semibold text-sm">Unlimited</span>
-                      ) : (
-                        <span className="font-semibold text-black">{user.scansUsed}/{user.scansLimit}</span>
-                      )}
-                    </td>
 
                     <td className="px-5 py-5 text-sm text-black whitespace-nowrap">{user.joinedAt}</td>
 

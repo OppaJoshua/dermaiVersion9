@@ -213,6 +213,10 @@ async function fulfillPaymentAndSendEmail({
 
   userAuthEmail,
 
+  paidAtSeconds,
+
+  expectedAmountInCentavos,
+
 }: {
 
   paymongoPaymentId: string;
@@ -227,6 +231,10 @@ async function fulfillPaymentAndSendEmail({
   metadata: Record<string, any>;
 
   userAuthEmail?: string | null;
+
+  paidAtSeconds?: number | null;
+
+  expectedAmountInCentavos?: number | null;
 
 }) {
 
@@ -262,11 +270,59 @@ async function fulfillPaymentAndSendEmail({
 
   }
 
+  // Authoritative Expected Amount Validation:
+  // Must verify from at least one trusted source: PaymentIntent authoritative amount or checkout snapshot
+  let authoritativeExpectedCentavos: number | null = null;
+
+  if (typeof expectedAmountInCentavos === "number" && Number.isFinite(expectedAmountInCentavos) && expectedAmountInCentavos > 0) {
+    authoritativeExpectedCentavos = expectedAmountInCentavos;
+  } else {
+    const snapshotAmountStr = metadata?.amount_paid || metadata?.total_amount;
+    if (snapshotAmountStr) {
+      const parsed = Math.round(Number(snapshotAmountStr) * 100);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        authoritativeExpectedCentavos = parsed;
+      }
+    }
+  }
+
+  // Reject activation if no authoritative expected amount can be established
+  if (authoritativeExpectedCentavos === null || !Number.isFinite(authoritativeExpectedCentavos) || authoritativeExpectedCentavos <= 0) {
+    throw new Error(
+      `Cannot verify payment amount for payment ${paymongoPaymentId}: authoritative expected transaction amount is missing or malformed.`
+    );
+  }
+
+  // Strict equality check: paid amount MUST match authoritative expected amount
+  if (amountInCentavos !== authoritativeExpectedCentavos) {
+    throw new Error(
+      `Payment amount mismatch: received ${amountInCentavos} centavos, but authoritative expected transaction amount is ${authoritativeExpectedCentavos} centavos`
+    );
+  }
+
+  // Cross-verify both sources if both are present
+  const snapshotStr = metadata?.amount_paid || metadata?.total_amount;
+  if (
+    typeof expectedAmountInCentavos === "number" &&
+    Number.isFinite(expectedAmountInCentavos) &&
+    expectedAmountInCentavos > 0 &&
+    snapshotStr
+  ) {
+    const snapshotParsed = Math.round(Number(snapshotStr) * 100);
+    if (Number.isFinite(snapshotParsed) && snapshotParsed > 0 && snapshotParsed !== expectedAmountInCentavos) {
+      throw new Error(
+        `Authoritative amount conflict: PaymentIntent amount (${expectedAmountInCentavos}) does not match checkout snapshot (${snapshotParsed})`
+      );
+    }
+  }
+
   // Gross amount actually charged by PayMongo
 
   const grossAmount = amountInCentavos / 100;
 
-  const paymentDateIso = new Date().toISOString();
+  // Authoritative gateway timestamp resolution & fail-safe cancellation guard
+  const hasTrustedTime = typeof paidAtSeconds === "number" && Number.isFinite(paidAtSeconds) && paidAtSeconds > 0;
+  const paymentTimeMs = hasTrustedTime ? paidAtSeconds * 1000 : null;
 
   const paymentMethodLabel =
 
@@ -364,18 +420,121 @@ async function fulfillPaymentAndSendEmail({
 
   }
 
-  // 3. Check for existing payment to avoid duplicate record
-
+  // 3. Check for existing payment to avoid duplicate record & duplicate fulfillment
   const { data: existingPayment } = await adminSupabase
-
     .from("user_payment")
-
-    .select("payment_id")
-
+    .select("payment_id, payment_date")
     .eq("paymongo_payment_id", paymongoPaymentId)
-
     .maybeSingle();
 
+  // Query existing subscription early for exact-payment idempotency & cancellation guard
+  const { data: existingSub } = await adminSupabase
+    .from("user_plan_subscription")
+    .select("subscription_id, plan_id, status, started_at, current_period_start, current_period_end, cancel_at_period_end, cancelled_at")
+    .eq("user_id", userId)
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  // Validate existing payment_date if present
+  const existingPaymentDateMs = existingPayment?.payment_date
+    ? new Date(existingPayment.payment_date).getTime()
+    : null;
+  const validExistingDateMs =
+    typeof existingPaymentDateMs === "number" &&
+    Number.isFinite(existingPaymentDateMs) &&
+    existingPaymentDateMs > 0
+      ? existingPaymentDateMs
+      : null;
+
+  // Authoritative reference payment timestamp (gateway paid_at first, then recorded payment_date)
+  const refPaymentTimeMs = paymentTimeMs ?? validExistingDateMs;
+
+  // Strict Fail-Closed Safety Gate:
+  // If an incoming payment has NO verifiable payment timestamp from PayMongo or existing payment record:
+  // DO NOT manufacture a timestamp using new Date() or Date.now().
+  // DO NOT grant an arbitrary subscription period.
+  // Reject safely with an explicit, recoverable error requiring verification.
+  if (refPaymentTimeMs === null || !Number.isFinite(refPaymentTimeMs) || refPaymentTimeMs <= 0) {
+    throw new Error(
+      `Cannot safely fulfill payment ${paymongoPaymentId}: authoritative payment timestamp is missing or invalid. Client re-verification required.`
+    );
+  }
+
+  const paymentDateIso = new Date(refPaymentTimeMs).toISOString();
+
+  // Scenario C Check: If reference payment time is older than the current subscription's start,
+  // do NOT overwrite the newer subscription! (Preserves newer subscription and cancellation state)
+  const existingStartedMs = existingSub?.started_at ? new Date(existingSub.started_at).getTime() : 0;
+  const isOlderPayment = Boolean(
+    existingSub &&
+    existingStartedMs > 0 &&
+    existingStartedMs > refPaymentTimeMs + 5000
+  );
+
+  if (isOlderPayment) {
+    console.log(
+      "[fulfillPayment] Incoming payment timestamp is older than current subscription started_at:",
+      { paymentTime: refPaymentTimeMs, existingStartedAt: existingSub?.started_at },
+      "- Preserving newer subscription. Idempotent skip."
+    );
+    return {
+      success: true,
+      idempotentSkip: true,
+      paymongoPaymentId,
+      planId,
+      userId,
+    };
+  }
+
+  // Scenario A Check: Exact-payment fulfillment idempotency
+  // If this exact PayMongo payment is already recorded in user_payment AND the subscription is
+  // already active on this plan with period start anchored to this payment, do NOT recalculate dates or re-upsert.
+  const subPeriodStartMs = existingSub?.current_period_start ? new Date(existingSub.current_period_start).getTime() : 0;
+
+  const isAlreadyFullyFulfilled = Boolean(
+    existingPayment &&
+    existingSub &&
+    existingSub.status === "active" &&
+    existingSub.plan_id === planId &&
+    Math.abs(subPeriodStartMs - refPaymentTimeMs) < 10000
+  );
+
+  if (isAlreadyFullyFulfilled) {
+    console.log("[fulfillPayment] Exact payment already fulfilled (anchored start matches):", paymongoPaymentId, "- Idempotent skip.");
+
+    // Check if receipt email has already been sent (using .limit(1) to avoid PGRST116 multi-row error)
+    let emailAlreadySent = false;
+    try {
+      const { data: auditLogRows, error: auditErr } = await adminSupabase
+        .from("system_audit_log")
+        .select("log_id")
+        .eq("action", "Receipt Email Sent")
+        .ilike("details", `%${paymongoPaymentId}%`)
+        .limit(1);
+
+      if (!auditErr && Array.isArray(auditLogRows) && auditLogRows.length > 0) {
+        emailAlreadySent = true;
+      }
+    } catch {
+      // Non-blocking check
+    }
+
+    if (emailAlreadySent) {
+      return {
+        success: true,
+        fulfilled: true,
+        idempotentSkip: true,
+        emailDispatched: true,
+        paymongoPaymentId,
+        planId,
+        userId,
+      };
+    }
+    console.log("[fulfillPayment] Subscription fulfilled but receipt not recorded as sent. Proceeding to atomic email delivery.");
+  }
+
+  if (!isAlreadyFullyFulfilled) {
   if (!existingPayment) {
 
     const paymentRecord = {
@@ -420,13 +579,12 @@ async function fulfillPaymentAndSendEmail({
 
   } else {
 
-    console.log("[fulfillPayment] user_payment already exists for reference:", paymongoPaymentId);
+    console.log("[fulfillPayment] user_payment already exists; completing subscription activation for:", paymongoPaymentId);
 
   }
 
-  // 4. Update / activate subscription period
-
-  const periodStart = new Date();
+  // 4. Update / activate subscription period anchored to authoritative payment timestamp
+  const periodStart = new Date(refPaymentTimeMs);
 
   const periodEnd = new Date(periodStart);
 
@@ -439,6 +597,16 @@ async function fulfillPaymentAndSendEmail({
     periodEnd.setMonth(periodEnd.getMonth() + 1);
 
   }
+
+  const cancelledTime = existingSub?.cancelled_at ? new Date(existingSub.cancelled_at).getTime() : 0;
+
+  // Fail-safe rule: If the user currently has a cancellation scheduled (cancel_at_period_end: true),
+  // ONLY clear it if we have an authoritative gateway timestamp proving the payment occurred AFTER the cancellation.
+  // If the timestamp is missing, invalid, unverified, or equal/older than cancelledTime, preserve the cancellation.
+  const isNewerCancellation = Boolean(
+    existingSub?.cancel_at_period_end &&
+    (paymentTimeMs === null || cancelledTime >= paymentTimeMs)
+  );
 
   const subscriptionRecord = {
 
@@ -457,6 +625,10 @@ async function fulfillPaymentAndSendEmail({
     current_period_start: periodStart.toISOString(),
 
     current_period_end: periodEnd.toISOString(),
+
+    cancel_at_period_end: isNewerCancellation ? true : false,
+
+    cancelled_at: isNewerCancellation ? (existingSub?.cancelled_at ?? null) : null,
 
     payment_method: metadata?.payment_method || paymentMethodType,
 
@@ -577,137 +749,170 @@ async function fulfillPaymentAndSendEmail({
     },
 
   });
+  }
 
-  // 5. Send Receipt Email (Idempotent: check system_audit_log for prior delivery)
+  // 5. Send Receipt Email (Atomic Outbox Claim with system_audit_log defense-in-depth)
 
   let emailDispatched = false;
 
   let emailErrorMsg: string | null = null;
 
-  const { data: alreadySentLog } = await adminSupabase
+  // Defense-in-depth: Check historical system_audit_log with .limit(1) to avoid PGRST116 multi-row error
+  let alreadySentLog = null;
+  try {
+    const { data: auditLogRows, error: auditErr } = await adminSupabase
+      .from("system_audit_log")
+      .select("log_id, details")
+      .eq("action", "Receipt Email Sent")
+      .ilike("details", `%${paymongoPaymentId}%`)
+      .limit(1);
 
-    .from("system_audit_log")
-
-    .select("log_id")
-
-    .eq("action", "Receipt Email Sent")
-
-    .ilike("details", `%${paymongoPaymentId}%`)
-
-    .maybeSingle();
-
-  if (alreadySentLog) {
-
-    console.log("[fulfillPayment] Receipt email was already sent for payment:", paymongoPaymentId);
-
-    return {
-
-      fulfilled: true,
-
-      emailDispatched: true,
-
-      emailError: null,
-
-      alreadyProcessed: true,
-
-      recipientEmail,
-
-      amount: grossAmount,
-
-    };
-
+    if (auditErr) {
+      console.warn("[fulfillPayment] system_audit_log query warning (falling back to email_outbox claim):", auditErr.message);
+    } else if (Array.isArray(auditLogRows) && auditLogRows.length > 0) {
+      alreadySentLog = auditLogRows[0];
+    }
+  } catch (auditCatchErr) {
+    console.warn("[fulfillPayment] system_audit_log exception:", auditCatchErr);
   }
 
-  try {
-
-    const dispatchResult = await sendReceiptEmail({
-
-      patientEmail: recipientEmail,
-
-      paymentMethod: paymentMethodLabel,
-
+  if (alreadySentLog) {
+    console.log("[fulfillPayment] Receipt email was already sent for payment (historical audit log match):", paymongoPaymentId);
+    return {
+      fulfilled: true,
+      emailDispatched: true,
+      emailError: null,
+      alreadyProcessed: true,
+      recipientEmail,
       amount: grossAmount,
-
-      planName,
-
-      billingCycle,
-
-      paymentDate: paymentDateIso,
-
       paymongoPaymentId,
+    };
+  }
 
-    });
+  let claimResult: { claim_acquired?: boolean; status?: string; outbox_id?: string } | null = null;
 
-    emailDispatched = dispatchResult.success;
+  if (recipientEmail && paymongoPaymentId && paymongoPaymentId.startsWith("pay_")) {
+    const idempotencyKey = `subscription_receipt:${paymongoPaymentId}`;
 
-    await recordAuditLog({
+    const { data: claimData, error: claimErr } = await adminSupabase.rpc(
+      "claim_email_outbox",
+      {
+        p_idempotency_key: idempotencyKey,
+        p_email_type: "subscription_payment_receipt",
+        p_recipient_email: recipientEmail,
+        p_user_id: userId,
+        p_appointment_id: null,
+        p_payload: {
+          patientEmail: recipientEmail,
+          patientName: metadata?.patient_name || "Patient",
+          paymentMethod: paymentMethodLabel,
+          amount: grossAmount,
+          planName,
+          billingCycle,
+          paymentDate: paymentDateIso,
+          paymongoPaymentId,
+        },
+        p_lease_seconds: 120,
+      }
+    );
 
-      userId,
+    if (claimErr) {
+      console.error("[fulfillPayment] Failed to claim email outbox for subscription receipt:", claimErr);
+      emailErrorMsg = claimErr.message;
+    } else {
+      claimResult = claimData;
+    }
 
-      action: "Receipt Email Sent",
+    if (claimResult?.claim_acquired) {
+      const outboxId = claimResult.outbox_id;
+      try {
+        const dispatchResult = await sendReceiptEmail({
+          patientEmail: recipientEmail,
+          paymentMethod: paymentMethodLabel,
+          amount: grossAmount,
+          planName,
+          billingCycle,
+          paymentDate: paymentDateIso,
+          paymongoPaymentId,
+        });
 
-      target: recipientEmail,
+        if (dispatchResult.success) {
+          emailDispatched = true;
+          await adminSupabase.rpc("finalize_email_outbox", {
+            p_outbox_id: outboxId,
+            p_success: true,
+          });
 
-      details: `Subscription receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${grossAmount.toFixed(2)}).`,
-
-      metadata: {
-
-        provider: dispatchResult.provider,
-
-        messageId: dispatchResult.messageId,
-
-        amount: grossAmount,
-
-        transactionId: paymongoPaymentId,
-
-      },
-
-    });
-
-    console.log("[fulfillPayment] Receipt email dispatch completed successfully.");
-
-  } catch (mailErr) {
-
-    emailErrorMsg = mailErr instanceof Error ? mailErr.message : String(mailErr);
-
-    console.error("[fulfillPayment] Receipt email sending error:", mailErr);
-
-    await recordAuditLog({
-
-      userId,
-
-      action: "Receipt Email Failed",
-
-      target: recipientEmail || "Unresolved recipient",
-
-      details: `Failed to deliver receipt email for payment ${paymongoPaymentId}: ${emailErrorMsg}`,
-
-      metadata: {
-
-        error: emailErrorMsg,
-
-        amount: grossAmount,
-
-        transactionId: paymongoPaymentId,
-
-      },
-
-    });
-
+          await recordAuditLog({
+            userId,
+            action: "Receipt Email Sent",
+            target: recipientEmail,
+            details: `Subscription receipt email dispatched to ${recipientEmail} for payment ${paymongoPaymentId} (amount: ₱${grossAmount.toFixed(2)}).`,
+            metadata: {
+              provider: dispatchResult.provider,
+              messageId: dispatchResult.messageId,
+              amount: grossAmount,
+              transactionId: paymongoPaymentId,
+            },
+          });
+          console.log("[fulfillPayment] Receipt email dispatch completed successfully.");
+        } else {
+          emailErrorMsg = dispatchResult.error || "Email provider dispatch failed";
+          console.error("[fulfillPayment] Receipt email delivery failed:", emailErrorMsg);
+          await adminSupabase.rpc("finalize_email_outbox", {
+            p_outbox_id: outboxId,
+            p_success: false,
+            p_error: emailErrorMsg,
+          });
+          await recordAuditLog({
+            userId,
+            action: "Receipt Email Failed",
+            target: recipientEmail || "Unresolved recipient",
+            details: `Failed to deliver receipt email for payment ${paymongoPaymentId}: ${emailErrorMsg}`,
+            metadata: {
+              error: emailErrorMsg,
+              amount: grossAmount,
+              transactionId: paymongoPaymentId,
+            },
+          });
+        }
+      } catch (mailErr) {
+        emailErrorMsg = mailErr instanceof Error ? mailErr.message : String(mailErr);
+        console.error("[fulfillPayment] Receipt email sending exception:", emailErrorMsg);
+        await adminSupabase.rpc("finalize_email_outbox", {
+          p_outbox_id: outboxId,
+          p_success: false,
+          p_error: emailErrorMsg,
+        });
+        await recordAuditLog({
+          userId,
+          action: "Receipt Email Failed",
+          target: recipientEmail || "Unresolved recipient",
+          details: `Failed to deliver receipt email for payment ${paymongoPaymentId}: ${emailErrorMsg}`,
+          metadata: {
+            error: emailErrorMsg,
+            amount: grossAmount,
+            transactionId: paymongoPaymentId,
+          },
+        });
+      }
+    } else {
+      console.log(`[fulfillPayment] Subscription receipt email outbox claim skipped (status: ${claimResult?.status})`);
+      emailDispatched = claimResult?.status === "sent";
+      if (claimResult?.status === "processing") {
+        emailErrorMsg = "Receipt email delivery in progress by another worker";
+      }
+    }
   }
 
   return {
-
     fulfilled: true,
-
     emailDispatched,
-
     emailError: emailErrorMsg,
-
+    alreadyProcessed: Boolean(alreadySentLog || claimResult?.status === "sent"),
     recipientEmail,
-
     amount: grossAmount,
-
+    paymongoPaymentId,
   };
 
 }
@@ -2412,39 +2617,78 @@ Deno.serve(async (req: Request) => {
 
       if (status === "succeeded") {
 
-        const payments = intentAttributes?.payments || [];
+        // deno-lint-ignore no-explicit-any
+        const payments: any[] = Array.isArray(intentAttributes?.payments) ? intentAttributes.payments : [];
+        const expectedPaymentId: string | null = (typeof intentAttributes?.latest_payment_id === "string" && intentAttributes.latest_payment_id.trim())
+          ? intentAttributes.latest_payment_id.trim()
+          : null;
 
-        const primaryPayment = payments[0];
+        // deno-lint-ignore no-explicit-any
+        let primaryPayment: any = null;
 
-        const paymongoPaymentId: string =
+        if (expectedPaymentId) {
+          // deno-lint-ignore no-explicit-any
+          const matchingPayment = payments.find((p: any) => p?.id === expectedPaymentId);
+          if (!matchingPayment) {
+            throw new Error(`Expected PayMongo payment ${expectedPaymentId} not found in payment intent`);
+          }
+          if (matchingPayment.attributes?.status !== "paid") {
+            throw new Error(`PayMongo payment ${expectedPaymentId} status is not paid (${matchingPayment.attributes?.status || "unknown"})`);
+          }
+          primaryPayment = matchingPayment;
+        } else {
+          // deno-lint-ignore no-explicit-any
+          const paidPayments = payments.filter((p: any) => p && p.attributes?.status === "paid");
+          if (paidPayments.length === 1) {
+            primaryPayment = paidPayments[0];
+          } else if (paidPayments.length === 0) {
+            throw new Error("No verified paid payment found on payment intent");
+          } else {
+            throw new Error(`Multiple paid payments (${paidPayments.length}) found without authoritative latest_payment_id`);
+          }
+        }
 
-          primaryPayment?.id ||
+        const paymongoPaymentId: string = primaryPayment?.id;
+        if (!paymongoPaymentId || typeof paymongoPaymentId !== "string" || !paymongoPaymentId.startsWith("pay_")) {
+          throw new Error(`Invalid or missing PayMongo payment ID: ${paymongoPaymentId}`);
+        }
 
-          intentAttributes?.latest_payment_id ||
+        const amountInCentavos: number = primaryPayment.attributes?.amount ?? intentAttributes?.amount ?? 0;
+        if (typeof amountInCentavos !== "number" || amountInCentavos <= 0) {
+          throw new Error(`PayMongo payment amount is missing or invalid: ${amountInCentavos}`);
+        }
 
-          paymentIntentId;
+        if (typeof intentAttributes?.amount === "number" && intentAttributes.amount > 0) {
+          if (primaryPayment.attributes?.amount !== intentAttributes.amount) {
+            throw new Error(
+              `Payment amount mismatch: payment has ${primaryPayment.attributes?.amount} centavos, but PaymentIntent expected ${intentAttributes.amount} centavos`
+            );
+          }
+        }
 
-        const amountInCentavos =
-
-          primaryPayment?.attributes?.amount ??
-
-          intentAttributes?.amount ??
-
-          0;
+        if (intentAttributes?.currency && primaryPayment.attributes?.currency) {
+          if (primaryPayment.attributes.currency.toUpperCase() !== intentAttributes.currency.toUpperCase()) {
+            throw new Error(
+              `Payment currency mismatch: payment has ${primaryPayment.attributes?.currency}, but PaymentIntent expected ${intentAttributes.currency}`
+            );
+          }
+        }
 
         const paymentMethodType: string =
-
-          primaryPayment?.attributes?.source?.type ||
-
-          primaryPayment?.attributes?.payment_method_details?.type ||
-
+          primaryPayment.attributes?.source?.type ||
+          primaryPayment.attributes?.payment_method_details?.type ||
           intentAttributes?.metadata?.payment_method ||
-
           intentAttributes?.payment_method_allowed?.[0] ||
-
           "gcash";
 
         const metadata = intentAttributes?.metadata || {};
+
+        const paidAtSeconds: number | null =
+          (typeof primaryPayment.attributes?.paid_at === "number" && primaryPayment.attributes.paid_at > 0)
+            ? primaryPayment.attributes.paid_at
+            : (typeof intentAttributes?.paid_at === "number" && intentAttributes.paid_at > 0)
+            ? intentAttributes.paid_at
+            : null;
 
         try {
 
@@ -2493,6 +2737,10 @@ Deno.serve(async (req: Request) => {
               metadata,
 
               userAuthEmail: user.email,
+
+              paidAtSeconds,
+
+              expectedAmountInCentavos: intentAttributes?.amount ?? null,
 
             });
 
@@ -3048,39 +3296,78 @@ Deno.serve(async (req: Request) => {
 
       }
 
-      const payments = intentAttributes?.payments || [];
+      // deno-lint-ignore no-explicit-any
+      const payments: any[] = Array.isArray(intentAttributes?.payments) ? intentAttributes.payments : [];
+      const expectedPaymentId: string | null = (typeof intentAttributes?.latest_payment_id === "string" && intentAttributes.latest_payment_id.trim())
+        ? intentAttributes.latest_payment_id.trim()
+        : null;
 
-      const primaryPayment = payments[0];
+      // deno-lint-ignore no-explicit-any
+      let primaryPayment: any = null;
 
-      const paymongoPaymentId: string =
+      if (expectedPaymentId) {
+        // deno-lint-ignore no-explicit-any
+        const matchingPayment = payments.find((p: any) => p?.id === expectedPaymentId);
+        if (!matchingPayment) {
+          throw new Error(`Expected PayMongo payment ${expectedPaymentId} not found in payment intent`);
+        }
+        if (matchingPayment.attributes?.status !== "paid") {
+          throw new Error(`PayMongo payment ${expectedPaymentId} status is not paid (${matchingPayment.attributes?.status || "unknown"})`);
+        }
+        primaryPayment = matchingPayment;
+      } else {
+        // deno-lint-ignore no-explicit-any
+        const paidPayments = payments.filter((p: any) => p && p.attributes?.status === "paid");
+        if (paidPayments.length === 1) {
+          primaryPayment = paidPayments[0];
+        } else if (paidPayments.length === 0) {
+          throw new Error("No verified paid payment found on payment intent");
+        } else {
+          throw new Error(`Multiple paid payments (${paidPayments.length}) found without authoritative latest_payment_id`);
+        }
+      }
 
-        primaryPayment?.id ||
+      const paymongoPaymentId: string = primaryPayment?.id;
+      if (!paymongoPaymentId || typeof paymongoPaymentId !== "string" || !paymongoPaymentId.startsWith("pay_")) {
+        throw new Error(`Invalid or missing PayMongo payment ID: ${paymongoPaymentId}`);
+      }
 
-        intentAttributes?.latest_payment_id ||
+      const amountInCentavos: number = primaryPayment.attributes?.amount ?? intentAttributes?.amount ?? 0;
+      if (typeof amountInCentavos !== "number" || amountInCentavos <= 0) {
+        throw new Error(`PayMongo payment amount is missing or invalid: ${amountInCentavos}`);
+      }
 
-        paymentIntentId;
+      if (typeof intentAttributes?.amount === "number" && intentAttributes.amount > 0) {
+        if (primaryPayment.attributes?.amount !== intentAttributes.amount) {
+          throw new Error(
+            `Payment amount mismatch: payment has ${primaryPayment.attributes?.amount} centavos, but PaymentIntent expected ${intentAttributes.amount} centavos`
+          );
+        }
+      }
 
-      const amountInCentavos =
-
-        primaryPayment?.attributes?.amount ??
-
-        intentAttributes?.amount ??
-
-        0;
+      if (intentAttributes?.currency && primaryPayment.attributes?.currency) {
+        if (primaryPayment.attributes.currency.toUpperCase() !== intentAttributes.currency.toUpperCase()) {
+          throw new Error(
+            `Payment currency mismatch: payment has ${primaryPayment.attributes?.currency}, but PaymentIntent expected ${intentAttributes.currency}`
+          );
+        }
+      }
 
       const paymentMethodType: string =
-
-        primaryPayment?.attributes?.source?.type ||
-
-        primaryPayment?.attributes?.payment_method_details?.type ||
-
+        primaryPayment.attributes?.source?.type ||
+        primaryPayment.attributes?.payment_method_details?.type ||
         intentAttributes?.metadata?.payment_method ||
-
         intentAttributes?.payment_method_allowed?.[0] ||
-
         "gcash";
 
       const metadata = intentAttributes?.metadata || {};
+
+      const paidAtSeconds: number | null =
+        (typeof primaryPayment.attributes?.paid_at === "number" && primaryPayment.attributes.paid_at > 0)
+          ? primaryPayment.attributes.paid_at
+          : (typeof intentAttributes?.paid_at === "number" && intentAttributes.paid_at > 0)
+          ? intentAttributes.paid_at
+          : null;
 
       if (!isServiceRoleRequest && metadata?.user_id && metadata.user_id !== user.id) {
 
@@ -3119,6 +3406,10 @@ Deno.serve(async (req: Request) => {
             metadata,
 
             userAuthEmail: user.email,
+
+            paidAtSeconds,
+
+            expectedAmountInCentavos: intentAttributes?.amount ?? null,
 
           });
 
@@ -3213,6 +3504,10 @@ Deno.serve(async (req: Request) => {
             metadata: metadata || {},
 
             userAuthEmail: userAuthEmail || (typeof body.userEmail === "string" ? body.userEmail : null) || user.email,
+
+            paidAtSeconds: body?.paidAtSeconds ?? body?.paid_at ?? null,
+
+            expectedAmountInCentavos: body?.expectedAmountInCentavos ?? null,
 
           });
 

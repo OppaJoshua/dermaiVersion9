@@ -107,32 +107,42 @@ const FAQS = [
 ];
 
 export default function DoctorSettingsPage() {
-  const { activeClinicId, activeAffiliation, affiliations } = useDoctorClinicContext();
+  const { activeClinicId, activeAffiliation, affiliations, doctorName, googleAvatarUrl } = useDoctorClinicContext();
   const selectedClinicName = activeAffiliation?.clinic?.name || "No clinic assignments found";
   const [profile, setProfile] = useState<DoctorProfile>(() => {
-    try {
-      const stored = localStorage.getItem("dermai_doctor_profile");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        return {
-          ...INITIAL_PROFILE,
-          id: parsed.id || parsed.doctor_id || "",
-          fullName: parsed.fullName || parsed.name || "",
-          photo: parsed.photo || parsed.photo_url || "",
-          clinicName: parsed.clinic || parsed.clinicName || "",
-        };
-      }
-    } catch {}
-    return INITIAL_PROFILE;
+    if (activeClinicId && activeClinicId !== "all") {
+      try {
+        const stored = localStorage.getItem(`dermai_doctor_profile_${activeClinicId}`);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          return {
+            ...INITIAL_PROFILE,
+            id: parsed.id || parsed.doctor_id || activeAffiliation?.doctor_id || "",
+            fullName: parsed.fullName || parsed.name || activeAffiliation?.doctor_name || doctorName || "",
+            photo: parsed.photo ?? parsed.photo_url ?? activeAffiliation?.photo_url ?? "",
+            clinicName: parsed.clinic || parsed.clinicName || activeAffiliation?.clinic?.name || "",
+          };
+        }
+      } catch {}
+    }
+    return {
+      ...INITIAL_PROFILE,
+      id: activeAffiliation?.doctor_id || "",
+      fullName: activeAffiliation?.doctor_name || doctorName || "",
+      photo: activeAffiliation?.photo_url || "",
+      clinicName: activeAffiliation?.clinic?.name || "",
+    };
   });
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [sessionUserId, setSessionUserId] = useState<string>("");
+  const [sessionEmail, setSessionEmail] = useState<string>("");
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketMessage, setTicketMessage] = useState("");
   const [ticketSent, setTicketSent] = useState(false);
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [photoSaved, setPhotoSaved] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const profileRequestRef = useRef(0);
 
@@ -140,6 +150,9 @@ export default function DoctorSettingsPage() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user?.id) {
         setSessionUserId(session.user.id);
+      }
+      if (session?.user?.email) {
+        setSessionEmail(session.user.email.trim());
       }
     });
   }, []);
@@ -172,80 +185,127 @@ export default function DoctorSettingsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setPhotoError(null);
+
+    if (!activeClinicId || activeClinicId === "all") {
+      setPhotoError("Please select a specific clinic branch to update your profile picture.");
+      return;
+    }
+
     if (!file.type.startsWith("image/")) {
+      setPhotoError("Please select a valid image file.");
       return;
     }
 
     if (file.size > 3 * 1024 * 1024) {
+      setPhotoError("Image size must be 3MB or less.");
       return;
     }
 
-    if (!profile.id) {
+    const targetDoctorId = activeAffiliation?.doctor_id || profile.id;
+    if (!targetDoctorId) {
       console.error("Cannot upload doctor photo: doctor ID is missing.");
+      setPhotoError("Could not identify your clinic doctor profile.");
       return;
     }
 
     try {
       const rawPhotoUrl = await uploadDoctorPhoto(file);
       const { data: sessionData } = await supabase.auth.getSession();
-      const sessionUserId = sessionData?.session?.user?.id;
+      const currentSessionUserId = sessionData?.session?.user?.id;
 
-      // Update central doctor avatar with cache busting, localStorage sync, and global event dispatch
-      const updatedUrl = await updateDoctorAvatar(profile.id, rawPhotoUrl, sessionUserId);
+      // Update clinic-specific doctor avatar with cache busting, scoped localStorage sync, and global event dispatch
+      const updatedUrl = await updateDoctorAvatar(
+        targetDoctorId,
+        rawPhotoUrl,
+        currentSessionUserId,
+        activeClinicId
+      );
 
-      setProfile((prev) => ({ ...prev, photo: updatedUrl }));
+      setProfile((prev) => ({ ...prev, id: targetDoctorId, photo: updatedUrl }));
       setPhotoSaved(true);
       setTimeout(() => setPhotoSaved(false), 3000);
 
       logAuditEvent({
-        userId: sessionUserId || profile.id,
+        userId: currentSessionUserId || targetDoctorId,
         role: "doctor",
         category: "User",
         action: "Avatar Updated",
         target: "Doctor Avatar",
-        details: `Dr. ${profile.fullName || "Doctor"} updated their profile avatar.`,
+        details: `Dr. ${profile.fullName || "Doctor"} updated their profile avatar for ${selectedClinicName}.`,
         performerName: profile.fullName || "Doctor",
       }).catch(() => {});
     } catch (err) {
       console.error("Failed to upload doctor photo:", err);
+      setPhotoError("Failed to upload photo. Your previous photo has been preserved.");
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
   };
 
   const handleRemovePhoto = async () => {
-    if (!profile.id) {
+    setPhotoError(null);
+
+    if (!activeClinicId || activeClinicId === "all") {
+      return;
+    }
+
+    const targetDoctorId = activeAffiliation?.doctor_id || profile.id;
+    if (!targetDoctorId) {
       console.error("Cannot remove doctor photo: doctor ID is missing.");
       return;
     }
 
     try {
       const { data: sessionData } = await supabase.auth.getSession();
-      const sessionUserId = sessionData?.session?.user?.id;
+      const currentSessionUserId = sessionData?.session?.user?.id;
 
-      await removeDoctorAvatar(profile.id, sessionUserId);
+      await removeDoctorAvatar(targetDoctorId, currentSessionUserId, activeClinicId);
 
-      setProfile((prev) => ({ ...prev, photo: "" }));
+      setProfile((prev) => ({ ...prev, id: targetDoctorId, photo: "" }));
 
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
 
       logAuditEvent({
-        userId: sessionUserId || profile.id,
+        userId: currentSessionUserId || targetDoctorId,
         role: "doctor",
         category: "User",
         action: "Avatar Removed",
         target: "Doctor Avatar",
-        details: `Dr. ${profile.fullName || "Doctor"} removed their profile avatar.`,
+        details: `Dr. ${profile.fullName || "Doctor"} removed their profile avatar for ${selectedClinicName}.`,
         performerName: profile.fullName || "Doctor",
       }).catch(() => {});
     } catch (err) {
       console.error("Failed to remove doctor photo:", err);
+      setPhotoError("Failed to remove photo. Please try again.");
     }
   };
 
   const loadData = useCallback(async () => {
     const requestId = ++profileRequestRef.current;
-    if (!activeClinicId || activeClinicId === "all") return;
+    if (!activeClinicId || activeClinicId === "all") {
+      setProfile({
+        ...INITIAL_PROFILE,
+        fullName: doctorName || affiliations[0]?.doctor_name || "",
+        photo: "",
+      });
+      return;
+    }
+
+    // Immediately align id and photo with activeAffiliation while fetching full profile details
+    if (activeAffiliation) {
+      setProfile((prev) => ({
+        ...prev,
+        id: activeAffiliation.doctor_id,
+        fullName: activeAffiliation.doctor_name || prev.fullName || doctorName || "",
+        clinicName: activeAffiliation.clinic?.name || prev.clinicName || "",
+        photo: activeAffiliation.photo_url || "",
+      }));
+    }
     try {
       let docFound: any = null;
       const storedDocId = activeAffiliation?.doctor_id || "";
@@ -341,7 +401,7 @@ export default function DoctorSettingsPage() {
       setProfile(updatedProfile);
       try {
         localStorage.setItem(
-          "dermai_doctor_profile",
+          `dermai_doctor_profile_${activeClinicId}`,
           JSON.stringify({
             id: updatedProfile.id,
             fullName: updatedProfile.fullName,
@@ -353,7 +413,7 @@ export default function DoctorSettingsPage() {
     } catch (err) {
       console.error("Error loading doctor profile:", err);
     }
-  }, [activeClinicId, activeAffiliation?.doctor_id]);
+  }, [activeClinicId, activeAffiliation, affiliations, doctorName]);
 
   useEffect(() => {
     loadData();
@@ -435,7 +495,90 @@ export default function DoctorSettingsPage() {
     }
   };
 
-  if (activeClinicId === "all") return (
+  if (activeClinicId === "all") {
+    // 1. Consolidated Specialization Resolution
+    const specEntries = affiliations.map((aff) => {
+      const clinicName = aff.clinic?.name || "Clinic";
+      const specs = (aff.specializations || []).map((s) => s.trim()).filter(Boolean);
+      const normKey = specs
+        .slice()
+        .sort((a, b) => a.localeCompare(b))
+        .map((s) => s.toLowerCase())
+        .join("|");
+      return {
+        clinicId: aff.clinic_id,
+        clinicName,
+        specs,
+        display: specs.length > 0 ? specs.join(", ") : "Not assigned",
+        normKey,
+      };
+    });
+    const nonEmptySpecEntries = specEntries.filter((e) => e.specs.length > 0);
+    const missingSpecEntries = specEntries.filter((e) => e.specs.length === 0);
+    const distinctSpecKeys = new Set(nonEmptySpecEntries.map((e) => e.normKey));
+    const allSpecsIdentical =
+      specEntries.length > 0 &&
+      missingSpecEntries.length === 0 &&
+      distinctSpecKeys.size === 1;
+
+    // 2. Consolidated PRC License Resolution
+    const prcEntries = affiliations.map((aff) => {
+      const clinicName = aff.clinic?.name || "Clinic";
+      const raw = (aff.prc_license || "").trim();
+      const cleaned = raw.replace(/^#+/, "").trim();
+      const norm = cleaned.toUpperCase();
+      return {
+        clinicId: aff.clinic_id,
+        clinicName,
+        raw,
+        cleaned,
+        norm,
+      };
+    });
+    const recordedPrcEntries = prcEntries.filter((e) => e.norm.length > 0);
+    const missingPrcClinics = prcEntries.filter((e) => e.norm.length === 0).map((e) => e.clinicName);
+    const distinctPrcNorms = new Set(recordedPrcEntries.map((e) => e.norm));
+    const hasPrcConflict = distinctPrcNorms.size > 1;
+    const agreedPrc =
+      distinctPrcNorms.size === 1 ? `#${recordedPrcEntries[0].cleaned}` : "";
+
+    // 3. Consolidated Account Email & Distinct Clinic Roster Emails
+    const resolvedAccountEmail =
+      sessionEmail ||
+      affiliations.find((a) => a.email && a.email.trim())?.email?.trim() ||
+      "";
+    const differingClinicEmails = affiliations
+      .map((aff) => ({
+        clinicId: aff.clinic_id,
+        clinicName: aff.clinic?.name || "Clinic",
+        email: (aff.email || "").trim(),
+      }))
+      .filter(
+        (e) =>
+          e.email.length > 0 &&
+          (!resolvedAccountEmail || e.email.toLowerCase() !== resolvedAccountEmail.toLowerCase())
+      );
+
+    // 4. Consolidated Contact Number Resolution
+    const phoneEntries = affiliations.map((aff) => {
+      const clinicName = aff.clinic?.name || "Clinic";
+      const raw = (aff.contact_number || "").trim();
+      const norm = raw.replace(/\D/g, "") || raw;
+      return {
+        clinicId: aff.clinic_id,
+        clinicName,
+        raw,
+        norm,
+      };
+    });
+    const recordedPhoneEntries = phoneEntries.filter((e) => e.raw.length > 0);
+    const missingPhoneClinics = phoneEntries.filter((e) => e.raw.length === 0).map((e) => e.clinicName);
+    const distinctPhoneNorms = new Set(recordedPhoneEntries.map((e) => e.norm));
+    const hasDifferingPhones = distinctPhoneNorms.size > 1;
+    const sharedPhone =
+      distinctPhoneNorms.size === 1 ? recordedPhoneEntries[0].raw : "";
+
+    return (
     <div className="max-w-7xl space-y-6 pb-12">
       {/* Header */}
       <div className="pb-2 border-b border-slate-200/80">
@@ -453,40 +596,19 @@ export default function DoctorSettingsPage() {
           style={{ clipPath: "polygon(30% 0%, 100% 0%, 100% 100%, 0% 100%)" }}
         />
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
-          {/* Left: Doctor Photo & Name */}
+          {/* Left: Doctor Photo & Name (Consolidated view shows authenticated Google account avatar, no single-clinic photo override) */}
           <div className="flex flex-col sm:flex-row items-center sm:items-start text-center sm:text-left gap-4 sm:gap-6 min-w-0 flex-1">
-            <div className="relative group shrink-0">
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className="cursor-pointer hover:opacity-95 transition-opacity"
-                title="Click to change photo"
-              >
-                <DoctorAvatar
-                  doctorId={profile.id}
-                  doctor={{ photo_url: profile.photo, name: profile.fullName }}
-                  name={profile.fullName}
-                  className="w-24 h-24 sm:w-28 sm:h-28 !rounded-2xl border border-slate-200/80 shadow-xs text-3xl font-bold"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="absolute -bottom-1 -right-1 p-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-xs transition-all cursor-pointer"
-                title="Update photo"
-              >
-                <Camera className="w-3.5 h-3.5" />
-              </button>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handlePhotoUpload}
-                accept="image/*"
-                className="hidden"
+            <div className="relative shrink-0">
+              <DoctorAvatar
+                doctorId={undefined}
+                doctor={{ photo_url: googleAvatarUrl || "", name: doctorName || profile.fullName || affiliations[0]?.doctor_name || "Doctor" }}
+                name={doctorName || profile.fullName || affiliations[0]?.doctor_name || "Doctor"}
+                className="w-24 h-24 sm:w-28 sm:h-28 !rounded-2xl border border-slate-200/80 shadow-xs text-3xl font-bold"
               />
             </div>
             <div className="min-w-0 flex-1">
               <h2 className="text-xl sm:text-2xl md:text-[26px] font-bold text-slate-900 tracking-tight">
-                {profile.fullName || "Doctor"}
+                {doctorName || profile.fullName || affiliations[0]?.doctor_name || "Doctor"}
               </h2>
               <p className="text-sm font-medium text-[#64748B] flex items-center justify-center sm:justify-start gap-2 mt-2">
                 <Stethoscope className="w-4 h-4 text-[#64748B] shrink-0" />
@@ -505,21 +627,9 @@ export default function DoctorSettingsPage() {
                   ))}
                 </div>
               )}
-              {profile.photo && (
-                <button
-                  type="button"
-                  onClick={handleRemovePhoto}
-                  className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-semibold text-rose-500 hover:text-rose-600 transition-colors cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-                  <span>Remove Profile Photo</span>
-                </button>
-              )}
-              {photoSaved && (
-                <span className="mt-2 inline-flex items-center gap-1 text-xs text-emerald-700 font-semibold bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Avatar updated!
-                </span>
-              )}
+              <p className="mt-2 text-xs text-slate-400">
+                Select a specific clinic branch from the top switcher to manage that clinic&apos;s profile photo.
+              </p>
             </div>
           </div>
 
@@ -530,12 +640,35 @@ export default function DoctorSettingsPage() {
               <p className="text-[13px] sm:text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 mb-0.5">
                 SPECIALIZATION
               </p>
-              <p className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight leading-snug break-words">
-                {profile.specializations && profile.specializations.length > 0
-                  ? profile.specializations.join(", ")
-                  : "Not assigned"}
-              </p>
-              <p className="text-xs text-[#94A3B8] mt-0.5">Assigned by clinic admin</p>
+              {nonEmptySpecEntries.length === 0 ? (
+                <>
+                  <p className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight leading-snug break-words">
+                    Not assigned
+                  </p>
+                  <p className="text-xs text-[#94A3B8] mt-0.5">Assigned by clinic admin</p>
+                </>
+              ) : allSpecsIdentical ? (
+                <>
+                  <p className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight leading-snug break-words">
+                    {nonEmptySpecEntries[0].display}
+                  </p>
+                  <p className="text-xs text-[#94A3B8] mt-0.5">Assigned across all affiliated clinics</p>
+                </>
+              ) : (
+                <>
+                  <div className="space-y-1 mt-1">
+                    {specEntries.map((entry) => (
+                      <div key={entry.clinicId} className="text-xs sm:text-sm leading-snug break-words">
+                        <span className="font-semibold text-slate-500">{entry.clinicName}: </span>
+                        <span className={entry.specs.length > 0 ? "font-bold text-slate-900" : "italic text-slate-400"}>
+                          {entry.display}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-[#94A3B8] mt-1">Assigned by clinic admin per branch</p>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -543,34 +676,103 @@ export default function DoctorSettingsPage() {
 
       {/* PRC / Email / Phone */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-5 min-w-0">
-        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4">
-          <IdCardIcon className="w-6 h-6 text-[#1D4ED8] shrink-0" />
+        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-start gap-3.5 sm:gap-4">
+          <IdCardIcon className="w-6 h-6 text-[#1D4ED8] shrink-0 mt-0.5" />
           <div className="min-w-0 flex-1">
             <span className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">PRC LICENSE ID</span>
-            <p className="font-bold text-slate-900 text-lg sm:text-xl tracking-tight truncate">
-              {profile.prcLicense ? (profile.prcLicense.startsWith("#") ? profile.prcLicense : `#${profile.prcLicense}`) : "Not provided"}
-            </p>
-            <p className="text-sm text-[#94A3B8] mt-0.5">PRC license number on file</p>
+            {hasPrcConflict ? (
+              <>
+                <p className="font-bold text-amber-700 text-base sm:text-lg tracking-tight">
+                  Requires verification
+                </p>
+                <div className="mt-1 space-y-0.5">
+                  {prcEntries.map((entry) => (
+                    <p key={entry.clinicId} className="text-xs text-slate-600 break-words">
+                      <span className="font-semibold">{entry.clinicName}:</span>{" "}
+                      {entry.cleaned ? `#${entry.cleaned}` : "Not recorded"}
+                    </p>
+                  ))}
+                </div>
+              </>
+            ) : agreedPrc ? (
+              <>
+                <p className="font-bold text-slate-900 text-lg sm:text-xl tracking-tight truncate">
+                  {agreedPrc}
+                </p>
+                {missingPrcClinics.length > 0 ? (
+                  <p className="text-xs text-amber-600 mt-0.5 break-words">
+                    Not recorded in: {missingPrcClinics.join(", ")}
+                  </p>
+                ) : (
+                  <p className="text-sm text-[#94A3B8] mt-0.5">PRC license number on file</p>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="font-bold text-slate-900 text-lg sm:text-xl tracking-tight truncate">
+                  Not provided
+                </p>
+                <p className="text-sm text-[#94A3B8] mt-0.5">PRC license number on file</p>
+              </>
+            )}
           </div>
         </div>
-        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4">
-          <Mail className="w-7 h-6 text-[#1D4ED8] shrink-0" />
+        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-start gap-3.5 sm:gap-4">
+          <Mail className="w-7 h-6 text-[#1D4ED8] shrink-0 mt-0.5" />
           <div className="min-w-0 flex-1">
-            <span className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">CLINICAL EMAIL</span>
-            <p className="font-bold text-slate-900 text-sm sm:text-[15px] tracking-tight break-all sm:break-normal leading-snug" title={profile.email}>
-              {profile.email || "—"}
+            <span className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">ACCOUNT EMAIL</span>
+            <p className="font-bold text-slate-900 text-sm sm:text-[15px] tracking-tight break-all sm:break-normal leading-snug" title={resolvedAccountEmail}>
+              {resolvedAccountEmail || "—"}
             </p>
-            <p className="text-sm text-[#94A3B8] mt-0.5">Roster login address</p>
+            {differingClinicEmails.length > 0 ? (
+              <div className="mt-1 space-y-0.5">
+                {differingClinicEmails.map((item) => (
+                  <p key={item.clinicId} className="text-xs text-slate-600 break-all">
+                    <span className="font-semibold">{item.clinicName}:</span> {item.email}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-[#94A3B8] mt-0.5">Registered account email</p>
+            )}
           </div>
         </div>
-        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-center gap-3.5 sm:gap-4 sm:col-span-2 xl:col-span-1">
-          <Phone className="w-6 h-6 text-[#1D4ED8] shrink-0" />
+        <div className="bg-white rounded-2xl border border-sky-100/80 p-4 sm:p-5.5 shadow-xs flex items-start gap-3.5 sm:gap-4 sm:col-span-2 xl:col-span-1">
+          <Phone className="w-6 h-6 text-[#1D4ED8] shrink-0 mt-0.5" />
           <div className="min-w-0 flex-1">
             <span className="text-[14px] font-bold uppercase tracking-wider text-[#64748B]/80 block mb-0.5">CONTACT NUMBER</span>
-            <p className="font-bold text-slate-900 text-base sm:text-lg tracking-tight truncate">
-              {profile.phone || "Not provided"}
-            </p>
-            <p className="text-sm text-[#94A3B8] mt-0.5">Official clinic mobile</p>
+            {hasDifferingPhones ? (
+              <div className="space-y-1 mt-0.5">
+                {phoneEntries.map((entry) => (
+                  <p key={entry.clinicId} className="text-xs sm:text-sm text-slate-700 break-words">
+                    <span className="font-semibold text-slate-500">{entry.clinicName}:</span>{" "}
+                    <span className={entry.raw ? "font-bold text-slate-900" : "italic text-slate-400"}>
+                      {entry.raw || "Not provided"}
+                    </span>
+                  </p>
+                ))}
+              </div>
+            ) : sharedPhone ? (
+              <>
+                <p className="font-bold text-slate-900 text-base sm:text-lg tracking-tight truncate">
+                  {sharedPhone}
+                </p>
+                {missingPhoneClinics.length > 0 ? (
+                  <p className="text-xs text-amber-600 mt-0.5 break-words">
+                    Not recorded in: {missingPhoneClinics.join(", ")}
+                  </p>
+                ) : (
+                  <p className="text-sm text-[#94A3B8] mt-0.5">Official clinic mobile</p>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="font-bold text-slate-900 text-base sm:text-lg tracking-tight truncate">
+                  Not provided
+                </p>
+                <p className="text-sm text-[#94A3B8] mt-0.5">Official clinic mobile</p>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -693,7 +895,8 @@ export default function DoctorSettingsPage() {
         hideWhenEmpty={false}
       />
     </div>
-  );
+    );
+  }
 
   return (
     <div className="max-w-7xl space-y-6 pb-12">
@@ -774,6 +977,11 @@ export default function DoctorSettingsPage() {
                 <span className="mt-2 inline-flex items-center gap-1 text-xs text-emerald-700 font-semibold bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Avatar updated!
                 </span>
+              )}
+              {photoError && (
+                <p className="mt-2 text-xs font-semibold text-rose-600">
+                  {photoError}
+                </p>
               )}
             </div>
           </div>

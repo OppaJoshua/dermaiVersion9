@@ -25,6 +25,7 @@ import { PatientAvatar } from "@/components/common/PatientAvatar";
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
 import { DoctorDutyScheduleCard } from "@/components/common/DoctorDutyScheduleCard";
 import { UrgentReviewsQueue } from "@/components/doctor/UrgentReviewsQueue";
+import { sanitizePatientSymptoms } from "@/lib/appointmentPaymentService";
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -62,7 +63,8 @@ export default function DoctorDashboardPage() {
     setSaveError("");
   };
 
-  const handleCompleteConsultation = async () => {
+  const handleCompleteConsultation = async (e?: React.FormEvent | React.MouseEvent) => {
+    e?.preventDefault?.();
     if (!consultingAppt || savingConsultation) return;
     if (!clinicalDiagnosis.trim()) {
       setSaveError("Please enter your final clinical diagnosis before completing.");
@@ -723,7 +725,7 @@ export default function DoctorDashboardPage() {
 
               return (
                 <button
-                  key={idx}
+                  key={`${cell.dateStr}-${idx}`}
                   type="button"
                   onClick={() => setSelectedCalendarDate(cell.dateStr)}
                   className="flex flex-col items-center justify-center py-1 rounded-xl transition-all cursor-pointer relative group"
@@ -954,14 +956,14 @@ export default function DoctorDashboardPage() {
                 </div>
 
                 {/* Patient Intake / Notes */}
-                {(consultingAppt.notes || consultingAppt.conditionName) && (
+                {(sanitizePatientSymptoms(consultingAppt.notes) || consultingAppt.conditionName) && (
                   <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/60 text-xs">
                     <p className="font-bold text-slate-700 mb-1 flex items-center gap-1.5">
                       <FileText className="w-3.5 h-3.5 text-slate-600" />
                       Reason for Consultation &amp; Chief Complaint
                     </p>
                     <p className="text-slate-600 leading-relaxed">
-                      {consultingAppt.notes || consultingAppt.conditionName}
+                      {sanitizePatientSymptoms(consultingAppt.notes) || consultingAppt.conditionName}
                     </p>
                   </div>
                 )}

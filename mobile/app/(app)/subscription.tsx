@@ -100,11 +100,16 @@ export default function SubscriptionScreen() {
   );
 
   const isProOrPremium = Boolean(
-    (sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1 || sub?.statusLabel === 'Premium Active') &&
+    (sub?.plan === 'premium' ||
+      sub?.plan === 'pro' ||
+      sub?.plan === 'basic' ||
+      sub?.statusLabel === 'Premium Active' ||
+      sub?.statusLabel === 'Basic Active') &&
     !sub?.isExpired
   );
 
   const isPremium = isProOrPremium;
+  const isUnlimitedScans = isPremium && sub?.scanLimit === -1;
 
   const headerBadgeLabel = isCancelling
     ? 'Canceling'
@@ -112,6 +117,8 @@ export default function SubscriptionScreen() {
 
   const cardBadgeLabel = isCancelling
     ? 'CANCELING'
+    : sub?.statusLabel === 'Basic Active' || sub?.plan === 'basic'
+    ? 'BASIC ACTIVE'
     : 'PREMIUM ACTIVE';
 
   // Resolve dynamic monthly & yearly plans from Supabase `plan` table
@@ -142,8 +149,16 @@ export default function SubscriptionScreen() {
 
   const priceLabel = `${formatMoney(totalPrice)}/${billingCycle === 'yearly' ? 'year' : 'month'}`;
   const scansUsed = sub?.scansUsed ?? 0;
+  const freePlanActive = isPremium ? true : Boolean(sub?.freePlanActive);
+  const freePlanVerified = isPremium ? true : sub?.freePlanVerified !== false;
+  const freePlanAmbiguous = isPremium ? false : Boolean(sub?.freePlanAmbiguous);
+  const usageVerified = isUnlimitedScans || (sub?.scansCountVerified !== false && freePlanVerified);
+  const isAdminDeactivated = !isPremium && freePlanVerified && !freePlanActive && !freePlanAmbiguous;
+  const isAmbiguousConfig = !isPremium && freePlanAmbiguous;
   const freeQuota =
-    sub?.scanLimit && sub.scanLimit > 0 ? sub.scanLimit : MAX_FREE_SCANS;
+    typeof sub?.scanLimit === 'number' && sub.scanLimit >= 0
+      ? sub.scanLimit
+      : 0;
 
   const formattedRenewalDate = (() => {
     if (!sub?.endDate) return null;
@@ -281,13 +296,19 @@ export default function SubscriptionScreen() {
     { title: 'Permanent Skin Scan History', desc: 'Store, compare, and share records with doctors' },
   ];
 
-  const dynamicFeatures =
-    selectedPlan?.features && selectedPlan.features.length > 0
-      ? selectedPlan.features.map((f) => ({
-          title: f,
-          desc: 'Included in your DermAI Pro subscription plan',
-        }))
-      : DEFAULT_FEATURES;
+  const activeFeatureStrings =
+    isPremium && sub?.planFeatures && sub.planFeatures.length > 0
+      ? sub.planFeatures
+      : selectedPlan?.features && selectedPlan.features.length > 0
+      ? selectedPlan.features
+      : null;
+
+  const dynamicFeatures = activeFeatureStrings
+    ? activeFeatureStrings.map((f) => ({
+        title: f,
+        desc: `Included in your ${isPremium ? sub?.planName || 'DermAI' : selectedPlan?.name || 'DermAI Pro'} subscription plan`,
+      }))
+    : DEFAULT_FEATURES;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -343,7 +364,7 @@ export default function SubscriptionScreen() {
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           {/* ── Active Status Banner ── */}
-          {isPremium ? (
+          {isPremium && (
             <View style={styles.activePremiumCard}>
               <View style={styles.activePremiumTop}>
                 <View style={{ flex: 1, marginRight: 12 }}>
@@ -387,22 +408,117 @@ export default function SubscriptionScreen() {
                 ) : null}
               </View>
             </View>
-          ) : (
-            <View style={styles.freeTierCard}>
-              <View style={styles.freeTierHeader}>
-                <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={styles.freeTierTitle}>
-                    {statusLabel === 'Basic Active'
-                      ? `${sub?.planName || 'Basic Plan'} (Active)`
-                      : 'Plan usage'}
-                  </Text>
-                  <Text style={styles.freeTierSub}>
-                    {freeQuota} free AI skin anomaly scans included per billing cycle
+          )}
+
+          {/* ── Plan Usage Card (Unlimited vs Limited) ── */}
+          <View style={styles.freeTierCard}>
+            <View style={[styles.freeTierHeader, { justifyContent: 'space-between', alignItems: 'center' }]}>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.freeTierTitle}>Plan usage</Text>
+                <Text style={styles.freeTierSub}>AI skin scans</Text>
+              </View>
+              {isAdminDeactivated || isAmbiguousConfig ? (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: '#fffbeb',
+                    borderColor: '#fde68a',
+                    borderWidth: 1,
+                    paddingHorizontal: 10,
+                    paddingVertical: 4,
+                    borderRadius: 999,
+                  }}
+                >
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#b45309' }}>
+                    Unavailable
                   </Text>
                 </View>
-              </View>
+              ) : !usageVerified && !isUnlimitedScans ? (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: '#fff1f2',
+                    borderColor: '#fecdd3',
+                    borderWidth: 1,
+                    paddingHorizontal: 10,
+                    paddingVertical: 4,
+                    borderRadius: 999,
+                  }}
+                >
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#be123c' }}>
+                    Verification required
+                  </Text>
+                </View>
+              ) : isUnlimitedScans ? (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: '#fdf2f8',
+                    borderColor: '#fce7f3',
+                    borderWidth: 1,
+                    paddingHorizontal: 10,
+                    paddingVertical: 4,
+                    borderRadius: 999,
+                  }}
+                >
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#be185d' }}>
+                    ∞ Unlimited
+                  </Text>
+                </View>
+              ) : (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: '#f8fafc',
+                    borderColor: '#e2e8f0',
+                    borderWidth: 1,
+                    paddingHorizontal: 10,
+                    paddingVertical: 4,
+                    borderRadius: 999,
+                  }}
+                >
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#334155' }}>
+                    Limited — {freeQuota} {freeQuota === 1 ? 'scan' : 'scans'}
+                  </Text>
+                </View>
+              )}
+            </View>
 
-              {/* Scan quota bar */}
+            {isAdminDeactivated ? (
+              <View style={styles.quotaBarSection}>
+                <Text style={styles.freeTierSub}>
+                  Free AI skin scanning is currently unavailable. Please view the available subscription plans to continue scanning.
+                </Text>
+                {scansUsed > 0 && (
+                  <Text style={[styles.freeTierSub, { marginTop: 6, fontWeight: '600' }]}>
+                    Your historical scan records ({scansUsed} completed free {scansUsed === 1 ? 'scan' : 'scans'}) are safely preserved.
+                  </Text>
+                )}
+              </View>
+            ) : isAmbiguousConfig ? (
+              <View style={styles.quotaBarSection}>
+                <Text style={styles.freeTierSub}>
+                  {sub?.freePlanError ||
+                    'Free AI skin scanning is temporarily unavailable due to a plan configuration issue.'}
+                </Text>
+              </View>
+            ) : !usageVerified && !isUnlimitedScans ? (
+              <View style={styles.quotaBarSection}>
+                <Text style={styles.freeTierSub}>
+                  Unable to verify your scan allowance. Please check your internet connection and try again.
+                </Text>
+              </View>
+            ) : isUnlimitedScans ? (
+              <View style={styles.quotaBarSection}>
+                <Text style={styles.freeTierSub}>
+                  Your {sub?.planName || 'Pro'} plan has no limit on AI skin scans.
+                </Text>
+              </View>
+            ) : (
               <View style={styles.quotaBarSection}>
                 <View style={styles.quotaLabels}>
                   <Text style={styles.quotaCountTxt}>
@@ -416,17 +532,26 @@ export default function SubscriptionScreen() {
                   <View
                     style={[
                       styles.quotaFill,
-                      { width: `${Math.min(100, (scansUsed / Math.max(1, freeQuota)) * 100)}%` },
+                      {
+                        width: `${
+                          freeQuota > 0
+                            ? Math.min(100, (Math.min(scansUsed, freeQuota) / freeQuota) * 100)
+                            : 0
+                        }%`,
+                      },
                     ]}
                   />
                 </View>
-                  <View style={styles.quotaLabels}>
-                    
-                  </View>
-
+                <Text style={[styles.freeTierSub, { marginTop: 8 }]}>
+                  {isPremium
+                    ? `You have used ${scansUsed} of ${freeQuota} AI skin ${freeQuota === 1 ? 'scan' : 'scans'} in your current ${sub?.planName || 'plan'} billing cycle.`
+                    : Math.max(0, freeQuota - scansUsed) === 0
+                    ? 'You have used all your available free AI skin scans. Please subscribe to continue scanning.'
+                    : `You have used ${scansUsed} of ${freeQuota} one-time free AI skin ${freeQuota === 1 ? 'scan' : 'scans'}.`}
+                </Text>
               </View>
-            </View>
-          )}
+            )}
+          </View>
 
           {/* ── Billing Cycle Selector (if Free/Basic or Upgrading, and both cycles exist) ── */}
           {!isPremium && yearlyPlan && (
@@ -537,7 +662,7 @@ export default function SubscriptionScreen() {
           {/* ── Premium Features Checklist ── */}
           <View style={styles.featuresSection}>
             <Text style={styles.featuresTitle}>
-              What&apos;s Included in {selectedPlan?.name || 'DermAI Pro'}
+              What&apos;s Included in {isPremium ? sub?.planName || 'Your Plan' : selectedPlan?.name || 'DermAI Pro'}
             </Text>
             <View style={styles.featuresCard}>
               {dynamicFeatures.map((item, idx) => (
@@ -732,7 +857,7 @@ function PaymentModal({
         endDate: end.toISOString(),
         transactionId: result.paymongoPaymentId,
         scansUsed: 0,
-        scanLimit: -1,
+        scanLimit: typeof selectedPlan?.scanLimit === 'number' ? selectedPlan.scanLimit : -1,
         basePrice: result.basePrice,
         vatAmount: result.vatAmount,
         totalPrice: result.amount,
@@ -773,7 +898,9 @@ function PaymentModal({
       // Authoritative re-fetch for the signed-in patient (auth.uid()). If the plan is not Pro/active
       // yet (GCash and Maya alike), re-run server-side fulfillment and re-check.
       const isProActive = (s: SubscriptionRecord | null) =>
-        !!s && s.status === 'active' && (s.scanLimit === -1 || s.plan === 'premium' || s.plan === 'pro');
+        !!s &&
+        s.status === 'active' &&
+        (s.scanLimit === -1 || s.plan === 'premium' || s.plan === 'pro' || s.plan === 'basic');
       let confirmedSub = await getUserSubscription(user.id);
       for (let syncTry = 0; syncTry < 3 && !isProActive(confirmedSub); syncTry++) {
         await verifyPayMongoIntentOnce(result.paymentIntentId, result.clientKey);

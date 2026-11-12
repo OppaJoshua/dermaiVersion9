@@ -29,6 +29,7 @@ import {
   addAppNotification,
   getOccupiedSlotsForDate,
   acquireAppointmentSlotHold,
+  sanitizePatientSymptoms,
   cancelAppointmentSlotHold,
   releaseAppointmentHoldSafely,
   supabase,
@@ -810,7 +811,7 @@ export function BookingModal({
           emergencyContactName: emergencyName.trim() || undefined,
           emergencyContactPhone: emergencyPhone.trim() || undefined,
           emergencyContactRelationship: emergencyRelationship || undefined,
-          notes: notes.trim() || undefined,
+          notes: sanitizePatientSymptoms(notes) || undefined,
           clinicNote: docDispName
             ? `Assigned to ${docDispName} for pre-consultation review.`
             : 'Unassigned consultation request.',

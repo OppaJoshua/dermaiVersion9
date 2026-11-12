@@ -24,7 +24,11 @@ import { logAuditEvent } from "@/utils/auditLogger";
 import { predictSkinCondition, getConditionUUID, AIPredictionError } from "../../lib/aiApi";
 import { createPatientNotification } from "../../lib/notificationService";
 import AIScanningAnimationView from "../../components/common/AIScanningAnimationView";
-import { validateAndSyncSubscription } from "@/lib/subscriptionService";
+import {
+  validateAndSyncSubscription,
+  calculateOneTimeFreeScanUsage,
+  countPaidPeriodScans,
+} from "@/lib/subscriptionService";
 import {
   QUESTIONNAIRE_QUESTIONS,
   toggleOptionSelection,
@@ -195,39 +199,100 @@ export default function ScanSkinPage() {
   const [scanResult, setScanResult] = useState<ScanResultData | null>(null);
   const [recommendedClinics, setRecommendedClinics] = useState<RecommendedClinic[]>([]);
 
-  const [subData, setSubData] = useState({ scansUsed: 0, scanLimit: 3, isPro: false });
+  const [subData, setSubData] = useState<{
+    scansUsed: number;
+    scanLimit: number;
+    isPro: boolean;
+    freePlanActive: boolean;
+    freePlanVerified: boolean;
+    freePlanAmbiguous: boolean;
+    usageVerified: boolean;
+    statusMessage: string | null;
+    loaded: boolean;
+  }>({
+    scansUsed: 0,
+    scanLimit: 0,
+    isPro: false,
+    freePlanActive: false,
+    freePlanVerified: false,
+    freePlanAmbiguous: false,
+    usageVerified: false,
+    statusMessage: null,
+    loaded: false,
+  });
 
   useEffect(() => {
     const loadSubscription = async () => {
       try {
         if (!user?.id) {
-          setSubData({ scansUsed: 0, scanLimit: 3, isPro: false });
+          setSubData({
+            scansUsed: 0,
+            scanLimit: 0,
+            isPro: false,
+            freePlanActive: false,
+            freePlanVerified: false,
+            freePlanAmbiguous: false,
+            usageVerified: false,
+            statusMessage: null,
+            loaded: true,
+          });
           return;
         }
 
         const subInfo = await validateAndSyncSubscription(user.id);
-        const hasValidPaidPeriod = subInfo.isPro;
-        const planScanLimit: number = subInfo.isPro ? -1 : 3;
         const isPro = subInfo.isPro;
 
-        // Expired subscriptions use the current calendar month's Free scan cycle.
-        const cycleStart: string = hasValidPaidPeriod
-          ? subInfo.currentPeriodStart ||
-          new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
-          : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+        if (isPro) {
+          const planScanLimit =
+            subInfo.paidLimitVerified !== false && typeof subInfo.scanLimit === "number"
+              ? subInfo.scanLimit
+              : 0;
+          const cycleStart =
+            subInfo.currentPeriodStart || subInfo.subscription?.started_at || null;
+          const paidUsage = await countPaidPeriodScans(
+            user.id,
+            cycleStart,
+            subInfo.currentPeriodEnd
+          );
+          const isUnlimited = planScanLimit === -1;
+          const verified =
+            isUnlimited || (subInfo.paidLimitVerified !== false && paidUsage.verified);
 
-        const { count: used } = await supabase
-          .from("ai_scan_result")
-          .select("*", { count: "exact", head: true })
-          .eq("user_id", user.id)
-          .eq("status", "completed")
-          .gte("scanned_at", cycleStart);
+          setSubData({
+            scansUsed: paidUsage.scansUsed,
+            scanLimit: planScanLimit,
+            isPro: true,
+            freePlanActive: true,
+            freePlanVerified: true,
+            freePlanAmbiguous: false,
+            usageVerified: verified,
+            statusMessage: verified
+              ? null
+              : paidUsage.error ||
+                "Unable to verify your scan allowance. Please check your internet connection and try again.",
+            loaded: true,
+          });
+        } else {
+          const freeUsage = await calculateOneTimeFreeScanUsage(user.id);
+          const freePlanVerified = subInfo.freePlanVerified === true;
+          const freePlanAmbiguous = Boolean(subInfo.freePlanAmbiguous || freeUsage.ambiguous);
+          const freePlanActive = freePlanVerified && subInfo.freePlanActive === true;
+          const planScanLimit = freePlanActive && typeof subInfo.scanLimit === "number"
+            ? subInfo.scanLimit
+            : 0;
 
-        setSubData({
-          scansUsed: used ?? 0,
-          scanLimit: planScanLimit,
-          isPro,
-        });
+          setSubData({
+            scansUsed: freeUsage.freeScansUsed,
+            scanLimit: planScanLimit,
+            isPro: false,
+            freePlanActive,
+            freePlanVerified,
+            freePlanAmbiguous,
+            usageVerified: freePlanVerified && freeUsage.verified && !freePlanAmbiguous,
+            statusMessage: subInfo.freePlanError || freeUsage.error,
+            loaded: true,
+          });
+        }
       } catch (err) {
         console.error("Failed to load subscription data:", err);
       }
@@ -329,15 +394,212 @@ export default function ScanSkinPage() {
     // Dynamic verification against current timestamp on scan action
     const freshSub = await validateAndSyncSubscription(user.id);
     const freshIsPro = freshSub.isPro;
-    const freshCanScan = freshIsPro || (subData.scanLimit - subData.scansUsed > 0);
 
-    if (!freshIsPro && !freshCanScan) {
-      setAnalyzeError("Your free scans have been used up. Please upgrade to Pro for unlimited scans.");
-      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-      navigate("/dashboard/subscription-status");
-      return;
+    if (freshIsPro) {
+      const freshScanLimit =
+        freshSub.paidLimitVerified !== false && typeof freshSub.scanLimit === "number"
+          ? freshSub.scanLimit
+          : 0;
+      const isUnlimitedPlan = freshScanLimit === -1;
+
+      if (!isUnlimitedPlan) {
+        if (freshSub.paidLimitVerified === false) {
+          const msg =
+            "Unable to verify your scan allowance. Please check your internet connection and try again.";
+          setSubData({
+            scansUsed: subData.scansUsed,
+            scanLimit: 0,
+            isPro: true,
+            freePlanActive: true,
+            freePlanVerified: true,
+            freePlanAmbiguous: false,
+            usageVerified: false,
+            statusMessage: msg,
+            loaded: true,
+          });
+          setAnalyzeError(msg);
+          return;
+        }
+
+        const freshCycleStart =
+          freshSub.currentPeriodStart || freshSub.subscription?.started_at || null;
+        const paidUsage = await countPaidPeriodScans(
+          user.id,
+          freshCycleStart,
+          freshSub.currentPeriodEnd
+        );
+
+        if (!paidUsage.verified) {
+          const msg =
+            paidUsage.error ||
+            "Unable to verify your scan allowance. Please check your internet connection and try again.";
+          setSubData({
+            scansUsed: subData.scansUsed,
+            scanLimit: freshScanLimit,
+            isPro: true,
+            freePlanActive: true,
+            freePlanVerified: true,
+            freePlanAmbiguous: false,
+            usageVerified: false,
+            statusMessage: msg,
+            loaded: true,
+          });
+          setAnalyzeError(msg);
+          return;
+        }
+
+        const freshScansUsed = paidUsage.scansUsed;
+        setSubData({
+          scansUsed: freshScansUsed,
+          scanLimit: freshScanLimit,
+          isPro: true,
+          freePlanActive: true,
+          freePlanVerified: true,
+          freePlanAmbiguous: false,
+          usageVerified: true,
+          statusMessage: null,
+          loaded: true,
+        });
+
+        if (freshScanLimit - freshScansUsed <= 0) {
+          setAnalyzeError(
+            "You have reached your AI skin scan limit for your current billing cycle."
+          );
+          window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+          document.documentElement.scrollTop = 0;
+          document.body.scrollTop = 0;
+          navigate("/dashboard/subscription-status");
+          return;
+        }
+      } else {
+        setSubData((prev) => ({
+          ...prev,
+          scanLimit: -1,
+          isPro: true,
+          freePlanActive: true,
+          freePlanVerified: true,
+          freePlanAmbiguous: false,
+          usageVerified: true,
+          statusMessage: null,
+          loaded: true,
+        }));
+      }
+    } else {
+      // Non-paid user: strictly governed by the Admin Free Plan status and one-time Free allowance
+      const freePlanVerified = freshSub.freePlanVerified === true;
+      const freePlanAmbiguous = Boolean(freshSub.freePlanAmbiguous);
+      const freePlanActive = freePlanVerified && freshSub.freePlanActive === true;
+
+      if (freePlanAmbiguous) {
+        const msg =
+          freshSub.freePlanError ||
+          "Free AI skin scanning is temporarily unavailable due to a plan configuration issue.";
+        setSubData((prev) => ({
+          ...prev,
+          scanLimit: 0,
+          isPro: false,
+          freePlanActive: false,
+          freePlanVerified: false,
+          freePlanAmbiguous: true,
+          usageVerified: false,
+          statusMessage: msg,
+          loaded: true,
+        }));
+        setAnalyzeError(msg);
+        return;
+      }
+
+      if (!freePlanVerified) {
+        const msg =
+          freshSub.freePlanError ||
+          "Unable to verify your scan allowance. Please check your internet connection and try again.";
+        setSubData((prev) => ({
+          ...prev,
+          scanLimit: 0,
+          isPro: false,
+          freePlanActive: false,
+          freePlanVerified: false,
+          freePlanAmbiguous: false,
+          usageVerified: false,
+          statusMessage: msg,
+          loaded: true,
+        }));
+        setAnalyzeError(msg);
+        return;
+      }
+
+      if (!freePlanActive) {
+        const msg =
+          "Free AI skin scanning is currently unavailable. Please view the available subscription plans to continue scanning.";
+        setSubData((prev) => ({
+          ...prev,
+          scanLimit: 0,
+          isPro: false,
+          freePlanActive: false,
+          freePlanVerified: true,
+          freePlanAmbiguous: false,
+          usageVerified: false,
+          statusMessage: msg,
+          loaded: true,
+        }));
+        setAnalyzeError(msg);
+        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+        navigate("/dashboard/subscription-status");
+        return;
+      }
+
+      const freeUsage = await calculateOneTimeFreeScanUsage(user.id);
+      if (!freeUsage.verified) {
+        const msg =
+          freeUsage.ambiguous
+            ? freeUsage.error ||
+              "Free AI skin scanning is temporarily unavailable due to a plan configuration issue."
+            : "Unable to verify your scan allowance. Please check your internet connection and try again.";
+        setSubData({
+          scansUsed: 0,
+          scanLimit: freshSub.scanLimit,
+          isPro: false,
+          freePlanActive: true,
+          freePlanVerified: true,
+          freePlanAmbiguous: Boolean(freeUsage.ambiguous),
+          usageVerified: false,
+          statusMessage: msg,
+          loaded: true,
+        });
+        setAnalyzeError(msg);
+        return;
+      }
+
+      const freshScanLimit = typeof freshSub.scanLimit === "number" ? freshSub.scanLimit : 0;
+      const freshScansUsed = freeUsage.freeScansUsed;
+
+      setSubData({
+        scansUsed: freshScansUsed,
+        scanLimit: freshScanLimit,
+        isPro: false,
+        freePlanActive: true,
+        freePlanVerified: true,
+        freePlanAmbiguous: false,
+        usageVerified: true,
+        statusMessage: null,
+        loaded: true,
+      });
+
+      const isUnlimitedFree = freshScanLimit === -1;
+      const freshCanScan = isUnlimitedFree || freshScanLimit - freshScansUsed > 0;
+
+      if (!freshCanScan) {
+        setAnalyzeError(
+          "You have used all your available free AI skin scans. Please subscribe to continue scanning."
+        );
+        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+        navigate("/dashboard/subscription-status");
+        return;
+      }
     }
     if (!closeUpFile || !wideFile) return;
 
@@ -717,6 +979,34 @@ export default function ScanSkinPage() {
             Complete the 15-question pre-screening and upload skin photos for an evidence-informed AI assessment
           </p>
         </div>
+
+        {subData.loaded && !subData.isPro && (!subData.freePlanActive || !subData.usageVerified) && (
+          <div className="mb-6 rounded-2xl bg-amber-50 border border-amber-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900">
+            <div>
+              <p className="font-bold text-sm text-amber-950">
+                {subData.freePlanAmbiguous
+                  ? "Free AI Skin Scanning Temporarily Unavailable"
+                  : subData.freePlanVerified && !subData.freePlanActive
+                  ? "Free AI Skin Scanning Currently Unavailable"
+                  : "Scan Allowance Verification Required"}
+              </p>
+              <p className="mt-0.5 text-amber-800">
+                {subData.freePlanAmbiguous
+                  ? subData.statusMessage ||
+                    "Free AI skin scanning is temporarily unavailable due to a plan configuration issue."
+                  : subData.freePlanVerified && !subData.freePlanActive
+                  ? "Free AI skin scanning is currently unavailable. Please view the available subscription plans to continue scanning."
+                  : "Unable to verify your scan allowance. Please check your internet connection and try again."}
+              </p>
+            </div>
+            <Link
+              to="/dashboard/upgrade"
+              className="px-4 py-2 rounded-xl bg-magenta-600 text-white font-semibold text-xs hover:bg-magenta-700 transition-colors text-center shrink-0"
+            >
+              View Subscription Plans
+            </Link>
+          </div>
+        )}
 
         {/* Multi-step progress bar */}
         <div className="flex items-center justify-center gap-0 mb-8">

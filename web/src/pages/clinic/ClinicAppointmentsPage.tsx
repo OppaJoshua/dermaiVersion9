@@ -341,8 +341,7 @@ export default function ClinicAppointmentsPage() {
       if (data && data.length > 0) {
         docRows = data.filter((d: any) => (d.status || "").toLowerCase() !== "inactive");
         setClinicDoctors(docRows.map((d: any) => {
-          const userObj = Array.isArray(d.user) ? d.user[0] : d.user;
-          const rawPhoto = d.photo_url || userObj?.avatar_url;
+          const rawPhoto = d.photo_url || undefined;
           return {
             id: d.doctor_id,
             name: d.doctor_name,
