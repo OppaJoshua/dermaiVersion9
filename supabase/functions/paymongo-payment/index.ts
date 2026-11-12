@@ -1388,7 +1388,9 @@ Deno.serve(async (req: Request) => {
 
     const apiKeyHeader = req.headers.get("apikey") || "";
 
-    const token = authHeader.replace(/^Bearer\s+/i, "").trim() || apiKeyHeader.trim();
+    const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
+
+    const token = bearerToken || apiKeyHeader.trim();
 
     if (!token) {
 
@@ -1402,27 +1404,35 @@ Deno.serve(async (req: Request) => {
 
     }
 
-    let user = null;
+    let user: { id: string; email?: string | null } | null = null;
 
-    if (
+    const isServiceRoleRequest = Boolean(supabaseServiceRoleKey && token === supabaseServiceRoleKey);
 
-      (supabaseServiceRoleKey && token === supabaseServiceRoleKey) ||
+    let isAuthenticatedPatient = false;
 
-      (supabaseAnonKey && token === supabaseAnonKey) ||
-
-      action === "fulfill_payment"
-
-    ) {
+    if (isServiceRoleRequest) {
 
       user = {
 
-        id: body.userId || "service_role",
+        id: "service_role",
 
-        email: body.userEmail || null,
+        email: null,
 
       };
 
     } else {
+
+      if (supabaseAnonKey && token === supabaseAnonKey) {
+
+        return jsonResponse(
+
+          { error: "Authenticated user session required" },
+
+          401
+
+        );
+
+      }
 
       const {
 
@@ -1432,7 +1442,7 @@ Deno.serve(async (req: Request) => {
 
       } = await supabase.auth.getUser(token);
 
-      if (userError || !authUser) {
+      if (userError || !authUser?.id) {
 
         console.warn("[paymongo-payment] User auth failed:", userError?.message);
 
@@ -1447,6 +1457,8 @@ Deno.serve(async (req: Request) => {
       }
 
       user = authUser;
+
+      isAuthenticatedPatient = true;
 
     }
 
@@ -1812,6 +1824,18 @@ Deno.serve(async (req: Request) => {
         );
       }
 
+      if (isServiceRoleRequest || !isAuthenticatedPatient || !user?.id) {
+        return jsonResponse(
+          {
+            error: isServiceRoleRequest
+              ? "Booking checkout requires an authenticated patient session."
+              : "Authenticated user session required.",
+            code: isServiceRoleRequest ? "ERR_FORBIDDEN" : "ERR_UNAUTHORIZED",
+          },
+          isServiceRoleRequest ? 403 : 401
+        );
+      }
+
       const userId = user.id;
       if (!paymentMethod) {
         throw new Error("Payment method is required");
@@ -1917,20 +1941,22 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      if (claimData.user_id && claimData.user_id !== userId) {
+      if (!claimData.user_id || claimData.user_id !== userId) {
         await adminSupabase.rpc("release_checkout_claim", {
           p_appointment_id: effectiveAppointmentId,
           p_claim_id: claimId,
         });
         return jsonResponse(
-          { error: "Unauthorized access to appointment reservation" },
+          { error: "Unauthorized access to appointment reservation", code: "ERR_FORBIDDEN" },
           403
         );
       }
 
       const attemptId = claimData.attempt_id;
-      const idempotencyKey =
-        claimData.checkout_idempotency_key || `dermai_appt_${effectiveAppointmentId}`;
+      let idempotencyKey =
+        claimData.idempotency_key ||
+        claimData.checkout_idempotency_key ||
+        `dermai_appt_${effectiveAppointmentId}`;
 
       // SEC-03: Proactively attempt recovery / cancellation of any pending or failed orphaned intents for this appointment
       try {
@@ -2066,17 +2092,54 @@ Deno.serve(async (req: Request) => {
 
           // If confirmed failed or cancelled, update user_payment to record terminal state before creating fresh intent
           if (existingStatus === "failed" || existingStatus === "cancelled") {
-            await adminSupabase
+            const { error: ledgerUpdateErr } = await adminSupabase
               .from("user_payment")
               .update({ status: existingStatus })
-              .eq("paymongo_payment_id", existingIntentId);
+              .eq("paymongo_payment_id", existingIntentId)
+              .eq("appointment_id", effectiveAppointmentId)
+              .in("status", ["pending", "processing"]);
 
-            // Rotate idempotency key for fresh logical checkout attempt
+            if (ledgerUpdateErr) {
+              console.error("[paymongo-payment] Failed to update terminal user_payment status before retry:", ledgerUpdateErr);
+              await adminSupabase.rpc("release_checkout_claim", {
+                p_appointment_id: effectiveAppointmentId,
+                p_claim_id: claimId,
+              });
+              return jsonResponse(
+                {
+                  error: "Failed to record prior payment status before retrying checkout.",
+                  code: "ERR_DB_TRACKING_FAILED",
+                },
+                500
+              );
+            }
+
+            // Rotate idempotency key for fresh logical checkout attempt and verify persistence before calling gateway
             const freshKey = `dermai_appt_${effectiveAppointmentId}_${crypto.randomUUID().slice(0, 8)}`;
-            await adminSupabase
+            const { data: rotatedAppt, error: rotateKeyErr } = await adminSupabase
               .from("patient_appointment")
               .update({ checkout_idempotency_key: freshKey })
-              .eq("appointment_id", effectiveAppointmentId);
+              .eq("appointment_id", effectiveAppointmentId)
+              .eq("checkout_claim_id", claimId)
+              .select("appointment_id")
+              .maybeSingle();
+
+            if (rotateKeyErr || !rotatedAppt) {
+              console.error("[paymongo-payment] Failed to persist rotated idempotency key before retry:", rotateKeyErr);
+              await adminSupabase.rpc("release_checkout_claim", {
+                p_appointment_id: effectiveAppointmentId,
+                p_claim_id: claimId,
+              });
+              return jsonResponse(
+                {
+                  error: "Failed to persist new checkout idempotency key before creating payment intent.",
+                  code: "ERR_DB_TRACKING_FAILED",
+                },
+                500
+              );
+            }
+
+            idempotencyKey = freshKey;
           }
         } catch (verifyErr) {
           console.warn("[paymongo-payment] Network error verifying existing intent, failing closed:", verifyErr);
@@ -2150,12 +2213,13 @@ Deno.serve(async (req: Request) => {
         console.warn(`[paymongo-payment] PaymentIntent creation HTTP failure (isAbort: ${isAbort}):`, fetchErr);
 
         // SEC-02 PAYMENT SAFETY:
-        // Record uncertain state in database (affected rows checked inside RPC)
-        await adminSupabase.rpc("record_checkout_uncertain", {
-          p_appointment_id: effectiveAppointmentId,
-          p_claim_id: claimId,
-          p_attempt_id: attemptId,
-          p_uncertain_reason: isAbort ? "gateway_timeout" : "network_error",
+        // Gateway outcome uncertain: retain 60s DB lease to prevent concurrent duplicate intent creation
+        await recordAuditLog({
+          userId,
+          action: isAbort ? "checkout_gateway_timeout" : "checkout_gateway_network_error",
+          target: `appointment:${effectiveAppointmentId}`,
+          details: `PaymentIntent creation HTTP failure (isAbort: ${isAbort}). Lease retained for idempotency protection.`,
+          metadata: { appointmentId: effectiveAppointmentId, claimId, idempotencyKey, isAbort, payloadHash },
         });
 
         return jsonResponse(
@@ -2187,13 +2251,52 @@ Deno.serve(async (req: Request) => {
 
       if (!response.ok) {
         console.error("PayMongo create booking intent error:", data);
+        if (response.status === 408) {
+          // HTTP 408 Request Timeout: retain 60s lease to preserve idempotency key
+          await recordAuditLog({
+            userId,
+            action: "checkout_gateway_timeout",
+            target: `appointment:${effectiveAppointmentId}`,
+            details: `PayMongo request timed out (HTTP 408). Retaining lease for idempotency protection.`,
+            metadata: { appointmentId: effectiveAppointmentId, claimId, status: 408, payloadHash },
+          });
+          return jsonResponse(
+            {
+              error: "Payment gateway request timed out. Status is being verified. Please wait a moment before retrying.",
+              code: "ERR_GATEWAY_TIMEOUT",
+              uncertain: true,
+            },
+            408
+          );
+        }
+
+        if (response.status === 429) {
+          // HTTP 429 Rate Limited: retain 60s lease to prevent rapid retries hammering the gateway
+          await recordAuditLog({
+            userId,
+            action: "checkout_gateway_rate_limited",
+            target: `appointment:${effectiveAppointmentId}`,
+            details: `PayMongo rate limit reached (HTTP 429). Retaining lease for idempotency protection.`,
+            metadata: { appointmentId: effectiveAppointmentId, claimId, status: 429, payloadHash },
+          });
+          return jsonResponse(
+            {
+              error: "Payment gateway rate limit reached. Please wait a moment before retrying.",
+              code: "ERR_GATEWAY_RATE_LIMITED",
+              uncertain: true,
+            },
+            429
+          );
+        }
+
         if (response.status >= 500) {
-          // 5xx means request reached gateway but outcome is uncertain
-          await adminSupabase.rpc("record_checkout_uncertain", {
-            p_appointment_id: effectiveAppointmentId,
-            p_claim_id: claimId,
-            p_attempt_id: attemptId,
-            p_uncertain_reason: `gateway_${response.status}`,
+          // 5xx Gateway Server Error: outcome uncertain, retain 60s lease to preserve idempotency key
+          await recordAuditLog({
+            userId,
+            action: "checkout_gateway_5xx",
+            target: `appointment:${effectiveAppointmentId}`,
+            details: `PayMongo reported internal server error (${response.status}). Retaining lease for idempotency protection.`,
+            metadata: { appointmentId: effectiveAppointmentId, claimId, status: response.status, payloadHash },
           });
           return jsonResponse(
             {
@@ -2205,14 +2308,24 @@ Deno.serve(async (req: Request) => {
           );
         }
 
-        // 4xx client parameter rejection (not created)
-        await adminSupabase.rpc("cancel_checkout_attempt", {
-          p_appointment_id: effectiveAppointmentId,
-          p_claim_id: claimId,
-          p_attempt_id: attemptId,
-          p_gateway_confirmed_status: "not_created",
-          p_reason: data?.errors?.[0]?.detail || "gateway_4xx_rejected",
-        });
+        // Deterministic rejection handling: release lease ONLY for verified deterministic statuses
+        const deterministicRejections = [400, 401, 403, 404, 422];
+        if (deterministicRejections.includes(response.status)) {
+          await adminSupabase.rpc("release_checkout_claim", {
+            p_appointment_id: effectiveAppointmentId,
+            p_claim_id: claimId,
+          });
+        } else {
+          // Unclassified / unknown status: retain lease fail-closed
+          await recordAuditLog({
+            userId,
+            action: "checkout_gateway_unknown_status",
+            target: `appointment:${effectiveAppointmentId}`,
+            details: `PayMongo returned unclassified status (${response.status}). Retaining lease fail-closed.`,
+            metadata: { appointmentId: effectiveAppointmentId, claimId, status: response.status, payloadHash },
+          });
+        }
+
         return jsonResponse(
           {
             error:
@@ -2585,7 +2698,7 @@ Deno.serve(async (req: Request) => {
 
           }
 
-          if (metadata?.user_id && metadata.user_id !== user.id) {
+          if (!isServiceRoleRequest && metadata?.user_id && metadata.user_id !== user.id) {
 
             throw new Error("Payment does not belong to the authenticated user");
 
@@ -2699,11 +2812,21 @@ Deno.serve(async (req: Request) => {
 
       }
 
-      // Security check: must belong to authenticated user (unless service role or admin)
+      // Security check: must belong to verified authenticated user unless authorized via trusted service_role token
 
-      if (appt.user_id && user?.id && user.id !== "service_role" && appt.user_id !== user.id) {
+      if (!isServiceRoleRequest) {
 
-        return jsonResponse({ success: false, code: "ERR_FORBIDDEN", message: "Unauthorized." }, 403);
+        if (!isAuthenticatedPatient || !user?.id) {
+
+          return jsonResponse({ success: false, code: "ERR_UNAUTHORIZED", message: "Authenticated user session required." }, 401);
+
+        }
+
+        if (!appt.user_id || appt.user_id !== user.id) {
+
+          return jsonResponse({ success: false, code: "ERR_FORBIDDEN", message: "Unauthorized." }, 403);
+
+        }
 
       }
 
@@ -2741,9 +2864,155 @@ Deno.serve(async (req: Request) => {
 
       }
 
-      // Resolve payment intent ID
+      // Resolve payment intent ID (stored database reference takes strict priority)
 
-      const effectiveIntentId = paymentIntentId || (appt.payment_reference?.startsWith("pi_") ? appt.payment_reference : null);
+      const dbIntentId =
+        typeof appt.payment_reference === "string" && appt.payment_reference.startsWith("pi_")
+          ? appt.payment_reference
+          : null;
+
+      const callerIntentId =
+        typeof paymentIntentId === "string" && paymentIntentId.trim().length > 0
+          ? paymentIntentId.trim()
+          : null;
+
+      if (dbIntentId && callerIntentId && callerIntentId !== dbIntentId) {
+        return jsonResponse(
+          {
+            success: false,
+            code: "ERR_INTENT_MISMATCH",
+            message: "Provided paymentIntentId does not match the appointment's active PaymentIntent.",
+          },
+          409
+        );
+      }
+
+      let effectiveIntentId: string | null = dbIntentId;
+
+      if (!effectiveIntentId && callerIntentId) {
+        if (!/^pi_[A-Za-z0-9_-]{1,128}$/.test(callerIntentId)) {
+          return jsonResponse(
+            {
+              success: false,
+              code: "ERR_INVALID_PARAMS",
+              message: "Invalid PayMongo PaymentIntent ID format.",
+            },
+            400
+          );
+        }
+
+        const { data: ledgerRows, error: ledgerErr } = await adminSupabase
+          .from("user_payment")
+          .select("payment_id, appointment_id, user_id, paymongo_payment_id, paymongo_payment_intent_id, status")
+          .or(`paymongo_payment_id.eq.${callerIntentId},paymongo_payment_intent_id.eq.${callerIntentId}`);
+
+        if (ledgerErr) {
+          console.error("[safe_cancel_booking_hold] Failed to verify caller PaymentIntent ownership:", ledgerErr);
+          return jsonResponse(
+            {
+              success: false,
+              code: "ERR_PAYMENT_LOOKUP_FAILED",
+              message: "Unable to verify PaymentIntent ownership; hold preserved.",
+            },
+            500
+          );
+        }
+
+        const { data: orphanRow, error: orphanErr } = await adminSupabase
+          .from("payment_intent_orphan")
+          .select("orphan_id, appointment_id")
+          .eq("paymongo_payment_id", callerIntentId)
+          .maybeSingle();
+
+        if (orphanErr && orphanErr.code !== "42P01" && orphanErr.code !== "PGRST205") {
+          console.error("[safe_cancel_booking_hold] Failed checking orphaned PaymentIntent ownership:", orphanErr);
+          return jsonResponse(
+            {
+              success: false,
+              code: "ERR_PAYMENT_LOOKUP_FAILED",
+              message: "Unable to verify PaymentIntent ownership; hold preserved.",
+            },
+            500
+          );
+        }
+
+        if (orphanRow && orphanRow.appointment_id !== appointmentId) {
+          return jsonResponse(
+            {
+              success: false,
+              code: "ERR_INTENT_OWNERSHIP_CONFLICT",
+              message: "PaymentIntent belongs to another appointment.",
+            },
+            409
+          );
+        }
+
+        if (ledgerRows && ledgerRows.some((row) => row.appointment_id !== appointmentId)) {
+          return jsonResponse(
+            {
+              success: false,
+              code: "ERR_INTENT_OWNERSHIP_CONFLICT",
+              message: "PaymentIntent belongs to another appointment.",
+            },
+            409
+          );
+        }
+
+        const matchingForAppt = (ledgerRows || []).filter((row) => row.appointment_id === appointmentId);
+        if (matchingForAppt.length === 0) {
+          return jsonResponse(
+            {
+              success: false,
+              code: "ERR_FORBIDDEN",
+              message: "PaymentIntent ownership could not be verified for this appointment.",
+            },
+            403
+          );
+        }
+
+        if (!isServiceRoleRequest) {
+          if (
+            matchingForAppt.some(
+              (row) => !row.user_id || row.user_id !== appt.user_id || row.user_id !== user.id
+            )
+          ) {
+            return jsonResponse(
+              {
+                success: false,
+                code: "ERR_FORBIDDEN",
+                message: "PaymentIntent user does not match the appointment and authenticated user.",
+              },
+              403
+            );
+          }
+        } else if (appt.user_id && matchingForAppt.some((row) => !row.user_id || row.user_id !== appt.user_id)) {
+          return jsonResponse(
+            {
+              success: false,
+              code: "ERR_INTENT_OWNERSHIP_CONFLICT",
+              message: "PaymentIntent user does not match the appointment owner.",
+            },
+            409
+          );
+        }
+
+        effectiveIntentId = callerIntentId;
+      }
+
+      if (effectiveIntentId && !/^pi_[A-Za-z0-9_-]{1,128}$/.test(effectiveIntentId)) {
+        return jsonResponse(
+          {
+            success: false,
+            code: "ERR_INVALID_PARAMS",
+            message: "Stored PayMongo PaymentIntent reference is malformed.",
+          },
+          400
+        );
+      }
+
+      let gatewayVerified = false;
+      let verifiedIntentId: string | null = null;
+      let verifiedIntentStatus: "cancelled" | "failed" | null = null;
 
       if (effectiveIntentId) {
 
@@ -2831,6 +3100,18 @@ Deno.serve(async (req: Request) => {
         }
 
         let intentStatus = pmData?.data?.attributes?.status;
+
+        const metaApptId = pmData?.data?.attributes?.metadata?.appointment_id;
+        if (metaApptId && metaApptId !== appointmentId) {
+          return jsonResponse(
+            {
+              success: false,
+              code: "ERR_INTENT_OWNERSHIP_CONFLICT",
+              message: "Gateway PaymentIntent metadata does not match this appointment.",
+            },
+            409
+          );
+        }
 
         if (intentStatus === "succeeded") {
 
@@ -2927,23 +3208,20 @@ Deno.serve(async (req: Request) => {
         }
 
         // Gateway confirmed terminal failure/cancellation for this intent.
-
-        // Update user_payment for this specific intent to cancelled/failed BEFORE calling cancellation RPC.
-
-        await adminSupabase
-
-          .from("user_payment")
-
-          .update({ status: intentStatus === "cancelled" ? "cancelled" : "failed" })
-
-          .eq("paymongo_payment_id", effectiveIntentId);
+        // Pass verified intent ID + terminal status into the atomic cancellation RPC
+        // so the matching ledger row is updated only if appointment cancellation succeeds.
+        gatewayVerified = true;
+        verifiedIntentId = effectiveIntentId;
+        verifiedIntentStatus = intentStatus === "cancelled" ? "cancelled" : "failed";
 
       }
 
-      // Safely cancel the hold via RPC (authoritatively verified with PayMongo gateway)
+      // Safely cancel the hold via RPC (atomically updates appointment, checkout state, and matching ledger row)
       const { data: cancelRes, error: cancelErr } = await adminSupabase.rpc("cancel_appointment_hold", {
         p_appointment_id: appointmentId,
-        p_gateway_verified: true,
+        p_gateway_verified: gatewayVerified,
+        p_verified_intent_id: verifiedIntentId,
+        p_verified_intent_status: verifiedIntentStatus,
       });
 
       if (cancelErr || !cancelRes?.success) {
@@ -2959,18 +3237,6 @@ Deno.serve(async (req: Request) => {
         });
 
       }
-
-      // Update any remaining processing user_payment record to cancelled
-
-      await adminSupabase
-
-        .from("user_payment")
-
-        .update({ status: "cancelled" })
-
-        .eq("appointment_id", appointmentId)
-
-        .eq("status", "processing");
 
       return jsonResponse({
 
@@ -3103,7 +3369,7 @@ Deno.serve(async (req: Request) => {
           ? intentAttributes.paid_at
           : null;
 
-      if (metadata?.user_id && metadata.user_id !== user.id) {
+      if (!isServiceRoleRequest && metadata?.user_id && metadata.user_id !== user.id) {
 
         throw new Error("Payment does not belong to the authenticated user");
 
@@ -3165,6 +3431,24 @@ Deno.serve(async (req: Request) => {
 
     if (action === "fulfill_payment") {
 
+      if (!isServiceRoleRequest) {
+
+        return jsonResponse(
+
+          {
+
+            error: "Forbidden: fulfill_payment requires service_role authorization.",
+
+            code: "ERR_FORBIDDEN",
+
+          },
+
+          403
+
+        );
+
+      }
+
       const {
 
         paymongoPaymentId,
@@ -3203,7 +3487,7 @@ Deno.serve(async (req: Request) => {
 
             metadata: metadata || {},
 
-            userAuthEmail: userAuthEmail || user.email,
+            userAuthEmail: userAuthEmail || (typeof body.userEmail === "string" ? body.userEmail : null) || user.email,
 
           })
 
@@ -3219,7 +3503,7 @@ Deno.serve(async (req: Request) => {
 
             metadata: metadata || {},
 
-            userAuthEmail: userAuthEmail || user.email,
+            userAuthEmail: userAuthEmail || (typeof body.userEmail === "string" ? body.userEmail : null) || user.email,
 
             paidAtSeconds: body?.paidAtSeconds ?? body?.paid_at ?? null,
 

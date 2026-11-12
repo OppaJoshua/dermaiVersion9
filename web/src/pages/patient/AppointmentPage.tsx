@@ -3790,8 +3790,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           <div className="space-y-1.5">
             <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Payment Successful!</h1>
             <p className="text-xs text-gray-500 max-w-md mx-auto">
-              Your consultation payment has been received and your appointment request has been confirmed with{" "}
-              <strong className="text-gray-900">{paymentConfirmedDetails?.clinicName || selectedClinic?.name || "Skin Clinic"}</strong>.
+              Your consultation payment has been received. Your appointment request with{" "}
+              <strong className="text-gray-900">{paymentConfirmedDetails?.clinicName || selectedClinic?.name || "Skin Clinic"}</strong>{" "}
+              is now awaiting review by the clinic and assigned dermatologist.
             </p>
           </div>
 
@@ -3874,7 +3875,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             <div className="flex items-center justify-between">
               <span className="text-gray-500">Payment Status</span>
               <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200 text-[10px]">
-                Paid &amp; Confirmed
+                Paid &mdash; Awaiting Doctor Review
               </span>
             </div>
           </div>
