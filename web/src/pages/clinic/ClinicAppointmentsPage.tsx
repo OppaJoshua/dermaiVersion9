@@ -675,6 +675,7 @@ export default function ClinicAppointmentsPage() {
       now.getDate()
     ).padStart(2, "0")}`;
   });
+  const [scheduleTab, setScheduleTab] = useState<"upcoming" | "completed">("upcoming");
 
   const [clinicSettings] = useState<ClinicSettings>(() => {
     try {
@@ -907,24 +908,58 @@ export default function ClinicAppointmentsPage() {
     [appointments]
   );
 
-  const displayedQueue = useMemo(() => {
-    let base: AppointmentRecord[] = incomingQueue;
-    if (queueFilter === "needs_doctor") base = needsDoctorQueue;
-    else if (queueFilter === "in_review") base = inReviewQueue;
-    else if (queueFilter === "approved") base = approvedQueue;
-    else if (queueFilter === "reschedule_requests") {
-      base = [...rescheduleRequestsQueue].sort((a, b) => compareAppointmentUrgency(a, b, urgencyNow));
-    }
+  const scheduleAppointmentsByDate = useMemo(() => {
+    const activeAppointments = appointments.filter((appointment) => {
+      const isCompleted =
+        appointment.status === "completed" ||
+        appointment.checkInStatus === "completed" ||
+        appointment.checkInStatus === "no-show";
+      const isExcluded = appointment.status === "cancelled" || appointment.status === "rejected";
+      return !isExcluded && (scheduleTab === "completed" ? isCompleted : !isCompleted);
+    });
 
-    if (highlightedApptId) {
-      const target = appointments.find((a) => String(a.id) === String(highlightedApptId));
-      if (target) {
-        const rest = base.filter((a) => String(a.id) !== String(target.id));
-        return [target, ...rest];
-      }
-    }
-    return base;
-  }, [queueFilter, incomingQueue, needsDoctorQueue, inReviewQueue, approvedQueue, rescheduleRequestsQueue, urgencyNow, highlightedApptId, appointments]);
+    return activeAppointments.reduce<Record<string, AppointmentRecord[]>>((acc, appointment) => {
+      if (!appointment.date) return acc;
+      const dateKey = appointment.date.includes("T") ? appointment.date.split("T")[0] : appointment.date;
+      if (!acc[dateKey]) acc[dateKey] = [];
+      acc[dateKey].push(appointment);
+      return acc;
+    }, {});
+  }, [appointments, scheduleTab]);
+
+  const selectedDateQueue = useMemo(() => {
+    const dateAppointments = scheduleAppointmentsByDate[selectedDate] || [];
+    const dateMatches = (appointment: AppointmentRecord) => {
+      const dateKey = appointment.date?.includes("T") ? appointment.date.split("T")[0] : appointment.date;
+      const isCompleted =
+        appointment.status === "completed" ||
+        appointment.checkInStatus === "completed" ||
+        appointment.checkInStatus === "no-show";
+      return dateKey === selectedDate && (scheduleTab === "completed" ? isCompleted : !isCompleted);
+    };
+
+    if (queueFilter === "needs_doctor") return needsDoctorQueue.filter(dateMatches);
+    if (queueFilter === "in_review") return inReviewQueue.filter(dateMatches);
+    if (queueFilter === "reschedule_requests") return rescheduleRequestsQueue.filter(dateMatches);
+    if (queueFilter === "approved") return approvedQueue.filter(dateMatches);
+    return sortAppointmentsByDailyQueue(dateAppointments);
+  }, [
+    scheduleAppointmentsByDate,
+    selectedDate,
+    queueFilter,
+    needsDoctorQueue,
+    inReviewQueue,
+    rescheduleRequestsQueue,
+    approvedQueue,
+    scheduleTab,
+  ]);
+
+  const formatSelectedDate = (dateKey: string) => {
+    const date = new Date(`${dateKey}T00:00:00`);
+    return Number.isNaN(date.getTime())
+      ? dateKey
+      : date.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  };
 
   // Deep-link handler: when ?appointment=<id> is present in URL, auto-select tab, calendar date, highlight card, and open detail modal
   useEffect(() => {
@@ -1990,8 +2025,51 @@ export default function ClinicAppointmentsPage() {
         </p>
       )}
 
+      <div className="flex gap-2 border-b border-slate-200/80 overflow-x-auto whitespace-nowrap pb-px no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+        {([
+          { key: "upcoming", label: "Upcoming Schedules" },
+          { key: "completed", label: "Completed Consultations" },
+        ] as const).map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setScheduleTab(tab.key)}
+            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors cursor-pointer flex items-center shrink-0 ${
+              scheduleTab === tab.key
+                ? "border-[#c0166a] text-[#c0166a]"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            {tab.label}
+            <span
+              className={`ml-2 text-[11px] px-2 py-0.5 rounded-full font-bold ${
+                scheduleTab === tab.key
+                  ? "bg-rose-50 text-[#c0166a]"
+                  : "bg-gray-100 text-gray-500"
+              }`}
+            >
+              {tab.key === "upcoming"
+                ? appointments.filter(
+                    (appointment) =>
+                      appointment.status !== "completed" &&
+                      appointment.status !== "cancelled" &&
+                      appointment.status !== "rejected" &&
+                      appointment.checkInStatus !== "completed" &&
+                      appointment.checkInStatus !== "no-show"
+                  ).length
+                : appointments.filter(
+                    (appointment) =>
+                      appointment.status === "completed" ||
+                      appointment.checkInStatus === "completed" ||
+                      appointment.checkInStatus === "no-show"
+                  ).length}
+            </span>
+          </button>
+        ))}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* ── Left Column: Calendar + Scheduled on [Date] + Legend ── */}
+        {/* ── Left Column: Calendar + Legend ── */}
         <div className="lg:col-span-7 xl:col-span-6 bg-white border border-gray-100 rounded-3xl p-5 shadow-xs">
           {/* Calendar Header */}
           <div className="flex items-center justify-between mb-3">
@@ -2043,7 +2121,7 @@ export default function ClinicAppointmentsPage() {
           <div className="grid grid-cols-7 gap-1.5">
             {calendarCells.map((cell) => {
               const isSelected = selectedDate === cell.key;
-              const dayAppointments = appointmentsByDate[cell.key] || [];
+              const dayAppointments = scheduleAppointmentsByDate[cell.key] || [];
               const hasAppointment = dayAppointments.some(
                 (a) => a.status !== "cancelled" && a.status !== "rejected"
               );
@@ -2051,7 +2129,12 @@ export default function ClinicAppointmentsPage() {
               return (
                 <div
                   key={cell.key}
-                  onClick={() => setSelectedDate(cell.key)}
+                  onClick={() => {
+                    setSelectedDate(cell.key);
+                    if (!cell.inCurrentMonth) {
+                      setCurrentMonth(new Date(cell.date.getFullYear(), cell.date.getMonth(), 1));
+                    }
+                  }}
                   className={cn(
                     "min-h-13.5 sm:min-h-14.5 rounded-xl p-1.5 sm:p-2 text-left transition-all cursor-pointer flex flex-col justify-between border",
                     !cell.inCurrentMonth
@@ -2085,7 +2168,7 @@ export default function ClinicAppointmentsPage() {
             })}
           </div>
 
-          {/* ── Scheduled on [selectedDate] Section ── */}
+          {false && (
           <div className="mt-6">
             <h3 className="text-sm font-bold text-gray-900 mb-3">
               Scheduled on {selectedDate}
@@ -2191,6 +2274,8 @@ export default function ClinicAppointmentsPage() {
             </div>
           </div>
 
+          )}
+
           {/* ── Legend ── */}
           <div className="flex items-center gap-6 text-xs text-gray-500 pt-5 mt-6 border-t border-gray-100 flex-wrap px-1">
             <div className="flex items-center gap-2">
@@ -2207,13 +2292,20 @@ export default function ClinicAppointmentsPage() {
         <div className="lg:col-span-5 xl:col-span-6 bg-white border border-gray-100 rounded-2xl p-4 sm:p-5">
           <div className="flex items-start justify-between gap-3 mb-3">
             <div className="min-w-0">
-              <h2 className="font-display font-bold text-gray-900 text-base">Incoming Consultation Requests</h2>
+              <h2 className="font-display font-bold text-gray-900 text-base">
+                Appointments for {formatSelectedDate(selectedDate)}
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {selectedDateQueue.length} {selectedDateQueue.length === 1 ? "appointment" : "appointments"} matching this date and filter
+              </p>
             </div>
             <span className="text-xs px-2.5 py-1 rounded-full bg-magenta-50 text-magenta-700 border border-magenta-200 font-bold shrink-0 whitespace-nowrap inline-flex items-center gap-1 self-start">
-              {incomingQueue.length} pending
+              {scheduleTab === "completed" ? "Completed" : "Upcoming"}
             </span>
           </div>
 
+          {scheduleTab === "upcoming" && (
+          <>
           {/* Queue Stage Filter Pills */}
           <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-3 pt-1 text-xs no-scrollbar">
             {[
@@ -2244,12 +2336,18 @@ export default function ClinicAppointmentsPage() {
               </button>
             ))}
           </div>
+          </>
+          )}
 
           <div className="space-y-3 max-h-165 overflow-y-auto pr-1 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-            {displayedQueue.length === 0 && (
+            {selectedDateQueue.length === 0 && (
               <div className="border border-dashed border-gray-200 rounded-2xl p-8 text-center bg-gray-50/50">
                 <Clock className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                <p className="text-xs font-semibold text-gray-600">No requests in this category</p>
+                <p className="text-xs font-semibold text-gray-600">
+                  {scheduleTab === "completed"
+                    ? "No completed consultations for this date."
+                    : "No approved appointments scheduled for this date."}
+                </p>
                 <p className="text-[11px] text-gray-400 mt-1 max-w-xs mx-auto">
                   {queueFilter === "needs_doctor"
                     ? "All consultation requests have been assigned to doctors for review."
@@ -2262,7 +2360,7 @@ export default function ClinicAppointmentsPage() {
               </div>
             )}
 
-            {displayedQueue.map((appointment) => {
+            {selectedDateQueue.map((appointment) => {
               const urgency = getPendingAppointmentUrgency(appointment, urgencyNow);
               const isDoctorDeclined = appointment.doctorStatus === "rejected";
               const isInReview = !isDoctorDeclined && Boolean(appointment.assignedDoctorId) && appointment.doctorStatus === "pending-review";
