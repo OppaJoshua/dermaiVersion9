@@ -107,6 +107,13 @@ export default function ScanScreen() {
   const [liveCameraSlot, setLiveCameraSlot] = useState<'primary' | 'reference' | null>(null);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [scansUsed, setScansUsed] = useState(0);
+  const [scanLimit, setScanLimit] = useState<number>(0);
+  const [planName, setPlanName] = useState<string>('Free Plan');
+  const [scansCountVerified, setScansCountVerified] = useState<boolean>(false);
+  const [freePlanActive, setFreePlanActive] = useState<boolean>(true);
+  const [freePlanVerified, setFreePlanVerified] = useState<boolean>(true);
+  const [freePlanAmbiguous, setFreePlanAmbiguous] = useState<boolean>(false);
+  const [freePlanError, setFreePlanError] = useState<string | null>(null);
   const [isPremium, setIsPremium] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const questionScrollRef = useRef<any>(null);
@@ -126,25 +133,146 @@ export default function ScanScreen() {
   async function loadScanInfo() {
     const user = await getCurrentUser();
     if (!user) return;
-    const isDemoAccount = user.email.toLowerCase().endsWith('@dermai.ph');
-    if (isDemoAccount) {
-      setIsPremium(true);
-      setScansUsed(0);
+    const sub = await getUserSubscription(user.id);
+    if (!sub) {
+      setFreePlanVerified(false);
+      setFreePlanAmbiguous(false);
+      setScansCountVerified(false);
+      setFreePlanError(
+        'Unable to verify your scan allowance. Please check your internet connection and try again.'
+      );
       return;
     }
-    const sub = await getUserSubscription(user.id);
-    setIsPremium(sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1);
-    setScansUsed(sub?.scansUsed ?? 0);
+    const hasActivePaidSub = Boolean(
+      (sub.plan === 'premium' ||
+        sub.plan === 'pro' ||
+        sub.plan === 'basic' ||
+        sub.statusLabel === 'Premium Active' ||
+        sub.statusLabel === 'Basic Active') &&
+        !sub.isExpired
+    );
+    const resolvedLimit =
+      hasActivePaidSub && sub.scanLimit === -1
+        ? -1
+        : typeof sub.scanLimit === 'number' && sub.scanLimit >= 0
+        ? sub.scanLimit
+        : 0;
+    setIsPremium(hasActivePaidSub);
+    setScanLimit(resolvedLimit);
+    setPlanName(sub.planName || (hasActivePaidSub ? 'Pro Plan' : 'Free Plan'));
+    setScansUsed(sub.scansUsed ?? 0);
+    setFreePlanActive(hasActivePaidSub ? true : Boolean(sub.freePlanActive));
+    setFreePlanVerified(hasActivePaidSub ? true : sub.freePlanVerified !== false);
+    setFreePlanAmbiguous(hasActivePaidSub ? false : Boolean(sub.freePlanAmbiguous));
+    setFreePlanError(hasActivePaidSub ? null : sub.freePlanError || null);
+    setScansCountVerified(sub.scansCountVerified !== false);
   }
 
-  async function checkCanScan(): Promise<boolean> {
+  async function checkCanScan(notifyOnLimit = false): Promise<boolean> {
     const user = await getCurrentUser();
-    if (!user) return true;
-    const isDemoAccount = user.email.toLowerCase().endsWith('@dermai.ph');
-    if (isDemoAccount) return true;
+    if (!user) {
+      const msg = 'Please sign in to verify your scan allowance and analyze your skin.';
+      setAnalysisError(msg);
+      Alert.alert('Sign In Required', msg);
+      return false;
+    }
+
     const sub = await getUserSubscription(user.id);
-    if (sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1) return true;
-    return (sub?.scansUsed ?? 0) < MAX_FREE_SCANS;
+    if (!sub) {
+      setFreePlanVerified(false);
+      setFreePlanAmbiguous(false);
+      setScansCountVerified(false);
+      const retryMsg =
+        'Unable to verify your scan allowance. Please check your internet connection and try again.';
+      setFreePlanError(retryMsg);
+      setAnalysisError(retryMsg);
+      Alert.alert('Unable to Verify Scan Allowance', retryMsg);
+      return false;
+    }
+
+    const hasActivePaidSub = Boolean(
+      (sub.plan === 'premium' ||
+        sub.plan === 'pro' ||
+        sub.plan === 'basic' ||
+        sub.statusLabel === 'Premium Active' ||
+        sub.statusLabel === 'Basic Active') &&
+        !sub.isExpired
+    );
+    const resolvedLimit =
+      hasActivePaidSub && sub.scanLimit === -1
+        ? -1
+        : typeof sub.scanLimit === 'number' && sub.scanLimit >= 0
+        ? sub.scanLimit
+        : 0;
+    const isUnlimited =
+      (hasActivePaidSub || (sub.freePlanVerified !== false && Boolean(sub.freePlanActive))) &&
+      resolvedLimit === -1;
+
+    setIsPremium(hasActivePaidSub);
+    setScanLimit(resolvedLimit);
+    setPlanName(sub.planName || (hasActivePaidSub ? 'Pro Plan' : 'Free Plan'));
+    setFreePlanActive(hasActivePaidSub ? true : Boolean(sub.freePlanActive));
+    setFreePlanVerified(hasActivePaidSub ? true : sub.freePlanVerified !== false);
+    setFreePlanAmbiguous(hasActivePaidSub ? false : Boolean(sub.freePlanAmbiguous));
+    setFreePlanError(hasActivePaidSub ? null : sub.freePlanError || null);
+
+    // Situation D — Ambiguous Free Plan configuration or ambiguous historical usage
+    if (!hasActivePaidSub && sub.freePlanAmbiguous) {
+      setScansCountVerified(false);
+      const ambigMsg =
+        sub.freePlanError ||
+        'Free AI skin scanning is temporarily unavailable due to a plan configuration issue.';
+      setAnalysisError(ambigMsg);
+      Alert.alert('Free Scanning Unavailable', ambigMsg);
+      router.push('/(app)/subscription');
+      return false;
+    }
+
+    // Situation A — Admin deactivated the Free Plan
+    if (!hasActivePaidSub && sub.freePlanVerified !== false && sub.freePlanActive === false) {
+      const inactiveMsg =
+        'Free AI skin scanning is currently unavailable. Please view the available subscription plans to continue scanning.';
+      setAnalysisError(inactiveMsg);
+      Alert.alert('Free Scanning Unavailable', inactiveMsg);
+      router.push('/(app)/subscription');
+      return false;
+    }
+
+    // Preserve normal behavior for genuinely unlimited plans
+    if (isUnlimited) {
+      setScansUsed(sub.scansUsed ?? 0);
+      setScansCountVerified(true);
+      return true;
+    }
+
+    // Situation B — Network or verification error (for limited or free plans)
+    if (sub.scansCountVerified === false || (!hasActivePaidSub && sub.freePlanVerified === false)) {
+      setScansCountVerified(false);
+      const retryMsg =
+        'Unable to verify your scan allowance. Please check your internet connection and try again.';
+      setAnalysisError(retryMsg);
+      Alert.alert('Unable to Verify Scan Allowance', retryMsg);
+      return false;
+    }
+
+    const used = sub.scansUsed ?? 0;
+    setScansUsed(used);
+    setScansCountVerified(true);
+
+    // Situation C — Original Free allowance exhausted (or limited paid plan limit reached)
+    if (used >= resolvedLimit) {
+      const limitMsg = hasActivePaidSub
+        ? `You have reached your limit of ${resolvedLimit} AI skin ${resolvedLimit === 1 ? 'scan' : 'scans'} for your current ${sub.planName || 'plan'} billing cycle.`
+        : 'You have used all your available free AI skin scans. Please subscribe to continue scanning.';
+      setAnalysisError(limitMsg);
+      if (notifyOnLimit) {
+        Alert.alert('Scan Limit Reached', limitMsg);
+      }
+      router.push('/(app)/subscription');
+      return false;
+    }
+
+    return true;
   }
 
   function reset() {
@@ -259,6 +387,12 @@ export default function ScanScreen() {
 
     if (!referenceImageUri) {
       Alert.alert('Second Photo Required', 'Please upload a second photo for anatomical context comparison.');
+      return;
+    }
+
+    // Verify scan allowance immediately before starting AI analysis
+    const canProceed = await checkCanScan(true);
+    if (!canProceed) {
       return;
     }
 
@@ -402,14 +536,10 @@ export default function ScanScreen() {
       (async () => {
         try {
           await saveScanResult(user.id, scanResult);
-          const isDemoAccount = user.email.toLowerCase().endsWith('@dermai.ph');
+          setScansUsed((prev) => prev + 1);
           const sub = await getUserSubscription(user.id);
-          const isPaid = sub?.plan === 'premium' || sub?.plan === 'pro' || sub?.scanLimit === -1;
-          if (!isDemoAccount && !isPaid) {
-            await setUserSubscription(user.id, {
-              ...(sub ?? { userId: user.id, email: user.email, plan: 'free' as const }),
-              scansUsed: (sub?.scansUsed ?? 0) + 1,
-            });
+          if (sub && sub.scansCountVerified !== false && typeof sub.scansUsed === 'number') {
+            setScansUsed(sub.scansUsed);
           }
           await addAppNotification(user.id, {
             type: 'scan',
@@ -425,9 +555,18 @@ export default function ScanScreen() {
   }
 
   // --- Welcome ---------------------------------------------------------------
+  const isUnlimitedPlan = (isPremium || (freePlanVerified && freePlanActive)) && scanLimit === -1;
+  const effectiveScanLimit = scanLimit >= 0 ? scanLimit : 0;
+  const scansLeft = isUnlimitedPlan ? Infinity : Math.max(0, effectiveScanLimit - scansUsed);
+  const isAdminDeactivated = !isPremium && freePlanVerified && !freePlanActive && !freePlanAmbiguous;
+  const isAmbiguousConfig = !isPremium && freePlanAmbiguous;
+  const isVerificationError =
+    !isUnlimitedPlan && !isAmbiguousConfig && (!scansCountVerified || (!isPremium && !freePlanVerified));
+  const freeScanningDisabled = isAdminDeactivated || isAmbiguousConfig;
+  const limitReached =
+    freeScanningDisabled || (!isUnlimitedPlan && !isVerificationError && scansCountVerified && scansLeft === 0);
+
   if (step === 'welcome') {
-    const scansLeft = Math.max(0, MAX_FREE_SCANS - scansUsed);
-    const limitReached = !isPremium && scansLeft === 0;
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <ScrollView style={styles.container} contentContainerStyle={styles.welcomeContainer} showsVerticalScrollIndicator={false}>
@@ -473,7 +612,7 @@ export default function ScanScreen() {
               </View>
             ))}
 
-            {!isPremium && (
+            {!isUnlimitedPlan && (
               <View style={[styles.quotaBanner, limitReached && styles.quotaBannerDanger]}>
                 <View style={[styles.quotaIconWrap, { backgroundColor: limitReached ? COLORS.danger + '18' : COLORS.primary + '18' }]}>
                   <Ionicons
@@ -484,12 +623,32 @@ export default function ScanScreen() {
                 </View>
                 <View style={{ flex: 1, marginLeft: 10 }}>
                   <Text style={[styles.quotaTitle, limitReached && { color: COLORS.danger }]}>
-                    {limitReached ? 'Free scans used' : `Free Plan: ${MAX_FREE_SCANS} Scans`}
+                    {isAdminDeactivated || isAmbiguousConfig
+                      ? 'Free Scanning Unavailable'
+                      : isVerificationError
+                      ? 'Scan Allowance Unverified'
+                      : limitReached
+                      ? isPremium
+                        ? `${planName}: Scan limit reached`
+                        : 'Free scans used'
+                      : isPremium
+                      ? `${planName}: Limited — ${effectiveScanLimit} ${effectiveScanLimit === 1 ? 'Scan' : 'Scans'}`
+                      : `Free Plan: ${effectiveScanLimit} ${effectiveScanLimit === 1 ? 'Scan' : 'Scans'}`}
                   </Text>
                   <Text style={styles.quotaSub}>
-                    {limitReached
-                      ? 'Upgrade to Premium for unlimited scans'
-                      : `You have ${scansLeft} free skin scan${scansLeft !== 1 ? 's' : ''}. Upgrade for unlimited access.`}
+                    {isAdminDeactivated
+                      ? 'Free AI skin scanning is currently unavailable. Please view the available subscription plans to continue scanning.'
+                      : isAmbiguousConfig
+                      ? freePlanError || 'Free AI skin scanning is temporarily unavailable due to a plan configuration issue.'
+                      : isVerificationError
+                      ? 'Unable to verify your scan allowance. Please check your internet connection and try again.'
+                      : limitReached
+                      ? isPremium
+                        ? `You have used ${scansUsed} of ${effectiveScanLimit} scans in this billing cycle.`
+                        : 'You have used all your available free AI skin scans. Please subscribe to continue scanning.'
+                      : isPremium
+                      ? `${scansUsed} / ${effectiveScanLimit} used · ${scansLeft} skin scan${scansLeft !== 1 ? 's' : ''} remaining`
+                      : `You have ${scansLeft} one-time free skin scan${scansLeft !== 1 ? 's' : ''} remaining.`}
                   </Text>
                 </View>
                 {limitReached && (
@@ -497,17 +656,19 @@ export default function ScanScreen() {
                     style={styles.quotaUpgradeBtn}
                     onPress={() => router.push('/(app)/subscription')}
                   >
-                    <Text style={styles.quotaUpgradeTxt}>Upgrade</Text>
+                    <Text style={styles.quotaUpgradeTxt}>{isPremium ? 'Manage' : 'Upgrade'}</Text>
                   </TouchableOpacity>
                 )}
               </View>
             )}
-            {isPremium && (
+            {isUnlimitedPlan && (
               <View style={styles.quotaBannerPremium}>
                 <View style={[styles.quotaIconWrap, { backgroundColor: COLORS.primary + '18' }]}>
                   <Ionicons name="star" size={15} color={COLORS.primary} />
                 </View>
-                <Text style={[styles.quotaTitle, { marginLeft: 10, color: COLORS.primary }]}>Premium — Unlimited Scans</Text>
+                <Text style={[styles.quotaTitle, { marginLeft: 10, color: COLORS.primary }]}>
+                  {planName} — Unlimited Scans
+                </Text>
               </View>
             )}
 
@@ -516,8 +677,8 @@ export default function ScanScreen() {
               onPress={limitReached
                 ? () => router.push('/(app)/subscription')
                 : async () => {
-                    const can = await checkCanScan();
-                    if (!can) { router.push('/(app)/subscription'); return; }
+                    const can = await checkCanScan(false);
+                    if (!can) return;
                     setStep('questionnaire');
                   }}
             >
@@ -1030,23 +1191,33 @@ export default function ScanScreen() {
                 ))}
               </View>
 
-              {!isPremium && (
+              {!isUnlimitedPlan && (
                 <View style={styles.quotaBanner}>
                   <View style={[styles.quotaIconWrap, { backgroundColor: '#F5F6FA' }]}>
                     <Ionicons name="lock-closed-outline" size={16} color={COLORS.textSecondary} />
                   </View>
                   <View style={{ flex: 1, marginLeft: 10 }}>
-                    <Text style={styles.quotaTitle}>Free Plan: {MAX_FREE_SCANS} Scans</Text>
+                    <Text style={styles.quotaTitle}>
+                      {isPremium
+                        ? `${planName}: Limited — ${effectiveScanLimit} ${effectiveScanLimit === 1 ? 'Scan' : 'Scans'}`
+                        : `Free Plan: ${effectiveScanLimit} ${effectiveScanLimit === 1 ? 'Scan' : 'Scans'}`}
+                    </Text>
                     <Text style={styles.quotaSub}>
-                      You have {Math.max(0, MAX_FREE_SCANS - scansUsed)} free skin scan{Math.max(0, MAX_FREE_SCANS - scansUsed) !== 1 ? 's' : ''}. Upgrade for unlimited access.
+                      {!scansCountVerified
+                        ? 'Scan allowance will be verified before analysis begins.'
+                        : isPremium
+                        ? `${scansUsed} / ${effectiveScanLimit} used · ${scansLeft} skin scan${scansLeft !== 1 ? 's' : ''} remaining in this billing cycle.`
+                        : `You have ${scansLeft} free skin scan${scansLeft !== 1 ? 's' : ''}. Upgrade for unlimited access.`}
                     </Text>
                   </View>
-                  <TouchableOpacity
-                    style={styles.quotaUpgradeBtn}
-                    onPress={() => router.push('/(app)/subscription')}
-                  >
-                    <Text style={styles.quotaUpgradeTxt}>Upgrade</Text>
-                  </TouchableOpacity>
+                  {!isPremium && (
+                    <TouchableOpacity
+                      style={styles.quotaUpgradeBtn}
+                      onPress={() => router.push('/(app)/subscription')}
+                    >
+                      <Text style={styles.quotaUpgradeTxt}>Upgrade</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               )}
 

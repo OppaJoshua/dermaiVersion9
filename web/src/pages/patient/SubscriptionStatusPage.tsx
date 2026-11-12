@@ -5,7 +5,12 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 import { cn } from "@/lib/utils";
-import { validateAndSyncSubscription } from "@/lib/subscriptionService";
+import {
+  validateAndSyncSubscription,
+  fetchAdminFreePlanConfig,
+  calculateOneTimeFreeScanUsage,
+  countPaidPeriodScans,
+} from "@/lib/subscriptionService";
 
 interface PlanFeature {
   feature_id: string;
@@ -31,10 +36,37 @@ interface SubscriptionInfo {
   remainingDays?: number | null;
   cancelAtPeriodEnd?: boolean;
   maxScans: number;
+  configuredMaxScans?: number;
   scansUsed: number;
+  freePlanActive?: boolean;
+  freePlanVerified?: boolean;
+  freePlanAmbiguous?: boolean;
+  usageVerified?: boolean;
+  statusMessage?: string | null;
 }
 
-const DEFAULT_MAX_FREE_SCANS = 3;
+/**
+ * Conservatively resolves a plan's scan_limit:
+ * - -1 explicitly represents Unlimited (Infinity)
+ * - >= 0 represents a finite scan limit (0, 3, 5, 10, etc.)
+ * - null, undefined, or invalid values fall back to `fallback` (default 0) and never assume Unlimited.
+ */
+function resolveMaxScans(rawLimit: unknown, fallback = 0): number {
+  if (rawLimit === null || rawLimit === undefined || rawLimit === "") {
+    return fallback;
+  }
+  const num = Number(rawLimit);
+  if (!Number.isFinite(num)) {
+    return fallback;
+  }
+  if (num === -1) {
+    return Infinity;
+  }
+  if (num >= 0) {
+    return Math.floor(num);
+  }
+  return fallback;
+}
 
 export default function SubscriptionStatusPage() {
   const { user, loading: authLoading } = useAuth();
@@ -66,68 +98,37 @@ export default function SubscriptionStatusPage() {
 
       try {
         if (!user?.id) {
-          // If no user is logged in, fetch the active Free Plan
-          const { data: freePlanData } = await supabase
-            .from("plan")
-            .select(`
-              plan_id,
-              name,
-              description,
-              scan_limit,
-              plan_feature (
-                feature_id,
-                feature_text
-              )
-            `)
-            .or("price.eq.0,name.ilike.Free")
-            .limit(1)
-            .maybeSingle();
-
+          const freePlanConfig = await fetchAdminFreePlanConfig();
           if (!isMounted) return;
 
-          const freeFeatures = Array.isArray(freePlanData?.plan_feature)
-            ? freePlanData.plan_feature
-                .map((feature: any) => feature.feature_text)
-                .filter(Boolean)
-            : [];
+          const configuredMax = resolveMaxScans(freePlanConfig.configuredScanLimit, 0);
+          const effectiveMax =
+            freePlanConfig.verified && freePlanConfig.isActive
+              ? resolveMaxScans(freePlanConfig.scanLimit, 0)
+              : 0;
 
           setSubscription({
             isPro: false,
-            planName: freePlanData?.name ?? "Free Plan",
-            planDescription: freePlanData?.description ?? "",
-            planFeatures: freeFeatures,
-            maxScans:
-              freePlanData?.scan_limit === -1
-                ? Infinity
-                : freePlanData?.scan_limit ?? DEFAULT_MAX_FREE_SCANS,
+            planName: freePlanConfig.plan?.name ?? "Free Plan",
+            planDescription: freePlanConfig.plan?.description ?? "",
+            planFeatures: freePlanConfig.features,
+            maxScans: effectiveMax,
+            configuredMaxScans: configuredMax,
             scansUsed: 0,
             remainingDays: null,
             cancelAtPeriodEnd: false,
+            freePlanActive: freePlanConfig.isActive,
+            freePlanVerified: freePlanConfig.verified,
+            freePlanAmbiguous: freePlanConfig.ambiguous,
+            usageVerified: freePlanConfig.verified,
+            statusMessage: freePlanConfig.error,
           });
 
           return;
         }
 
         // Dynamically validate, expire and synchronize the patient's subscription
-        const [subInfo, freePlanRes] = await Promise.all([
-          validateAndSyncSubscription(user.id),
-          supabase
-            .from("plan")
-            .select(`
-              plan_id,
-              name,
-              description,
-              scan_limit,
-              plan_feature (
-                feature_id,
-                feature_text
-              )
-            `)
-            .or("price.eq.0,name.ilike.Free")
-            .limit(1)
-            .maybeSingle(),
-        ]);
-
+        const subInfo = await validateAndSyncSubscription(user.id);
         if (!isMounted) return;
 
         const subData = subInfo.subscription;
@@ -136,40 +137,20 @@ export default function SubscriptionStatusPage() {
         const periodEndRaw = subInfo.currentPeriodEnd;
         const periodEnd = periodEndRaw ? new Date(periodEndRaw) : null;
 
-        // Determine cycleStart for AI scans
-        const cycleStart: string =
-          isPro
-            ? subData?.current_period_start ||
-              subData?.started_at ||
-              new Date(
-                new Date().getFullYear(),
-                new Date().getMonth(),
-                1
-              ).toISOString()
-            : new Date(
-                new Date().getFullYear(),
-                new Date().getMonth(),
-                1
-              ).toISOString();
-
-        // Fetch AI scans used in this cycle
-        const { count: usedScans } = await supabase
-          .from("ai_scan_result")
-          .select("*", { count: "exact", head: true })
-          .eq("user_id", user.id)
-          .eq("status", "completed")
-          .gte("scanned_at", cycleStart);
-
-        if (!isMounted) return;
-
-        // Atomically set the resolved subscription state
+        // Active Paid Subscription Branch (independent of Free Plan status)
         if (isPro && plan) {
+          const cycleStart = subData?.current_period_start || subData?.started_at || null;
+          const paidUsage = await countPaidPeriodScans(
+            user.id,
+            cycleStart,
+            subInfo.currentPeriodEnd
+          );
+          if (!isMounted) return;
+
           const remainingDays = periodEnd
             ? Math.max(
                 0,
-                Math.ceil(
-                  (periodEnd.getTime() - Date.now()) / 86400000
-                )
+                Math.ceil((periodEnd.getTime() - Date.now()) / 86400000)
               )
             : null;
 
@@ -180,6 +161,13 @@ export default function SubscriptionStatusPage() {
                 year: "numeric",
               })
             : undefined;
+
+          const resolvedPlanMaxScans =
+            plan.scan_limit === -1
+              ? Infinity
+              : subInfo.paidLimitVerified !== false
+              ? resolveMaxScans(plan.scan_limit, 0)
+              : 0;
 
           let planFeatures: string[] = Array.isArray(plan.plan_feature)
             ? plan.plan_feature
@@ -199,15 +187,21 @@ export default function SubscriptionStatusPage() {
             }
           }
 
-          // Fallback to Pro features specified in requirements
+          // Fallback features aligned with actual configured scan_limit
           if (planFeatures.length === 0) {
             planFeatures = [
-              "Unlimited AI Skin Scans",
+              resolvedPlanMaxScans === Infinity
+                ? "Unlimited AI Skin Scans"
+                : `${resolvedPlanMaxScans} AI Skin ${resolvedPlanMaxScans === 1 ? "Scan" : "Scans"} per billing cycle`,
               "Unlimited Nearby Clinic Suggestions",
               "Unlimited AI Skin Analysis Results",
               "Access to Clinic Directory",
             ];
           }
+
+          const isUnlimitedPaid = resolvedPlanMaxScans === Infinity;
+          const paidVerified =
+            isUnlimitedPaid || (subInfo.paidLimitVerified !== false && paidUsage.verified);
 
           setSubscription({
             isPro: true,
@@ -220,23 +214,43 @@ export default function SubscriptionStatusPage() {
             cancelAtPeriodEnd: Boolean(
               subData?.cancel_at_period_end || subData?.status === "cancelling"
             ),
-            maxScans:
-              plan.scan_limit === -1
-                ? Infinity
-                : plan.scan_limit ?? Infinity,
-            scansUsed: usedScans ?? 0,
+            maxScans: resolvedPlanMaxScans,
+            configuredMaxScans: resolvedPlanMaxScans,
+            scansUsed: paidUsage.scansUsed,
+            freePlanActive: true,
+            freePlanVerified: true,
+            freePlanAmbiguous: false,
+            usageVerified: paidVerified,
+            statusMessage: paidVerified ? null : paidUsage.error,
           });
         } else {
-          const freePlanData = freePlanRes.data;
+          // Free or Expired Subscription Branch (controlled by Admin Free Plan)
+          const freeUsage = await calculateOneTimeFreeScanUsage(user.id);
+          if (!isMounted) return;
+
+          const freePlanData = subInfo.freePlanDetails;
+          const freePlanVerified = subInfo.freePlanVerified === true;
+          const freePlanAmbiguous = Boolean(subInfo.freePlanAmbiguous || freeUsage.ambiguous);
+          const freePlanActive = freePlanVerified && subInfo.freePlanActive === true;
+          const configuredFreeMaxScans = resolveMaxScans(
+            subInfo.freePlanConfiguredLimit,
+            0
+          );
+          const effectiveFreeMaxScans = freePlanActive
+            ? resolveMaxScans(subInfo.scanLimit, 0)
+            : 0;
+
           let freeFeatures = Array.isArray(freePlanData?.plan_feature)
             ? freePlanData.plan_feature
                 .map((feature: any) => feature.feature_text)
                 .filter(Boolean)
             : [];
 
-          if (freeFeatures.length === 0) {
+          if (freeFeatures.length === 0 && freePlanVerified && freePlanActive) {
             freeFeatures = [
-              "3 AI Skin Scans per billing cycle",
+              effectiveFreeMaxScans === Infinity
+                ? "Unlimited AI Skin Scans"
+                : `${effectiveFreeMaxScans} One-Time Free AI Skin ${effectiveFreeMaxScans === 1 ? "Scan" : "Scans"}`,
               "Limited Nearby Clinic Suggestions",
               "Limited AI Skin Analysis Results",
               "Access to Clinic Directory",
@@ -246,16 +260,19 @@ export default function SubscriptionStatusPage() {
           setSubscription({
             isPro: false,
             isExpired: subInfo.isExpired,
-            planName: "Free Plan",
+            planName: freePlanData?.name || "Free Plan",
             planDescription: freePlanData?.description ?? "",
             planFeatures: freeFeatures,
-            maxScans:
-              freePlanData?.scan_limit === -1
-                ? Infinity
-                : freePlanData?.scan_limit ?? DEFAULT_MAX_FREE_SCANS,
-            scansUsed: usedScans ?? 0,
+            maxScans: effectiveFreeMaxScans,
+            configuredMaxScans: configuredFreeMaxScans,
+            scansUsed: freeUsage.freeScansUsed,
             remainingDays: null,
             cancelAtPeriodEnd: false,
+            freePlanActive,
+            freePlanVerified,
+            freePlanAmbiguous,
+            usageVerified: freePlanVerified && freeUsage.verified && !freePlanAmbiguous,
+            statusMessage: subInfo.freePlanError || freeUsage.error,
           });
         }
       } catch (err) {
@@ -286,25 +303,33 @@ export default function SubscriptionStatusPage() {
   // Clean up "Pro Plan" to "Pro" if applicable to match the sleek design in photo
   const planName = isPro && rawPlanName.toLowerCase().includes("pro") ? "Pro" : rawPlanName;
   const planFeatures = subscription?.planFeatures ?? [];
-  const maxScans = subscription?.maxScans ?? DEFAULT_MAX_FREE_SCANS;
+  const maxScans = subscription?.maxScans ?? 0;
   const scansUsed = subscription?.scansUsed ?? 0;
   const remainingDays = subscription?.remainingDays ?? null;
   const renewsAt = subscription?.renewsAt;
   const cancelAtPeriodEnd = subscription?.cancelAtPeriodEnd ?? false;
+  const freePlanActive = Boolean(subscription?.freePlanActive);
+  const freePlanVerified = subscription?.freePlanVerified !== false;
+  const freePlanAmbiguous = Boolean(subscription?.freePlanAmbiguous);
+  const usageVerified = subscription?.usageVerified !== false;
+  const statusMessage = subscription?.statusMessage ?? null;
+  const isAdminDeactivated = !isPro && freePlanVerified && !freePlanActive && !freePlanAmbiguous;
+  const isAmbiguousConfig = !isPro && freePlanAmbiguous;
 
-  const scansRemaining = isPro
-    ? 999
+  const isUnlimited = maxScans === Infinity;
+  const scansRemaining = isUnlimited
+    ? Infinity
     : Math.max(0, maxScans - scansUsed);
 
   const remainingPercentage =
-    isPro || maxScans === Infinity
+    isUnlimited
       ? 100
       : maxScans > 0
-      ? Math.min(
-          100,
-          Math.round((scansRemaining / maxScans) * 100)
-        )
-      : 0;
+        ? Math.min(
+            100,
+            Math.round((scansRemaining / maxScans) * 100)
+          )
+        : 0;
 
   return (
     <div className="min-h-screen bg-patient-bg text-gray-900 pt-8 pb-20 px-4 font-sans antialiased">
@@ -386,6 +411,10 @@ export default function SubscriptionStatusPage() {
                         : "bg-emerald-50 text-emerald-600 border border-emerald-100"
                       : subscription?.isExpired
                       ? "bg-rose-50 text-rose-600 border border-rose-100"
+                      : isAdminDeactivated || isAmbiguousConfig
+                      ? "bg-amber-50 text-amber-700 border border-amber-200"
+                      : !usageVerified
+                      ? "bg-rose-50 text-rose-700 border border-rose-200"
                       : "bg-gray-100 text-gray-600 border border-gray-200"
                   )}
                 >
@@ -395,6 +424,10 @@ export default function SubscriptionStatusPage() {
                       : "Active"
                     : subscription?.isExpired
                     ? "Expired"
+                    : isAdminDeactivated || isAmbiguousConfig
+                    ? "Unavailable"
+                    : !usageVerified
+                    ? "Verification required"
                     : "Active"}
                 </span>
               </div>
@@ -410,7 +443,11 @@ export default function SubscriptionStatusPage() {
                       ? "Active"
                       : subscription?.isExpired
                       ? "0 days"
-                      : "Ongoing"}
+                      : isAdminDeactivated || isAmbiguousConfig
+                      ? "Unavailable"
+                      : !usageVerified
+                      ? "Verify"
+                      : "One-time"}
                   </span>
                 </div>
 
@@ -447,10 +484,22 @@ export default function SubscriptionStatusPage() {
                     </div>
                     <div>
                       <h4 className="text-xs sm:text-sm font-bold text-gray-900">
-                        No plan features configured.
+                        {isAdminDeactivated
+                          ? "Free AI skin scanning is currently unavailable."
+                          : isAmbiguousConfig
+                          ? "Free AI skin scanning is temporarily unavailable."
+                          : !isPro && !usageVerified
+                          ? "Unable to verify your scan allowance."
+                          : "No plan features configured."}
                       </h4>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        Features of your plan will be listed here.
+                        {isAdminDeactivated
+                          ? "Please view the available subscription plans to continue scanning."
+                          : isAmbiguousConfig
+                          ? "Plan configuration requires administrator review."
+                          : !isPro && !usageVerified
+                          ? "Please check your internet connection and try again."
+                          : "Features of your plan will be listed here."}
                       </p>
                     </div>
                   </div>
@@ -489,49 +538,120 @@ export default function SubscriptionStatusPage() {
               </h2>
 
               <div className="space-y-3">
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center gap-2">
                   <span className="text-sm font-semibold text-gray-900">
                     AI skin scans
                   </span>
 
-                  {isPro ? (
+                  {isAdminDeactivated || isAmbiguousConfig ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-semibold border border-amber-200">
+                      <span>Unavailable</span>
+                    </span>
+                  ) : !usageVerified && !isUnlimited ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 text-rose-700 text-xs font-semibold border border-rose-200">
+                      <span>Verification required</span>
+                    </span>
+                  ) : isUnlimited ? (
                     <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-pink-50 text-pink-700 text-xs font-semibold border border-pink-100">
                       <span className="text-sm leading-none font-bold">∞</span>
                       <span>Unlimited</span>
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-200">
-                      <span>{scansRemaining} remaining</span>
+                      <span>
+                        Limited — {maxScans} {maxScans === 1 ? "scan" : "scans"}
+                      </span>
                     </span>
                   )}
                 </div>
 
-                {/* Striped Magenta Progress Bar */}
-                <div className="h-3.5 w-full bg-gray-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-500"
-                    style={{
-                      width: `${remainingPercentage}%`,
-                      background:
-                        "repeating-linear-gradient(45deg, #831843, #831843 6px, #9d174d 6px, #9d174d 12px)",
-                    }}
-                  />
-                </div>
-
-                {/* Subtext */}
-                <p className="text-xs text-gray-500 font-normal pt-1">
-                  {isPro
-                    ? `Your ${planName} plan has no limit on AI skin scans.`
-                    : `You have used ${scansUsed} of ${maxScans} free scans.`}
-                </p>
-
-                {!isPro && scansRemaining <= 0 && (
-                  <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex gap-3 text-xs mt-4">
-                    <p className="text-amber-800 leading-relaxed">
-                      You've reached your limit for free AI scans. Upgrade to Pro
-                      for unlimited scans and priority booking.
+                {isAdminDeactivated ? (
+                  <div className="space-y-3 pt-1">
+                    <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-xs text-amber-800 leading-relaxed">
+                      <p>
+                        Free AI skin scanning is currently unavailable. Please view the available subscription plans to continue scanning.
+                      </p>
+                      {scansUsed > 0 && (
+                        <p className="mt-2 font-medium text-amber-900">
+                          Your historical scan records ({scansUsed} completed free{" "}
+                          {scansUsed === 1 ? "scan" : "scans"}) are safely preserved.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ) : isAmbiguousConfig ? (
+                  <div className="space-y-3 pt-1">
+                    <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-xs text-amber-800 leading-relaxed">
+                      <p>
+                        {statusMessage ||
+                          "Free AI skin scanning is temporarily unavailable due to a plan configuration issue."}
+                      </p>
+                    </div>
+                  </div>
+                ) : !usageVerified && !isUnlimited ? (
+                  <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl text-xs text-rose-800 leading-relaxed mt-2">
+                    <p>
+                      Unable to verify your scan allowance. Please check your internet connection and try again.
                     </p>
                   </div>
+                ) : isUnlimited ? (
+                  <>
+                    {/* Striped Magenta Progress Bar */}
+                    <div className="h-3.5 w-full bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${remainingPercentage}%`,
+                          background:
+                            "repeating-linear-gradient(45deg, #831843, #831843 6px, #9d174d 6px, #9d174d 12px)",
+                        }}
+                      />
+                    </div>
+
+                    <p className="text-xs text-gray-500 font-normal pt-1">
+                      Your {planName} plan has no limit on AI skin scans.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between text-xs font-medium text-gray-700 pt-0.5">
+                      <span>
+                        {scansUsed} / {maxScans} {maxScans === 1 ? "scan" : "scans"} used
+                      </span>
+                      <span className="font-semibold text-gray-900">
+                        {scansRemaining} {scansRemaining === 1 ? "scan" : "scans"} remaining
+                      </span>
+                    </div>
+
+                    {/* Striped Magenta Progress Bar */}
+                    <div className="h-3.5 w-full bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${remainingPercentage}%`,
+                          background:
+                            "repeating-linear-gradient(45deg, #831843, #831843 6px, #9d174d 6px, #9d174d 12px)",
+                        }}
+                      />
+                    </div>
+
+                    {/* Subtext */}
+                    <p className="text-xs text-gray-500 font-normal pt-1">
+                      {isPro
+                        ? `You have used ${scansUsed} of ${maxScans} AI skin ${maxScans === 1 ? "scan" : "scans"} in your current ${planName} billing cycle.`
+                        : `You have used ${scansUsed} of ${maxScans} one-time free AI skin ${maxScans === 1 ? "scan" : "scans"}.`}
+                    </p>
+
+                    {scansRemaining <= 0 && (
+                      <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex gap-3 text-xs mt-4">
+                        <p className="text-amber-800 leading-relaxed">
+                          {isPro
+                            ? `You've reached your limit of ${maxScans} AI ${maxScans === 1 ? "scan" : "scans"} for your current ${planName} billing cycle. Upgrade your plan for additional or unlimited scans.`
+                            : "You have used all your available free AI skin scans. Please subscribe to continue scanning."}
+                        </p>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </motion.div>
@@ -541,5 +661,3 @@ export default function SubscriptionStatusPage() {
     </div>
   );
 }
-
-

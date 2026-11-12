@@ -26,6 +26,7 @@ import {
   cancelAppointment,
   getClinics,
   addAppNotification,
+  sanitizePatientSymptoms,
 } from '@/lib/store';
 import type { Appointment, PatientAccount, ClinicRecord, ClinicDoctor } from '@/lib/store';
 
@@ -413,7 +414,7 @@ function AppointmentCard({
       {/* Symptoms / Notes Preview */}
       {appt.notes ? (
         <Text style={styles.reason} numberOfLines={2}>
-          Symptoms: {appt.notes}
+          Symptoms: {sanitizePatientSymptoms(appt.notes) || 'No symptoms provided'}
         </Text>
       ) : null}
 
@@ -673,7 +674,9 @@ function AppointmentSummaryModal({
             {appt.notes ? (
               <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f1f5f9' }}>
                 <Text style={styles.summaryInfoKey}>Patient Symptoms / Notes</Text>
-                <Text style={styles.summaryNotesTxt}>{appt.notes}</Text>
+                <Text style={styles.summaryNotesTxt}>
+                  {sanitizePatientSymptoms(appt.notes) || 'No symptoms or notes provided.'}
+                </Text>
               </View>
             ) : null}
 

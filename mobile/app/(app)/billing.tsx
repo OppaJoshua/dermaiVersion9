@@ -14,7 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS, MAX_FREE_SCANS } from '@/lib/constants';
+import { COLORS } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
 import { logAuditEvent } from '@/lib/auditLogger';
 import {
@@ -49,7 +49,6 @@ interface AppointmentReceiptDetails {
 export default function BillingScreen() {
   const [user, setUser] = useState<PatientAccount | null>(null);
   const [sub, setSub] = useState<SubscriptionRecord | null>(null);
-  const [freePlanScanLimit, setFreePlanScanLimit] = useState<number>(MAX_FREE_SCANS);
   const [billingHistory, setBillingHistory] = useState<BillingHistoryItem[]>([]);
   const [selectedSubscriptionReceipt, setSelectedSubscriptionReceipt] =
     useState<BillingHistoryItem | null>(null);
@@ -70,24 +69,10 @@ export default function BillingScreen() {
         return;
       }
 
-      // Fetch Free Plan scan limit from Supabase `plan` table (matching Web BillingSettingsPage.tsx)
-      const freePlanPromise = supabase
-        .from('plan')
-        .select('plan_id, name, scan_limit')
-        .eq('price', 0)
-        .eq('status', 'active')
-        .limit(1)
-        .maybeSingle();
-
-      const [freePlanRes, s, history] = await Promise.all([
-        freePlanPromise,
+      const [s, history] = await Promise.all([
         getUserSubscription(u.id),
         getBillingHistory(u.id),
       ]);
-
-      if (freePlanRes.data && typeof freePlanRes.data.scan_limit === 'number') {
-        setFreePlanScanLimit(freePlanRes.data.scan_limit);
-      }
 
       setSub(s);
       setBillingHistory(history);
@@ -147,6 +132,17 @@ export default function BillingScreen() {
           loadData(true);
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'plan',
+        },
+        () => {
+          loadData(true);
+        }
+      )
       .subscribe();
 
     return () => {
@@ -155,7 +151,14 @@ export default function BillingScreen() {
   }, [user?.id, loadData]);
 
   const statusBadge = sub?.statusLabel || 'No Active Subscription';
-  const isPro = statusBadge === 'Premium Active';
+  const isPro =
+    Boolean(
+      statusBadge === 'Premium Active' ||
+        statusBadge === 'Basic Active' ||
+        sub?.plan === 'premium' ||
+        sub?.plan === 'pro' ||
+        sub?.plan === 'basic'
+    ) && !sub?.isExpired;
   const isExpired = Boolean(sub?.isExpired);
 
   // Plan Display Name matching Web BillingSettingsPage.tsx
@@ -190,11 +193,11 @@ export default function BillingScreen() {
 
   // Scan limit for the Current Plan card
   const maxScans =
-    isPro || sub?.scanLimit === -1
+    sub?.scanLimit === -1
       ? -1
-      : sub?.scanLimit && sub.scanLimit > 0
+      : typeof sub?.scanLimit === 'number' && sub.scanLimit >= 0
       ? sub.scanLimit
-      : freePlanScanLimit;
+      : 0;
 
   async function handleCancel() {
     if (!isPro) return;
@@ -467,7 +470,7 @@ export default function BillingScreen() {
                     ? sub?.cancelAtPeriodEnd
                       ? styles.statusBadgeWarning
                       : styles.statusBadgeActive
-                    : isExpired
+                    : isExpired || sub?.freePlanActive === false
                     ? styles.statusBadgeExpired
                     : styles.statusBadgeFree,
                 ]}
@@ -479,7 +482,7 @@ export default function BillingScreen() {
                       ? sub?.cancelAtPeriodEnd
                         ? styles.statusBadgeTxtWarning
                         : styles.statusBadgeTxtActive
-                      : isExpired
+                      : isExpired || sub?.freePlanActive === false
                       ? styles.statusBadgeTxtExpired
                       : styles.statusBadgeTxtFree,
                   ]}
@@ -490,6 +493,8 @@ export default function BillingScreen() {
                       : 'Active'
                     : isExpired
                     ? 'Expired'
+                    : sub?.freePlanActive === false
+                    ? 'Inactive'
                     : 'Free'}
                 </Text>
               </View>
@@ -545,9 +550,13 @@ export default function BillingScreen() {
                   <Text style={styles.planDetailValue} numberOfLines={1}>
                     {isPro
                       ? formattedRenewalDate || 'N/A'
+                      : sub?.freePlanActive === false
+                      ? 'Unavailable (Inactive)'
+                      : sub?.scansCountVerified === false
+                      ? 'Verification required'
                       : maxScans === -1
                       ? 'Unlimited scans'
-                      : `${maxScans} scans per account`}
+                      : `${maxScans} one-time ${maxScans === 1 ? 'scan' : 'scans'}`}
                   </Text>
                 </View>
               </View>

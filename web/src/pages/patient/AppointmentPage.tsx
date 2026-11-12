@@ -73,6 +73,7 @@ import {
 } from "@/lib/slotAvailabilityState";
 import {
   acquireAppointmentSlotHold,
+  sanitizePatientSymptoms,
   extractEdgeFunctionError,
   releaseAppointmentHoldSafely,
   setCheckoutRedirectRecord,
@@ -247,7 +248,8 @@ export function isDoctorMatch(d1: any, d2: any): boolean {
 
 export function getDoctorPhoto(doc?: { id?: string; doctor_id?: string; name?: string; email?: string; photo?: string; photo_url?: string } | null): string {
   if (!doc) return "";
-  const centralUrl = getDoctorAvatarUrl(doc.id || doc.doctor_id, doc);
+  const targetDocId = doc.id || doc.doctor_id;
+  const centralUrl = getDoctorAvatarUrl(targetDocId, doc);
   if (centralUrl) {
     return centralUrl;
   }
@@ -258,34 +260,25 @@ export function getDoctorPhoto(doc?: { id?: string; doctor_id?: string; name?: s
     return doc.photo_url;
   }
 
-  // Cross-reference with doctor accounts added in ClinicDoctorsPage
-  try {
-    const cached = localStorage.getItem("dermai_clinic_doctors");
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (Array.isArray(parsed)) {
-        const match = parsed.find((c: any) => isDoctorMatch(c, doc) && (c.photo || c.photo_url));
-        if (match && (match.photo || match.photo_url)) {
-          return match.photo || match.photo_url;
+  // Only match localStorage cache by exact clinic-specific doctor_id (never cross-clinic by name/email)
+  if (targetDocId) {
+    try {
+      const cached = localStorage.getItem("dermai_clinic_doctors");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          const match = parsed.find(
+            (c: any) =>
+              String(c.id || c.doctor_id || "") === String(targetDocId) &&
+              (c.photo || c.photo_url)
+          );
+          if (match && (match.photo || match.photo_url)) {
+            return match.photo || match.photo_url;
+          }
         }
       }
-    }
-  } catch { }
-
-  // Cross-reference with logged in doctor profile
-  try {
-    const stored = localStorage.getItem("dermai_doctor_profile");
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (parsed.photo) {
-        const cleanTarget = (doc.name || "").toLowerCase().replace(/^(dr|doctor)\.?\s+/i, "").trim();
-        const profName = (parsed.fullName || parsed.name || "").toLowerCase().replace(/^(dr|doctor)\.?\s+/i, "").trim();
-        if (cleanTarget && profName && (cleanTarget === profName || cleanTarget.includes(profName) || profName.includes(cleanTarget))) {
-          return parsed.photo;
-        }
-      }
-    }
-  } catch { }
+    } catch { }
+  }
 
   return "";
 }
@@ -1592,12 +1585,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
             const specStr = resolvedSpecializations.join(", ");
 
-            const userObj = Array.isArray(d.user) ? d.user[0] : d.user;
-            let resolvedPhoto = d.photo_url || d.photo || d.photoUrl || userObj?.avatar_url || d.avatar_url;
+            let resolvedPhoto = d.photo_url || d.photo || d.photoUrl;
             if (resolvedPhoto) {
               resolvedPhoto = resolveAvatarUrl(resolvedPhoto) || resolvedPhoto;
             } else {
-              resolvedPhoto = getDoctorPhoto({ id: d.doctor_id || d.id, name: docName, email: d.email });
+              resolvedPhoto = getDoctorPhoto({ id: d.doctor_id || d.id, photo_url: d.photo_url, photo: d.photo });
             }
 
             return {
@@ -2274,7 +2266,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             emergencyContactName: emergencyContactName.trim() || undefined,
             emergencyContactPhone: emergencyContactPhone.trim() || undefined,
             emergencyContactRelationship: emergencyRelationship.trim() || undefined,
-            notes: notes.trim() || undefined,
+            notes: sanitizePatientSymptoms(notes) || undefined,
             clinicNote: activeDutyDoctor?.name ? `Assigned to ${formatCleanDoctorTitle(activeDutyDoctor.name)} for pre-consultation review.` : undefined,
             questionnaireAnswers: selectedScan?.questionnaireAnswers || questionnaireData || undefined,
             skinPhotoUrl: selectedScan?.photoUrl || undefined,
@@ -2807,7 +2799,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
         emergency_contact_phone: emergencyContactPhone.trim() || null,
         emergency_contact_relationship: emergencyRelationship.trim() || null,
         questionnaire_answers: qAnswers || questionnaireData || null,
-        notes: notes.trim() || null,
+        notes: sanitizePatientSymptoms(notes),
         clinic_note: initialClinicNote,
         primary_scan_id: scanIdToSave,
         skin_photo_url: photoPath,
@@ -3045,7 +3037,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           queueNumber: assignedQueueNum,
           primaryScanId: scanIdToSave || undefined,
           conditionId: condId || undefined,
-          notes: notes.trim() || "",
+          notes: sanitizePatientSymptoms(notes) || "",
           clinicNote: initialClinicNote || undefined,
           skinPhotoUrl: photoPath,
           aiConditionName: conditionLabel,
@@ -3298,7 +3290,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             emergencyContactName: emergencyContactName.trim() || undefined,
             emergencyContactPhone: emergencyContactPhone.trim() || undefined,
             emergencyContactRelationship: emergencyRelationship.trim() || undefined,
-            notes: notes.trim() || undefined,
+            notes: sanitizePatientSymptoms(notes) || undefined,
             clinicNote: activeDutyDoctor?.name ? `Assigned to ${formatCleanDoctorTitle(activeDutyDoctor.name)} for pre-consultation review.` : undefined,
             questionnaireAnswers: selectedScan?.questionnaireAnswers || questionnaireData || undefined,
             skinPhotoUrl: selectedScan?.photoUrl || undefined,

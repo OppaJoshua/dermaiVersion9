@@ -31,10 +31,24 @@ export type SubscriptionPlan = {
   description: string;
   features: string[];
   scanLimit: number | null;
-  status: "active" | "inactive";
+  status: "active" | "inactive" | "archived";
   createdAt: string;
   updatedAt: string;
 };
+
+export function isDefaultFreePlan(
+  plan?: { price?: number | string; name?: string } | null
+): boolean {
+  if (!plan) return false;
+  const numPrice = Number(plan.price);
+  const trimmedName = (plan.name || "").trim().toLowerCase();
+  return (
+    numPrice === 0 ||
+    trimmedName === "free" ||
+    trimmedName === "free plan" ||
+    /^free(\s+plan)?$/i.test(trimmedName)
+  );
+}
 
 // GET /plan (public read — no auth required)
 export async function getSubscriptionPlansAsync(
@@ -82,7 +96,11 @@ export async function getSubscriptionPlansAsync(
       .map((f: any) => f.feature_text)
       .filter(Boolean),
     scanLimit: p.scan_limit === -1 ? null : p.scan_limit,
-    status: p.status as "active" | "inactive",
+    status: (p.status === "archived"
+      ? "archived"
+      : p.status === "inactive"
+      ? "inactive"
+      : "active") as "active" | "inactive" | "archived",
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   }));
@@ -934,20 +952,79 @@ export async function upsertSubscriptionPlan(plan: SubscriptionPlan): Promise<vo
   }).catch(() => {});
 }
 
-// Delete subscription plan (admin only)
-export async function deleteSubscriptionPlan(id: string): Promise<void> {
-  const { error } = await supabase.from("plan").delete().eq("plan_id", id);
-  if (error) console.error("[store] deleteSubscriptionPlan:", error.message);
-  else {
-    logAuditEvent({
-      role: "admin",
-      category: "Subscription",
-      action: "Subscription Plan Deleted",
-      target: `Plan ID: ${id}`,
-      details: `Subscription plan ${id} was deleted by admin.`,
-      metadata: { planId: id },
-    }).catch(() => {});
+// Soft-delete / Archive subscription plan (admin only)
+// Preserves the existing row in public.plan, prevents SQL DELETE or row deletion,
+// and protects foreign key integrity for existing subscribers.
+export async function archiveSubscriptionPlan(id: string): Promise<void> {
+  const { data: planToArchive, error: fetchError } = await supabase
+    .from("plan")
+    .select("plan_id, name, price")
+    .eq("plan_id", id)
+    .maybeSingle();
+
+  if (fetchError) {
+    console.warn("[store] archiveSubscriptionPlan fetch warning:", fetchError.message);
   }
+
+  if (planToArchive && isDefaultFreePlan(planToArchive)) {
+    throw new Error("The default Free Plan cannot be archived or removed.");
+  }
+
+  const { error } = await supabase
+    .from("plan")
+    .update({ status: "archived" })
+    .eq("plan_id", id);
+
+  if (error) {
+    console.error("[store] archiveSubscriptionPlan:", error.message);
+    throw new Error(`Failed to archive plan: ${error.message}`);
+  }
+
+  logAuditEvent({
+    role: "admin",
+    category: "Subscription",
+    action: "Subscription Plan Archived",
+    target: planToArchive?.name ? `Plan: ${planToArchive.name}` : `Plan ID: ${id}`,
+    details: `Subscription plan "${planToArchive?.name || id}" was archived (soft deleted) by admin.`,
+    metadata: { planId: id, planName: planToArchive?.name },
+  }).catch(() => {});
+}
+
+// Restore archived subscription plan to inactive status (admin only)
+export async function restoreSubscriptionPlan(id: string): Promise<void> {
+  const { data: planToRestore, error: fetchError } = await supabase
+    .from("plan")
+    .select("plan_id, name, price")
+    .eq("plan_id", id)
+    .maybeSingle();
+
+  if (fetchError) {
+    console.warn("[store] restoreSubscriptionPlan fetch warning:", fetchError.message);
+  }
+
+  const { error } = await supabase
+    .from("plan")
+    .update({ status: "inactive" })
+    .eq("plan_id", id);
+
+  if (error) {
+    console.error("[store] restoreSubscriptionPlan:", error.message);
+    throw new Error(`Failed to restore plan: ${error.message}`);
+  }
+
+  logAuditEvent({
+    role: "admin",
+    category: "Subscription",
+    action: "Subscription Plan Restored",
+    target: planToRestore?.name ? `Plan: ${planToRestore.name}` : `Plan ID: ${id}`,
+    details: `Subscription plan "${planToRestore?.name || id}" was restored to inactive status by admin.`,
+    metadata: { planId: id, planName: planToRestore?.name },
+  }).catch(() => {});
+}
+
+// Soft-deletes (archives) subscription plan; does NOT execute SQL DELETE or remove rows.
+export async function deleteSubscriptionPlan(id: string): Promise<void> {
+  return archiveSubscriptionPlan(id);
 }
 
 // Clinic Patient Records with file_path support

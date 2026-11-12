@@ -20,6 +20,7 @@ import { ZoomableSkinPhoto } from "@/components/common/ZoomableSkinPhoto";
 import { formatConfidencePercent } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
+import { sanitizePatientSymptoms } from "@/lib/appointmentPaymentService";
 
 type AppointmentRecord = DoctorAppointmentRecord;
 
@@ -311,7 +312,8 @@ export default function DoctorScheduledAppointmentsPage() {
     };
   }, [viewingAppt]);
 
-  const handleCompleteConsultation = async () => {
+  const handleCompleteConsultation = async (e?: React.FormEvent | React.MouseEvent) => {
+    e?.preventDefault?.();
     if (!viewingAppt) return;
     if (!clinicalDiagnosis.trim()) {
       setSaveError("Please enter your final clinical diagnosis before completing.");
@@ -346,7 +348,7 @@ export default function DoctorScheduledAppointmentsPage() {
     }
   };
 
-  if (loading) {
+  if (loading && !appointments.length) {
     return (
       <div className="py-24 text-center">
         <Loader2 className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-3" />
@@ -675,23 +677,31 @@ export default function DoctorScheduledAppointmentsPage() {
                               </span>
                             )}
                           </div>
-                          <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium mt-0.5">
-                            {appt.patientGender && <span>{appt.patientGender}</span>}
-                            {appt.patientGender && (appt.patientAge || appt.patientBirthdate) && <span>&bull;</span>}
-                            {(appt.patientAge || appt.patientBirthdate) && (
-                              <span>
-                                {appt.patientAge ? `${appt.patientAge} years old` : `Born ${appt.patientBirthdate}`}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1 text-xs text-slate-600 mt-1 truncate">
-                            <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            <span className="truncate">
-                              {appt.doctorDiagnosis || appt.conditionName || "Not provided"}
-                            </span>
-                          </div>
+                          {tab !== "completed" && (
+                            <>
+                              <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium mt-0.5">
+                                {appt.patientGender && <span>{appt.patientGender}</span>}
+                                {appt.patientGender && (appt.patientAge || appt.patientBirthdate) && <span>&bull;</span>}
+                                {(appt.patientAge || appt.patientBirthdate) && (
+                                  <span>
+                                    {appt.patientAge ? `${appt.patientAge} years old` : `Born ${appt.patientBirthdate}`}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1 text-xs text-slate-600 mt-1 truncate">
+                                <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <span className="truncate">
+                                  {appt.doctorDiagnosis || appt.conditionName || "Not provided"}
+                                </span>
+                              </div>
+                            </>
+                          )}
                           {appt.clinicName && (
-                            <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md mt-1.5 border border-blue-100/80">
+                            <div
+                              className={`inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100/80 ${
+                                tab === "completed" ? "mt-1" : "mt-1.5"
+                              }`}
+                            >
                               <Building2 className="w-3 h-3 text-blue-500 shrink-0" />
                               <span className="truncate max-w-37.5">{appt.clinicName}</span>
                             </div>
@@ -707,17 +717,19 @@ export default function DoctorScheduledAppointmentsPage() {
                         </div>
 
                         {/* Reason for Visit */}
-                        <div className="flex items-start gap-1.5 text-xs text-slate-600 mt-0.5">
-                          <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                          <div className="leading-tight truncate">
-                            <span className="text-slate-400 block text-[10.5px]">
-                              Reason for Visit:
-                            </span>
-                            <span className="text-slate-700 font-medium text-xs truncate block">
-                              {appt.notes || appt.conditionName || "Not provided"}
-                            </span>
+                        {tab !== "completed" && (
+                          <div className="flex items-start gap-1.5 text-xs text-slate-600 mt-0.5">
+                            <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                            <div className="leading-tight truncate">
+                              <span className="text-slate-400 block text-[10.5px]">
+                                Reason for Visit:
+                              </span>
+                              <span className="text-slate-700 font-medium text-xs truncate block">
+                                {sanitizePatientSymptoms(appt.notes) || appt.conditionName || "Not provided"}
+                              </span>
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
                       {/* Right: Conduct Visit Button */}
                       <div className="shrink-0 flex items-center xl:justify-end w-full sm:w-auto">
@@ -869,6 +881,16 @@ export default function DoctorScheduledAppointmentsPage() {
                       </span>
                     </div>
                   </div>
+                </div>
+
+                {/* Reason for Visit */}
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wide block mb-1">
+                    Reason for Visit
+                  </span>
+                  <p className="font-medium text-slate-800 leading-relaxed whitespace-pre-wrap">
+                    {sanitizePatientSymptoms(viewingAppt.notes)?.trim() || "Not provided"}
+                  </p>
                 </div>
 
                 {/* Uploaded Skin Photo & AI Result */}

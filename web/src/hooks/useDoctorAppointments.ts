@@ -10,6 +10,7 @@ import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 import { compareDoctorAppointments, scopeDoctorAppointments } from "@/lib/doctorAppointmentScope";
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
 import { getReviewUrgency, urgentReviewDateBounds } from "@/lib/appointmentUrgency";
+import { sanitizePatientSymptoms } from "@/lib/appointmentPaymentService";
 
 export type DoctorAppointmentRecord = {
   id: string;
@@ -101,8 +102,17 @@ function calculateAgeFromBirthdate(birthdateStr?: string | null): number | undef
 }
 
 
-export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boolean } = {}) {
+export function useDoctorAppointments({
+  urgentOnly = false,
+  statusIn,
+  includeNoShow = false,
+}: {
+  urgentOnly?: boolean;
+  statusIn?: string[];
+  includeNoShow?: boolean;
+} = {}) {
   const { user } = useAuth();
+  const statusInKey = statusIn ? statusIn.slice().sort().join(",") : "";
   const [appointments, setAppointments] = useState<DoctorAppointmentRecord[]>([]);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -130,15 +140,15 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
 
   const isFetchingRef = useRef(false);
   const queuedRefetchRef = useRef(false);
-  const latestFetchRef = useRef<() => Promise<void>>(async () => {});
+  const latestFetchRef = useRef<(isBackground?: boolean) => Promise<void>>(async () => {});
 
-  const fetchAppointments = useCallback(async () => {
+  const fetchAppointments = useCallback(async (isBackground = false) => {
     if (isFetchingRef.current) {
       queuedRefetchRef.current = true;
       return;
     }
     isFetchingRef.current = true;
-    setLoading(true);
+    if (!isBackground) setLoading(true);
     setError(null);
     const requestUserId = user?.id;
     const currentActiveClinicId = activeClinicIdRef.current;
@@ -209,6 +219,19 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
         if (urgentOnly) {
           const bounds = urgentReviewDateBounds(Date.now());
           apptQuery.eq("status", "pending").gte("date", bounds.from).lt("date", bounds.until);
+        }
+        if (statusIn && statusIn.length > 0) {
+          const variants = Array.from(new Set(statusIn.flatMap(s => [
+            s.toLowerCase(),
+            s.toUpperCase(),
+            s.charAt(0).toUpperCase() + s.slice(1).toLowerCase(),
+            s
+          ])));
+          if (includeNoShow) {
+            apptQuery.or(`status.in.(${variants.join(",")}),check_in_status.eq.no-show,check_in_status.eq.no_show,status.eq.no-show,status.eq.no_show`);
+          } else {
+            apptQuery.in("status", variants);
+          }
         }
         const { data, error } = await apptQuery
           .order("date", { ascending: true, nullsFirst: false })
@@ -411,7 +434,7 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
               questionnaireAnswers: qAnswers,
               date: dateStr,
               time: timeStr,
-              notes: row.notes || "",
+              notes: sanitizePatientSymptoms(row.notes) || "",
               clinicNote: row.clinic_note || "",
               status: resolvedStatus,
               assignedDoctorId: row.assigned_doctor_id || undefined,
@@ -466,7 +489,15 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
       // Only render rows returned by Supabase under the authenticated session's RLS.
       // Browser caches must not introduce records omitted by database access rules.
       if (currentUserIdRef.current !== requestUserId || activeClinicIdRef.current !== currentActiveClinicId) return;
-      const finalAppointments = Array.from(apptMap.values()).filter(a => !urgentOnly || getReviewUrgency(a, Date.now()) !== null);
+      const finalAppointments = Array.from(apptMap.values()).filter(a => {
+        if (urgentOnly && getReviewUrgency(a, Date.now()) === null) return false;
+        if (statusIn && statusIn.length > 0) {
+          const s = String(a.status || "").toLowerCase();
+          const matches = statusIn.some(expected => expected.toLowerCase() === s) || (includeNoShow && isAppointmentNoShow(a));
+          if (!matches) return false;
+        }
+        return true;
+      });
       finalAppointments.sort(compareDoctorAppointments);
       setAppointments(finalAppointments);
       setLoadedScope(`${requestUserId}:${currentActiveClinicId}`);
@@ -477,18 +508,18 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
       }
       console.error("[useDoctorAppointments] fetchAppointments error:", err);
     } finally {
-      setLoading(false);
+      if (!isBackground) setLoading(false);
       isFetchingRef.current = false;
       if (queuedRefetchRef.current) {
         queuedRefetchRef.current = false;
-        void latestFetchRef.current();
+        void latestFetchRef.current(true);
       }
     }
-  }, [user, urgentOnly]);
+  }, [user?.id, user?.email, user?.user_metadata?.full_name, urgentOnly, statusInKey, includeNoShow]);
 
   useEffect(() => {
     latestFetchRef.current = fetchAppointments;
-    fetchAppointments();
+    fetchAppointments(false);
 
     // Each effect setup owns a distinct channel. Supabase reuses channels by
     // name, including subscribed channels whose async cleanup is still running.
@@ -537,21 +568,21 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
               }
             }
           }
-          fetchAppointments();
+          fetchAppointments(true);
         }
       )
       .subscribe();
 
     // 2. Custom event & storage listeners for smooth cross-tab updates
-    const handleAppointmentsUpdated = () => fetchAppointments();
-    const handleFocus = () => fetchAppointments();
+    const handleAppointmentsUpdated = () => fetchAppointments(true);
+    const handleFocus = () => fetchAppointments(true);
     const handleStorage = (e: StorageEvent) => {
       if (
         e.key === "dermai_clinic_appointments" ||
         e.key === "dermai_clinic_doctors" ||
         e.key === "dermai_doctor_last_read_notifs"
       ) {
-        fetchAppointments();
+        fetchAppointments(true);
       }
     };
 
@@ -561,7 +592,7 @@ export function useDoctorAppointments({ urgentOnly = false }: { urgentOnly?: boo
 
     // 4. Periodic polling fallback (relaxed to 60s; Supabase Realtime + focus + storage handle live updates)
     const pollInterval = setInterval(() => {
-      fetchAppointments();
+      fetchAppointments(true);
     }, 60000);
 
     return () => {

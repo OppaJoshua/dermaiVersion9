@@ -1354,13 +1354,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
             });
           }
 
-          const userObj = Array.isArray(doc.user) ? doc.user[0] : doc.user;
-          const rawPhoto =
-            doc.photo_url ||
-            userObj?.avatar_url ||
-            localPhotoMap.get(String(doc.doctor_id)) ||
-            (doc.email ? localPhotoMap.get(String(doc.email).toLowerCase().trim()) : undefined) ||
-            undefined;
+          const rawPhoto = doc.photo_url || undefined;
           const preservedPhoto = resolveAvatarUrl(rawPhoto);
 
           return {
@@ -2198,14 +2192,13 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
         throw new Error(`Failed to update doctor profile: ${updateDocError.message}`);
       }
 
-      // 2. Update user table if registered
+      // 2. Update user table if registered (keep user.avatar_url untouched so clinic photos stay isolated)
       try {
         await supabase
           .from("user")
           .update({
             full_name: doctorName,
             contact_number: doctorContact,
-            ...(finalPhotoUrl ? { avatar_url: finalPhotoUrl } : {}),
           })
           .eq("email", editingDoctor.email);
       } catch {

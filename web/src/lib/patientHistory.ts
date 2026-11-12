@@ -1,24 +1,32 @@
 import type { DoctorAppointmentRecord } from '../hooks/useDoctorAppointments';
 
-export type HistoryTab = 'all' | 'completed' | 'approved' | 'pending' | 'rejected';
+export type HistoryTab = 'all' | 'completed' | 'approved' | 'pending' | 'rejected' | 'no-show';
 export type PatientHistory = {
   id: string;
   latest: DoctorAppointmentRecord;
   appointments: DoctorAppointmentRecord[];
 };
 
+export function isNoShowAppointment(a?: Partial<DoctorAppointmentRecord> | { status?: string | null; check_in_status?: string | null; checkInStatus?: string | null } | null): boolean {
+  if (!a) return false;
+  const s = String(a.status || "").toLowerCase().replace(/_/g, "-");
+  const c = String((a as any)?.checkInStatus || (a as any)?.check_in_status || "").toLowerCase().replace(/_/g, "-");
+  return s === "no-show" || c === "no-show";
+}
+
 export function historyStatus(a: DoctorAppointmentRecord): Exclude<HistoryTab, 'all'> {
-  if (a.status === 'completed' || a.doctorDone || a.checkInStatus === 'completed' || a.checkInStatus === 'no-show' || a.status === 'no-show') return 'completed';
+  if (isNoShowAppointment(a)) return 'no-show';
+  if (a.status === 'completed' || a.doctorDone || a.checkInStatus === 'completed') return 'completed';
   if (a.status === 'rejected' || a.status === 'cancelled' || a.doctorStatus === 'rejected') return 'rejected';
   if (a.doctorStatus === 'approved' || a.status === 'confirmed' || a.status === 'scheduled') return 'approved';
   return 'pending';
 }
 
 export function historyStatusLabel(a: DoctorAppointmentRecord): string {
-  if (a.checkInStatus === 'no-show' || a.status === 'no-show') return 'No-Show';
+  if (isNoShowAppointment(a)) return 'No-Show';
   if (a.checkInStatus === 'arrived' || a.status === 'arrived') return 'Arrived';
   if (a.status === 'cancelled' && historyStatus(a) === 'rejected') return 'Cancelled';
-  return { completed: 'Completed', approved: 'Approved', pending: 'Pending Review', rejected: 'Declined' }[historyStatus(a)];
+  return { completed: 'Completed', approved: 'Approved', pending: 'Pending Review', rejected: 'Declined', 'no-show': 'No-Show' }[historyStatus(a)] || 'Reviewed';
 }
 
 function visitTimestamp(a: DoctorAppointmentRecord): number {

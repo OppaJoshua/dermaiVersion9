@@ -29,6 +29,7 @@ import { isAppointmentPastScheduled } from "@/lib/schedulingService";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { resolveAvatarUrl } from "@/utils/storage";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
+import { sanitizePatientSymptoms } from "@/lib/appointmentPaymentService";
 
 /* ── Types ────────────────────────────────────────────────────────── */
 
@@ -1309,7 +1310,9 @@ export default function ClinicPatientsPage() {
                               <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
                                 <FileText className="w-3 h-3" /> Patient Symptoms &amp; Notes
                               </span>
-                              <p className="text-gray-800 leading-relaxed">{appt.notes}</p>
+                              <p className="text-gray-800 leading-relaxed">
+                                {sanitizePatientSymptoms(appt.notes) || "No symptoms or notes provided."}
+                              </p>
                             </div>
                           )}
 

@@ -1,5 +1,6 @@
+// deno-lint-ignore no-import-prefix
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
-import { sendBookingReceiptEmail } from "../paymongo-payment/emailReceipt.ts";
+import { sendBookingReceiptEmail, sendReceiptEmail } from "../paymongo-payment/emailReceipt.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,7 +10,7 @@ const corsHeaders = {
   "Content-Type": "application/json",
 };
 
-function jsonResponse(data: Record<string, any>, status = 200) {
+function jsonResponse(data: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: corsHeaders,
@@ -109,7 +110,79 @@ Deno.serve(async (req: Request) => {
           continue; // Do NOT finalize; let new lease holder or cleanup sweep handle it
         }
 
-        // 2. Pre-Dispatch Appointment Re-Validation:
+        // 2a. Explicit Route: Subscription Payment Receipt
+        if (task.email_type === "subscription_payment_receipt") {
+          const recipientEmail = task.recipient_email || payload.patientEmail;
+          if (!recipientEmail) {
+            throw new Error("Subscription receipt task missing recipient_email");
+          }
+
+          if (paymongoPaymentId) {
+            const { data: payRow } = await adminSupabase
+              .from("user_payment")
+              .select("payment_id, status, amount")
+              .or(`paymongo_payment_id.eq.${paymongoPaymentId},reference_number.eq.${paymongoPaymentId}`)
+              .limit(1)
+              .maybeSingle();
+
+            if (payRow && payRow.status !== "success") {
+              const cancelMsg = `Subscription receipt aborted: Payment ${paymongoPaymentId} is not in success status (${payRow.status}).`;
+              console.warn(`[email-outbox-worker] ${cancelMsg}`);
+              await adminSupabase.rpc("finalize_email_outbox", {
+                p_outbox_id: outboxId,
+                p_success: false,
+                p_error: cancelMsg,
+              });
+              failed++;
+              continue;
+            }
+          }
+
+          const dispatchResult = await sendReceiptEmail({
+            patientEmail: recipientEmail,
+            paymentMethod: payload.paymentMethod || "GCash",
+            amount: Number(payload.amount ?? 0),
+            planName: payload.planName || "Pro Plan",
+            billingCycle: payload.billingCycle || "monthly",
+            paymentDate: payload.paymentDate || new Date().toISOString(),
+            paymongoPaymentId: paymongoPaymentId || "N/A",
+          });
+
+          if (dispatchResult.success) {
+            await adminSupabase.rpc("finalize_email_outbox", {
+              p_outbox_id: outboxId,
+              p_success: true,
+            });
+
+            if (task.user_id) {
+              try {
+                await adminSupabase.from("system_audit_log").insert({
+                  user_id: task.user_id,
+                  action: "Receipt Email Sent",
+                  target: recipientEmail,
+                  details: `Subscription receipt email dispatched by background worker to ${recipientEmail} for payment ${paymongoPaymentId}.`,
+                  ip_address: "127.0.0.1",
+                  user_agent: "DermAI Outbox Background Worker",
+                });
+              } catch { /* ignore non-blocking audit */ }
+            }
+
+            succeeded++;
+            console.log(`[email-outbox-worker] Subscription task ${outboxId} sent successfully to ${recipientEmail}`);
+          } else {
+            const errMsg = dispatchResult.error || "Email provider dispatch failed";
+            await adminSupabase.rpc("finalize_email_outbox", {
+              p_outbox_id: outboxId,
+              p_success: false,
+              p_error: errMsg,
+            });
+            failed++;
+            console.warn(`[email-outbox-worker] Subscription task ${outboxId} dispatch failed: ${errMsg}`);
+          }
+          continue;
+        }
+
+        // 2b. Pre-Dispatch Appointment Re-Validation:
         // Immediately prior to dispatch, verify that the appointment is confirmed paid and not cancelled/refunded/rejected
         if (!appointmentId) {
           throw new Error("Outbox task missing appointment_id");
@@ -254,7 +327,7 @@ Deno.serve(async (req: Request) => {
           failed++;
           console.warn(`[email-outbox-worker] Task ${outboxId} dispatch failed: ${errMsg}`);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         await adminSupabase.rpc("finalize_email_outbox", {
           p_outbox_id: outboxId,
@@ -273,7 +346,7 @@ Deno.serve(async (req: Request) => {
       failed,
       timestamp: new Date().toISOString(),
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[email-outbox-worker] Worker runtime error:", error);
     return jsonResponse(
       {

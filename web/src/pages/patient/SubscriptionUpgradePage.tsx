@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { Calendar, CalendarDays, AlertCircle } from "lucide-react";
+import { Calendar, CalendarDays, AlertCircle, CheckCircle2, Loader2, PackageOpen } from "lucide-react";
 import { getSubscriptionPlansAsync, type SubscriptionPlan } from "@/lib/store";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
@@ -15,17 +15,54 @@ import { validateAndSyncSubscription } from "@/lib/subscriptionService";
 // PayMongo is handled by the Supabase Edge Function.
 const PAYMONGO_PUBLIC_KEY = import.meta.env.VITE_PAYMONGO_PUBLIC_KEY || "";
 
+/**
+ * Validates that a plan is active, visible to patients, and a paid plan (not Free).
+ */
+function isPlanEligibleForPurchase(
+  plan: SubscriptionPlan | null | undefined,
+  cycle?: "monthly" | "yearly"
+): plan is SubscriptionPlan {
+  if (!plan || !plan.id) return false;
+  if (plan.status !== "active") return false;
+  if ( !(Number(plan.price) > 0) ) return false;
+  if (/^free(\s+plan)?$/i.test((plan.name || "").trim())) return false;
+
+  // Respect any optional patient-visibility flags if present on the plan object
+  const raw = plan as unknown as Record<string, unknown>;
+  if (
+    raw.visible_to_patients === false ||
+    raw.visibleToPatients === false ||
+    raw.is_visible === false ||
+    raw.isVisible === false ||
+    raw.hidden === true
+  ) {
+    return false;
+  }
+
+  if (cycle && plan.billingType !== cycle) return false;
+  return true;
+}
+
+function formatScanLimit(scanLimit: number | null | undefined): string {
+  if (scanLimit === null || scanLimit === undefined || scanLimit === -1) {
+    return "Unlimited AI Scans";
+  }
+  return `${scanLimit} AI Scan${scanLimit === 1 ? "" : "s"}`;
+}
 
 export default function SubscriptionUpgradePage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
+  const [isLoadingPlans, setIsLoadingPlans] = useState(true);
   const [isSubscribing, setIsSubscribing] = useState(false);
   const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("monthly");
-  const [selectedPlanId] = useState<string | null>(null);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isAgreementOpen, setIsAgreementOpen] = useState(false);
   const [agreementAccepted, setAgreementAccepted] = useState(false);
+  const hasValidatedPreselection = useRef(false);
+  const autoSelectedPlanIdRef = useRef<string | null>(null);
 
   // Controlled form state
   const [fullName, setFullName] = useState("");
@@ -35,8 +72,79 @@ export default function SubscriptionUpgradePage() {
   const [mobileNumber, setMobileNumber] = useState("");
 
   useEffect(() => {
-    getSubscriptionPlansAsync(false).then(setPlans).catch(() => {});
+    let cancelled = false;
+    setIsLoadingPlans(true);
+    getSubscriptionPlansAsync(false)
+      .then((fetchedPlans) => {
+        if (cancelled) return;
+        setPlans(fetchedPlans);
+      })
+      .catch(() => {
+        if (!cancelled) setPlans([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingPlans(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  // Validate any URL or sessionStorage preselected plan once plans are loaded
+  useEffect(() => {
+    if (isLoadingPlans || hasValidatedPreselection.current) return;
+    hasValidatedPreselection.current = true;
+
+    const params = new URLSearchParams(window.location.search);
+    const urlCycle = params.get("billingCycle") || params.get("billing_cycle");
+    const urlPlanId =
+      params.get("planId") ||
+      params.get("plan_id") ||
+      params.get("plan");
+
+    let storedPlanId: string | null = null;
+    let storedCycle: string | null = null;
+    try {
+      storedPlanId =
+        sessionStorage.getItem("dermai_chosen_plan") ||
+        sessionStorage.getItem("dermai_pending_plan_id");
+      storedCycle = sessionStorage.getItem("dermai_pending_billing_cycle");
+    } catch {
+      /* ignore storage errors */
+    }
+
+    const candidateCycle =
+      urlCycle === "monthly" || urlCycle === "yearly"
+        ? urlCycle
+        : storedCycle === "monthly" || storedCycle === "yearly"
+        ? storedCycle
+        : null;
+
+    const candidatePlanId = urlPlanId || storedPlanId;
+
+    if (candidatePlanId) {
+      const matched = plans.find((p) => p.id === candidatePlanId);
+      if (isPlanEligibleForPurchase(matched)) {
+        setBillingCycle(matched.billingType);
+        setSelectedPlanId(matched.id);
+        autoSelectedPlanIdRef.current = null;
+        return;
+      } else {
+        // Preselected plan is missing, inactive, hidden, or Free — reject selection
+        setSelectedPlanId(null);
+        try {
+          sessionStorage.removeItem("dermai_chosen_plan");
+          sessionStorage.removeItem("dermai_pending_plan_id");
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    if (candidateCycle) {
+      setBillingCycle(candidateCycle);
+    }
+  }, [plans, isLoadingPlans]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -132,36 +240,100 @@ export default function SubscriptionUpgradePage() {
     loadPatientProfile();
   }, [user]);
 
-  const availablePlans = plans.filter(
-  (p) =>
-    p.billingType === billingCycle &&
-    p.status === "active" &&
-    p.price > 0
-);
-
-const selectedPlan =
-  availablePlans.find((p) => p.id === selectedPlanId) ??
-  availablePlans[0];
-
-// Pricing Formula:
-// vat_amount = round(base_price * 0.12, 2)
-// total_price = round(base_price + vat_amount, 2)
-// For base_price = 177.68, vat_amount = 21.32 and total_price = 199.00.
-const basePrice = Number(selectedPlan?.price ?? 0);
-const pricing = calculatePricing(basePrice);
-const total = pricing.totalPrice;
-const vatAmount = pricing.vatAmount;
-const amountInCentavos = pricing.amountInCentavos;
-const billingLabel = billingCycle === "monthly" ? "Monthly" : "Yearly";
-const currentPlanId = selectedPlan?.id;
-
-// Price shown on the Monthly / Yearly toggle buttons (VAT-inclusive)
-const togglePrice = (type: "monthly" | "yearly") => {
-  const p = plans.find(
-    (x) => x.billingType === type && x.status === "active" && x.price > 0
+  const availablePlans = plans.filter((p) =>
+    isPlanEligibleForPurchase(p, billingCycle)
   );
-  return p ? withVat(p.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
-};
+
+  // Strict selection: never fall back to availablePlans[0]
+  const selectedPlan = selectedPlanId
+    ? availablePlans.find((p) => p.id === selectedPlanId) ?? null
+    : null;
+
+  // Clear selection whenever it does not belong to the active billing cycle or becomes ineligible
+  useEffect(() => {
+    if (!selectedPlanId || isLoadingPlans) return;
+    const match = plans.find((p) => p.id === selectedPlanId);
+    if (!isPlanEligibleForPurchase(match, billingCycle)) {
+      setSelectedPlanId(null);
+    }
+  }, [plans, billingCycle, selectedPlanId, isLoadingPlans]);
+
+  // Auto-select when exactly one eligible plan exists for the active billing cycle;
+  // If plans increase to 2 or more, safely clear any stale auto-selection so manual selection is preserved.
+  useEffect(() => {
+    if (isLoadingPlans) return;
+
+    if (availablePlans.length === 1) {
+      const singlePlan = availablePlans[0];
+      if (selectedPlanId !== singlePlan.id) {
+        setSelectedPlanId(singlePlan.id);
+        autoSelectedPlanIdRef.current = singlePlan.id;
+      }
+    } else if (availablePlans.length >= 2) {
+      if (autoSelectedPlanIdRef.current && selectedPlanId === autoSelectedPlanIdRef.current) {
+        setSelectedPlanId(null);
+        autoSelectedPlanIdRef.current = null;
+      }
+    } else {
+      // availablePlans.length === 0
+      autoSelectedPlanIdRef.current = null;
+    }
+  }, [availablePlans, selectedPlanId, isLoadingPlans]);
+
+  const handleBillingCycleChange = (nextCycle: "monthly" | "yearly") => {
+    setBillingCycle(nextCycle);
+    setError(null);
+    setSelectedPlanId((prevId) => {
+      if (!prevId) return null;
+      const match = plans.find((p) => p.id === prevId);
+      return isPlanEligibleForPurchase(match, nextCycle) ? prevId : null;
+    });
+  };
+
+  const handleSelectPlan = (planId: string) => {
+    const target = availablePlans.find((p) => p.id === planId);
+    if (!isPlanEligibleForPurchase(target, billingCycle)) {
+      setSelectedPlanId(null);
+      autoSelectedPlanIdRef.current = null;
+      setError("The selected subscription plan is no longer available.");
+      return;
+    }
+    setSelectedPlanId(target.id);
+    autoSelectedPlanIdRef.current = null;
+    setError(null);
+  };
+
+  // Pricing Formula:
+  // vat_amount = round(base_price * 0.12, 2)
+  // total_price = round(base_price + vat_amount, 2)
+  // For base_price = 177.68, vat_amount = 21.32 and total_price = 199.00.
+  const basePrice = Number(selectedPlan?.price ?? 0);
+  const pricing = calculatePricing(basePrice);
+  const total = pricing.totalPrice;
+  const vatAmount = pricing.vatAmount;
+  const amountInCentavos = pricing.amountInCentavos;
+  const billingLabel = billingCycle === "monthly" ? "Monthly" : "Yearly";
+  const currentPlanId = selectedPlan?.id;
+
+  // Price shown on the Monthly / Yearly toggle buttons (VAT-inclusive)
+  const togglePrice = (type: "monthly" | "yearly") => {
+    if (selectedPlan && selectedPlan.billingType === type) {
+      return withVat(selectedPlan.price).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    }
+    const eligibleForCycle = plans.filter((x) =>
+      isPlanEligibleForPurchase(x, type)
+    );
+    const p = eligibleForCycle[0];
+    return p
+      ? withVat(p.price).toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      : "—";
+  };
 
 
     // On return from PayMongo 3DS redirect, check payment status
@@ -261,6 +433,11 @@ const togglePrice = (type: "monthly" | "yearly") => {
     e.preventDefault();
     setError(null);
 
+    if (!selectedPlan || !currentPlanId || !isPlanEligibleForPurchase(selectedPlan, billingCycle) || total <= 0) {
+      setError("Please select an available subscription plan before proceeding to payment.");
+      return;
+    }
+
     if (!fullName.trim() || !email.trim() || !address.trim() || !mobileNumber.trim()) {
       setError("Please complete your full name, email address, billing address, and mobile number.");
       return;
@@ -281,11 +458,6 @@ const togglePrice = (type: "monthly" | "yearly") => {
       return;
     }
 
-    if (!currentPlanId || total <= 0) {
-      setError("Please select a valid subscription plan.");
-      return;
-    }
-
     setAgreementAccepted(false);
     setIsAgreementOpen(true);
   };
@@ -302,11 +474,29 @@ const togglePrice = (type: "monthly" | "yearly") => {
       return;
     }
 
+    if (!selectedPlan || !currentPlanId || !isPlanEligibleForPurchase(selectedPlan, billingCycle) || total <= 0) {
+      setSelectedPlanId(null);
+      setIsAgreementOpen(false);
+      setError("Please select an available subscription plan before proceeding to payment.");
+      return;
+    }
+
     setIsAgreementOpen(false);
     setIsSubscribing(true);
     setError(null);
 
     try {
+    // Re-verify plan eligibility from the database right before checkout so deactivated/hidden plans cannot be purchased
+    const latestPlans = await getSubscriptionPlansAsync(false);
+    setPlans(latestPlans);
+    const verifiedPlan = latestPlans.find((p) => p.id === currentPlanId);
+    if (!isPlanEligibleForPurchase(verifiedPlan, billingCycle)) {
+      setSelectedPlanId(null);
+      throw new Error(
+        "The selected subscription plan is no longer active or available. Please select an available plan to continue."
+      );
+    }
+
     // Frontend guard: validate and auto-synchronize subscription status
     const subInfo = await validateAndSyncSubscription(user.id);
     const existingSubscription = subInfo.subscription;
@@ -325,6 +515,7 @@ const togglePrice = (type: "monthly" | "yearly") => {
 
     // Save calculation and billing cycle so we can restore it after a 3DS redirect and in receipt
     sessionStorage.setItem("dermai_pending_billing_cycle", billingCycle);
+    sessionStorage.setItem("dermai_pending_plan_id", currentPlanId);
     sessionStorage.setItem("dermai_pending_plan_base_price", String(basePrice));
     sessionStorage.setItem("dermai_pending_plan_vat_amount", String(vatAmount));
     sessionStorage.setItem("dermai_pending_plan_total_price", String(total));
@@ -433,6 +624,10 @@ const togglePrice = (type: "monthly" | "yearly") => {
       );
 
       sessionStorage.removeItem(
+        "dermai_pending_plan_id"
+      );
+
+      sessionStorage.removeItem(
         "dermai_pending_payment_intent_client_key"
       );
 
@@ -456,16 +651,16 @@ const togglePrice = (type: "monthly" | "yearly") => {
             Unlock Unlimited AI Skin Analysis
           </h1>
           <p className="text-sm text-gray-500 mt-2">
-            Get unlimited AI scans.
+            Select a subscription plan to upgrade your DermAI account.
           </p>
 
           {/* Billing Cycle Toggle */}
           <div className="mt-6 inline-flex p-1 bg-gray-100 rounded-2xl border border-gray-200/60 max-w-xs w-full">
             <button
               type="button"
-              onClick={() => setBillingCycle("monthly")}
+              onClick={() => handleBillingCycleChange("monthly")}
               className={cn(
-                "flex-1 py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5",
+                "flex-1 py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer",
                 billingCycle === "monthly"
                   ? "bg-white text-gray-900 shadow-xs"
                   : "text-gray-500 hover:text-gray-900"
@@ -476,9 +671,9 @@ const togglePrice = (type: "monthly" | "yearly") => {
             </button>
             <button
               type="button"
-              onClick={() => setBillingCycle("yearly")}
+              onClick={() => handleBillingCycleChange("yearly")}
               className={cn(
-                "flex-1 py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 relative",
+                "flex-1 py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 relative cursor-pointer",
                 billingCycle === "yearly"
                   ? "bg-white text-gray-900 shadow-xs"
                   : "text-gray-500 hover:text-gray-900"
@@ -490,6 +685,158 @@ const togglePrice = (type: "monthly" | "yearly") => {
           </div>
         </div>
 
+        {/* Selectable Subscription Plan Cards (hidden when exactly one plan is available) */}
+        {(isLoadingPlans || availablePlans.length !== 1) && (
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-3 px-1">
+              <div>
+                <h2 className="text-sm font-bold text-gray-900">
+                  Available {billingLabel} Plans
+                </h2>
+                <p className="text-xs text-gray-500">
+                  Choose one {billingCycle} plan below to continue with payment
+                </p>
+              </div>
+              {availablePlans.length > 0 && (
+                <span className="text-xs font-medium text-gray-500">
+                  {availablePlans.length} {availablePlans.length === 1 ? "plan" : "plans"} available
+                </span>
+              )}
+            </div>
+
+            {isLoadingPlans ? (
+              <div className="bg-white rounded-3xl border border-gray-100 p-10 text-center shadow-xs">
+                <Loader2 className="w-6 h-6 text-magenta-600 animate-spin mx-auto mb-2.5" />
+                <p className="text-xs font-medium text-gray-500">
+                  Loading available subscription plans...
+                </p>
+              </div>
+            ) : availablePlans.length === 0 ? (
+              <div className="bg-white rounded-3xl border border-gray-100 p-10 text-center shadow-xs">
+                <PackageOpen className="w-9 h-9 text-gray-300 mx-auto mb-2.5" />
+                <p className="text-sm font-bold text-gray-800">
+                  No {billingLabel.toLowerCase()} plans available right now
+                </p>
+                <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
+                  There are currently no active {billingLabel.toLowerCase()} subscription plans available for purchase. Please switch billing cycles or check back later.
+                </p>
+              </div>
+            ) : (
+              <div
+                role="radiogroup"
+                aria-label={`Available ${billingLabel} Subscription Plans`}
+                className={cn(
+                  "grid gap-4",
+                  availablePlans.length === 1
+                    ? "grid-cols-1 max-w-xl mx-auto"
+                    : "grid-cols-1 md:grid-cols-2"
+                )}
+              >
+                {availablePlans.map((plan) => {
+                  const isSelected = selectedPlan?.id === plan.id;
+                  const planPricing = calculatePricing(Number(plan.price));
+                  const planCycleLabel = plan.billingType === "yearly" ? "Yearly" : "Monthly";
+                  const planScanLimitLabel = formatScanLimit(plan.scanLimit);
+
+                  return (
+                    <button
+                      key={plan.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={isSelected}
+                      onClick={() => handleSelectPlan(plan.id)}
+                      className={cn(
+                        "w-full text-left rounded-3xl p-5 sm:p-6 border transition-all flex flex-col justify-between cursor-pointer focus:outline-none focus:ring-2 focus:ring-magenta-500/25",
+                        isSelected
+                          ? "border-2 border-magenta-600 bg-magenta-50/20 shadow-xs ring-2 ring-magenta-500/10"
+                          : "border-gray-200 bg-white hover:border-magenta-300 hover:bg-gray-50/40"
+                      )}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="text-base font-bold text-gray-900">
+                                {plan.name}
+                              </h3>
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-700">
+                                {planCycleLabel}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {plan.description || "Subscription Plan"}
+                            </p>
+                          </div>
+
+                          <div
+                            className={cn(
+                              "w-5 h-5 rounded-full border flex items-center justify-center shrink-0 mt-0.5 transition-colors",
+                              isSelected
+                                ? "border-magenta-600 bg-magenta-600 text-white"
+                                : "border-gray-300 bg-white"
+                            )}
+                          >
+                            {isSelected && <CheckCircle2 className="w-3.5 h-3.5" />}
+                          </div>
+                        </div>
+
+                        <div className="flex items-baseline gap-1.5 mb-3">
+                          <span className="text-2xl font-bold text-gray-900">
+                            ₱{planPricing.totalPrice.toLocaleString(undefined, {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </span>
+                          <span className="text-xs text-gray-500 font-medium">
+                            / {plan.billingType === "yearly" ? "year" : "month"}
+                          </span>
+                        </div>
+
+                        <div className="mb-3">
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-[11px] font-semibold border border-emerald-200/60">
+                            Scan Limit: {planScanLimitLabel}
+                          </span>
+                        </div>
+
+                        <div className="space-y-1.5 pt-3 border-t border-gray-100 text-xs text-gray-600">
+                          {(plan.features ?? []).map((feature, idx) => (
+                            <div
+                              key={`${plan.id}-card-feature-${idx}`}
+                              className="flex items-center gap-2"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                              <span>{feature}</span>
+                            </div>
+                          ))}
+                          {(!plan.features || plan.features.length === 0) && (
+                            <p className="text-gray-400">No additional features listed.</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
+                        <span
+                          className={cn(
+                            "text-xs font-semibold",
+                            isSelected ? "text-magenta-600" : "text-gray-500"
+                          )}
+                        >
+                          {isSelected ? "Selected Plan" : "Click to select this plan"}
+                        </span>
+                        {isSelected && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-magenta-600 text-white text-[10px] font-bold uppercase tracking-wide">
+                            Selected
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
           {/* Order Summary & Features (5 cols) */}
           <motion.div
@@ -500,12 +847,14 @@ const togglePrice = (type: "monthly" | "yearly") => {
             <div className="bg-white rounded-3xl border border-gray-100 p-6 sm:p-7 shadow-xs">
               <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
                 <div>
-                 <h2 className="text-lg font-bold text-gray-900">
-                     {selectedPlan?.name ?? "Subscription Plan"}
-                </h2>
+                  <h2 className="text-lg font-bold text-gray-900">
+                    {selectedPlan ? selectedPlan.name : "No Plan Selected"}
+                  </h2>
                   <p className="text-xs text-gray-500">
-                     {selectedPlan?.description || "Subscription Plan"}
-                </p>
+                    {selectedPlan
+                      ? selectedPlan.description || "Subscription Plan"
+                      : `Select a ${billingLabel.toLowerCase()} plan above to view summary`}
+                  </p>
                 </div>
               </div>
 
@@ -513,7 +862,15 @@ const togglePrice = (type: "monthly" | "yearly") => {
               <div className="space-y-3 text-xs mb-6">
                 <div className="flex justify-between items-center text-gray-600">
                   <span>Billing Plan</span>
-                  <span className="font-semibold text-gray-900">{billingLabel}</span>
+                  <span className="font-semibold text-gray-900">
+                    {selectedPlan ? billingLabel : "—"}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-gray-600">
+                  <span>Scan Limit</span>
+                  <span className="font-semibold text-gray-900">
+                    {selectedPlan ? formatScanLimit(selectedPlan.scanLimit) : "—"}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center text-gray-600">
                   <span>Price</span>
@@ -532,23 +889,33 @@ const togglePrice = (type: "monthly" | "yearly") => {
               {/* Pro Features Included */}
               <div className="space-y-2.5 pt-4 border-t border-gray-100 mb-5">
                 <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">
-                    INCLUDED WITH {selectedPlan?.name?.toUpperCase() ?? "SUBSCRIPTION PLAN"}
+                    INCLUDED WITH {selectedPlan?.name?.toUpperCase() ?? "SELECTED PLAN"}
                 </p>
 
-                <div className="space-y-2 text-xs text-gray-600">
-                    {(selectedPlan?.features ?? []).map((feature, index) => (
-                        <div key={`${selectedPlan?.id}-feature-${index}`} className="flex items-center gap-2">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                            <span>{feature}</span>
-                        </div>
+                {selectedPlan ? (
+                  <div className="space-y-2 text-xs text-gray-600">
+                    <div className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                      <span>Scan Limit: {formatScanLimit(selectedPlan.scanLimit)}</span>
+                    </div>
+                    {(selectedPlan.features ?? []).map((feature, index) => (
+                      <div key={`${selectedPlan.id}-feature-${index}`} className="flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                        <span>{feature}</span>
+                      </div>
                     ))}
 
-                    {(!selectedPlan?.features || selectedPlan.features.length === 0) && (
-                        <p className="text-gray-400">
-                            No additional features listed.
-                        </p>
+                    {(!selectedPlan.features || selectedPlan.features.length === 0) && (
+                      <p className="text-gray-400">
+                        No additional features listed.
+                      </p>
                     )}
-                </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-400">
+                    Select an available plan above to see its included benefits and scan limit.
+                  </p>
+                )}
               </div>
 
               <div className="p-3.5 bg-gray-50 rounded-2xl border border-gray-100 text-[11px] text-gray-500 leading-relaxed">
@@ -688,11 +1055,13 @@ const togglePrice = (type: "monthly" | "yearly") => {
                 <div className="pt-4 space-y-2.5">
                   <button
                     type="submit"
-                    disabled={isSubscribing}
-                    className="w-full py-3.5 bg-magenta-600 text-white rounded-full font-semibold text-sm shadow-sm hover:bg-magenta-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait flex items-center justify-center gap-2 cursor-pointer"
+                    disabled={isSubscribing || !selectedPlan || availablePlans.length === 0 || total <= 0}
+                    className="w-full py-3.5 bg-magenta-600 text-white rounded-full font-semibold text-sm shadow-sm hover:bg-magenta-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
                   >
                     {isSubscribing ? (
                       "Processing Payment..."
+                    ) : !selectedPlan ? (
+                      "Select a Plan to Continue"
                     ) : (
                       <>
                          Pay &amp; Activate (₱{total.toFixed(2)})

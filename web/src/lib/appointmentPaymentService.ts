@@ -36,6 +36,20 @@ export type AppointmentPaymentStatus =
 
 export type SimulatedPaymentOutcome = "success" | "failed" | "cancelled";
 
+/**
+ * Sanitizes patient-entered symptoms / reason for visit text.
+ * Strictly guarantees that no payment metadata (e.g. [Payment: ...], Paid online via...)
+ * is ever appended or persisted into the patient's symptoms or notes field.
+ */
+export function sanitizePatientSymptoms(text?: string | null): string | null {
+  if (!text) return null;
+  const clean = text
+    .replace(/\[Payment:.*?\]/gi, "")
+    .replace(/(?:^|\n)?\s*Payment:\s*Paid online[^\n\r]*/gi, "")
+    .trim();
+  return clean || null;
+}
+
 
 
 export interface AcquireHoldParams {
@@ -308,7 +322,7 @@ export async function acquireAppointmentSlotHold(
 
       p_emergency_contact_relationship: params.emergencyContactRelationship || null,
 
-      p_notes: params.notes || null,
+      p_notes: sanitizePatientSymptoms(params.notes),
 
       p_clinic_note: params.clinicNote || null,
 
@@ -368,7 +382,7 @@ export async function acquireAppointmentSlotHold(
 
         p_emergency_rel: params.emergencyContactRelationship || null,
 
-        p_notes: params.notes || null,
+        p_notes: sanitizePatientSymptoms(params.notes),
 
         p_questionnaire: params.questionnaireAnswers || null,
 

@@ -392,6 +392,18 @@ export default function BillingSettingsPage() {
 
   useEffect(() => {
     loadBillingData();
+
+    const handleSubUpdated = () => {
+      loadBillingData();
+    };
+
+    window.addEventListener("dermai_subscription_updated", handleSubUpdated);
+    window.addEventListener("derm_profile_updated", handleSubUpdated);
+
+    return () => {
+      window.removeEventListener("dermai_subscription_updated", handleSubUpdated);
+      window.removeEventListener("derm_profile_updated", handleSubUpdated);
+    };
   }, [loadBillingData]);
 
 
@@ -569,6 +581,13 @@ export default function BillingSettingsPage() {
 
       await loadBillingData();
 
+      window.dispatchEvent(
+        new CustomEvent("dermai_subscription_updated", {
+          detail: { userId: user?.id, tier: sub.planName || "Pro", status: "cancelling" },
+        })
+      );
+      window.dispatchEvent(new CustomEvent("derm_profile_updated"));
+
       logAuditEvent({
         userId: user?.id,
         role: "patient",
@@ -620,6 +639,13 @@ export default function BillingSettingsPage() {
       }
 
       await loadBillingData();
+
+      window.dispatchEvent(
+        new CustomEvent("dermai_subscription_updated", {
+          detail: { userId: user?.id, tier: sub.planName || "Pro", status: "active" },
+        })
+      );
+      window.dispatchEvent(new CustomEvent("derm_profile_updated"));
 
       logAuditEvent({
         userId: user?.id,

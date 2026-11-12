@@ -389,7 +389,7 @@ Deno.serve(async (req: Request) => {
   }
 
   let remindersSent = 0;
-  let notificationsCreated = 0;
+  const notificationsCreated = 0;
   let skipped = 0;
   const failures: string[] = [];
 

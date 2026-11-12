@@ -53,114 +53,95 @@ try {
   if (stored) {
     const parsed = JSON.parse(stored);
     const photo = parsed.photo || parsed.photo_url || null;
-    if (parsed.id) avatarCache.set(parsed.id, { photoUrl: photo, timestamp: Date.now() });
-    if (parsed.doctor_id) avatarCache.set(parsed.doctor_id, { photoUrl: photo, timestamp: Date.now() });
-    if (parsed.userId) avatarCache.set(parsed.userId, { photoUrl: photo, timestamp: Date.now() });
+    if (parsed.id) avatarCache.set(String(parsed.id), { photoUrl: photo, timestamp: Date.now() });
+    if (parsed.doctor_id) avatarCache.set(String(parsed.doctor_id), { photoUrl: photo, timestamp: Date.now() });
   }
 } catch {}
 
 import { resolveAvatarUrl } from "./avatarUrlResolver";
 
 /**
+ * Synchronously updates the in-memory cache for a specific clinic doctor record.
+ */
+export function setDoctorAvatarInCache(doctorId: string, photoUrl: string | null): void {
+  if (!doctorId) return;
+  const timestamp = Date.now();
+  const resolved = photoUrl ? withCacheBuster(resolveAvatarUrl(photoUrl) || photoUrl, timestamp) : null;
+  avatarCache.set(String(doctorId), { photoUrl: resolved, timestamp });
+}
+
+/**
  * Synchronously retrieves doctor avatar URL from in-memory cache or doctor object with cache-busting.
+ * Strictly scoped to clinic-specific doctorId and photo_url/photo (never global user.avatar_url).
  */
 export function getDoctorAvatarUrl(
   doctorIdOrUserId?: string,
   doctor?: { photo?: string | null; photo_url?: string | null; avatar_url?: string | null } | null
 ): string {
   if (doctorIdOrUserId) {
-    const cached = avatarCache.get(doctorIdOrUserId);
+    const cached = avatarCache.get(String(doctorIdOrUserId));
     if (cached && cached.photoUrl) {
       return cached.photoUrl;
     }
   }
-  const raw = doctor?.photo_url || doctor?.photo || doctor?.avatar_url;
+  const raw = doctor?.photo_url || doctor?.photo;
   const resolved = resolveAvatarUrl(raw);
   return resolved ? withCacheBuster(resolved) : "";
 }
 
 /**
- * Fetches the central avatar URL for a doctor from clinic_doctor (and user table fallback).
+ * Fetches the clinic-specific avatar URL for a doctor strictly from public.clinic_doctor by doctor_id.
+ * Never falls back to another clinic's record or to public.user.avatar_url.
  */
 export async function fetchDoctorAvatar(
-  doctorIdOrUserId: string,
+  doctorId: string,
   forceFresh = false
 ): Promise<string | null> {
-  if (!doctorIdOrUserId) return null;
+  if (!doctorId) return null;
 
-  if (!forceFresh) {
-    const cached = avatarCache.get(doctorIdOrUserId);
-    if (cached) {
-      return cached.photoUrl;
-    }
+  if (!forceFresh && avatarCache.has(String(doctorId))) {
+    return avatarCache.get(String(doctorId))?.photoUrl ?? null;
   }
 
   try {
-    // 1. Check clinic_doctor record
     const { data: doc } = await supabase
       .from("clinic_doctor")
-      .select("doctor_id, user_id, photo_url")
-      .or(`doctor_id.eq.${doctorIdOrUserId},user_id.eq.${doctorIdOrUserId}`)
-      .limit(1)
+      .select("doctor_id, photo_url")
+      .eq("doctor_id", doctorId)
       .maybeSingle();
 
     if (doc) {
-      let resolved = resolveAvatarUrl(doc.photo_url);
-      // Fallback to linked user profile avatar if clinic_doctor photo is not set
-      if (!resolved && doc.user_id) {
-        try {
-          const { data: userRow } = await supabase
-            .from("user")
-            .select("avatar_url")
-            .eq("user_id", doc.user_id)
-            .maybeSingle();
-          if (userRow?.avatar_url) {
-            resolved = resolveAvatarUrl(userRow.avatar_url);
-          }
-        } catch {}
+      const resolved = resolveAvatarUrl(doc.photo_url);
+      const url = resolved ? withCacheBuster(resolved) : null;
+      if (doc.doctor_id) {
+        avatarCache.set(String(doc.doctor_id), { photoUrl: url, timestamp: Date.now() });
       }
-
-      const url = resolved ? withCacheBuster(resolved) : null;
-      if (doc.doctor_id) avatarCache.set(doc.doctor_id, { photoUrl: url, timestamp: Date.now() });
-      if (doc.user_id) avatarCache.set(doc.user_id, { photoUrl: url, timestamp: Date.now() });
-      return url;
-    }
-
-    // 2. Fallback: check user table avatar_url if doctorIdOrUserId is an auth user_id
-    const { data: userRow } = await supabase
-      .from("user")
-      .select("user_id, avatar_url")
-      .eq("user_id", doctorIdOrUserId)
-      .maybeSingle();
-
-    if (userRow) {
-      const resolved = resolveAvatarUrl(userRow.avatar_url);
-      const url = resolved ? withCacheBuster(resolved) : null;
-      avatarCache.set(userRow.user_id, { photoUrl: url, timestamp: Date.now() });
       return url;
     }
   } catch (err) {
     console.warn("[doctorAvatarService] fetchDoctorAvatar error:", err);
   }
 
+  avatarCache.set(String(doctorId), { photoUrl: null, timestamp: Date.now() });
   return null;
 }
 
 /**
- * Updates a doctor's avatar across clinic_doctor and user tables,
+ * Updates a doctor's avatar strictly for the specified clinic_doctor membership row,
  * busts browser CDN/storage caches with timestamp, and broadcasts
- * an event so all mounted components update immediately.
+ * an event so all mounted components for that clinic-doctor membership update immediately.
  */
 export async function updateDoctorAvatar(
   doctorId: string,
   rawPhotoUrl: string,
-  userId?: string
+  userId?: string,
+  clinicId?: string
 ): Promise<string> {
   const timestamp = Date.now();
   const photoUrlWithBuster = withCacheBuster(rawPhotoUrl, timestamp);
 
-  // 1. Update clinic_doctor table (Single Source of Truth)
-  const { error: cdError } = await supabase
+  // 1. Update clinic_doctor table strictly for this clinic-doctor membership
+  let query = supabase
     .from("clinic_doctor")
     .update({
       photo_url: photoUrlWithBuster,
@@ -168,77 +149,72 @@ export async function updateDoctorAvatar(
     })
     .eq("doctor_id", doctorId);
 
+  if (clinicId && clinicId !== "all") {
+    query = query.eq("clinic_id", clinicId);
+  }
+
+  const { error: cdError } = await query;
+
   if (cdError) {
     console.warn("[doctorAvatarService] Failed to update clinic_doctor photo_url:", cdError);
+    throw cdError;
   }
 
-  // 2. Resolve userId if not provided
-  let resolvedUserId = userId;
-  if (!resolvedUserId) {
-    try {
-      const { data: docRow } = await supabase
-        .from("clinic_doctor")
-        .select("user_id")
-        .eq("doctor_id", doctorId)
-        .maybeSingle();
-      if (docRow?.user_id) {
-        resolvedUserId = docRow.user_id;
-      }
-    } catch {}
-  }
+  // 2. Update in-memory cache strictly by clinic-specific doctorId
+  avatarCache.set(String(doctorId), { photoUrl: photoUrlWithBuster, timestamp });
 
-  // 3. Update public.user table avatar_url if user_id is linked
-  if (resolvedUserId) {
-    try {
-      const { error: userError } = await supabase
-        .from("user")
-        .update({ avatar_url: photoUrlWithBuster })
-        .eq("user_id", resolvedUserId);
-
-      if (userError) {
-        console.warn("[doctorAvatarService] Failed to update user avatar_url:", userError);
-      }
-    } catch {}
-  }
-
-  // 4. Update in-memory cache
-  avatarCache.set(doctorId, { photoUrl: photoUrlWithBuster, timestamp });
-  if (resolvedUserId) {
-    avatarCache.set(resolvedUserId, { photoUrl: photoUrlWithBuster, timestamp });
-  }
-
-  // 5. Update local storage caches safely
+  // 3. Update local storage caches safely (scoped by doctorId / clinicId only)
   try {
+    if (clinicId && clinicId !== "all") {
+      const scopedKey = `dermai_doctor_profile_${clinicId}`;
+      const storedScoped = localStorage.getItem(scopedKey);
+      if (storedScoped) {
+        const parsedScoped = JSON.parse(storedScoped);
+        if (!parsedScoped.id || String(parsedScoped.id) === String(doctorId)) {
+          parsedScoped.photo = photoUrlWithBuster;
+          localStorage.setItem(scopedKey, JSON.stringify(parsedScoped));
+        }
+      }
+    }
+
     const stored = localStorage.getItem("dermai_doctor_profile");
     if (stored) {
       const parsed = JSON.parse(stored);
-      parsed.photo = photoUrlWithBuster;
-      localStorage.setItem("dermai_doctor_profile", JSON.stringify(parsed));
+      if (parsed.id && String(parsed.id) === String(doctorId)) {
+        parsed.photo = photoUrlWithBuster;
+        localStorage.setItem("dermai_doctor_profile", JSON.stringify(parsed));
+      }
     }
 
-    const clinicDocs = localStorage.getItem("dermai_clinic_doctors");
-    if (clinicDocs) {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith("dermai_clinic_doctors")) continue;
+      const clinicDocs = localStorage.getItem(key);
+      if (!clinicDocs) continue;
       const parsedDocs = JSON.parse(clinicDocs);
       if (Array.isArray(parsedDocs)) {
+        let changed = false;
         const updated = parsedDocs.map((d: any) => {
           const isDocMatch =
-            d.id === doctorId ||
-            d.doctor_id === doctorId ||
-            (resolvedUserId && d.user_id === resolvedUserId);
+            String(d.id || "") === String(doctorId) ||
+            String(d.doctor_id || "") === String(doctorId);
           if (isDocMatch) {
+            changed = true;
             return { ...d, photo: photoUrlWithBuster, photo_url: photoUrlWithBuster };
           }
           return d;
         });
-        localStorage.setItem("dermai_clinic_doctors", JSON.stringify(updated));
+        if (changed) {
+          localStorage.setItem(key, JSON.stringify(updated));
+        }
       }
     }
   } catch {}
 
-  // 6. Broadcast event
+  // 4. Broadcast event scoped to doctorId
   const eventPayload: DoctorAvatarUpdateEvent = {
-    doctorId,
-    userId: resolvedUserId,
+    doctorId: String(doctorId),
+    userId,
     photoUrl: photoUrlWithBuster,
     timestamp,
   };
@@ -252,17 +228,18 @@ export async function updateDoctorAvatar(
 }
 
 /**
- * Removes a doctor's avatar from clinic_doctor and user tables,
+ * Removes a doctor's avatar strictly from the specified clinic_doctor membership row,
  * updates caches, and broadcasts the removal event.
  */
 export async function removeDoctorAvatar(
   doctorId: string,
-  userId?: string
+  userId?: string,
+  clinicId?: string
 ): Promise<void> {
   const timestamp = Date.now();
 
-  // 1. Update clinic_doctor table
-  await supabase
+  // 1. Update clinic_doctor table strictly for this clinic-doctor membership
+  let query = supabase
     .from("clinic_doctor")
     .update({
       photo_url: null,
@@ -270,69 +247,71 @@ export async function removeDoctorAvatar(
     })
     .eq("doctor_id", doctorId);
 
-  // 2. Resolve userId
-  let resolvedUserId = userId;
-  if (!resolvedUserId) {
-    try {
-      const { data: docRow } = await supabase
-        .from("clinic_doctor")
-        .select("user_id")
-        .eq("doctor_id", doctorId)
-        .maybeSingle();
-      if (docRow?.user_id) {
-        resolvedUserId = docRow.user_id;
-      }
-    } catch {}
+  if (clinicId && clinicId !== "all") {
+    query = query.eq("clinic_id", clinicId);
   }
 
-  // 3. Update public.user table
-  if (resolvedUserId) {
-    try {
-      await supabase
-        .from("user")
-        .update({ avatar_url: null })
-        .eq("user_id", resolvedUserId);
-    } catch {}
+  const { error: cdError } = await query;
+  if (cdError) {
+    console.warn("[doctorAvatarService] Failed to remove clinic_doctor photo_url:", cdError);
+    throw cdError;
   }
 
-  // 4. Update in-memory cache
-  avatarCache.set(doctorId, { photoUrl: null, timestamp });
-  if (resolvedUserId) {
-    avatarCache.set(resolvedUserId, { photoUrl: null, timestamp });
-  }
+  // 2. Update in-memory cache strictly by clinic-specific doctorId
+  avatarCache.set(String(doctorId), { photoUrl: null, timestamp });
 
-  // 5. Update local storage caches
+  // 3. Update local storage caches safely (scoped by doctorId / clinicId only)
   try {
+    if (clinicId && clinicId !== "all") {
+      const scopedKey = `dermai_doctor_profile_${clinicId}`;
+      const storedScoped = localStorage.getItem(scopedKey);
+      if (storedScoped) {
+        const parsedScoped = JSON.parse(storedScoped);
+        if (!parsedScoped.id || String(parsedScoped.id) === String(doctorId)) {
+          parsedScoped.photo = "";
+          localStorage.setItem(scopedKey, JSON.stringify(parsedScoped));
+        }
+      }
+    }
+
     const stored = localStorage.getItem("dermai_doctor_profile");
     if (stored) {
       const parsed = JSON.parse(stored);
-      parsed.photo = "";
-      localStorage.setItem("dermai_doctor_profile", JSON.stringify(parsed));
+      if (parsed.id && String(parsed.id) === String(doctorId)) {
+        parsed.photo = "";
+        localStorage.setItem("dermai_doctor_profile", JSON.stringify(parsed));
+      }
     }
 
-    const clinicDocs = localStorage.getItem("dermai_clinic_doctors");
-    if (clinicDocs) {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith("dermai_clinic_doctors")) continue;
+      const clinicDocs = localStorage.getItem(key);
+      if (!clinicDocs) continue;
       const parsedDocs = JSON.parse(clinicDocs);
       if (Array.isArray(parsedDocs)) {
+        let changed = false;
         const updated = parsedDocs.map((d: any) => {
           const isDocMatch =
-            d.id === doctorId ||
-            d.doctor_id === doctorId ||
-            (resolvedUserId && d.user_id === resolvedUserId);
+            String(d.id || "") === String(doctorId) ||
+            String(d.doctor_id || "") === String(doctorId);
           if (isDocMatch) {
+            changed = true;
             return { ...d, photo: "", photo_url: null };
           }
           return d;
         });
-        localStorage.setItem("dermai_clinic_doctors", JSON.stringify(updated));
+        if (changed) {
+          localStorage.setItem(key, JSON.stringify(updated));
+        }
       }
     }
   } catch {}
 
-  // 6. Broadcast event
+  // 4. Broadcast event scoped to doctorId
   const eventPayload: DoctorAvatarUpdateEvent = {
-    doctorId,
-    userId: resolvedUserId,
+    doctorId: String(doctorId),
+    userId,
     photoUrl: null,
     timestamp,
   };
@@ -362,7 +341,7 @@ export interface UseDoctorAvatarOptions {
 }
 
 /**
- * Shared global Realtime channel for external database updates to clinic_doctor and user tables.
+ * Shared global Realtime channel for external database updates to clinic_doctor table.
  * Uses a single channel across all hook instances to prevent duplicate subscriptions,
  * topic collisions, and RealtimeChannel state errors.
  */
@@ -376,69 +355,35 @@ function ensureGlobalDoctorRealtime(): void {
     const channelName = `doc-avatar-global-rt-${Math.random().toString(36).slice(2, 9)}-${Date.now()}`;
     const channel = supabase.channel(channelName);
 
-    channel
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "clinic_doctor",
-        },
-        (payload) => {
-          const newRow = payload.new as any;
-          if (newRow && "photo_url" in newRow) {
-            const updated = newRow.photo_url ? withCacheBuster(newRow.photo_url) : null;
-            const timestamp = Date.now();
+    channel.on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "clinic_doctor",
+      },
+      (payload) => {
+        const newRow = payload.new as any;
+        if (newRow && "photo_url" in newRow && newRow.doctor_id) {
+          const timestamp = Date.now();
+          const resolved = resolveAvatarUrl(newRow.photo_url);
+          const updated = resolved ? withCacheBuster(resolved, timestamp) : null;
 
-            if (newRow.doctor_id) {
-              avatarCache.set(String(newRow.doctor_id), { photoUrl: updated, timestamp });
-            }
-            if (newRow.user_id) {
-              avatarCache.set(String(newRow.user_id), { photoUrl: updated, timestamp });
-            }
+          avatarCache.set(String(newRow.doctor_id), { photoUrl: updated, timestamp });
 
-            const eventPayload: DoctorAvatarUpdateEvent = {
-              doctorId: newRow.doctor_id ? String(newRow.doctor_id) : undefined,
-              userId: newRow.user_id ? String(newRow.user_id) : undefined,
-              photoUrl: updated,
-              timestamp,
-            };
+          const eventPayload: DoctorAvatarUpdateEvent = {
+            doctorId: String(newRow.doctor_id),
+            userId: newRow.user_id ? String(newRow.user_id) : undefined,
+            photoUrl: updated,
+            timestamp,
+          };
 
-            window.dispatchEvent(
-              new CustomEvent(DOCTOR_AVATAR_UPDATED_EVENT, { detail: eventPayload })
-            );
-          }
+          window.dispatchEvent(
+            new CustomEvent(DOCTOR_AVATAR_UPDATED_EVENT, { detail: eventPayload })
+          );
         }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "user",
-        },
-        (payload) => {
-          const newRow = payload.new as any;
-          if (newRow && "avatar_url" in newRow) {
-            const updated = newRow.avatar_url ? withCacheBuster(newRow.avatar_url) : null;
-            const timestamp = Date.now();
-
-            if (newRow.user_id) {
-              avatarCache.set(String(newRow.user_id), { photoUrl: updated, timestamp });
-            }
-
-            const eventPayload: DoctorAvatarUpdateEvent = {
-              userId: newRow.user_id ? String(newRow.user_id) : undefined,
-              photoUrl: updated,
-              timestamp,
-            };
-
-            window.dispatchEvent(
-              new CustomEvent(DOCTOR_AVATAR_UPDATED_EVENT, { detail: eventPayload })
-            );
-          }
-        }
-      );
+      }
+    );
 
     channel.subscribe((status) => {
       if (status === "SUBSCRIBED") {
@@ -453,63 +398,77 @@ function ensureGlobalDoctorRealtime(): void {
 }
 
 /**
- * React hook that binds to the central doctor avatar state with real-time updates and cache invalidation.
+ * React hook that binds to the clinic-specific doctor avatar state with real-time updates and cache invalidation.
+ * Never resolves or shares photos across clinics by userId.
  */
 export function useDoctorAvatar(options: UseDoctorAvatarOptions = {}) {
-  const { doctorId: explicitDocId, userId: explicitUserId, doctor, initialUrl } = options;
-  const docId = explicitDocId || doctor?.doctor_id || doctor?.id;
-  const uId = explicitUserId || doctor?.user_id;
+  const { doctorId: explicitDocId, doctor, initialUrl } = options;
+  const docId = explicitDocId || doctor?.doctor_id || doctor?.id || null;
+  const hasExplicitPhotoProp =
+    doctor !== undefined && doctor !== null && ("photo_url" in doctor || "photo" in doctor);
 
-  const getInitial = (): string | null => {
-    if (docId && avatarCache.has(docId)) return avatarCache.get(docId)!.photoUrl;
-    if (uId && avatarCache.has(uId)) return avatarCache.get(uId)!.photoUrl;
-    const provided = resolveAvatarUrl(doctor?.photo_url || doctor?.photo || doctor?.avatar_url || initialUrl);
-    if (provided) return provided;
-    try {
-      const stored = localStorage.getItem("dermai_doctor_profile");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.photo && (!docId || parsed.id === docId)) {
-          return parsed.photo;
-        }
+  const getInitial = useCallback((): string | null => {
+    if (docId && avatarCache.has(String(docId))) {
+      const cached = avatarCache.get(String(docId))!;
+      if (cached.photoUrl) return cached.photoUrl;
+      if (hasExplicitPhotoProp) {
+        const propUrl = resolveAvatarUrl(doctor?.photo_url || doctor?.photo || initialUrl);
+        return propUrl || null;
       }
-    } catch {}
+      return null;
+    }
+    const provided = resolveAvatarUrl(doctor?.photo_url || doctor?.photo || initialUrl);
+    if (provided) return provided;
+    if (docId) {
+      try {
+        const stored = localStorage.getItem("dermai_doctor_profile");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.photo && String(parsed.id) === String(docId)) {
+            return resolveAvatarUrl(parsed.photo) || null;
+          }
+        }
+      } catch {}
+    }
     return null;
-  };
+  }, [docId, doctor, hasExplicitPhotoProp, initialUrl]);
 
   const [avatarUrl, setAvatarUrl] = useState<string | null>(getInitial);
-  const [loading, setLoading] = useState<boolean>(!avatarUrl && Boolean(docId || uId));
+  const [loading, setLoading] = useState<boolean>(!avatarUrl && Boolean(docId) && !hasExplicitPhotoProp);
 
   const refresh = useCallback(async (force = false) => {
-    const key = docId || uId;
-    if (!key) return;
+    if (!docId) {
+      setAvatarUrl(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    const fetched = await fetchDoctorAvatar(key, force);
+    const fetched = await fetchDoctorAvatar(String(docId), force);
     setAvatarUrl(fetched);
     setLoading(false);
-  }, [docId, uId]);
+  }, [docId]);
 
   useEffect(() => {
     const current = getInitial();
     setAvatarUrl(current);
 
-    if (!current && (docId || uId)) {
-      refresh();
+    if (docId && current) {
+      avatarCache.set(String(docId), { photoUrl: current, timestamp: Date.now() });
+    } else if (docId && !current && !hasExplicitPhotoProp && !avatarCache.has(String(docId))) {
+      void refresh();
+    } else if (!docId) {
+      setAvatarUrl(providedUrlOrNull(doctor?.photo_url || doctor?.photo || initialUrl));
     }
-  }, [docId, uId, doctor?.photo, doctor?.photo_url, doctor?.avatar_url, initialUrl, refresh]);
+  }, [docId, doctor?.photo, doctor?.photo_url, initialUrl, hasExplicitPhotoProp, getInitial, refresh]);
 
-  // Subscribe to global avatar updates
+  // Subscribe to global avatar updates strictly matching this clinic's doctorId
   useEffect(() => {
     const handleAvatarUpdated = (e: Event) => {
       const customEvent = e as CustomEvent<DoctorAvatarUpdateEvent>;
       const detail = customEvent.detail;
       if (!detail) return;
 
-      const isMatch =
-        (docId && detail.doctorId && String(docId) === String(detail.doctorId)) ||
-        (uId && detail.userId && String(uId) === String(detail.userId));
-
-      if (isMatch) {
+      if (docId && detail.doctorId && String(docId) === String(detail.doctorId)) {
         setAvatarUrl(detail.photoUrl);
       }
     };
@@ -518,7 +477,7 @@ export function useDoctorAvatar(options: UseDoctorAvatarOptions = {}) {
     return () => {
       window.removeEventListener(DOCTOR_AVATAR_UPDATED_EVENT, handleAvatarUpdated);
     };
-  }, [docId, uId]);
+  }, [docId]);
 
   // Ensure the shared global realtime listener is active once per session
   useEffect(() => {
@@ -526,4 +485,8 @@ export function useDoctorAvatar(options: UseDoctorAvatarOptions = {}) {
   }, []);
 
   return { avatarUrl, loading, refresh };
+}
+
+function providedUrlOrNull(raw?: string | null): string | null {
+  return resolveAvatarUrl(raw) || null;
 }
