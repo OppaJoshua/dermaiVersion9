@@ -434,15 +434,28 @@ export default function ClinicDashboardPage() {
 
       // Merge doctor names and duty schedules from local cache if missing
       try {
-        const rawDocs = localStorage.getItem("dermai_clinic_doctors");
+        let rawDocs: string | null = null;
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith("dermai_clinic_doctors") && resolvedClinicId && k.includes(String(resolvedClinicId))) {
+            rawDocs = localStorage.getItem(k);
+            if (rawDocs) break;
+          }
+        }
+        if (!rawDocs) {
+          rawDocs = localStorage.getItem("dermai_clinic_doctors");
+        }
         if (rawDocs) {
           const parsed = JSON.parse(rawDocs);
           if (Array.isArray(parsed)) {
             parsed.forEach((d: any) => {
-              if (d.id && d.name && !docMap.has(d.id)) {
-                docMap.set(d.id, d.name);
+              const dId = d.id || d.doctor_id;
+              if (dId && (d.name || d.doctor_name) && !docMap.has(dId)) {
+                docMap.set(dId, d.name || d.doctor_name);
               }
-              const existingIdx = loadedDoctors.findIndex((doc) => doc.id === d.id);
+              const existingIdx = loadedDoctors.findIndex(
+                (doc) => doc.id === dId || (doc.userId && d.user_id && doc.userId === d.user_id)
+              );
               if (existingIdx >= 0) {
                 if (!loadedDoctors[existingIdx].photo && (d.photo || d.photo_url)) {
                   loadedDoctors[existingIdx].photo = d.photo || d.photo_url;
@@ -460,19 +473,29 @@ export default function ClinicDashboardPage() {
                 ) {
                   loadedDoctors[existingIdx].dutyDays = d.dutyDays;
                 }
-              } else if (d.id && d.name) {
-                loadedDoctors.push({
-                  id: d.id,
-                  name: d.name,
-                  photo: d.photo || d.photo_url,
-                  specialization: d.specialization || d.specializations?.[0]?.name,
-                  specializations: d.specializations || (d.specialization ? [{ id: "1", name: d.specialization }] : []),
-                  dutyDays: d.dutyDays || [],
-                  dutyStartTime: d.dutyStartTime || "08:00",
-                  dutyEndTime: d.dutyEndTime || "17:00",
-                  dutySchedule: d.dutySchedule,
-                  status: d.status || "Active",
-                });
+              } else if (loadedDoctors.length === 0 && dId && (d.name || d.doctor_name)) {
+                // Only fall back to adding cached doctors if the database returned 0 doctors for this clinic,
+                // and ensure the cached doctor matches the active clinic identity if clinic info is present.
+                const matchesClinic = !d.clinic_id && !d.clinicId
+                  ? true
+                  : (d.clinic_id === resolvedClinicId || d.clinicId === resolvedClinicId);
+
+                if (matchesClinic) {
+                  loadedDoctors.push({
+                    id: dId,
+                    name: d.name || d.doctor_name,
+                    photo: d.photo || d.photo_url,
+                    userId: d.user_id,
+                    user_id: d.user_id,
+                    specialization: d.specialization || d.specializations?.[0]?.name,
+                    specializations: d.specializations || (d.specialization ? [{ id: "1", name: d.specialization }] : []),
+                    dutyDays: d.dutyDays || [],
+                    dutyStartTime: d.dutyStartTime || "08:00",
+                    dutyEndTime: d.dutyEndTime || "17:00",
+                    dutySchedule: d.dutySchedule,
+                    status: d.status || "Active",
+                  });
+                }
               }
             });
           }
@@ -726,7 +749,7 @@ export default function ClinicDashboardPage() {
   // Compute doctors who are on duty today based on their active duty schedule
   // Strictly respects clinic opening hours, operating days, shift validity, and current local time
   const onDutyDoctors = useMemo(() => {
-    return doctors
+    const rawOnDuty = doctors
       .filter((doc) => doc.status !== "Inactive")
       .map((doc) => {
         const docSched = parseDoctorSchedule(
@@ -841,6 +864,17 @@ export default function ClinicDashboardPage() {
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
+
+    // Display each unique doctor only once per selected clinic
+    const seenDoctorKeys = new Set<string>();
+    const uniqueOnDuty: typeof rawOnDuty = [];
+    for (const docItem of rawOnDuty) {
+      if (!seenDoctorKeys.has(docItem.id)) {
+        seenDoctorKeys.add(docItem.id);
+        uniqueOnDuty.push(docItem);
+      }
+    }
+    return uniqueOnDuty;
   }, [doctors, todayDayName, nowMinutes, clinicSchedule, clinicStatus]);
 
   // Shifts and patient count for the selected schedule date

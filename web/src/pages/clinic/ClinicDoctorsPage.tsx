@@ -3,6 +3,7 @@ import { parseAssignedDutySchedule } from "@/lib/doctorDutySchedule";
 import { findCrossClinicDutyConflicts, type ScheduleConflict } from "@/lib/doctorScheduleConflicts";
 import { fetchClinicDoctorRows } from "@/lib/clinicDoctorRoster";
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import {
   UserPlus,
   Trash2,
@@ -340,16 +341,90 @@ function ModernTimeSelect({
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const selectedItemRef = useRef<HTMLButtonElement>(null);
+
+  const [coords, setCoords] = useState<{
+    left: number;
+    width: number;
+    placement: "bottom" | "top";
+    top?: number;
+    bottom?: number;
+    maxHeight: number;
+  } | null>(null);
+
+  const updatePosition = useCallback(() => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const dropdownMaxHeight = 220;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    const placement = spaceBelow < dropdownMaxHeight && spaceAbove > spaceBelow ? "top" : "bottom";
+
+    const width = Math.max(rect.width, 130);
+    let left = rect.left;
+    if (left + width > window.innerWidth - 8) {
+      left = Math.max(8, window.innerWidth - width - 8);
+    }
+
+    if (placement === "bottom") {
+      setCoords({
+        left,
+        width,
+        placement: "bottom",
+        top: rect.bottom + 4,
+        maxHeight: Math.max(120, Math.min(dropdownMaxHeight, spaceBelow - 12)),
+      });
+    } else {
+      setCoords({
+        left,
+        width,
+        placement: "top",
+        bottom: window.innerHeight - rect.top + 4,
+        maxHeight: Math.max(120, Math.min(dropdownMaxHeight, spaceAbove - 12)),
+      });
+    }
+  }, []);
 
   useEffect(() => {
+    if (!open) return;
+
+    updatePosition();
+
     function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        buttonRef.current &&
+        !buttonRef.current.contains(target) &&
+        menuRef.current &&
+        !menuRef.current.contains(target)
+      ) {
         setOpen(false);
       }
     }
+
+    function handleScrollOrResize() {
+      updatePosition();
+    }
+
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    window.addEventListener("scroll", handleScrollOrResize, true);
+    window.addEventListener("resize", handleScrollOrResize);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("scroll", handleScrollOrResize, true);
+      window.removeEventListener("resize", handleScrollOrResize);
+    };
+  }, [open, updatePosition]);
+
+  // Scroll selected option into view when opened
+  useEffect(() => {
+    if (open && selectedItemRef.current) {
+      selectedItemRef.current.scrollIntoView({ block: "nearest" });
+    }
+  }, [open]);
 
   const effectiveOptions = options && options.length > 0 ? options : TIME_SLOT_OPTIONS;
   const selectedOpt = effectiveOptions.find((o) => o.value === value);
@@ -363,9 +438,13 @@ function ModernTimeSelect({
         </label>
       )}
       <button
+        ref={buttonRef}
         type="button"
         disabled={disabled}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => {
+          updatePosition();
+          setOpen((prev) => !prev);
+        }}
         className={`w-full flex items-center justify-between ${compact ? "h-8 px-2 rounded-lg" : "px-3.5 py-2 rounded-xl"
           } border bg-white text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${isInvalid
             ? "border-rose-300 bg-rose-50/30 text-rose-800"
@@ -386,38 +465,53 @@ function ModernTimeSelect({
         />
       </button>
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.12 }}
-            className="absolute left-0 min-w-32.5 w-full top-full mt-1 max-h-52 overflow-y-auto rounded-xl border border-gray-100 bg-white shadow-xl z-50 p-1 divide-y divide-gray-50/80"
-          >
-            {effectiveOptions.map((opt) => {
-              const isSelected = opt.value === value;
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => {
-                    onChange(opt.value);
-                    setOpen(false);
-                  }}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${isSelected
-                    ? "bg-[#c0166a] text-white font-bold"
-                    : "text-gray-700 hover:bg-magenta-50 hover:text-magenta-900"
-                    }`}
-                >
-                  <span>{opt.label}</span>
-                  {isSelected && <Check className="w-3.5 h-3.5 text-white shrink-0" />}
-                </button>
-              );
-            })}
-          </motion.div>
+      {typeof document !== "undefined" &&
+        createPortal(
+          <AnimatePresence>
+            {open && coords && (
+              <motion.div
+                ref={menuRef}
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={{ duration: 0.12 }}
+                style={{
+                  position: "fixed",
+                  left: `${coords.left}px`,
+                  width: `${coords.width}px`,
+                  top: coords.placement === "bottom" ? `${coords.top}px` : undefined,
+                  bottom: coords.placement === "top" ? `${coords.bottom}px` : undefined,
+                  maxHeight: `${coords.maxHeight}px`,
+                  zIndex: 9999,
+                }}
+                className="overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-2xl p-1 divide-y divide-gray-50/80"
+              >
+                {effectiveOptions.map((opt) => {
+                  const isSelected = opt.value === value;
+                  return (
+                    <button
+                      key={opt.value}
+                      ref={isSelected ? selectedItemRef : undefined}
+                      type="button"
+                      onClick={() => {
+                        onChange(opt.value);
+                        setOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${isSelected
+                        ? "bg-[#c0166a] text-white font-bold"
+                        : "text-gray-700 hover:bg-magenta-50 hover:text-magenta-900"
+                        }`}
+                    >
+                      <span>{opt.label}</span>
+                      {isSelected && <Check className="w-3.5 h-3.5 text-white shrink-0" />}
+                    </button>
+                  );
+                })}
+              </motion.div>
+            )}
+          </AnimatePresence>,
+          document.body
         )}
-      </AnimatePresence>
     </div>
   );
 }
@@ -2960,24 +3054,6 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                 </div>
 
                 {/* Conflict Warning & Action Block */}
-                {scheduleConflicts.length > 0 && (
-                  <div className="rounded-2xl border-2 border-red-300 bg-red-50/95 p-4 sm:p-5 shadow-sm space-y-3 text-left">
-                    <div className="flex items-start gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="mt-2 space-y-1.5 text-xs text-red-800">
-                          {scheduleConflicts.map((c, idx) => (
-                            <div key={idx} className="flex items-start gap-1.5 leading-relaxed">
-                              <span className="text-red-500 font-bold shrink-0">•</span>
-                              <span>
-                                <strong>{c.doctorName}</strong> <strong className="underline decoration-red-300 underline-offset-2">Doctor is not available</strong>.
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
 
                 {/* 2. Daily Schedule Card */}
                 <div className="bg-white rounded-2xl border border-gray-200/80 p-5 sm:p-6 shadow-xs space-y-4">
@@ -3076,6 +3152,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                       );
 
                       const coWorkingForDay = coWorkingDoctors.filter((c) => c.day === day);
+                      const dayConflict = scheduleConflicts.find((c) => c.day === day);
                       const hasDayConflict = scheduleConflicts.some((c) => c.day === day);
 
                       return (
@@ -3146,8 +3223,13 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                                   )}
                                   {hasDayConflict && (
                                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-800 font-bold border border-red-300 flex items-center gap-1 shadow-2xs">
-                                      <AlertTriangle className="w-3 h-3 text-red-600" />
-                                      <span>Conflict (Other Clinic)</span>
+                                      <AlertTriangle className="w-3 h-3 text-red-600 shrink-0" />
+                                      <span>
+                                        <strong>{dayConflict?.doctorName || selectedDoctor?.name}</strong>{" "}
+                                        <strong className="underline decoration-red-300 underline-offset-2">
+                                          Doctor is not available
+                                        </strong>
+                                      </span>
                                     </span>
                                   )}
                                 </div>
