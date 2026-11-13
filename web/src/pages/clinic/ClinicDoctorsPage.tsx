@@ -3770,7 +3770,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                 <div className="mb-3 flex items-start gap-2.5 text-xs font-semibold text-red-800 bg-red-50 border border-red-200 rounded-xl px-4 py-3 shadow-2xs">
                   <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                   <div>
-                    <span className="font-bold text-red-900">Doctor is not available:</span> Overlapping duty hours detected with another clinic branch. Please select non-overlapping hours to enable saving.
+                    <span className="font-bold text-red-900">Doctor is not available:</span> Please select non-overlapping hours to enable saving.
                   </div>
                 </div>
               )}
