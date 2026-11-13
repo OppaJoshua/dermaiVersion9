@@ -109,6 +109,8 @@ interface DoctorRow {
   duty_schedule?: any;
   status?: string | null;
   specialization?: string | null;
+  specializations?: string[] | null;
+  doctor_specializations?: any;
   user?: { avatar_url?: string | null } | null;
   avatar_url?: string | null;
   weekly_schedule?: DoctorWeeklySchedule;
@@ -483,7 +485,17 @@ export function SelectAlternateDoctorModal({
           if (doctorList.length === 0) {
             let query = supabase
               .from("clinic_doctor")
-              .select("*, user:user_id(avatar_url)")
+              .select(`
+                *,
+                user:user_id(avatar_url),
+                doctor_specializations (
+                  specialization_id,
+                  specializations (
+                    id,
+                    name
+                  )
+                )
+              `)
               .eq("clinic_id", targetClinicId);
 
             if (prevDocId) {
@@ -495,7 +507,72 @@ export function SelectAlternateDoctorModal({
               doctorList = docRows;
             }
           }
+
+          // Fetch doctor_specializations junction records for any doctors that don't have them loaded (e.g. from RPC)
+          if (doctorList.length > 0) {
+            const docIdsNeedingSpecs = doctorList
+              .filter((d: any) => !Array.isArray(d.doctor_specializations) || d.doctor_specializations.length === 0)
+              .map((d: any) => d.doctor_id)
+              .filter(Boolean);
+
+            if (docIdsNeedingSpecs.length > 0) {
+              try {
+                const { data: specRows, error: specErr } = await supabase
+                  .from("doctor_specializations")
+                  .select(`
+                    doctor_id,
+                    specialization_id,
+                    specializations (
+                      id,
+                      name
+                    )
+                  `)
+                  .in("doctor_id", docIdsNeedingSpecs);
+
+                if (!specErr && Array.isArray(specRows) && specRows.length > 0) {
+                  const specsByDocId = new Map<string, any[]>();
+                  for (const row of specRows as any[]) {
+                    const dId = String(row.doctor_id);
+                    if (!specsByDocId.has(dId)) {
+                      specsByDocId.set(dId, []);
+                    }
+                    specsByDocId.get(dId)!.push(row);
+                  }
+
+                  doctorList = doctorList.map((d: any) => {
+                    const dId = String(d.doctor_id);
+                    if (specsByDocId.has(dId)) {
+                      return {
+                        ...d,
+                        doctor_specializations: specsByDocId.get(dId),
+                      };
+                    }
+                    return d;
+                  });
+                }
+              } catch (err) {
+                console.warn("[SelectAlternateDoctorModal] Could not fetch doctor_specializations:", err);
+              }
+            }
+          }
         }
+
+        // Check localStorage cache (from ClinicDoctorsPage / AppointmentPage)
+        const localCachedDoctors: any[] = [];
+        try {
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith("dermai_clinic_doctors")) {
+              const val = localStorage.getItem(k);
+              if (val) {
+                const parsed = JSON.parse(val);
+                if (Array.isArray(parsed)) {
+                  localCachedDoctors.push(...parsed);
+                }
+              }
+            }
+          }
+        } catch { }
 
         // 5. Fallback to localStorage if no doctors found in database
         if (doctorList.length === 0) {
@@ -515,6 +592,7 @@ export function SelectAlternateDoctorModal({
                   doctor_name: d.doctor_name || d.name || "Specialist",
                   prc_license: d.prc_license || d.prcLicense || null,
                   specialization: d.specialization || "Dermatology Specialist",
+                  specializations: Array.isArray(d.specializations) ? d.specializations : undefined,
                   photo_url: d.photo_url || d.photo || null,
                   duty_days: d.duty_days || d.dutyDays || null,
                   duty_start_time: d.duty_start_time || d.dutyStartTime || null,
@@ -527,7 +605,7 @@ export function SelectAlternateDoctorModal({
           } catch { }
         }
 
-        // 6. Active & Availability Constraints
+        // 6. Active & Availability Constraints and Real Specialization Resolution
         let filtered: DoctorRow[] = doctorList
           .filter((d) => {
             if (String(d.clinic_id) !== String(targetClinicId)) return false;
@@ -541,7 +619,69 @@ export function SelectAlternateDoctorModal({
             const hasValidHours = isDoctorDutyValid(d);
             return hasDutyDays && hasValidHours;
           })
-          .map((d) => {
+          .map((d: any) => {
+            // Find match in localCachedDoctors
+            const localMatch = localCachedDoctors.find((cd: any) => {
+              if (cd.doctor_id && d.doctor_id && String(cd.doctor_id) === String(d.doctor_id)) return true;
+              if (cd.id && d.doctor_id && String(cd.id) === String(d.doctor_id)) return true;
+              if (cd.doctor_name && d.doctor_name && String(cd.doctor_name).toLowerCase().trim() === String(d.doctor_name).toLowerCase().trim()) return true;
+              if (cd.name && d.doctor_name && String(cd.name).toLowerCase().trim() === String(d.doctor_name).toLowerCase().trim()) return true;
+              return false;
+            });
+
+            // Real specializations extraction (junction table, local cache, or fields) matching AppointmentPage
+            let resolvedSpecializations: string[] = [];
+
+            // 1. From doctor_specializations junction table join
+            if (Array.isArray(d.doctor_specializations) && d.doctor_specializations.length > 0) {
+              resolvedSpecializations = d.doctor_specializations
+                .map((ds: any) => {
+                  const specObj = Array.isArray(ds?.specializations) ? ds.specializations[0] : ds?.specializations;
+                  return specObj?.name || ds?.name;
+                })
+                .map((s: any) => String(s || "").trim())
+                .filter(Boolean);
+            }
+
+            // 2. From localMatch (Clinic roster cache from ClinicDoctorsPage / AppointmentPage)
+            if (resolvedSpecializations.length === 0 && localMatch) {
+              if (Array.isArray(localMatch.specializations) && localMatch.specializations.length > 0) {
+                resolvedSpecializations = localMatch.specializations
+                  .map((s: any) => (typeof s === "string" ? s : s?.name))
+                  .map((s: any) => String(s || "").trim())
+                  .filter(Boolean);
+              } else if (localMatch.specialization && typeof localMatch.specialization === "string") {
+                resolvedSpecializations = localMatch.specialization
+                  .split(",")
+                  .map((s: string) => s.trim())
+                  .filter(Boolean);
+              }
+            }
+
+            // 3. From d.specializations array
+            if (resolvedSpecializations.length === 0 && Array.isArray(d.specializations) && d.specializations.length > 0) {
+              resolvedSpecializations = d.specializations
+                .map((s: any) => (typeof s === "string" ? s : s?.name))
+                .map((s: any) => String(s || "").trim())
+                .filter(Boolean);
+            }
+
+            // 4. From d.specialization string (if not generic placeholder)
+            if (resolvedSpecializations.length === 0 && d.specialization && typeof d.specialization === "string") {
+              const parts = d.specialization
+                .split(/[,•|/]/)
+                .map((s: string) => s.trim())
+                .filter(Boolean);
+              if (parts.length > 0 && parts[0].toLowerCase() !== "general dermatology") {
+                resolvedSpecializations = parts;
+              }
+            }
+
+            // 5. Default fallback only if genuinely no specializations exist
+            if (resolvedSpecializations.length === 0) {
+              resolvedSpecializations = ["General Dermatology"];
+            }
+
             const rawSchedObj = d.duty_schedule;
             const parsedSchedule = parseDoctorSchedule(
               rawSchedObj,
@@ -549,8 +689,11 @@ export function SelectAlternateDoctorModal({
               d.duty_start_time || clinicOpen,
               d.duty_end_time || clinicClose
             );
+
             return {
               ...d,
+              specializations: resolvedSpecializations,
+              specialization: resolvedSpecializations.join(", "),
               weekly_schedule: parsedSchedule,
             };
           });
@@ -687,38 +830,26 @@ export function SelectAlternateDoctorModal({
     return availableDoctors.find((d) => d.doctor_id === selectedDoctorId) || null;
   }, [availableDoctors, selectedDoctorId]);
 
-  // Selected doctor specializations parsed into individual pills
+  // Helper: Extract doctor specializations list matching AppointmentPage format
+  const getDoctorSpecializationsList = (doc: DoctorRow | null | undefined): string[] => {
+    if (!doc) return [];
+    if (Array.isArray(doc.specializations) && doc.specializations.length > 0) {
+      return doc.specializations.map((s) => String(s).trim()).filter(Boolean);
+    }
+    if (doc.specialization && typeof doc.specialization === "string") {
+      const parts = doc.specialization
+        .split(/[,•|/]/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (parts.length > 0) return parts;
+    }
+    return ["General Dermatology"];
+  };
+
+  // Selected doctor specializations parsed into list
   const selectedDoctorSpecializations = useMemo(() => {
-    if (!selectedDoctor?.specialization) return ["Dermatology Specialist"];
-    const split = selectedDoctor.specialization
-      .split(/[,/]/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    return split.length > 0 ? split : [selectedDoctor.specialization];
-  }, [selectedDoctor?.specialization]);
-
-  // Calculate duty days display string for a doctor
-  const formatDutyDays = (doc: DoctorRow): string => {
-    const days = getDoctorDutyDays(doc);
-    if (days.length > 0) {
-      if (days.length === 7) return "Mon – Sun (All week)";
-      const dayOrder = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-      const sorted = [...days].sort((a, b) => dayOrder.indexOf(a) - dayOrder.indexOf(b));
-      return sorted.map((d) => d.slice(0, 3)).join(", ");
-    }
-    return "Schedule upon request";
-  };
-
-  // Calculate duty hours display string for a doctor
-  const formatDutyHours = (doc: DoctorRow): string => {
-    if (doc.duty_start_time && doc.duty_end_time) {
-      return `${formatTime12h(doc.duty_start_time)} - ${formatTime12h(doc.duty_end_time)}`;
-    }
-    if (doc.duty_start_time) {
-      return `From ${formatTime12h(doc.duty_start_time)}`;
-    }
-    return "Clinic Operating Hours";
-  };
+    return getDoctorSpecializationsList(selectedDoctor);
+  }, [selectedDoctor]);
 
   // Standard 7-column calendar grid mapping logic (42 cells) exactly like AppointmentPage.tsx
   const calendarGridDays = useMemo(() => {
@@ -1228,8 +1359,15 @@ export function SelectAlternateDoctorModal({
             const syntheticRejId = `appt-rejected-${appointment.id}`;
             if (!existingRead.includes(syntheticRejId)) {
               existingRead.push(syntheticRejId);
-              localStorage.setItem(readKey, JSON.stringify(existingRead));
             }
+            if (appointment.doctorReviewedAt) {
+              const stamp = new Date(appointment.doctorReviewedAt).getTime();
+              const stampId = `appt-rejected-${appointment.id}-${stamp}`;
+              if (!existingRead.includes(stampId)) {
+                existingRead.push(stampId);
+              }
+            }
+            localStorage.setItem(readKey, JSON.stringify(existingRead));
           } catch { }
 
           await supabase
@@ -1714,18 +1852,21 @@ export function SelectAlternateDoctorModal({
               </div>
             ) : (
               <div ref={doctorDropdownRef} className="relative w-full">
-                {/* Compact Trigger Button */}
+                {/* Compact Dropdown Trigger Button */}
                 <button
                   type="button"
+                  disabled={availableDoctors.length <= 1}
                   onClick={() => setIsDoctorDropdownOpen((prev) => !prev)}
-                  className={`w-full flex items-center justify-between p-2.5 sm:p-3 rounded-2xl border bg-white transition-all cursor-pointer text-left ${
+                  className={`w-full flex items-center justify-between p-2.5 sm:p-3 rounded-2xl border bg-white transition-all text-left ${
                     isDoctorDropdownOpen
-                      ? "border-magenta-700 ring-2 ring-magenta-500/10 shadow-xs"
-                      : "border-magenta-200/90 hover:border-magenta-400 hover:bg-pink-50/15 shadow-2xs"
+                      ? "border-[#801336] ring-2 ring-[#801336]/10 shadow-xs"
+                      : availableDoctors.length > 1
+                        ? "border-pink-200/90 hover:border-pink-300 hover:bg-pink-50/20 cursor-pointer shadow-2xs"
+                        : "border-pink-200/80 shadow-2xs cursor-default"
                   }`}
                 >
                   {selectedDoctor ? (
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className="flex items-center gap-3 sm:gap-3.5 min-w-0 flex-1">
                       <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full border-2 border-pink-300 p-0.5 shrink-0 flex items-center justify-center bg-white shadow-2xs">
                         <DoctorAvatar
                           doctorId={selectedDoctor.doctor_id}
@@ -1736,51 +1877,47 @@ export function SelectAlternateDoctorModal({
                         />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-bold text-gray-900 text-sm truncate">
-                            Dr. {selectedDoctor.doctor_name.replace(/^dr\.\s*/i, "")}
-                          </span>
-                          {selectedDoctor.prc_license && (
-                            <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-md border border-gray-200/70 shrink-0">
-                              PRC #{selectedDoctor.prc_license}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                          {selectedDoctorSpecializations.map((spec, idx) => (
-                            <span
-                              key={idx}
-                              className="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-pink-50/60 text-[#801336] font-medium border border-pink-200/80"
-                            >
-                              {spec}
-                            </span>
-                          ))}
-                        </div>
+                        <span className="font-bold text-gray-900 text-sm sm:text-base block truncate">
+                          Dr. {selectedDoctor.doctor_name.replace(/^dr\.\s*/i, "")}
+                        </span>
+                        <p className="text-[11px] sm:text-xs text-magenta-700 font-medium truncate mt-0.5">
+                          {selectedDoctorSpecializations.join(", ")}
+                        </p>
                       </div>
                     </div>
                   ) : (
-                    <span className="text-xs text-gray-400 font-medium">Select a doctor...</span>
+                    <div className="flex items-center gap-3 sm:gap-3.5 min-w-0 flex-1 py-0.5">
+                      <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full border-2 border-dashed border-pink-300 p-0.5 shrink-0 flex items-center justify-center bg-pink-50/50 text-[#801336]">
+                        <Stethoscope className="w-5 h-5 sm:w-6 sm:h-6" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="font-bold text-gray-800 text-sm sm:text-base block">
+                          Select an attending doctor
+                        </span>
+                        <p className="text-[11px] text-gray-500 mt-0.5">
+                          {availableDoctors.length > 0
+                            ? `${availableDoctors.length} ${availableDoctors.length === 1 ? "doctor" : "doctors"} available · Click to choose`
+                            : "Click to choose an attending specialist"}
+                        </p>
+                      </div>
+                    </div>
                   )}
 
-                  <div className="flex items-center gap-2 shrink-0 ml-3">
-                    <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 hidden xs:inline-block">
-                      No extra charge
-                    </span>
+                  {availableDoctors.length > 1 && (
                     <ChevronDown
-                      className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${
-                        isDoctorDropdownOpen ? "rotate-180 text-magenta-600" : ""
+                      className={`w-4 h-4 text-gray-400 shrink-0 ml-3 transition-transform duration-200 ${
+                        isDoctorDropdownOpen ? "rotate-180 text-[#801336]" : ""
                       }`}
                     />
-                  </div>
+                  )}
                 </button>
 
-                {/* Dropdown Menu (List of doctors) */}
-                {isDoctorDropdownOpen && (
-                  <div className="absolute left-0 right-0 top-full mt-1.5 max-h-56 overflow-y-auto rounded-2xl border border-gray-200 bg-white shadow-xl z-50 p-1.5 space-y-1 divide-y divide-gray-50">
+                {/* Dropdown Popover */}
+                {isDoctorDropdownOpen && availableDoctors.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1.5 max-h-60 overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-2xl z-50 p-1.5 divide-y divide-gray-50 animate-in fade-in slide-in-from-top-1 duration-150">
                     {availableDoctors.map((doc) => {
                       const isSelected = selectedDoctorId === doc.doctor_id;
-                      const dutyDaysStr = formatDutyDays(doc);
-                      const dutyHoursStr = formatDutyHours(doc);
+                      const specsText = getDoctorSpecializationsList(doc).join(", ");
 
                       return (
                         <button
@@ -1806,31 +1943,16 @@ export function SelectAlternateDoctorModal({
                               className="w-9 h-9 rounded-full border border-pink-200 shrink-0"
                             />
                             <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <p className="text-xs sm:text-sm font-bold text-gray-900 truncate">
-                                  Dr. {doc.doctor_name.replace(/^dr\.\s*/i, "")}
-                                </p>
-                                {doc.prc_license && (
-                                  <span className="text-[9px] font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.2 rounded border border-gray-200 shrink-0">
-                                    PRC #{doc.prc_license}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-1.5 text-[10px] text-gray-500 mt-0.5 truncate">
-                                <span className="text-magenta-700 font-medium truncate">
-                                  {doc.specialization || "Dermatology Specialist"}
-                                </span>
-                                <span className="text-emerald-700 font-semibold shrink-0">
-                                  • {dutyDaysStr} ({dutyHoursStr})
-                                </span>
-                              </div>
+                              <p className="text-xs sm:text-sm font-bold text-gray-900 truncate">
+                                Dr. {doc.doctor_name.replace(/^dr\.\s*/i, "")}
+                              </p>
+                              <p className="text-[11px] text-magenta-700 font-medium truncate mt-0.5">
+                                {specsText}
+                              </p>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2 shrink-0 ml-2">
-                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                              No extra charge
-                            </span>
+                          <div className="w-5 flex items-center justify-end shrink-0 ml-2">
                             {isSelected && (
                               <Check className="w-4 h-4 text-magenta-600 stroke-[3]" />
                             )}
@@ -1859,17 +1981,20 @@ export function SelectAlternateDoctorModal({
                 </div>
               </div>
 
-              <div className="rounded-xl border border-gray-200 p-5 space-y-5">
-                {/* Standard 7-column calendar grid (slightly compact for modal) */}
-                <div className="space-y-2.5 sm:space-y-1">
+              <div className="bg-white rounded-2xl sm:rounded-3xl border border-gray-200/90 p-3.5 sm:p-4.5 shadow-xs space-y-4">
+                {/* Minimal Landscape Calendar Card (Compact for modal) */}
+                <div className="space-y-2.5 sm:space-y-3">
 
                   {/* Month Title & Prev/Next Navigation */}
-                  <div className="flex items-center justify-between gap-3 pb-2 border-b border-gray-100">
+                  <div className="flex items-center justify-between gap-3 pb-2.5 border-b border-gray-100">
                     <div>
-                      <h4 className="text-sm sm:text-base font-bold text-gray-900 flex items-center gap-2">
+                      <h3 className="text-sm sm:text-base font-bold text-gray-900 flex items-center gap-2">
                         <Calendar className="w-4 h-4 text-magenta-600" />
                         <span>{calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
-                      </h4>
+                      </h3>
+                      <p className="text-[11px] sm:text-xs text-gray-500 mt-0.5">
+                        Selected: <strong className="text-magenta-700 font-bold">{formattedPreviewDate}</strong>
+                      </p>
                     </div>
 
                     <div className="flex items-center gap-1.5">
@@ -1882,7 +2007,7 @@ export function SelectAlternateDoctorModal({
                             setCalendarMonth(prev);
                           }
                         }}
-                        className="px-2 py-1 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                        className="px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-lg sm:rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
                         title="Previous month"
                       >
                         <ChevronLeft className="w-3.5 h-3.5" />
@@ -1894,7 +2019,7 @@ export function SelectAlternateDoctorModal({
                           const next = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1);
                           setCalendarMonth(next);
                         }}
-                        className="px-2 py-1 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                        className="px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-lg sm:rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
                         title="Next month"
                       >
                         <span>Next</span>
@@ -1915,12 +2040,13 @@ export function SelectAlternateDoctorModal({
                     ))}
                   </div>
 
-                  {/* Minimal Landscape Calendar Grid (42 cells - compact) */}
+                  {/* Minimal Landscape Calendar Grid */}
                   <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
                     {calendarGridDays.map((cell, idx) => {
                       const isSelected = selectedDate === cell.dateStr;
                       const isToday = cell.isToday;
-                      const isDisabled = cell.isDisabled || !cell.inCurrentMonth;
+                      const isAvailable = !cell.isPast && cell.inCurrentMonth && cell.hasDoctorsOnDuty;
+                      const isDisabled = cell.isDisabled || !cell.inCurrentMonth || !isAvailable;
 
                       return (
                         <button
@@ -1933,32 +2059,37 @@ export function SelectAlternateDoctorModal({
                               setSlotConflictWarning(null);
                             }
                           }}
-                          className={`min-h-[44px] sm:min-h-[48px] p-1.5 sm:p-2 rounded-xl border text-left transition-all relative flex flex-col justify-between ${isSelected
-                            ? "border-2 border-magenta-600 bg-magenta-50/70 ring-2 ring-magenta-500/20 shadow-xs"
+                          className={`min-h-[46px] sm:min-h-[50px] p-1.5 sm:p-2 rounded-xl border text-left transition-all relative flex flex-col justify-between ${isSelected
+                            ? "border-2 border-magenta-600 bg-magenta-50/90 ring-2 ring-magenta-500/20 shadow-xs cursor-pointer"
                             : isDisabled
-                              ? "border-gray-100 bg-slate-50/40 text-gray-300 cursor-not-allowed"
+                              ? "border-[#f2e5eb] bg-[#faf4f6] text-[#c4b0b8] cursor-not-allowed select-none"
                               : isToday
-                                ? "border-magenta-300 bg-pink-50/20 hover:border-magenta-400 hover:shadow-2xs cursor-pointer"
-                                : "border-gray-200/80 bg-white hover:border-magenta-300 hover:bg-slate-50/40 hover:shadow-2xs cursor-pointer"
+                                ? "border-magenta-300 bg-pink-50/40 hover:border-magenta-400 hover:bg-pink-50/60 hover:shadow-2xs cursor-pointer"
+                                : "border-pink-200/90 bg-white hover:border-magenta-400 hover:bg-pink-50/20 hover:shadow-2xs cursor-pointer"
                             }`}
                         >
                           {/* Top row: Date Number & Today / Selected indicator */}
                           <div className="flex items-center justify-between w-full">
                             <span
-                              className={`text-xs font-bold leading-none ${isSelected
-                                ? "text-magenta-800"
-                                : isToday
-                                  ? "text-magenta-600"
-                                  : !cell.inCurrentMonth || cell.isPast
-                                    ? "text-gray-300"
-                                    : "text-gray-800"
+                              className={`text-xs sm:text-[13px] font-bold leading-none ${isSelected
+                                ? "text-magenta-900"
+                                : isToday && !isDisabled
+                                  ? "text-magenta-700"
+                                  : isDisabled
+                                    ? "text-[#c4b0b8]"
+                                    : "text-gray-900"
                                 }`}
                             >
                               {cell.dayNum}
                             </span>
 
                             {isToday && (
-                              <span className="text-[7px] sm:text-[8px] font-bold px-1 sm:px-1.5 py-0.5 rounded-full bg-magenta-100 text-magenta-700 leading-none">
+                              <span
+                                className={`text-[7px] sm:text-[8px] font-bold px-1 sm:px-1.5 py-0.5 rounded-full leading-none ${isDisabled
+                                  ? "bg-[#f0e2e8] text-[#aa939d]"
+                                  : "bg-magenta-100 text-magenta-700"
+                                  }`}
+                              >
                                 Today
                               </span>
                             )}
@@ -1968,35 +2099,26 @@ export function SelectAlternateDoctorModal({
                             )}
                           </div>
 
-                          {/* Empty bottom spacer to keep date numbers aligned at top */}
-                          <div className="min-h-[6px] sm:min-h-[8px]">&nbsp;</div>
+                          {/* Empty alignment spacer to keep date numbers aligned at top */}
+                          <div className="min-h-[4px] sm:min-h-[6px]" aria-hidden="true" />
                         </button>
                       );
                     })}
                   </div>
 
-                  {/* Selected Date Summary Banner */}
-                  {selectedDate && (
-                    <div className="p-2 sm:p-2.5 rounded-xl bg-magenta-50/50 border border-magenta-100 flex items-center justify-between gap-2 text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="text-gray-600 font-medium">Selected date:</span>
-                        <strong className="text-gray-900 font-bold">
-                          {formattedPreviewDate}
-                        </strong>
-                      </div>
-                      <span
-                        className={`font-semibold px-2 py-0.5 rounded-md text-[11px] ${selectedDateRecord?.isAvailable
-                          ? "bg-emerald-100 text-emerald-800"
-                          : "bg-amber-100 text-amber-800"
-                          }`}
-                      >
-                        {selectedDateRecord?.isAvailable ? "Available" : (selectedDateRecord?.reason || "Available")}
+                  {/* Minimal Calendar Legend */}
+                  <div className="flex items-center justify-between pt-2 border-t border-gray-100 text-[9px] sm:text-[10px] text-gray-500">
+                    <div className="flex items-center gap-2.5 sm:gap-3">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-md border border-pink-200/90 bg-white inline-block shadow-2xs" /> Available
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-md border border-[#f2e5eb] bg-[#faf4f6] inline-block" /> Not Available
                       </span>
                     </div>
-                  )}
-
-                  {/* Calendar Legend */}
-                  <div className="flex items-center justify-between pt-1 text-[10px] text-gray-500">
+                    <span className="flex items-center gap-1.5 font-semibold text-magenta-700">
+                      <span className="w-2.5 h-2.5 rounded-full bg-magenta-600 inline-block ring-1 ring-magenta-200" /> Selected Date
+                    </span>
                   </div>
                 </div>
 

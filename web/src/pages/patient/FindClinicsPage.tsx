@@ -222,6 +222,20 @@ const CONDITION_SYNONYMS: Record<string, string[]> = {
     ],
 };
 
+function normalizeSearchText(str: string | null | undefined): string {
+    if (!str) return "";
+    return str
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function tokenizeSearchQuery(query: string): string[] {
+    const normalized = normalizeSearchText(query);
+    return normalized ? normalized.split(/\s+/).filter(Boolean) : [];
+}
+
 function clinicTreatsCondition(clinic: ClinicItem, condition: string): boolean {
     if (!condition || condition === "Assessment Queued") return true;
     const condLower = condition.toLowerCase().trim();
@@ -819,19 +833,30 @@ export default function FindClinicsPage() {
         });
 
         const filtered = enriched.filter((clinic) => {
-            const q = searchQuery.toLowerCase().trim();
-            const matchesSearch =
-                !q ||
-                clinic.name.toLowerCase().includes(q) ||
-                clinic.address.toLowerCase().includes(q) ||
-                clinic.doctors.some((doc) => doc.name.toLowerCase().includes(q) || doc.specialization.toLowerCase().includes(q)) ||
-                clinic.conditionsTreated.some((cond) => {
-                    const cLower = cond.toLowerCase();
-                    if (cLower.includes(q)) return true;
-                    const syns = CONDITION_SYNONYMS[cLower];
-                    return syns ? syns.some((s) => s.includes(q) || q.includes(s)) : false;
-                }) ||
-                clinic.description.toLowerCase().includes(q);
+            const queryTokens = tokenizeSearchQuery(searchQuery);
+            let matchesSearch = true;
+
+            if (queryTokens.length > 0) {
+                const searchableFields = [
+                    clinic.name,
+                    clinic.address,
+                    clinic.district,
+                    clinic.description,
+                    ...(clinic.doctors || []).flatMap((doc) => [doc?.name, doc?.specialization]),
+                    ...(clinic.conditionsTreated || []).flatMap((cond) => {
+                        if (!cond) return [];
+                        const cLower = String(cond).toLowerCase().trim();
+                        const syns = CONDITION_SYNONYMS[cLower];
+                        return syns ? [cond, ...syns] : [cond];
+                    }),
+                ]
+                    .filter(Boolean)
+                    .map(normalizeSearchText);
+
+                matchesSearch = queryTokens.every((token) =>
+                    searchableFields.some((field) => field.includes(token))
+                );
+            }
 
             const matchesDistrict = selectedDistrict === "All Districts" || clinic.district === selectedDistrict;
             const matchesTab = activeTab === "all" || savedClinicIds.includes(clinic.id);
@@ -1896,12 +1921,18 @@ export default function FindClinicsPage() {
                                 <Search className="w-6 h-6 text-gray-300" />
                             </div>
                             <p className="text-xs font-bold text-gray-900 mb-1">
-                                {dbClinics.length === 0 ? "No clinics registered yet" : "No clinics match your filters"}
+                                {dbClinics.length === 0
+                                    ? "No clinics registered yet"
+                                    : searchQuery.trim()
+                                        ? `No clinics found matching "${searchQuery.trim()}"`
+                                        : "No clinics match your filters"}
                             </p>
                             <p className="text-[11px] text-gray-400 mb-3">
                                 {dbClinics.length === 0
                                     ? "Registered partner clinics will appear here."
-                                    : "Try resetting filters or adjusting search terms."}
+                                    : searchQuery.trim()
+                                        ? "Check for typos or try clearing your search."
+                                        : "Try resetting filters or adjusting search terms."}
                             </p>
                             {dbClinics.length === 0 ? (
                                 <button
@@ -1910,8 +1941,28 @@ export default function FindClinicsPage() {
                                 >
                                     <Building2 className="w-3.5 h-3.5" /> Partner With Us
                                 </button>
+                            ) : searchQuery.trim() ? (
+                                <div className="flex items-center justify-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setSearchQuery("")}
+                                        className="px-3.5 py-1.5 rounded-xl bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors cursor-pointer"
+                                    >
+                                        Clear search
+                                    </button>
+                                    {hasActiveFilters && (
+                                        <button
+                                            type="button"
+                                            onClick={resetAllFilters}
+                                            className="px-3.5 py-1.5 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+                                        >
+                                            Reset all filters
+                                        </button>
+                                    )}
+                                </div>
                             ) : (
                                 <button
+                                    type="button"
                                     onClick={resetAllFilters}
                                     className="px-3 py-1.5 rounded-xl bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition-colors cursor-pointer"
                                 >

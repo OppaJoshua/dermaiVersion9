@@ -401,6 +401,8 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
   const [loadingClinic, setLoadingClinic] = useState(true);
   const [showClinicDetailsModal, setShowClinicDetailsModal] = useState(false);
   const [showInstructionsModal, setShowInstructionsModal] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -2088,6 +2090,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
 
   const handlePrevStep = () => {
     setSubmitError(null);
+    setTermsAccepted(false);
     setCurrentStep(1);
     if (searchParams.get("step") === "2") {
       if (window.history.length > 1) {
@@ -2109,6 +2112,10 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     setSubmitError(null);
 
     if (!validateStep(1) || !validateStep(2) || !selectedClinic) {
+      return;
+    }
+
+    if (!termsAccepted) {
       return;
     }
 
@@ -5171,6 +5178,33 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                             Payable Online
                           </span>
                         </div>
+
+                        {/* Agreement Acknowledgment Checkbox */}
+                        <div className="pt-2.5 pb-0.5 border-t border-gray-200/70">
+                          <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={termsAccepted}
+                              onChange={(e) => setTermsAccepted(e.target.checked)}
+                              className="mt-0.5 w-4 h-4 rounded text-magenta-600 border-gray-300 focus:ring-magenta-500 focus:ring-offset-0 cursor-pointer accent-magenta-600 shrink-0"
+                            />
+                            <span className="text-[11px] leading-snug text-gray-600">
+                              I have read and agree to the{" "}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setShowTermsModal(true);
+                                }}
+                                className="text-magenta-600 hover:text-magenta-700 underline underline-offset-2 font-semibold cursor-pointer"
+                              >
+                                appointment terms and payment conditions
+                              </button>
+                              .
+                            </span>
+                          </label>
+                        </div>
                       </div>
 
                       {/* Action Buttons */}
@@ -5180,6 +5214,7 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                           onClick={() => handleSubmitAppointment()}
                           disabled={
                             submitting ||
+                            !termsAccepted ||
                             !hasAuthoritativeOccupancy ||
                             Boolean(availabilityError) ||
                             (selectedSlot ? !selectedSlot.isAvailable && !isSelectedSlotOwnHold : true) ||
@@ -5360,6 +5395,107 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                     className="px-5 py-2 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
                   >
                     Got It
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+      </ModalPortal>
+
+      {/* ── Appointment Terms & Payment Conditions Modal ──────────── */}
+      <ModalPortal isOpen={Boolean(showTermsModal)}>
+        <AnimatePresence>
+          {showTermsModal && (
+            <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                className="relative z-[9999] w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 max-h-[90vh] flex flex-col text-left"
+              >
+                {/* Header */}
+                <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-gray-100 bg-pink-50/50 shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-2xl bg-magenta-100 text-[#801336] flex items-center justify-center shrink-0 shadow-2xs">
+                      <ShieldCheck className="w-5 h-5 text-magenta-700" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm sm:text-base font-bold text-gray-900">Appointment Terms &amp; Payment Conditions</h3>
+                      <p className="text-[11px] text-gray-500 mt-0.5">Consultation terms, review process, and payment reminders</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTermsModal(false)}
+                    className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Body */}
+                <div className="p-6 overflow-y-auto space-y-4 text-xs">
+                  {/* Payment and Appointment Confirmation */}
+                  <div className="p-4 rounded-2xl bg-gray-50/80 border border-gray-100 space-y-2">
+                    <h4 className="font-bold text-gray-900 text-xs sm:text-[13px] text-magenta-900">
+                      Payment and Appointment Confirmation
+                    </h4>
+                    <ul className="list-disc pl-4 space-y-1.5 text-gray-600 leading-relaxed text-[11px]">
+                      <li>The consultation fee is collected through the available payment provider.</li>
+                      <li>Successful payment confirms receipt of payment and secures the appointment request, subject to clinic and assigned dermatologist review.</li>
+                      <li>Payment does not automatically mean that the dermatologist has accepted or approved the consultation.</li>
+                    </ul>
+                  </div>
+
+                  {/* Rescheduling */}
+                  <div className="p-4 rounded-2xl bg-gray-50/80 border border-gray-100 space-y-2">
+                    <h4 className="font-bold text-gray-900 text-xs sm:text-[13px] text-magenta-900">
+                      Rescheduling
+                    </h4>
+                    <ul className="list-disc pl-4 space-y-1.5 text-gray-600 leading-relaxed text-[11px]">
+                      <li>Rescheduling requests are subject to clinic and dermatologist availability and approval.</li>
+                      <li>Submitting a rescheduling request does not automatically change the existing appointment schedule.</li>
+                    </ul>
+                  </div>
+
+                  {/* Cancellation and Refunds */}
+                  <div className="p-4 rounded-2xl bg-gray-50/80 border border-gray-100 space-y-2">
+                    <h4 className="font-bold text-gray-900 text-xs sm:text-[13px] text-magenta-900">
+                      Cancellation and Refunds
+                    </h4>
+                    <ul className="list-disc pl-4 space-y-1.5 text-gray-600 leading-relaxed text-[11px]">
+                      <li>Cancellation and refund requests are handled according to the clinic's disclosed cancellation and refund policy and applicable Philippine laws and regulations.</li>
+                      <li>Where the clinic cancels the appointment or cannot provide the paid service, the patient may contact the clinic for appropriate rescheduling or refund assistance, subject to applicable law.</li>
+                      <li>Duplicate or unsuccessful payment transactions should be reported for verification and appropriate correction.</li>
+                    </ul>
+                  </div>
+
+                  {/* Important */}
+                  <div className="p-4 rounded-2xl bg-pink-50/50 border border-pink-200/80 space-y-2">
+                    <h4 className="font-bold text-gray-900 text-xs sm:text-[13px] text-[#801336]">
+                      Important
+                    </h4>
+                    <ul className="list-disc pl-4 space-y-1.5 text-gray-600 leading-relaxed text-[11px]">
+                      <li>Patients should review their selected clinic, dermatologist, schedule, and consultation fee before proceeding to payment.</li>
+                      <li>For questions about cancellation, rescheduling, or refunds, patients may contact the selected clinic directly.</li>
+                    </ul>
+                  </div>
+
+                  {/* Legal Notice */}
+                  <p className="text-[10px] text-gray-400 italic leading-normal pt-1">
+                    Notice: This document provides product terms and payment disclosures and does not waive statutory consumer rights under Philippine law. Clinic-specific policies are subject to individual clinic terms and review by qualified legal counsel.
+                  </p>
+                </div>
+
+                {/* Footer */}
+                <div className="px-6 py-3.5 bg-gray-50/80 border-t border-gray-100 flex items-center justify-end shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowTermsModal(false)}
+                    className="px-5 py-2 rounded-xl bg-magenta-600 hover:bg-magenta-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+                  >
+                    Close
                   </button>
                 </div>
               </motion.div>

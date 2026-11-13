@@ -202,7 +202,29 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
       /review update|schedule conflict|declined|rejected/i.test(item.title || "");
 
     if (apptId && isRejectionAction) {
-      const rejectKey = `${apptId}:::rejected`;
+      const stableEventId =
+        item.metadata?.rejection_event_id ||
+        item.metadata?.event_id;
+
+      const docId =
+        item.metadata?.doctor_id ||
+        item.metadata?.declined_doctor_id ||
+        "";
+
+      const rejectStamp =
+        item.metadata?.declined_at ||
+        item.metadata?.rejection_timestamp ||
+        item.timestamp;
+
+      const timeNum = rejectStamp ? new Date(rejectStamp).getTime() : NaN;
+      const hasValidTime = Number.isFinite(timeNum);
+
+      const rejectKey = stableEventId
+        ? `${apptId}:::rejected:::${stableEventId}`
+        : (docId && hasValidTime)
+        ? `${apptId}:::rejected:::${docId}:::${timeNum}`
+        : `${apptId}:::rejected:::${item.id}`;
+
       if (seenApptActions.has(rejectKey)) continue;
       seenApptActions.add(rejectKey);
     } else if (apptId && (isDoctorAction || normType === "appointment-cancelled" || normType === "appointment-request")) {
@@ -211,19 +233,22 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
       seenApptActions.add(apptActionKey);
     }
 
-    // C. Content Fingerprint: normalized title + body
-    const normTitle = (item.title || "").trim().toLowerCase();
-    const normMsg = (item.message || "").trim().toLowerCase();
-    const contentKey = `${normTitle}:::${normMsg}`;
+    // C. Content Fingerprint: normalized title + body (for general/broadcast notices; appointment actions are deduplicated by seenApptActions)
+    if (!isRejectionAction && !isDoctorAction) {
+      const normTitle = (item.title || "").trim().toLowerCase();
+      const normMsg = (item.message || "").trim().toLowerCase();
+      const contentKey = `${normTitle}:::${normMsg}`;
 
-    if (normTitle && normMsg && seenContentKeys.has(contentKey)) {
-      continue;
+      if (normTitle && normMsg && seenContentKeys.has(contentKey)) {
+        continue;
+      }
+
+      if (normTitle && normMsg) {
+        seenContentKeys.add(contentKey);
+      }
     }
 
     seenIds.add(item.id);
-    if (normTitle && normMsg) {
-      seenContentKeys.add(contentKey);
-    }
     unique.push(item);
   }
 
@@ -351,12 +376,44 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
       reselectedMapLocal = JSON.parse(localStorage.getItem("dermai_reselected_appointments") || "{}");
     } catch { }
 
-    const isApptReselectionResolved = (targetApptId?: string): boolean => {
+    const isApptReselectionResolved = (targetApptId?: string, notifTimestamp?: string): boolean => {
       if (!targetApptId) return false;
-      if (reselectedMapLocal[targetApptId]) return true;
       const appt = apptById.get(String(targetApptId));
       if (!appt) return false;
-      const qa = appt.questionnaire_answers || {};
+
+      const docSt = String(appt.doctor_status || "").toLowerCase();
+      const rawStatus = String(appt.status || "").toLowerCase();
+      const isDeclined =
+        docSt === "rejected" ||
+        docSt === "declined" ||
+        rawStatus === "doctor_declined" ||
+        rawStatus === "reselection_required" ||
+        rawStatus === "rejected";
+
+      if (isDeclined) {
+        // If doctor rejection is currently active, re-selection is only resolved if a new reassignment
+        // happened strictly AFTER the rejection timestamp of the event being evaluated
+        const rejectionTime = notifTimestamp
+          ? new Date(notifTimestamp).getTime()
+          : (appt.doctor_reviewed_at ? new Date(appt.doctor_reviewed_at).getTime() : 0);
+
+        const localEntry = reselectedMapLocal[targetApptId];
+        const localResolvedTime = localEntry?.resolvedAt ? new Date(localEntry.resolvedAt).getTime() : 0;
+        const qa = (appt.questionnaire_answers && typeof appt.questionnaire_answers === "object") ? appt.questionnaire_answers : {};
+        const qaReassignedTime = qa.reassigned_at ? new Date(qa.reassigned_at).getTime() : 0;
+
+        if (
+          (localResolvedTime > rejectionTime && localResolvedTime > 0) ||
+          (qaReassignedTime > rejectionTime && qaReassignedTime > 0)
+        ) {
+          return true;
+        }
+        return false;
+      }
+
+      // If doctor is not currently rejected, check standard reselected / scheduled state
+      if (reselectedMapLocal[targetApptId]) return true;
+      const qa = (appt.questionnaire_answers && typeof appt.questionnaire_answers === "object") ? appt.questionnaire_answers : {};
       if (
         qa.reselection_status === "reselected" ||
         qa.reselection_required === false ||
@@ -364,7 +421,6 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
       ) {
         return true;
       }
-      const docSt = String(appt.doctor_status || "").toLowerCase();
       if (docSt && docSt !== "rejected" && docSt !== "declined" && docSt !== "reselection_required") {
         return true;
       }
@@ -585,9 +641,10 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         }
 
         const resolvedApptId = apptId || clinicEnrichment?.appointmentId || (n as any).metadata?.appointment_id;
+        const notifDeclinedAt = (n as any).metadata?.declined_at || (n as any).metadata?.rejection_timestamp || n.created_at;
         const isRejectedResolved =
           isApptRejected &&
-          (Boolean((n as any).metadata?.reselection_resolved) || isApptReselectionResolved(resolvedApptId));
+          (Boolean((n as any).metadata?.reselection_resolved) || isApptReselectionResolved(resolvedApptId, notifDeclinedAt));
         const metaAdminId =
           (n as any).metadata?.admin_id ||
           (n as any).metadata?.resolved_by ||
@@ -698,7 +755,10 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
 
         // B1. Doctor-Initiated Decline (Only when doctor declined and not patient cancelled and reselection not already resolved)
         if (appt.doctor_status === "rejected" && appt.status !== "cancelled" && !isApptReselectionResolved(appt.appointment_id)) {
-          const notifId = `appt-rejected-${appt.appointment_id}`;
+          const rejectionStamp = appt.doctor_reviewed_at
+            ? new Date(appt.doctor_reviewed_at).getTime()
+            : (appt.updated_at ? new Date(appt.updated_at).getTime() : "initial");
+          const notifId = `appt-rejected-${appt.appointment_id}-${rejectionStamp}`;
           const noteText = appt.doctor_note ? ` Note: "${appt.doctor_note}".` : "";
           const rejectMsg = `Your appointment request at ${clinicName} on ${dateStr} was declined.${noteText} You can select another available doctor within 24 hours. If no selection is made within 24 hours, the clinic will automatically assign an available doctor to your booking.`;
 
@@ -713,10 +773,12 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             senderAvatar: clinicLogo,
             link: `/patient/appointment-status?appointment_id=${appt.appointment_id}&action=reassign`,
             timestamp: appt.doctor_reviewed_at || appt.created_at || new Date().toISOString(),
-            isRead: readSet.has(notifId),
+            isRead: readSet.has(notifId) || (rejectionStamp === "initial" && readSet.has(`appt-rejected-${appt.appointment_id}`)),
             metadata: {
               appointment_id: appt.appointment_id,
+              doctor_id: appt.assigned_doctor_id || (appt.questionnaire_answers as any)?.latest_declined_doctor_id,
               declined_at: appt.doctor_reviewed_at || appt.created_at || new Date().toISOString(),
+              rejection_timestamp: appt.doctor_reviewed_at || appt.created_at || new Date().toISOString(),
               expires_at: new Date(new Date(appt.doctor_reviewed_at || appt.created_at || Date.now()).getTime() + 24 * 3600 * 1000).toISOString(),
             },
           });
