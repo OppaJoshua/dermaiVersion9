@@ -62,6 +62,172 @@ function formatTimestamp(iso: string) {
   }
 }
 
+/**
+ * Formatter for doctor management audit entries in the Admin Audit Logs UI.
+ * Scoped strictly to:
+ * - "Doctor Added"
+ * - "Doctor Deactivated"
+ * - "Doctor Reactivated"
+ *
+ * For "Doctor Added", if the stored details say "Clinic added doctor..." and embedded context contains
+ * a valid clinicName, formats cleanly as "[Clinic Name] added Dr. [Doctor Name] to its doctor roster."
+ * For "Doctor Deactivated" and "Doctor Reactivated", formats cleanly as:
+ * "[Clinic Name] deactivated Dr. [Doctor Name] from its doctor roster."
+ * "[Clinic Name] reactivated Dr. [Doctor Name] in its doctor roster."
+ *
+ * For all other audit events or records without sufficient metadata, returns the original details unchanged.
+ */
+export function formatDoctorAuditDetails(action: string, rawDetails?: string | null, target?: string | null): string {
+  if (!rawDetails) return "—";
+
+  const act = (action || "").trim();
+  if (act !== "Doctor Added" && act !== "Doctor Deactivated" && act !== "Doctor Reactivated") {
+    return rawDetails;
+  }
+
+  // Parse embedded Context JSON if present: "... | Context: {...}"
+  const contextIdx = rawDetails.indexOf(" | Context: ");
+  let contextObj: Record<string, any> | null = null;
+  if (contextIdx !== -1) {
+    try {
+      contextObj = JSON.parse(rawDetails.slice(contextIdx + 12));
+    } catch {
+      contextObj = null;
+    }
+  }
+
+  // Doctor Added
+  if (act === "Doctor Added") {
+    const baseText = contextIdx !== -1 ? rawDetails.slice(0, contextIdx).trim() : rawDetails.trim();
+    if (/^[^\s].+ added Dr\..+ to its doctor roster\.?$/i.test(baseText) && !baseText.startsWith("Clinic added")) {
+      return baseText;
+    }
+
+    const clinicName = contextObj?.clinicName || contextObj?.clinic_name;
+    const docRaw = contextObj?.doctorName || contextObj?.doctor_name || (target ? target.replace(/^Dr\.\s*/i, "") : "");
+    if (clinicName && docRaw) {
+      const cleanDoc = String(docRaw).replace(/^Dr\.\s*/i, "").trim();
+      return `${clinicName} added Dr. ${cleanDoc} to its doctor roster.`;
+    }
+
+    return baseText || rawDetails;
+  }
+
+  // Doctor Deactivated
+  if (act === "Doctor Deactivated") {
+    const baseText = contextIdx !== -1 ? rawDetails.slice(0, contextIdx).trim() : rawDetails.trim();
+    if (/^[^\s].+ deactivated Dr\..+ from its doctor roster\.?$/i.test(baseText) && !baseText.startsWith("Clinic deactivated")) {
+      return baseText;
+    }
+    const clinicName = contextObj?.clinicName || contextObj?.clinic_name;
+    const docRaw = contextObj?.doctorName || contextObj?.doctor_name || (target ? target.replace(/^Dr\.\s*/i, "") : "");
+    if (clinicName && docRaw) {
+      const cleanDoc = String(docRaw).replace(/^Dr\.\s*/i, "").trim();
+      return `${clinicName} deactivated Dr. ${cleanDoc} from its doctor roster.`;
+    }
+    return baseText || rawDetails;
+  }
+
+  // Doctor Reactivated
+  if (act === "Doctor Reactivated") {
+    const baseText = contextIdx !== -1 ? rawDetails.slice(0, contextIdx).trim() : rawDetails.trim();
+    if (/^[^\s].+ reactivated Dr\..+ in its doctor roster\.?$/i.test(baseText) && !baseText.startsWith("Clinic reactivated")) {
+      return baseText;
+    }
+    const clinicName = contextObj?.clinicName || contextObj?.clinic_name;
+    const docRaw = contextObj?.doctorName || contextObj?.doctor_name || (target ? target.replace(/^Dr\.\s*/i, "") : "");
+    if (clinicName && docRaw) {
+      const cleanDoc = String(docRaw).replace(/^Dr\.\s*/i, "").trim();
+      return `${clinicName} reactivated Dr. ${cleanDoc} in its doctor roster.`;
+    }
+    return baseText || rawDetails;
+  }
+
+  return rawDetails;
+}
+
+/**
+ * Resolves the display performer for an audit log.
+ * In Admin Audit Logs -> Activity Log -> PERFORMED BY, displays ONLY the registered clinic name
+ * for clinic-related audit records (e.g. "DERMCARE").
+ *
+ * Requirements:
+ * 1. Dynamically resolve the actual registered clinic name associated with each audit event.
+ * 2. Display the clinic name as the primary and only name in the PERFORMED BY column.
+ * 3. Keep the existing green CLINIC badge intact.
+ * 4. Apply this only to audit events reliably associated with a specific clinic.
+ * 5. For historical records or clinic login events where the clinic cannot be reliably identified,
+ *    preserve the existing performer display rather than guessing.
+ * 6. Do not change the PERFORMED BY display for Patient, Doctor, or Admin records.
+ */
+export function resolvePerformedBy(
+  log: {
+    actorType?: AuditActorType | string | null;
+    performedBy: string;
+    details?: string | null;
+    userId?: string | null;
+  },
+  clinicNameMap?: Map<string, string> | Record<string, string> | null
+): string {
+  const actor = String(log.actorType || "").toLowerCase().trim();
+  if (actor !== "clinic") {
+    return log.performedBy;
+  }
+
+  const rawDetails = log.details || "";
+
+  // 1. Check embedded Context JSON for clinic name or clinic ID
+  if (rawDetails.includes(" | Context: ")) {
+    const ctxIdx = rawDetails.indexOf(" | Context: ");
+    try {
+      const parsed = JSON.parse(rawDetails.slice(ctxIdx + 12));
+      if (parsed && typeof parsed === "object") {
+        const candidate = parsed.clinicName || parsed.clinic_name || parsed.clinic;
+        if (typeof candidate === "string" && candidate.trim()) {
+          return candidate.trim();
+        }
+
+        const cid = parsed.clinicId || parsed.clinic_id;
+        if (cid && clinicNameMap) {
+          const mappedName =
+            clinicNameMap instanceof Map ? clinicNameMap.get(cid) : (clinicNameMap as Record<string, string>)[cid];
+          if (mappedName && mappedName.trim()) {
+            return mappedName.trim();
+          }
+        }
+      }
+    } catch {
+      // Ignore JSON parse error and proceed to fallbacks
+    }
+  }
+
+  // 2. Check clinic name lookup map by owner/user ID
+  if (log.userId && clinicNameMap) {
+    const mappedByUid =
+      clinicNameMap instanceof Map
+        ? clinicNameMap.get(log.userId)
+        : (clinicNameMap as Record<string, string>)[log.userId];
+    if (mappedByUid && mappedByUid.trim()) {
+      return mappedByUid.trim();
+    }
+  }
+
+  // 3. Check for validated action description prefix, e.g. "DERMCARE added Dr. Alpha..."
+  const baseText = rawDetails.includes(" | Context: ")
+    ? rawDetails.slice(0, rawDetails.indexOf(" | Context: ")).trim()
+    : rawDetails.trim();
+  const prefixMatch = baseText.match(/^(.+?)\s+(?:added|deactivated|reactivated)\s+Dr\./i);
+  if (prefixMatch && prefixMatch[1]) {
+    const candidateClinic = prefixMatch[1].trim();
+    if (candidateClinic.toLowerCase() !== "clinic") {
+      return candidateClinic;
+    }
+  }
+
+  // 4. Historical fallback: preserve existing performer display rather than guessing
+  return log.performedBy;
+}
+
 function getStartOfDayIso(dateStr: string): string {
   const d = new Date(`${dateStr}T00:00:00`);
   return Number.isNaN(d.getTime()) ? `${dateStr}T00:00:00.000Z` : d.toISOString();
@@ -102,6 +268,7 @@ export default function AdminAuditLogsPage() {
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [clinicMap, setClinicMap] = useState<Map<string, string>>(new Map());
 
   // Live count per category for top metric cards
   const [categoryCounts, setCategoryCounts] = useState<Record<AuditEntryType, number>>({
@@ -167,7 +334,7 @@ export default function AdminAuditLogsPage() {
       let query = supabase
         .from("system_audit_log")
         .select(
-          "log_id, action, user_type, log_type, target, details, performer_name, timestamp, user:user_id ( full_name, email, role )",
+          "log_id, action, user_type, log_type, target, details, performer_name, timestamp, user_id, user:user_id ( full_name, email, role )",
           { count: "exact" }
         )
         .order("timestamp", { ascending: false });
@@ -209,6 +376,56 @@ export default function AdminAuditLogsPage() {
         return;
       }
 
+      // Dynamically resolve registered clinic names for clinic audit records
+      const clinicUserIds = new Set<string>();
+      const contextClinicIds = new Set<string>();
+
+      (data || []).forEach((l: any) => {
+        if (l.user_type === "clinic" && l.user_id) {
+          clinicUserIds.add(String(l.user_id));
+        }
+        if (l.details && typeof l.details === "string" && l.details.includes("Context:")) {
+          try {
+            const ctxIdx = l.details.indexOf(" | Context: ");
+            if (ctxIdx !== -1) {
+              const ctx = JSON.parse(l.details.slice(ctxIdx + 12));
+              if (ctx?.clinicId) contextClinicIds.add(String(ctx.clinicId));
+              if (ctx?.clinic_id) contextClinicIds.add(String(ctx.clinic_id));
+            }
+          } catch {}
+        }
+      });
+
+      const pageClinicMap = new Map<string, string>();
+      if (clinicUserIds.size > 0 || contextClinicIds.size > 0) {
+        try {
+          const orFilters: string[] = [];
+          if (clinicUserIds.size > 0) {
+            orFilters.push(`owner_user_id.in.(${Array.from(clinicUserIds).join(",")})`);
+          }
+          if (contextClinicIds.size > 0) {
+            orFilters.push(`clinic_id.in.(${Array.from(contextClinicIds).join(",")})`);
+          }
+          let clinicQuery = supabase.from("clinic").select("clinic_id, name, owner_user_id");
+          if (orFilters.length > 0) {
+            clinicQuery = clinicQuery.or(orFilters.join(","));
+          }
+          const { data: clinicData, error: clinicErr } = await clinicQuery;
+          if (!clinicErr && clinicData) {
+            clinicData.forEach((c: any) => {
+              if (c?.name) {
+                const trimmed = String(c.name).trim();
+                if (c.clinic_id) pageClinicMap.set(String(c.clinic_id), trimmed);
+                if (c.owner_user_id) pageClinicMap.set(String(c.owner_user_id), trimmed);
+              }
+            });
+            setClinicMap((prev) => new Map([...prev, ...pageClinicMap]));
+          }
+        } catch (lookupErr) {
+          console.warn("[AdminAuditLogs] Clinic name resolution warning:", lookupErr);
+        }
+      }
+
       const mapped: AuditEntry[] = (data || [])
         .filter(
           (l: any) =>
@@ -221,15 +438,26 @@ export default function AdminAuditLogsPage() {
           const fallbackPerformer =
             l.performer_name || userObj?.full_name || userObj?.email || (l.user_type === "system" ? "System Core" : "User");
 
+          const resolvedPerformer = resolvePerformedBy(
+            {
+              actorType: (l.user_type as AuditActorType) || (userObj?.role as AuditActorType),
+              performedBy: fallbackPerformer,
+              details: l.details,
+              userId: l.user_id,
+            },
+            pageClinicMap
+          );
+
           return {
             id: l.log_id,
             type: (l.log_type || "system") as AuditEntryType,
             action: l.action || "Action",
             target: l.target || userObj?.full_name || l.user_type || "System Core",
             details: l.details || "",
-            performedBy: fallbackPerformer,
+            performedBy: resolvedPerformer,
             actorType: (l.user_type as AuditActorType) || (userObj?.role as AuditActorType) || "system",
             timestamp: l.timestamp || new Date().toISOString(),
+            userId: l.user_id || null,
           };
         });
 
@@ -298,15 +526,26 @@ export default function AdminAuditLogsPage() {
             performerName = newRecord.user_type === "system" ? "System Core" : "User";
           }
 
+          const resolvedPerformer = resolvePerformedBy(
+            {
+              actorType: newRecord.user_type,
+              performedBy: performerName,
+              details: newRecord.details,
+              userId: newRecord.user_id,
+            },
+            clinicMap
+          );
+
           const newEntry: AuditEntry = {
             id: newRecord.log_id || `log-${Date.now()}`,
             type: (newRecord.log_type || "system") as AuditEntryType,
             action: newRecord.action || "Action",
             target: newRecord.target || "System Core",
             details: newRecord.details || "",
-            performedBy: performerName,
+            performedBy: resolvedPerformer,
             actorType: (newRecord.user_type as AuditActorType) || "system",
             timestamp: newRecord.timestamp || new Date().toISOString(),
+            userId: newRecord.user_id || null,
           };
 
           // Immediately prepend to audit log table if matching actor and date filters
@@ -572,13 +811,13 @@ export default function AdminAuditLogsPage() {
 
                       {/* Details */}
                       <td className="px-6 py-4 text-xs sm:text-sm text-gray-600 max-w-sm break-words leading-relaxed">
-                        {log.details || "—"}
+                        {formatDoctorAuditDetails(log.action, log.details, log.target)}
                       </td>
 
                       {/* Performed by & Role */}
                       <td className="px-6 py-4 whitespace-nowrap">
                         <p className="text-xs sm:text-sm font-bold text-slate-900 tracking-tight">
-                          {log.performedBy}
+                          {resolvePerformedBy(log, clinicMap)}
                         </p>
                         <span
                           className={cn(

@@ -69,7 +69,7 @@ export async function logAuditEvent({
   details,
   performerName,
   metadata = {},
-}: AuditEventParams): Promise<void> {
+}: AuditEventParams): Promise<boolean> {
   try {
     let resolvedUserId = userId || null;
     let resolvedRole = role ? normalizeActorType(role) : null;
@@ -133,8 +133,11 @@ export async function logAuditEvent({
     const { error } = await supabase.from("system_audit_log").insert(payload);
     if (error) {
       console.warn("[CentralAuditLogger] Failed to insert audit log:", error.message);
+      return false;
     }
+    return true;
   } catch (err) {
     console.error("[CentralAuditLogger] Unexpected audit logging exception:", err);
+    return false;
   }
 }

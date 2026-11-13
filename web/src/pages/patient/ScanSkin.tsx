@@ -105,6 +105,10 @@ export default function ScanSkinPage() {
 
   // Booking-origin context: ONLY active if explicitly launched from Appointment booking flow
   const location = useLocation();
+  const isDashboardRoute = useMemo(
+    () => location.pathname.startsWith("/dashboard"),
+    [location.pathname]
+  );
   const isBookingOrigin = useMemo(() => {
     const hasQueryParam =
       searchParams.get("fromAppointment") === "1" ||
@@ -980,7 +984,7 @@ export default function ScanSkinPage() {
           </p>
         </div>
 
-        {subData.loaded && !subData.isPro && (!subData.freePlanActive || !subData.usageVerified) && (
+        {isDashboardRoute && Boolean(user?.id) && subData.loaded && !subData.isPro && (!subData.freePlanActive || !subData.usageVerified) && (
           <div className="mb-6 rounded-2xl bg-amber-50 border border-amber-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900">
             <div>
               <p className="font-bold text-sm text-amber-950">

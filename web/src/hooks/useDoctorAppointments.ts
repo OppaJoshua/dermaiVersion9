@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { resolveAvatarUrl } from "@/utils/storage";
-import { createPatientNotification, notifyAdminDoctorCompletedReview } from "@/lib/notificationService";
+import { createPatientNotification, notifyAdminDoctorCompletedReview, createDoctorAppointmentConfirmedNotification } from "@/lib/notificationService";
 import { recordDoctorAiReview } from "@/lib/doctorReviewService";
 import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 import { compareDoctorAppointments, scopeDoctorAppointments } from "@/lib/doctorAppointmentScope";
@@ -811,6 +811,20 @@ export function useDoctorAppointments({
         } catch (clinicNotifErr) {
           console.warn("[useDoctorAppointments] Clinic notification insert warning:", clinicNotifErr);
         }
+      }
+
+      // When doctor accepts appointment (reaching confirmed state), notify the doctor with Confirmed Appointment
+      if (isApproved && user?.id) {
+        createDoctorAppointmentConfirmedNotification({
+          doctorUserId: user.id,
+          clinicId: clinicIdToNotify,
+          clinicName: existingAppt.clinicName,
+          appointmentId: appointmentId,
+          patientId: targetAppt?.userId || existingAppt.userId,
+          patientName: existingAppt.patientName || targetAppt?.patientName,
+        }).catch((docNotifErr) => {
+          console.warn("[useDoctorAppointments] Doctor confirmed notification note:", docNotifErr);
+        });
       }
 
       logAuditEvent({

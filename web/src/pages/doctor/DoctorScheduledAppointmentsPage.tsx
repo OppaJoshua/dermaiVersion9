@@ -2,7 +2,6 @@ import { compareDoctorAppointments } from "@/lib/doctorAppointmentScope";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  Calendar,
   Clock,
   ChevronDown,
   Stethoscope,
@@ -10,7 +9,6 @@ import {
   Loader2,
   ClipboardList,
   FileCheck,
-  FileText,
   Building2,
   AlertTriangle,
 } from "lucide-react";
@@ -401,7 +399,7 @@ export default function DoctorScheduledAppointmentsPage() {
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
-          Completed Consultations
+          Past Consultations
           <span
             className={`ml-2 text-[11px] px-2 py-0.5 rounded-full font-bold ${
               tab === "completed"
@@ -602,7 +600,7 @@ export default function DoctorScheduledAppointmentsPage() {
         </div>
 
         {/* ================= CARD 2 (RIGHT): SELECTED DATE PATIENT LIST ================= */}
-        <div className="bg-white rounded-2xl p-4 sm:p-6 md:p-7 border border-slate-200/90 shadow-xs flex flex-col justify-between min-h-140 min-w-0">
+        <div className="@container bg-white rounded-2xl p-4 sm:p-6 md:p-7 border border-slate-200/90 shadow-xs flex flex-col justify-between min-h-140 min-w-0">
           <div>
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
@@ -642,10 +640,10 @@ export default function DoctorScheduledAppointmentsPage() {
                   return (
                     <div
                       key={appt.id}
-                      className="py-4.5 flex flex-col xl:flex-row xl:items-center justify-between gap-4 first:pt-4 last:pb-2 group transition-all"
+                      className="py-4.5 grid grid-cols-1 sm:grid-cols-[1fr_auto] @lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-y-3 gap-x-4 first:pt-4 last:pb-2 group transition-all"
                     >
-                      {/* Left: Avatar + Name + Gender/Age + Diagnosis */}
-                      <div className="flex items-center gap-3.5 min-w-0 xl:w-[35%]">
+                      {/* Left: Patient Avatar + Name + Clinic Badge */}
+                      <div className="col-span-1 sm:col-span-2 @lg:col-span-1 min-w-0 flex items-center gap-3.5 justify-self-start w-full">
                         <PatientAvatar
                           avatarUrl={appt.patientAvatar}
                           fullName={appt.patientName}
@@ -653,9 +651,12 @@ export default function DoctorScheduledAppointmentsPage() {
                           borderClass="border border-slate-100"
                           className="shrink-0 shadow-2xs"
                         />
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="font-bold text-slate-900 text-sm md:text-base leading-snug truncate">
+                            <h3
+                              className="font-bold text-slate-900 text-sm md:text-base leading-snug truncate max-w-full"
+                              title={appt.patientName}
+                            >
                               {appt.patientName}
                             </h3>
                             {isNoShow && (
@@ -677,62 +678,28 @@ export default function DoctorScheduledAppointmentsPage() {
                               </span>
                             )}
                           </div>
-                          {tab !== "completed" && (
-                            <>
-                              <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium mt-0.5">
-                                {appt.patientGender && <span>{appt.patientGender}</span>}
-                                {appt.patientGender && (appt.patientAge || appt.patientBirthdate) && <span>&bull;</span>}
-                                {(appt.patientAge || appt.patientBirthdate) && (
-                                  <span>
-                                    {appt.patientAge ? `${appt.patientAge} years old` : `Born ${appt.patientBirthdate}`}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-1 text-xs text-slate-600 mt-1 truncate">
-                                <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                <span className="truncate">
-                                  {appt.doctorDiagnosis || appt.conditionName || "Not provided"}
-                                </span>
-                              </div>
-                            </>
-                          )}
                           {appt.clinicName && (
                             <div
-                              className={`inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100/80 ${
-                                tab === "completed" ? "mt-1" : "mt-1.5"
-                              }`}
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100/80 mt-1 max-w-full"
+                              title={appt.clinicName}
                             >
                               <Building2 className="w-3 h-3 text-blue-500 shrink-0" />
-                              <span className="truncate max-w-37.5">{appt.clinicName}</span>
+                              <span className="truncate max-w-37.5 sm:max-w-50">{appt.clinicName}</span>
                             </div>
                           )}
                         </div>
                       </div>
 
-                      {/* Middle: Time + Reason for Visit */}
-                      <div className="flex flex-col gap-1.5 min-w-0 xl:w-[40%] xl:px-2">
-                        <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
-                          <Clock className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                      {/* Center: Appointment Time */}
+                      <div className="col-span-1 justify-self-start sm:justify-self-start @lg:justify-self-center flex items-center min-w-0">
+                        <div className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-slate-700 whitespace-nowrap">
+                          <Clock className="w-4 h-4 text-rose-500 shrink-0" />
                           <span>{formatTime(appt.time, appt.date)}</span>
                         </div>
-
-                        {/* Reason for Visit */}
-                        {tab !== "completed" && (
-                          <div className="flex items-start gap-1.5 text-xs text-slate-600 mt-0.5">
-                            <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                            <div className="leading-tight truncate">
-                              <span className="text-slate-400 block text-[10.5px]">
-                                Reason for Visit:
-                              </span>
-                              <span className="text-slate-700 font-medium text-xs truncate block">
-                                {sanitizePatientSymptoms(appt.notes) || appt.conditionName || "Not provided"}
-                              </span>
-                            </div>
-                          </div>
-                        )}
                       </div>
-                      {/* Right: Conduct Visit Button */}
-                      <div className="shrink-0 flex items-center xl:justify-end w-full sm:w-auto">
+
+                      {/* Right: Action (Conduct Visit Button) */}
+                      <div className="col-span-1 justify-self-stretch sm:justify-self-end @lg:justify-self-end flex items-center justify-start sm:justify-end shrink-0 w-full sm:w-auto">
                         <button
                           type="button"
                           onClick={() => openApptModal(appt)}

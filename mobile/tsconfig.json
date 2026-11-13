@@ -2,10 +2,15 @@
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
-    "lib": ["DOM", "ESNext"],
+    "lib": [
+      "DOM",
+      "ESNext"
+    ],
     "jsx": "react-jsx",
     "moduleResolution": "bundler",
-    "customConditions": ["react-native"],
+    "customConditions": [
+      "react-native"
+    ],
     "allowJs": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
@@ -28,5 +33,6 @@
     "node_modules",
     "babel.config.js",
     "metro.config.js"
-  ]
+  ],
+  "extends": "expo/tsconfig.base"
 }

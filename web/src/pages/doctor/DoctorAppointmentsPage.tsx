@@ -956,7 +956,7 @@ export default function DoctorAppointmentsPage() {
                         {reviewModal.decision === "rejected" && (
                           <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
                             <p className="leading-relaxed">
-                              <strong>Decline Referral:</strong> Declining will notify your clinic triage team to <strong>re-assign another doctor</strong> from your clinic roster.
+                              <strong>Decline Referral:</strong> Declining this referral will notify the patient and allow them to choose another available doctor within 24 hours. If the patient does not select a doctor within that period, your clinic's triage team may<strong>reassign the appointment to another available doctor</strong> from your clinic roster.
                             </p>
                           </div>
                         )}

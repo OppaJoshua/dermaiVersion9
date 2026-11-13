@@ -90,9 +90,10 @@ export default function SubscriptionAgreementModal({
                   3. Billing Cycles & Renewal
                 </h3>
                 <p>
-                  Subscriptions are billed in advance according to your chosen cycle (Monthly or Yearly). You may cancel renewal at any time through your Billing Settings; your active Pro access will remain in effect until the end of the paid billing period.
+                  Subscriptions are billed in advance according to your chosen cycle (Monthly or Yearly). You may cancel renewal at any time through your Billing Settings; your active Pro access will remain in effect until the end of the paid billing period. Subscription payments are non-refundable.
                 </p>
               </div>
+              
 
               <div className="border border-gray-100 rounded-xl p-3.5 bg-gray-50/50">
                 <h3 className="font-semibold text-gray-900 mb-1">

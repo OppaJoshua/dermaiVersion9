@@ -231,7 +231,7 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
             } else if (item.type === "appointment-confirmed") {
               actionLabel = "View Scheduled Appointment";
             } else if (isAppointmentRequest) {
-              actionLabel = item.metadata?.branch_name ? "Review Patient Request" : "Review Request";
+              actionLabel = "Review Patient Request";
             }
 
             return (

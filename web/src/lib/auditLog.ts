@@ -18,6 +18,7 @@ export type AuditEntry = {
   performedBy: string;
   actorType: import("@/utils/auditLogger").AuditActorType;
   type: AuditEntryType;
+  userId?: string | null;
 };
 
 export type LogAuditParams = import("@/utils/auditLogger").AuditEventParams;

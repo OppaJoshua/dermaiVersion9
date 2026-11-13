@@ -605,6 +605,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
 
   // Notifications
   const [successMsg, setSuccessMsg] = useState("");
+  const [auditWarning, setAuditWarning] = useState("");
 
   /* ── Tab A: Register New Doctor Form State ──────────────────────── */
   const [registerForm, setRegisterForm] = useState({
@@ -1687,18 +1688,35 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
       setSuccessMsg(`Dr. ${finalizedDoctor.name} was successfully registered and added to roster.`);
       setTimeout(() => setSuccessMsg(""), 4500);
 
-      logAuditEvent({
-        role: "clinic",
-        category: "Clinic",
-        action: "Doctor Added",
-        target: `Dr. ${finalizedDoctor.name}`,
-        details: `Clinic added doctor "${finalizedDoctor.name}" (PRC: ${finalizedDoctor.prcLicense || "N/A"}) with specialization: ${finalizedDoctor.specialization || "General Dermatology"}.`,
-        metadata: {
-          doctorName: finalizedDoctor.name,
-          doctorId: finalizedDoctor.id,
-          clinicName: clinicDisplayName,
-        },
-      }).catch(() => { });
+      const cleanDocName = finalizedDoctor.name.replace(/^Dr\.\s*/i, "").trim();
+      const docDisplayName = `Dr. ${cleanDocName}`;
+      const performer =
+        user?.user_metadata?.full_name ||
+        user?.user_metadata?.name ||
+        user?.email?.split("@")[0] ||
+        clinicDisplayName;
+
+      try {
+        await logAuditEvent({
+          role: "clinic",
+          category: "Clinic",
+          action: "Doctor Added",
+          target: docDisplayName,
+          details: `${clinicDisplayName} added ${docDisplayName} to its doctor roster.`,
+          userId: user?.id,
+          performerName: performer,
+          metadata: {
+            doctorName: cleanDocName,
+            doctorId: finalizedDoctor.id,
+            clinicName: clinicDisplayName,
+            clinicId: clinicId,
+            prcLicense: finalizedDoctor.prcLicense || "N/A",
+            specialization: finalizedDoctor.specialization || "General Dermatology",
+          },
+        });
+      } catch (auditErr) {
+        console.warn("[ClinicDoctorsPage] Audit log creation warning:", auditErr);
+      }
 
       fetchDoctors();
     } catch (err: unknown) {
@@ -2302,10 +2320,55 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
   const handleConfirmStatusToggle = async () => {
     if (!statusConfirmDoctor) return;
     const doctor = statusConfirmDoctor;
-    const nextStatus: "Active" | "Inactive" = doctor.status === "Active" ? "Inactive" : "Active";
+
+    // Mandatory clinic verification check before modifying affiliation
+    if (!clinicId) {
+      console.error("[ClinicDoctorsPage] Mandatory clinic ID missing for doctor status update.");
+      setDoctorsError("Clinic verification required to update doctor affiliation.");
+      setTimeout(() => setDoctorsError(""), 5000);
+      setStatusConfirmDoctor(null);
+      return;
+    }
+
+    const previousStatus = doctor.status;
+    const nextStatus: "Active" | "Inactive" = previousStatus === "Active" ? "Inactive" : "Active";
+    const isDeactivating = nextStatus === "Inactive";
+    const actionName = isDeactivating ? "Doctor Deactivated" : "Doctor Reactivated";
+    const cleanDoctorName = doctor.name.replace(/^Dr\.\s*/i, "").trim();
+    const doctorDisplayName = `Dr. ${cleanDoctorName}`;
+    const performer =
+      user?.user_metadata?.full_name ||
+      user?.user_metadata?.name ||
+      user?.email?.split("@")[0] ||
+      clinicDisplayName;
 
     setTogglingStatus(true);
     try {
+      // Guarded update: mandatory scoping to exact doctor_id AND authenticated clinic_id, matching previousStatus
+      const updateQuery = supabase
+        .from("clinic_doctor")
+        .update({ status: nextStatus })
+        .eq("doctor_id", doctor.id)
+        .eq("clinic_id", clinicId)
+        .eq("status", previousStatus);
+
+      const { data: updatedRows, error: updateError } = await updateQuery.select("doctor_id, status");
+
+      if (updateError) {
+        console.error("[ClinicDoctorsPage] Failed to update doctor status:", updateError.message);
+        setDoctorsError(`Failed to update Dr. ${cleanDoctorName}'s status: ${updateError.message}`);
+        setTimeout(() => setDoctorsError(""), 5000);
+        return;
+      }
+
+      // Confirm that exactly one intended affiliation row was updated
+      if (!updatedRows || updatedRows.length !== 1) {
+        console.warn("[ClinicDoctorsPage] Doctor status was already modified or affiliation mismatched.");
+        await fetchDoctors();
+        return;
+      }
+
+      // DB update succeeded — update local state and UI
       const updated = allDoctors.map((d) => (d.id === doctor.id ? { ...d, status: nextStatus } : d));
       setAllDoctors(updated);
       localStorage.setItem(rosterCacheKey, JSON.stringify(updated));
@@ -2319,28 +2382,53 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
         });
       }
 
-      setSuccessMsg(`Dr. ${doctor.name} is now ${nextStatus}.`);
+      setSuccessMsg(
+        isDeactivating
+          ? `Dr. ${cleanDoctorName} was deactivated from the doctor roster.`
+          : `Dr. ${cleanDoctorName} was reactivated in the doctor roster.`
+      );
       setTimeout(() => setSuccessMsg(""), 3000);
 
-      logAuditEvent({
-        role: "clinic",
-        category: "Clinic",
-        action: "Doctor Status Changed",
-        target: `Dr. ${doctor.name}`,
-        details: `Dr. ${doctor.name} status updated to ${nextStatus}.`,
-        metadata: {
-          doctorName: doctor.name,
-          doctorId: doctor.id,
-          newStatus: nextStatus,
-        },
-      }).catch(() => { });
+      // Record audit event strictly AFTER successful DB transition
+      let auditSaved = false;
+      try {
+        auditSaved = await logAuditEvent({
+          role: "clinic",
+          category: "Clinic",
+          action: actionName,
+          target: doctorDisplayName,
+          details: isDeactivating
+            ? `${clinicDisplayName} deactivated ${doctorDisplayName} from its doctor roster.`
+            : `${clinicDisplayName} reactivated ${doctorDisplayName} in its doctor roster.`,
+          userId: user?.id,
+          performerName: performer,
+          metadata: {
+            clinicId,
+            clinicName: clinicDisplayName,
+            doctorId: doctor.id,
+            doctorName: cleanDoctorName,
+            previousStatus,
+            updatedStatus: nextStatus,
+            adminUserId: user?.id || null,
+            adminName: performer,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      } catch (auditErr) {
+        console.warn("[ClinicDoctorsPage] Audit log creation warning:", auditErr);
+        auditSaved = false;
+      }
 
-      await supabase
-        .from("clinic_doctor")
-        .update({ status: nextStatus })
-        .eq("doctor_id", doctor.id);
-    } catch {
-      // Local state is preserved
+      if (!auditSaved) {
+        console.warn("[ClinicDoctorsPage] Doctor status updated successfully, but the audit record could not be saved.");
+        setAuditWarning("Doctor status updated successfully, but the audit record could not be saved.");
+        setTimeout(() => setAuditWarning(""), 8000);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "An unexpected error occurred.";
+      console.error("[ClinicDoctorsPage] Status toggle error:", msg);
+      setDoctorsError(msg);
+      setTimeout(() => setDoctorsError(""), 5000);
     } finally {
       setTogglingStatus(false);
       setStatusConfirmDoctor(null);
@@ -2451,6 +2539,21 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
           >
             <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
             <span>{successMsg}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Audit Warning Notification ────────────────────────────── */}
+      <AnimatePresence>
+        {auditWarning && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium"
+          >
+            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+            <span>{auditWarning}</span>
           </motion.div>
         )}
       </AnimatePresence>

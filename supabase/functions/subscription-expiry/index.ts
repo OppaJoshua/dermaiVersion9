@@ -143,7 +143,6 @@ function renderExpiryEmailHtml(opts: {
             </td>
           </tr>
 
-
           <!-- Sign-off -->
           <tr>
             <td style="padding:0 40px 32px;font-size:15px;line-height:1.7;color:#4a3640;">

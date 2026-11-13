@@ -403,7 +403,8 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
               item.type === "scan-completed" ||
               (item.category as string) === "skin_scan" ||
               item.category === "scan" ||
-              item.metadata?.category === "skin_scan";
+              item.metadata?.category === "skin_scan" ||
+              /ai skin scan/i.test(item.title || "");
 
             // Resolve appointment_id for "Consultation Completed" deep-link
             const completedApptId = isCompleted
@@ -420,6 +421,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
             // the avatar circle or header label.
             const isClinicNotif =
               !isTicket &&
+              !isScanResult &&
               (isCompleted ||
                 isPaymentConfirmed ||
                 isRejected ||
@@ -538,18 +540,20 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className={cn(
-                          "text-xs font-semibold truncate",
-                          isMaintenance ? "text-amber-800" : "text-magenta-700"
-                        )}
-                      >
-                        {isTicket
-                          ? (item.senderName || "DERMAI Support")
-                          : isClinicNotif
-                          ? resolvedClinicName
-                          : (item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : resolvedClinicName || "Clinic"))}
-                      </span>
+                      {!isScanResult && (
+                        <span
+                          className={cn(
+                            "text-xs font-semibold truncate",
+                            isMaintenance ? "text-amber-800" : "text-magenta-700"
+                          )}
+                        >
+                          {isTicket
+                            ? (item.senderName || "DERMAI Support")
+                            : isClinicNotif
+                            ? resolvedClinicName
+                            : (item.senderName || (isBroadcast || isMaintenance ? "Platform Administrator" : resolvedClinicName || "Clinic"))}
+                        </span>
+                      )}
                       {isMaintenance && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
                           <AlertTriangle className="w-3 h-3 text-amber-600" />
@@ -594,6 +598,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                         }
                         onClick={(e) => {
                           e.stopPropagation();
+                          if (!item.isRead) markRead(item.id);
                           onClose?.();
                         }}
                         className="inline-flex items-center px-4 py-1.5 rounded-lg bg-[#A21D5C] hover:bg-[#88184d] text-white text-xs font-semibold transition-colors shadow-sm"
@@ -664,7 +669,11 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                         </div>
                         <Link
                           to={notifApptId ? `/patient/appointment-status?appointment_id=${notifApptId}&action=reassign` : "/patient/appointment-status"}
-                          onClick={onClose}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!item.isRead) markRead(item.id);
+                            onClose?.();
+                          }}
                           className="inline-flex items-center px-3.5 py-1.5 rounded-lg bg-magenta-600 text-white text-sm font-medium hover:bg-magenta-700 transition-colors shadow-xs"
                         >
                           Select alternate doctor
@@ -679,6 +688,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                       to={item.link || (item.metadata?.analysis_id ? `/dashboard/history?id=${item.metadata.analysis_id}` : "/dashboard/history")}
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (!item.isRead) markRead(item.id);
                         onClose?.();
                       }}
                       className="mt-2 inline-flex items-center text-sm font-medium text-magenta-700 hover:text-magenta-800 transition-colors"
@@ -709,6 +719,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                         to={targetLink}
                         onClick={(e) => {
                           e.stopPropagation();
+                          if (!item.isRead) markRead(item.id);
                           onClose?.();
                         }}
                         className="mt-2 inline-flex items-center text-sm font-medium text-magenta-700 hover:text-magenta-800 transition-colors"

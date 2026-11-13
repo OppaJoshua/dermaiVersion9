@@ -58,7 +58,11 @@ const LOCAL_NOTIF_PREFIX = "dermai_patient_notifications_";
 
 function getReadIds(role: NotificationRole, userId?: string, fallbackId?: string): Set<string> {
   const combined = new Set<string>();
-  const keys = [userId, fallbackId, "default"].filter(Boolean) as string[];
+  // Strict user isolation: if an authenticated userId is provided, read ONLY for that user to prevent account bleed
+  const keys = userId || fallbackId
+    ? ([userId, fallbackId].filter(Boolean) as string[])
+    : ["default"];
+
   for (const k of keys) {
     try {
       const raw = localStorage.getItem(`dermai_${role}_read_ids_${k}`);
@@ -71,20 +75,31 @@ function getReadIds(role: NotificationRole, userId?: string, fallbackId?: string
   return combined;
 }
 
-function saveReadId(role: NotificationRole, id: string, userId?: string, fallbackId?: string) {
-  const keys = [userId, fallbackId, "default"].filter(Boolean) as string[];
+function saveReadId(role: NotificationRole, id: string, userId?: string, fallbackId?: string, extraIds?: string[]) {
+  // Strict user isolation: if an authenticated userId is provided, save ONLY for that user
+  const keys = userId || fallbackId
+    ? ([userId, fallbackId].filter(Boolean) as string[])
+    : ["default"];
+
   for (const k of keys) {
     try {
       const key = `dermai_${role}_read_ids_${k}`;
       const set = getReadIds(role, k);
       set.add(id);
+      if (extraIds && Array.isArray(extraIds)) {
+        extraIds.forEach((eid) => set.add(eid));
+      }
       localStorage.setItem(key, JSON.stringify(Array.from(set)));
     } catch { }
   }
 }
 
 function saveAllReadIds(role: NotificationRole, ids: string[], userId?: string, fallbackId?: string) {
-  const keys = [userId, fallbackId, "default"].filter(Boolean) as string[];
+  // Strict user isolation: if an authenticated userId is provided, save ONLY for that user
+  const keys = userId || fallbackId
+    ? ([userId, fallbackId].filter(Boolean) as string[])
+    : ["default"];
+
   for (const k of keys) {
     try {
       const key = `dermai_${role}_read_ids_${k}`;
@@ -93,6 +108,66 @@ function saveAllReadIds(role: NotificationRole, ids: string[], userId?: string, 
       localStorage.setItem(key, JSON.stringify(Array.from(set)));
     } catch { }
   }
+}
+
+export function isNotificationRead(
+  id: string,
+  dbIsRead: boolean,
+  readSet: Set<string>,
+  meta?: {
+    appointmentId?: string;
+    ticketId?: string;
+    broadcastId?: string;
+    analysisId?: string;
+    title?: string;
+    message?: string;
+  }
+): boolean {
+  if (dbIsRead) return true;
+  if (readSet.has(id)) return true;
+
+  if (meta?.appointmentId) {
+    const aid = String(meta.appointmentId);
+    if (
+      readSet.has(aid) ||
+      readSet.has(`appt:${aid}`) ||
+      readSet.has(`appt-accepted-${aid}`) ||
+      readSet.has(`appt-completed-${aid}`) ||
+      readSet.has(`appt-rejected-${aid}`) ||
+      readSet.has(`appt-cancelled-${aid}`) ||
+      readSet.has(`appt-scheduled-${aid}`)
+    ) {
+      return true;
+    }
+  }
+
+  if (meta?.ticketId) {
+    const tid = String(meta.ticketId);
+    if (readSet.has(tid) || readSet.has(`ticket:${tid}`) || readSet.has(`ticket-update-${tid}`)) {
+      return true;
+    }
+  }
+
+  if (meta?.broadcastId) {
+    const bid = String(meta.broadcastId);
+    if (readSet.has(bid) || readSet.has(`broadcast:${bid}`)) {
+      return true;
+    }
+  }
+
+  if (meta?.analysisId) {
+    const sid = String(meta.analysisId);
+    if (readSet.has(sid) || readSet.has(`scan:${sid}`) || readSet.has(`scan-${sid}`)) {
+      return true;
+    }
+  }
+
+  if (meta?.title && meta?.message) {
+    const key = `content:${meta.title.trim().toLowerCase()}:::${meta.message.trim().toLowerCase()}`;
+    if (readSet.has(key)) return true;
+  }
+
+  return false;
 }
 
 export function resolveAppointmentTimestamp(appt: any, preferredTimestamp?: string): string {
@@ -143,6 +218,7 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
   const seenBroadcastIds = new Set<string>();
   const seenContentKeys = new Set<string>();
   const seenApptActions = new Set<string>();
+  const itemByKey = new Map<string, NotificationItem>();
 
   // Sort so persistent database records with UUID IDs take precedence over synthetic fallback IDs
   const sorted = [...items].sort((a, b) => {
@@ -159,7 +235,11 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
     if (!item || !item.id) continue;
 
     // A. Direct ID check
-    if (seenIds.has(item.id)) continue;
+    if (seenIds.has(item.id)) {
+      const existing = itemByKey.get(`id:${item.id}`);
+      if (existing && item.isRead) existing.isRead = true;
+      continue;
+    }
 
     // B. Broadcast ID check
     const bId =
@@ -170,9 +250,10 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
         ? item.id.replace(/^(clinic-|doc-)?broadcast-/, "")
         : undefined);
 
-    if (bId) {
-      if (seenBroadcastIds.has(bId)) continue;
-      seenBroadcastIds.add(bId);
+    if (bId && seenBroadcastIds.has(bId)) {
+      const existing = itemByKey.get(`broadcast:${bId}`);
+      if (existing && item.isRead) existing.isRead = true;
+      continue;
     }
 
     // B2. Appointment + Action deduplication (dedupes persistent DB user_notification with synthetic fallback)
@@ -225,12 +306,30 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
         ? `${apptId}:::rejected:::${docId}:::${timeNum}`
         : `${apptId}:::rejected:::${item.id}`;
 
-      if (seenApptActions.has(rejectKey)) continue;
+      if (seenApptActions.has(rejectKey)) {
+        const existing = itemByKey.get(`appt:${rejectKey}`);
+        if (existing && item.isRead) existing.isRead = true;
+        continue;
+      }
       seenApptActions.add(rejectKey);
-    } else if (apptId && (isDoctorAction || normType === "appointment-cancelled" || normType === "appointment-request")) {
+      itemByKey.set(`appt:${rejectKey}`, item);
+    } else if (
+      apptId &&
+      (isDoctorAction ||
+        normType === "appointment-cancelled" ||
+        normType === "appointment-request" ||
+        normType === "appointment-completed" ||
+        normType === "appointment-accepted" ||
+        normType === "appointment-scheduled")
+    ) {
       const apptActionKey = `${apptId}:::${normType}`;
-      if (seenApptActions.has(apptActionKey)) continue;
+      if (seenApptActions.has(apptActionKey)) {
+        const existing = itemByKey.get(`appt:${apptActionKey}`);
+        if (existing && item.isRead) existing.isRead = true;
+        continue;
+      }
       seenApptActions.add(apptActionKey);
+      itemByKey.set(`appt:${apptActionKey}`, item);
     }
 
     // C. Content Fingerprint: normalized title + body (for general/broadcast notices; appointment actions are deduplicated by seenApptActions)
@@ -240,15 +339,24 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
       const contentKey = `${normTitle}:::${normMsg}`;
 
       if (normTitle && normMsg && seenContentKeys.has(contentKey)) {
+        const existing = itemByKey.get(`content:${contentKey}`);
+        if (existing && item.isRead) existing.isRead = true;
         continue;
       }
 
       if (normTitle && normMsg) {
         seenContentKeys.add(contentKey);
+        itemByKey.set(`content:${contentKey}`, item);
       }
     }
 
+    itemByKey.set(`id:${item.id}`, item);
+    if (bId) {
+      seenBroadcastIds.add(bId);
+      itemByKey.set(`broadcast:${bId}`, item);
+    }
     seenIds.add(item.id);
+    unique.push(item);
     unique.push(item);
   }
 
@@ -708,7 +816,15 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
                 ? `/patient/appointment-status?appointment_id=${resolvedApptId}&action=reassign`
                 : isTicket ? "/patient/support" : undefined)),
           timestamp: n.created_at,
-          isRead: Boolean(n.is_read || readSet.has(n.notif_id) || isRejectedResolved),
+          isRead: Boolean(
+            isNotificationRead(n.notif_id, Boolean(n.is_read), readSet, {
+              appointmentId: resolvedApptId,
+              ticketId: ticketIdMatch || (n as any).metadata?.ticket_id,
+              broadcastId: (n as any).metadata?.broadcast_id,
+              title: n.title,
+              message: n.body,
+            }) || isRejectedResolved
+          ),
           metadata: {
             ...(n as any).metadata,
             appointment_id: resolvedApptId,
@@ -748,7 +864,11 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             senderAvatar: clinicLogo,
             link: "/dashboard/appointment-status",
             timestamp: appt.created_at || new Date().toISOString(),
-            isRead: readSet.has(notifId),
+            isRead: isNotificationRead(notifId, false, readSet, {
+              appointmentId: appt.appointment_id,
+              title: "Appointment Confirmed",
+              message: `Your appointment at ${clinicName} on ${dateStr}${timeStr} has been confirmed.`,
+            }),
             metadata: { appointment_id: appt.appointment_id },
           });
         }
@@ -773,7 +893,14 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             senderAvatar: clinicLogo,
             link: `/patient/appointment-status?appointment_id=${appt.appointment_id}&action=reassign`,
             timestamp: appt.doctor_reviewed_at || appt.created_at || new Date().toISOString(),
-            isRead: readSet.has(notifId) || (rejectionStamp === "initial" && readSet.has(`appt-rejected-${appt.appointment_id}`)),
+            isRead:
+              readSet.has(notifId) ||
+              (rejectionStamp === "initial" && readSet.has(`appt-rejected-${appt.appointment_id}`)) ||
+              isNotificationRead(notifId, false, readSet, {
+                appointmentId: appt.appointment_id,
+                title: "Appointment Declined",
+                message: rejectMsg,
+              }),
             metadata: {
               appointment_id: appt.appointment_id,
               doctor_id: appt.assigned_doctor_id || (appt.questionnaire_answers as any)?.latest_declined_doctor_id,
@@ -801,7 +928,11 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             senderAvatar: clinicLogo,
             link: "/dashboard/appointment-status",
             timestamp: appt.created_at || new Date().toISOString(),
-            isRead: readSet.has(notifId),
+            isRead: isNotificationRead(notifId, false, readSet, {
+              appointmentId: appt.appointment_id,
+              title: "Appointment Cancelled",
+              message: cancelMsg,
+            }),
             metadata: { appointment_id: appt.appointment_id },
           });
         }
@@ -820,7 +951,10 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             senderAvatar: clinicLogo,
             link: "/dashboard/history",
             timestamp: appt.created_at || new Date().toISOString(),
-            isRead: readSet.has(notifId),
+            isRead: isNotificationRead(notifId, false, readSet, {
+              appointmentId: appt.appointment_id,
+              title: "Consultation Completed",
+            }),
             metadata: { appointment_id: appt.appointment_id },
           });
         }
@@ -870,7 +1004,10 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             senderAvatar: defaultAdminAvatar || undefined,
             link: "/dashboard/settings/help",
             timestamp: ticket.updated_at || ticket.created_at,
-            isRead: readSet.has(notifId),
+            isRead: isNotificationRead(notifId, false, readSet, {
+              ticketId: ticket.ticket_id,
+              title: "Support Ticket Updated",
+            }),
             metadata: { ticket_id: ticket.ticket_id },
           });
         }
@@ -908,7 +1045,11 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
           senderType: "admin",
           senderAvatar: defaultAdminAvatar || undefined,
           timestamp: b.sent_at,
-          isRead: readSet.has(notifId),
+          isRead: isNotificationRead(notifId, false, readSet, {
+            broadcastId: b.broadcast_id,
+            title: b.title,
+            message: b.message,
+          }),
           metadata: {
             broadcast_id: b.broadcast_id,
             subtype: "admin_announcement",
@@ -1083,13 +1224,11 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
               id: notifId,
               type: isDelegated ? "appointment-delegated" : "appointment_request",
               category: "appointment",
-              title: isDelegated ? "Assigned by Clinic" : "New Booking Request",
-              message: isDelegated
-                ? `${clinic} assigned ${patient}'s booking${condition} on ${dateStr} to your review list.`
-                : `${patient} requested a consultation${condition} on ${dateStr}. Please accept or decline.`,
-              senderName: isDelegated ? clinic : patient,
-              senderType: isDelegated ? "clinic" : "patient",
-              senderAvatar: isDelegated ? (clinicLogo || undefined) : (patientAvatar || undefined),
+              title: "New Patient Appointment for Review",
+              message: "A new paid appointment has been assigned to you and is awaiting your review.",
+              senderName: clinic,
+              senderType: "clinic",
+              senderAvatar: clinicLogo || undefined,
               link: targetNav,
               timestamp: appt.created_at || new Date().toISOString(),
               isRead: readSet.has(notifId),
@@ -1098,8 +1237,13 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
                 appointmentId: appointmentId,
                 clinic_id: clinicId,
                 clinicId: clinicId,
+                clinic_name: clinic,
+                clinic_logo: clinicLogo,
+                branch_name: clinic,
+                branch_logo: clinicLogo,
                 patient_id: patientId,
                 patientId: patientId,
+                patient_avatar: patientAvatar,
                 category: "appointment",
                 type: "appointment_request",
                 link: targetNav,
@@ -1107,30 +1251,40 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
             });
           }
 
-          // B. Confirmed / upcoming consultation
-          if (appt.doctor_status === "approved" && appt.status !== "completed") {
-            const notifId = `doc-confirmed-${appt.appointment_id}`;
-            items.push({
-              id: notifId,
-              type: "appointment-confirmed",
-              category: "appointment",
-              title: "Upcoming Consultation",
-              message: `${patient}'s consultation${condition} on ${dateStr} has been confirmed.`,
-              senderName: patient,
-              senderType: "patient",
-              senderAvatar: patientAvatar || undefined,
-              link: "/doctor/scheduled",
-              timestamp: appt.created_at || new Date().toISOString(),
-              isRead: readSet.has(notifId),
-              metadata: {
-                appointment_id: appt.appointment_id,
-                appointmentId: appointmentId,
-                clinic_id: clinicId,
-                clinicId: clinicId,
-                patient_id: patientId,
-                patientId: patientId,
-              },
-            });
+          // B. Genuine upcoming consultation reminder (approaching scheduled time within 24 hours)
+          // Suppresses redundant self-confirmation ("... has been confirmed") when doctor approves the appointment
+          if (appt.doctor_status === "approved" && appt.status !== "completed" && appt.date) {
+            const parsedApptTime = resolveAppointmentTimestamp(appt, appt.date);
+            const apptTimestamp = new Date(parsedApptTime).getTime();
+            const now = Date.now();
+            const isApproaching = !isNaN(apptTimestamp) && apptTimestamp >= now && apptTimestamp - now <= 24 * 60 * 60 * 1000;
+            if (isApproaching) {
+              const notifId = `doc-reminder-${appt.appointment_id}`;
+              const timeStr = appt.time ? ` at ${appt.time}` : "";
+              items.push({
+                id: notifId,
+                type: "appointment-reminder",
+                category: "appointment",
+                title: "Upcoming Consultation Reminder",
+                message: `Reminder: Consultation with ${patient}${condition} is scheduled for ${dateStr}${timeStr} at ${clinic}.`,
+                senderName: clinic,
+                senderType: "clinic",
+                senderAvatar: clinicLogo || undefined,
+                link: "/doctor/scheduled",
+                timestamp: appt.created_at || new Date().toISOString(),
+                isRead: readSet.has(notifId),
+                metadata: {
+                  appointment_id: appt.appointment_id,
+                  appointmentId: appointmentId,
+                  clinic_id: clinicId,
+                  clinicId: clinicId,
+                  clinic_name: clinic,
+                  branch_name: clinic,
+                  patient_id: patientId,
+                  patientId: patientId,
+                },
+              });
+            }
           }
         });
       }
@@ -3529,19 +3683,68 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
 export async function markNotificationAsRead(
   id: string,
   role: NotificationRole,
-  userId?: string
+  userId?: string,
+  metadata?: Record<string, any>
 ): Promise<void> {
-  saveReadId(role, id, userId);
+  const extraAliases: string[] = [];
+  if (metadata?.appointment_id) {
+    const aid = String(metadata.appointment_id);
+    extraAliases.push(aid, `appt:${aid}`, `appt-accepted-${aid}`, `appt-completed-${aid}`, `appt-rejected-${aid}`, `appt-cancelled-${aid}`);
+  }
+  if (id.startsWith("appt-")) {
+    const raw = id.replace(/^appt-[a-z]+-/, "");
+    if (raw) {
+      extraAliases.push(raw, `appt:${raw}`, `appt-accepted-${raw}`, `appt-completed-${raw}`, `appt-rejected-${raw}`, `appt-cancelled-${raw}`);
+    }
+  }
+  if (metadata?.ticket_id) {
+    extraAliases.push(String(metadata.ticket_id), `ticket:${metadata.ticket_id}`, `ticket-update-${metadata.ticket_id}`);
+  }
+  if (id.startsWith("ticket-update-")) {
+    const raw = id.replace("ticket-update-", "");
+    extraAliases.push(raw, `ticket:${raw}`);
+  }
+  if (metadata?.broadcast_id) {
+    extraAliases.push(String(metadata.broadcast_id), `broadcast:${metadata.broadcast_id}`);
+  }
+  if (id.startsWith("broadcast-")) {
+    const raw = id.replace("broadcast-", "");
+    extraAliases.push(raw, `broadcast:${raw}`);
+  }
+  if (metadata?.analysis_id) {
+    extraAliases.push(String(metadata.analysis_id), `scan:${metadata.analysis_id}`, `scan-${metadata.analysis_id}`);
+  }
+  if (id.startsWith("scan-")) {
+    const raw = id.replace("scan-", "");
+    extraAliases.push(raw, `scan:${raw}`);
+  }
+
+  saveReadId(role, id, userId, undefined, extraAliases);
 
   // If it's a UUID, also attempt to update user_notification table directly
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
   if (isUuid) {
     try {
-      await supabase.from("user_notification").update({ is_read: true }).eq("notif_id", id);
+      let query = supabase.from("user_notification").update({ is_read: true }).eq("notif_id", id);
+      if (userId) {
+        query = query.eq("user_id", userId);
+      }
+      await query;
     } catch { }
     try {
       await supabase.from("admin_alert").update({ is_read: true }).eq("notif_id", id);
     } catch { }
+  } else if (id.startsWith("appt-") && userId) {
+    const rawApptId = id.replace(/^appt-[a-z]+-/, "");
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawApptId)) {
+      try {
+        await supabase
+          .from("user_notification")
+          .update({ is_read: true })
+          .eq("user_id", userId)
+          .contains("metadata", { appointment_id: rawApptId });
+      } catch { }
+    }
   }
 }
 
@@ -3569,7 +3772,34 @@ export async function markAllNotificationsAsRead(
     }
   }
 
-  saveAllReadIds(role, ids, currentUserId);
+  const allIdsToSave = new Set<string>(ids);
+  ids.forEach((id) => {
+    if (id.startsWith("appt-")) {
+      const raw = id.replace(/^appt-[a-z]+-/, "");
+      if (raw) {
+        allIdsToSave.add(raw);
+        allIdsToSave.add(`appt:${raw}`);
+        allIdsToSave.add(`appt-accepted-${raw}`);
+        allIdsToSave.add(`appt-completed-${raw}`);
+        allIdsToSave.add(`appt-rejected-${raw}`);
+        allIdsToSave.add(`appt-cancelled-${raw}`);
+      }
+    } else if (id.startsWith("ticket-update-")) {
+      const raw = id.replace("ticket-update-", "");
+      allIdsToSave.add(raw);
+      allIdsToSave.add(`ticket:${raw}`);
+    } else if (id.startsWith("broadcast-")) {
+      const raw = id.replace("broadcast-", "");
+      allIdsToSave.add(raw);
+      allIdsToSave.add(`broadcast:${raw}`);
+    } else if (id.startsWith("scan-")) {
+      const raw = id.replace("scan-", "");
+      allIdsToSave.add(raw);
+      allIdsToSave.add(`scan:${raw}`);
+    }
+  });
+
+  saveAllReadIds(role, Array.from(allIdsToSave), currentUserId);
 
   // Exact required mutation:
   // Persist change to public.user_notification scoped strictly to currentUserId
@@ -3594,9 +3824,9 @@ export async function markAllNotificationsAsRead(
 
   if (uuidIds.length > 0) {
     try {
-      const query = supabase.from("user_notification").update({ is_read: true }).in("notif_id", uuidIds);
+      let query = supabase.from("user_notification").update({ is_read: true }).in("notif_id", uuidIds);
       if (currentUserId) {
-        query.eq("user_id", currentUserId);
+        query = query.eq("user_id", currentUserId);
       }
       await query;
     } catch { }
@@ -4156,36 +4386,136 @@ export async function createDoctorAppointmentNotification(input: DoctorAppointme
     const scheduleStr = scheduledDate ? ` on ${scheduledDate}${scheduledTime ? ` at ${scheduledTime}` : ""}` : "";
     const typeLabel = consultationType || "consultation";
 
-    const rows = Array.from(targetUserIds).map((uid) => ({
-      user_id: uid,
-      type: "appointment_request",
-      subtype: "appointment_request",
-      title: "New Consultation Request",
-      body: `${patientName} requested a ${typeLabel}${scheduleStr} at ${clinicName || "Clinic"}. Please review the request.`,
-      is_read: false,
-      metadata: {
-        clinic_id: clinicId,
-        clinicId: clinicId,
-        patient_id: patientId,
-        patientId: patientId,
-        appointment_id: appointmentId,
-        appointmentId: appointmentId,
-        category: "appointment",
-        type: "appointment_request",
-        link: navLink,
-      },
-    }));
+    const targetArray = Array.from(targetUserIds);
 
-    const { error } = await supabase.from("user_notification").insert(rows);
-    if (error) {
-      console.warn("[notificationService] Error generating doctor appointment notification:", error.message);
-      return false;
+    // Idempotency check: avoid inserting duplicate review notifications for the same appointment and doctor
+    let alreadyNotified = new Set<string>();
+    try {
+      const { data: existingNotifs } = await supabase
+        .from("user_notification")
+        .select("user_id, metadata, title, type")
+        .in("user_id", targetArray)
+        .or("type.eq.appointment_request,type.eq.appointment-request,title.ilike.%Review%");
+
+      (existingNotifs || []).forEach((en: any) => {
+        const metaApptId = en.metadata?.appointment_id || en.metadata?.appointmentId;
+        if (metaApptId === appointmentId) {
+          alreadyNotified.add(en.user_id);
+        }
+      });
+    } catch {}
+
+    const rows = targetArray
+      .filter((uid) => !alreadyNotified.has(uid))
+      .map((uid) => ({
+        user_id: uid,
+        type: "appointment_request",
+        subtype: "appointment_request",
+        title: "To Review New Appointment",
+        body: "A new paid patient appointment has been assigned to you for review.",
+        is_read: false,
+        metadata: {
+          clinic_id: clinicId,
+          clinicId: clinicId,
+          clinic_name: clinicName || "Clinic",
+          branch_name: clinicName || "Clinic",
+          patient_id: patientId,
+          patientId: patientId,
+          patient_name: patientName,
+          consultation_type: typeLabel,
+          schedule_info: scheduleStr,
+          appointment_id: appointmentId,
+          appointmentId: appointmentId,
+          category: "appointment",
+          type: "appointment_request",
+          link: navLink,
+        },
+      }));
+
+    if (rows.length > 0) {
+      const { error } = await supabase.from("user_notification").insert(rows);
+      if (error) {
+        console.warn("[notificationService] Error generating doctor appointment notification:", error.message);
+        return false;
+      }
     }
 
     window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
     return true;
   } catch (err: any) {
     console.warn("[notificationService] Notification dispatch error:", err?.message || err);
+    return false;
+  }
+}
+
+export interface DoctorConfirmedNotificationInput {
+  doctorUserId: string;
+  clinicId?: string;
+  clinicName?: string;
+  appointmentId: string;
+  patientId?: string;
+  patientName?: string;
+}
+
+/**
+ * Generate a Confirmed Appointment notification for the doctor who accepted the appointment.
+ * Triggered ONLY when the doctor successfully accepts/approves the patient appointment.
+ */
+export async function createDoctorAppointmentConfirmedNotification(
+  input: DoctorConfirmedNotificationInput
+): Promise<boolean> {
+  const { doctorUserId, clinicId, clinicName, appointmentId, patientId, patientName } = input;
+  if (!doctorUserId || !appointmentId) return false;
+
+  try {
+    // Idempotency check: don't create duplicate confirmation notifications for the same appointment
+    try {
+      const { data: existingNotifs } = await supabase
+        .from("user_notification")
+        .select("notif_id, metadata, title, type")
+        .eq("user_id", doctorUserId)
+        .or("type.eq.appointment-confirmed,title.eq.Confirmed Appointment");
+
+      const alreadyExists = (existingNotifs || []).some((en: any) => {
+        const metaApptId = en.metadata?.appointment_id || en.metadata?.appointmentId;
+        return metaApptId === appointmentId || en.title === "Confirmed Appointment";
+      });
+
+      if (alreadyExists) return true;
+    } catch {}
+
+    const { error } = await supabase.from("user_notification").insert({
+      user_id: doctorUserId,
+      type: "appointment-confirmed",
+      subtype: "confirmed",
+      title: "Confirmed Appointment",
+      body: "You have accepted this patient's appointment. The consultation is now confirmed and scheduled.",
+      is_read: false,
+      metadata: {
+        clinic_id: clinicId,
+        clinicId: clinicId,
+        clinic_name: clinicName || "Clinic",
+        branch_name: clinicName || "Clinic",
+        patient_id: patientId,
+        patientId: patientId,
+        patient_name: patientName,
+        appointment_id: appointmentId,
+        appointmentId: appointmentId,
+        category: "appointment",
+        type: "appointment-confirmed",
+        link: "/doctor/scheduled",
+      },
+    });
+
+    if (error) {
+      console.warn("[notificationService] Error generating doctor confirmed notification:", error.message);
+      return false;
+    }
+
+    window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+    return true;
+  } catch (err: any) {
+    console.warn("[notificationService] Doctor confirmed notification error:", err?.message || err);
     return false;
   }
 }
