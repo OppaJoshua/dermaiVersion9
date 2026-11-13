@@ -843,9 +843,9 @@ export default function PatientSkinHistory() {
                 <div className="p-6 border-b border-gray-100 shrink-0 bg-white">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 text-xs font-semibold border border-magenta-100 mb-2">
-                        <Sparkles className="w-3.5 h-3.5 text-magenta-600" />
-                        <span>AI Preliminary Assessment Result</span>
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 text-xs font-semibold border border-magenta-100 mb-2 -ml-2">
+                        <Sparkles className="w-3.5 h-3.5 text-magenta-600 shrink-0" />
+                        <span>AI Preliminary Assessment Result - Please consult a doctor or dermatologist to confirm.</span>
                       </div>
                       <h2 className="text-2xl font-display font-bold text-gray-900">
                         Possible Condition: {selectedItem.condition}
@@ -938,7 +938,7 @@ export default function PatientSkinHistory() {
                               AI Confidence Score
                             </span>
                             <p className="text-xs text-gray-500 mt-0.5">
-                              Preliminary pattern similarity score — not a clinical diagnosis or calibrated probability.
+                              AI confidence based on your photos. Not a medical diagnosis.
                             </p>
                           </div>
                           <span className="text-2xl font-bold text-magenta-600 shrink-0 ml-4">

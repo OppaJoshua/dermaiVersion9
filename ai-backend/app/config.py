@@ -7,15 +7,17 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
-
 # ============================================
-# PATHS
+# PATHS & ENVIRONMENT
 # ============================================
 
 # Base directory (ai-backend/)
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables
+if (BASE_DIR / ".env").exists():
+    load_dotenv(BASE_DIR / ".env")
+load_dotenv()
 
 # Model path
 MODEL_PATH = BASE_DIR / os.getenv("MODEL_PATH", "models/unfreeze_best.h5").lstrip("./")
@@ -33,9 +35,22 @@ ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
         "ALLOWED_ORIGINS",
-        "http://localhost:5173,http://localhost:3000,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8081,http://192.168.100.42:8081"
+        "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174,http://localhost:3000,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8081,http://192.168.100.42:8081"
     ).split(",")
+    if origin.strip()
 ]
+for _default_origin in (
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://localhost:8081",
+    "http://localhost:8082",
+    "http://127.0.0.1:8081",
+    "http://192.168.100.42:8081",
+):
+    if _default_origin not in ALLOWED_ORIGINS:
+        ALLOWED_ORIGINS.append(_default_origin)
 
 # ============================================
 # MODEL CONFIGURATION

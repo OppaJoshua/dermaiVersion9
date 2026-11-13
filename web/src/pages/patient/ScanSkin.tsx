@@ -269,7 +269,7 @@ export default function ScanSkinPage() {
             statusMessage: verified
               ? null
               : paidUsage.error ||
-                "Unable to verify your scan allowance. Please check your internet connection and try again.",
+              "Unable to verify your scan allowance. Please check your internet connection and try again.",
             loaded: true,
           });
         } else {
@@ -555,7 +555,7 @@ export default function ScanSkinPage() {
         const msg =
           freeUsage.ambiguous
             ? freeUsage.error ||
-              "Free AI skin scanning is temporarily unavailable due to a plan configuration issue."
+            "Free AI skin scanning is temporarily unavailable due to a plan configuration issue."
             : "Unable to verify your scan allowance. Please check your internet connection and try again.";
         setSubData({
           scansUsed: 0,
@@ -987,16 +987,16 @@ export default function ScanSkinPage() {
                 {subData.freePlanAmbiguous
                   ? "Free AI Skin Scanning Temporarily Unavailable"
                   : subData.freePlanVerified && !subData.freePlanActive
-                  ? "Free AI Skin Scanning Currently Unavailable"
-                  : "Scan Allowance Verification Required"}
+                    ? "Free AI Skin Scanning Currently Unavailable"
+                    : "Scan Allowance Verification Required"}
               </p>
               <p className="mt-0.5 text-amber-800">
                 {subData.freePlanAmbiguous
                   ? subData.statusMessage ||
-                    "Free AI skin scanning is temporarily unavailable due to a plan configuration issue."
+                  "Free AI skin scanning is temporarily unavailable due to a plan configuration issue."
                   : subData.freePlanVerified && !subData.freePlanActive
-                  ? "Free AI skin scanning is currently unavailable. Please view the available subscription plans to continue scanning."
-                  : "Unable to verify your scan allowance. Please check your internet connection and try again."}
+                    ? "Free AI skin scanning is currently unavailable. Please view the available subscription plans to continue scanning."
+                    : "Unable to verify your scan allowance. Please check your internet connection and try again."}
               </p>
             </div>
             <Link
@@ -1548,9 +1548,9 @@ export default function ScanSkinPage() {
               <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm overflow-hidden">
                 <div className="p-6 sm:p-8 border-b border-slate-100">
                   <div className="flex flex-wrap items-center gap-2 mb-3">
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 text-xs font-semibold border border-magenta-100">
-                      <Sparkles className="w-3.5 h-3.5 text-magenta-600" />
-                      <span>AI Preliminary Assessment</span>
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 text-xs font-semibold border border-magenta-100 -ml-2">
+                      <Sparkles className="w-3.5 h-3.5 text-magenta-600 shrink-0" />
+                      <span>AI Preliminary Assessment - Please consult a doctor or dermatologist to confirm.</span>
                     </div>
                   </div>
                   <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 mb-1">

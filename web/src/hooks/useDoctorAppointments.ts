@@ -668,6 +668,22 @@ export function useDoctorAppointments({
         nextQa = { appointment_history: updatedHistory };
       }
 
+      if (!isApproved) {
+        nextQa.reselection_status = "reselection_required";
+        nextQa.reselection_required = true;
+        nextQa.doctor_declined = true;
+        nextQa.workflow_status = "doctor_declined";
+        nextQa.latest_doctor_rejection_at = updatePayload.doctor_reviewed_at;
+        nextQa.latest_declined_doctor_id = branchDoctor.doctor_id;
+        nextQa.latest_declined_doctor_name = doctorName || undefined;
+        nextQa.latest_decline_reason = note || undefined;
+      } else {
+        nextQa.reselection_status = "approved";
+        nextQa.reselection_required = false;
+        nextQa.doctor_declined = false;
+        nextQa.workflow_status = "confirmed";
+      }
+
       updatePayload.questionnaire_answers = nextQa;
 
       if (isApproved) {

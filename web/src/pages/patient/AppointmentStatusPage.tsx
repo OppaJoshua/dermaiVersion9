@@ -76,49 +76,66 @@ interface Appointment {
 const STEPS = ["Request Sent", "Doctor Review", "Scheduled", "Completed"];
 
 function isAppointmentReselectionRequired(app: Appointment): boolean {
-  const qa = app.questionnaireAnswers && typeof app.questionnaireAnswers === "object" ? app.questionnaireAnswers : {};
-  if (
-    qa.reselection_status === "reselected" ||
-    qa.reselection_required === false ||
-    qa.workflow_status === "pending_doctor_review" ||
-    qa.doctor_declined === false
-  ) {
-    return false;
-  }
-  try {
-    const rawReselected = localStorage.getItem("dermai_reselected_appointments");
-    if (rawReselected && app.id) {
-      const map = JSON.parse(rawReselected);
-      if (map && map[String(app.id)]) {
-        return false;
-      }
-    }
-  } catch { }
-
   const rawStatus = String(app.status || "").toLowerCase();
   const docStatus = String(app.doctorStatus || "").toLowerCase();
+
+  // 1. Terminal / Confirmed / Approved states never require re-selection
   if (
-    rawStatus === "pending_doctor_review" ||
-    rawStatus === "reselected" ||
     rawStatus === "scheduled" ||
     rawStatus === "confirmed" ||
     rawStatus === "completed" ||
     rawStatus === "cancelled" ||
-    docStatus === "pending-review" ||
     docStatus === "approved"
   ) {
     return false;
   }
 
-  return (
-    rawStatus === "reselection_required" ||
-    rawStatus === "doctor_declined" ||
+  // 2. Determine if doctor rejected/declined
+  const isDoctorRejected =
     docStatus === "rejected" ||
+    docStatus === "declined" ||
+    rawStatus === "doctor_declined" ||
+    rawStatus === "reselection_required" ||
     rawStatus === "rejected" ||
     rawStatus === "declined" ||
     rawStatus === "clinic_reassigning" ||
-    rawStatus === "needs_doctor"
-  );
+    rawStatus === "needs_doctor";
+
+  if (!isDoctorRejected) {
+    return false;
+  }
+
+  // 3. For rejected appointments, check whether a new reassignment occurred strictly AFTER the latest rejection
+  const rejectionTime = app.doctorReviewedAt
+    ? new Date(app.doctorReviewedAt).getTime()
+    : app.createdAt
+      ? new Date(app.createdAt).getTime()
+      : 0;
+
+  const qa = app.questionnaireAnswers && typeof app.questionnaireAnswers === "object" ? app.questionnaireAnswers : {};
+  const qaReassignedTime = qa.reassigned_at ? new Date(qa.reassigned_at).getTime() : 0;
+
+  let localResolvedTime = 0;
+  try {
+    const rawReselected = localStorage.getItem("dermai_reselected_appointments");
+    if (rawReselected && app.id) {
+      const map = JSON.parse(rawReselected);
+      const entry = map?.[String(app.id)];
+      if (entry?.resolvedAt) {
+        localResolvedTime = new Date(entry.resolvedAt).getTime();
+      }
+    }
+  } catch { }
+
+  // Re-selection is only satisfied if reassignment took place after the rejection
+  if (
+    (qaReassignedTime > rejectionTime && qaReassignedTime > 0) ||
+    (localResolvedTime > rejectionTime && localResolvedTime > 0)
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function getStepIndex(app: Appointment): number {
@@ -1108,11 +1125,12 @@ const AppointmentStatusPage: React.FC = () => {
     if (!targetAppt) return;
 
     if (paramAction === "reassign") {
+      const autoOpenKey = `${targetAppt.id}_${targetAppt.doctorReviewedAt || targetAppt.createdAt || "init"}`;
       if (
-        !dismissedReassignIdsRef.current.has(String(targetAppt.id)) &&
+        !dismissedReassignIdsRef.current.has(autoOpenKey) &&
         isAppointmentReselectionRequired(targetAppt)
       ) {
-        dismissedReassignIdsRef.current.add(String(targetAppt.id));
+        dismissedReassignIdsRef.current.add(autoOpenKey);
         setReassignModalAppt(targetAppt);
       } else if (!isAppointmentReselectionRequired(targetAppt)) {
         setReassignModalAppt(null);
@@ -1286,20 +1304,29 @@ const AppointmentStatusPage: React.FC = () => {
             }
           } catch { }
 
-          const isAlreadyReselected =
-            Boolean(localReselectedEntry) ||
-            qAnswers.reselection_status === "reselected" ||
-            qAnswers.reselection_required === false ||
-            qAnswers.workflow_status === "pending_doctor_review";
+          // Clean up stale local reselection if the assigned doctor has rejected after or at reassignment
+          const isDocRejected = a.doctor_status === "rejected" || a.doctor_status === "declined";
+          if (isDocRejected && localReselectedEntry) {
+            const reviewedAtTime = a.doctor_reviewed_at ? new Date(a.doctor_reviewed_at).getTime() : 0;
+            const resolvedAtTime = localReselectedEntry?.resolvedAt ? new Date(localReselectedEntry.resolvedAt).getTime() : 0;
+            if (!localReselectedEntry.resolvedAt || reviewedAtTime >= resolvedAtTime) {
+              localReselectedEntry = null;
+              try {
+                const rawReselected = localStorage.getItem("dermai_reselected_appointments");
+                if (rawReselected) {
+                  const parsedMap = JSON.parse(rawReselected);
+                  delete parsedMap[String(a.appointment_id)];
+                  localStorage.setItem("dermai_reselected_appointments", JSON.stringify(parsedMap));
+                }
+              } catch { }
+            }
+          }
 
           const clinicObj: any = Array.isArray(a.clinic) ? a.clinic[0] : a.clinic;
           const resolvedClinicName = clinicObj?.name || clinicNameMap.get(String(a.clinic_id)) || "Skin Clinic";
-          const isDocRejected = !isAlreadyReselected && a.doctor_status === "rejected";
-          const effectiveDoctorId = localReselectedEntry?.newDoctorId || a.assigned_doctor_id;
-          const effectiveDoctorStatus = isAlreadyReselected && a.doctor_status === "rejected"
-            ? "pending-review"
-            : (a.doctor_status || undefined);
-          const docName = localReselectedEntry?.newDoctorName
+          const effectiveDoctorId = (!isDocRejected && localReselectedEntry?.newDoctorId) || a.assigned_doctor_id;
+          const effectiveDoctorStatus = a.doctor_status || undefined;
+          const docName = (!isDocRejected && localReselectedEntry?.newDoctorName)
             ? `Dr. ${String(localReselectedEntry.newDoctorName).replace(/^dr\.\s*/i, "")}`
             : (effectiveDoctorId && !isDocRejected && docNameMap.has(effectiveDoctorId))
               ? `Dr. ${docNameMap.get(effectiveDoctorId)!.replace(/^dr\.\s*/i, "")}`
