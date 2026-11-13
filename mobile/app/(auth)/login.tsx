@@ -14,7 +14,12 @@ import { makeRedirectUri } from 'expo-auth-session';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { COLORS } from '@/lib/constants';
 import { supabase, processMobileOAuthCallbackUrl } from '@/lib/supabase';
-import { savePatientAccount } from '@/lib/store';
+import {
+  savePatientAccount,
+  verifyMobilePatientAccess,
+  consumeBlockedRoleNotice,
+  BlockedRoleNotice,
+} from '@/lib/store';
 import { logAuditEvent } from '@/lib/auditLogger';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -76,6 +81,7 @@ export default function LoginScreen() {
   // User Agreement & Privacy Consent state
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [showAgreementModal, setShowAgreementModal] = useState(false);
+  const [blockedAccountNotice, setBlockedAccountNotice] = useState<BlockedRoleNotice | null>(null);
 
   // Guard against rapid navigation cycles
   const isNavigatingRef = useRef<boolean>(false);
@@ -84,6 +90,23 @@ export default function LoginScreen() {
     if (!user || isNavigatingRef.current) return;
     isNavigatingRef.current = true;
     console.log('[Google Auth] Stage: authenticated user id:', user.id);
+
+    const accessCheck = await verifyMobilePatientAccess(user);
+    if (!accessCheck.allowed) {
+      console.warn('[Google Auth] Stage: blocked non-patient role on mobile:', accessCheck.role);
+      await supabase.auth.signOut().catch(() => {});
+      isNavigatingRef.current = false;
+      const notice = consumeBlockedRoleNotice() || {
+        role: accessCheck.role,
+        email: user.email || '',
+        message:
+          accessCheck.reason ||
+          'The DermAI Mobile App is exclusively for Patient accounts. Please sign in with a Patient Google account.',
+      };
+      setBlockedAccountNotice(notice);
+      return;
+    }
+
     const displayName =
       user.user_metadata?.full_name ||
       user.user_metadata?.name ||
@@ -126,6 +149,11 @@ export default function LoginScreen() {
   }
 
   useEffect(() => {
+    const pendingNotice = consumeBlockedRoleNotice();
+    if (pendingNotice) {
+      setBlockedAccountNotice(pendingNotice);
+    }
+
     const isOAuthCallbackUrl = (url?: string | null): url is string =>
       Boolean(
         url &&
@@ -173,6 +201,9 @@ export default function LoginScreen() {
           provider: 'google',
           options: {
             redirectTo: redirectUrl,
+            queryParams: {
+              prompt: 'select_account',
+            },
           },
         });
         if (error) throw error;
@@ -202,6 +233,9 @@ export default function LoginScreen() {
         options: {
           redirectTo,
           skipBrowserRedirect: true,
+          queryParams: {
+            prompt: 'select_account',
+          },
         },
       });
 
@@ -415,6 +449,73 @@ export default function LoginScreen() {
               >
                 <Ionicons name="checkmark-circle" size={17} color="#ffffff" />
                 <Text style={styles.acceptBtnTxt}>I Agree &amp; Continue</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Blocked Non-Patient Account Modal ── */}
+      <Modal
+        visible={Boolean(blockedAccountNotice)}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setBlockedAccountNotice(null)}
+      >
+        <View style={[styles.modalOverlay, { justifyContent: 'center', paddingHorizontal: 20 }]}>
+          <View
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: 24,
+              padding: 22,
+              width: '100%',
+              maxWidth: 400,
+              alignSelf: 'center',
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <View
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 14,
+                  backgroundColor: '#FEF2F2',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Ionicons name="lock-closed" size={22} color="#DC2626" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: '#111827' }}>
+                  Web Portal Account Detected
+                </Text>
+                <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
+                  Patient Mobile App Access Restricted
+                </Text>
+              </View>
+            </View>
+
+            <Text style={{ fontSize: 13, lineHeight: 20, color: '#374151', marginBottom: 18 }}>
+              {blockedAccountNotice?.message}
+            </Text>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
+              <TouchableOpacity
+                style={styles.declineBtn}
+                onPress={() => setBlockedAccountNotice(null)}
+              >
+                <Text style={styles.declineBtnTxt}>Close</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.acceptBtn}
+                onPress={async () => {
+                  setBlockedAccountNotice(null);
+                  await executeGoogleAuth();
+                }}
+              >
+                <Ionicons name="swap-horizontal" size={16} color="#ffffff" />
+                <Text style={styles.acceptBtnTxt}>Switch Google Account</Text>
               </TouchableOpacity>
             </View>
           </View>

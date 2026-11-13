@@ -507,7 +507,14 @@ export default function FindClinicsPage() {
     const [pricePopoverOpen, setPricePopoverOpen] = useState<boolean>(false);
     const pricePopoverRef = useRef<HTMLDivElement>(null);
     const [openTodayOnly, setOpenTodayOnly] = useState<boolean>(false);
-    const [searchQuery, setSearchQuery] = useState("");
+    const [searchQuery, setSearchQuery] = useState(() => searchParams.get("q") || searchParams.get("search") || "");
+
+    useEffect(() => {
+        const qParam = searchParams.get("q") || searchParams.get("search");
+        if (qParam !== null) {
+            setSearchQuery(qParam);
+        }
+    }, [searchParams]);
     const [selectedDistrict, setSelectedDistrict] = useState("All Districts");
 
     // Close price popover when clicking outside
@@ -824,6 +831,7 @@ export default function FindClinicsPage() {
                 !q ||
                 clinic.name.toLowerCase().includes(q) ||
                 clinic.address.toLowerCase().includes(q) ||
+                clinic.district.toLowerCase().includes(q) ||
                 clinic.doctors.some((doc) => doc.name.toLowerCase().includes(q) || doc.specialization.toLowerCase().includes(q)) ||
                 clinic.conditionsTreated.some((cond) => {
                     const cLower = cond.toLowerCase();

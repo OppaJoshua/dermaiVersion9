@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Camera,
   Brain,
@@ -12,8 +12,11 @@ import {
   Users,
   Send,
   Sparkles,
+  Building2,
+  X,
 } from "lucide-react";
 import { motion } from "framer-motion";
+import { supabase } from "@/lib/supabaseClient";
 import heroLeftImage from "@/assets/homepage-partDesign.png";
 import heroRightImage from "@/assets/Girl-homepage.png";
 import featureScanImg from "@/assets/feature-scan.jpg";
@@ -21,6 +24,24 @@ import featureAiImg from "@/assets/feature-ai.jpg";
 import featureClinicImg from "@/assets/feature-clinic.jpg";
 import appDownloadImg from "@/assets/app-download-hands.jpg";
 import UserGuideSection from "./UserGuideSection";
+
+type QuickClinic = {
+  id: string;
+  name: string;
+  address: string;
+  district: string;
+  logo?: string;
+  verified?: boolean;
+};
+
+const QUICK_SUGGESTIONS = [
+  "Acne Vulgaris",
+  "Melasma",
+  "Atopic Dermatitis",
+  "Cebu City",
+  "Lapu-Lapu",
+  "Mandaue",
+];
 
 const fadeUp = {
   initial: { opacity: 0, y: 30 },
@@ -136,22 +157,25 @@ function FeatureCarousel() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") setActive(i);
                 }}
-                className={`group relative overflow-hidden rounded-[28px] h-[380px] md:h-auto md:basis-0 cursor-pointer outline-none focus-visible:ring-4 focus-visible:ring-magenta-300 shadow-[0_10px_40px_rgba(61,8,36,0.12)] transition-[flex-grow] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${isActive ? "md:grow-[3]" : "md:grow"
-                  }`}
+                className={`group relative overflow-hidden rounded-[28px] h-[380px] md:h-auto md:basis-0 cursor-pointer outline-none focus-visible:ring-4 focus-visible:ring-magenta-300 shadow-[0_10px_40px_rgba(61,8,36,0.12)] transition-[flex-grow] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                  isActive ? "md:grow-[3]" : "md:grow"
+                }`}
               >
                 {/* Background photo */}
                 <img
                   src={feature.image}
                   alt={feature.title}
                   loading="lazy"
-                  className={`absolute inset-0 w-full h-full object-cover transition-transform duration-[1400ms] ease-out ${isActive ? "scale-105" : "scale-100"
-                    }`}
+                  className={`absolute inset-0 w-full h-full object-cover transition-transform duration-[1400ms] ease-out ${
+                    isActive ? "scale-105" : "scale-100"
+                  }`}
                 />
                 {/* Readability gradient */}
                 <div className="absolute inset-0 bg-linear-to-t from-magenta-900/90 via-magenta-900/30 to-transparent" />
                 <div
-                  className={`absolute inset-0 bg-magenta-900/25 transition-opacity duration-500 ${isActive ? "opacity-0" : "opacity-100"
-                    }`}
+                  className={`absolute inset-0 bg-magenta-900/25 transition-opacity duration-500 ${
+                    isActive ? "opacity-0" : "opacity-100"
+                  }`}
                 />
 
                 {/* Slide number */}
@@ -165,10 +189,11 @@ function FeatureCarousel() {
                     {feature.title}
                   </h3>
                   <div
-                    className={`grid transition-all duration-500 ease-out ${isActive
-                      ? "grid-rows-[1fr] opacity-100"
-                      : "grid-rows-[1fr] opacity-100 md:grid-rows-[0fr] md:opacity-0"
-                      }`}
+                    className={`grid transition-all duration-500 ease-out ${
+                      isActive
+                        ? "grid-rows-[1fr] opacity-100"
+                        : "grid-rows-[1fr] opacity-100 md:grid-rows-[0fr] md:opacity-0"
+                    }`}
                   >
                     <div className="overflow-hidden">
                       <p className="text-sm text-white/85 leading-relaxed max-w-md mb-5">
@@ -199,8 +224,9 @@ function FeatureCarousel() {
               type="button"
               aria-label={`Show ${feature.title}`}
               onClick={() => setActive(i)}
-              className={`relative h-1.5 rounded-full overflow-hidden transition-all duration-500 cursor-pointer ${i === active ? "w-12 bg-magenta-100" : "w-1.5 bg-gray-300 hover:bg-magenta-300"
-                }`}
+              className={`relative h-1.5 rounded-full overflow-hidden transition-all duration-500 cursor-pointer ${
+                i === active ? "w-12 bg-magenta-100" : "w-1.5 bg-gray-300 hover:bg-magenta-300"
+              }`}
             >
               {i === active && (
                 <motion.span
@@ -313,15 +339,115 @@ function AppDownloadSection() {
 }
 
 export default function HomePage() {
+  const navigate = useNavigate();
+  const [heroQuery, setHeroQuery] = useState("");
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [clinics, setClinics] = useState<QuickClinic[]>(() => {
+    try {
+      const cached = localStorage.getItem("dermai_cached_find_clinics");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          return parsed.map((c: any) => ({
+            id: String(c.id || c.clinic_id),
+            name: String(c.name || "Clinic"),
+            address: String(c.address || c.district || "Cebu"),
+            district: String(c.district || "Cebu"),
+            logo: c.logo || c.logo_url || "",
+            verified: Boolean(c.verified ?? true),
+          }));
+        }
+      }
+    } catch {}
+    return [];
+  });
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    supabase
+      .from("clinic")
+      .select("clinic_id, name, address, status, logo_url")
+      .in("status", ["approved", "verified"])
+      .then(({ data }) => {
+        if (!active || !data || data.length === 0) return;
+        setClinics(
+          data.map((c: any) => ({
+            id: String(c.clinic_id),
+            name: String(c.name || "Clinic"),
+            address: String(c.address || "Cebu"),
+            district: String(c.address || "Cebu"),
+            logo: c.logo_url || "",
+            verified: true,
+          }))
+        );
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (
+        searchContainerRef.current &&
+        !searchContainerRef.current.contains(e.target as Node)
+      ) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
+
+  const filteredClinics = useMemo(() => {
+    const q = heroQuery.toLowerCase().trim();
+    if (!q) return clinics.slice(0, 4);
+    return clinics
+      .filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          c.address.toLowerCase().includes(q) ||
+          c.district.toLowerCase().includes(q)
+      )
+      .slice(0, 5);
+  }, [clinics, heroQuery]);
+
+  const handleHeroSearchSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setDropdownOpen(false);
+    const trimmed = heroQuery.trim();
+    if (trimmed) {
+      navigate(`/find-clinics?q=${encodeURIComponent(trimmed)}`);
+    } else {
+      navigate("/find-clinics");
+    }
+  };
+
+  const handleSelectClinic = (clinic: QuickClinic) => {
+    setDropdownOpen(false);
+    navigate(
+      `/find-clinics?clinic=${encodeURIComponent(clinic.id)}&q=${encodeURIComponent(
+        clinic.name
+      )}`
+    );
+  };
+
+  const handleSelectQuickTag = (tag: string) => {
+    setHeroQuery(tag);
+    setDropdownOpen(false);
+    navigate(`/find-clinics?q=${encodeURIComponent(tag)}`);
+  };
+
   return (
     <div className="min-h-screen flex flex-col">
       {/* Hero Section */}
       <section
-        className="relative overflow-hidden bg-magenta-500 pb-0"
+        className="relative overflow-visible bg-magenta-500 pb-0 z-20"
         style={{ minHeight: "560px" }}
       >
         {/* Noise overlay */}
-        <div className="absolute inset-0 opacity-[0.03] bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMzAwIj48ZmlsdGVyIGlkPSJhIiB4PSIwIiB5PSIwIj48ZmVUdXJidWxlbmNlIGJhc2VGcmVxdWVuY3k9Ii43NSIgc3RpdGNoVGlsZXM9InN0aXRjaCIgdHlwZT0iZnJhY3RhbE5vaXNlIi8+PC9maWx0ZXI+PHJlY3Qgd2lkdGg9IjMwMCIgaGVpZ2h0PSIzMDAiIGZpbHRlcj0idXJsKCNhKSIgb3BhY2l0eT0iMSIvPjwvc3ZnPg==')] h-153.25">
+        <div className="absolute inset-0 overflow-hidden opacity-[0.03] bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMzAwIj48ZmlsdGVyIGlkPSJhIiB4PSIwIiB5PSIwIj48ZmVUdXJidWxlbmNlIGJhc2VGcmVxdWVuY3k9Ii43NSIgc3RpdGNoVGlsZXM9InN0aXRjaCIgdHlwZT0iZnJhY3RhbE5vaXNlIi8+PC9maWx0ZXI+PHJlY3Qgd2lkdGg9IjMwMCIgaGVpZ2h0PSIzMDAiIGZpbHRlcj0idXJsKCNhKSIgb3BhY2l0eT0iMSIvPjwvc3ZnPg==')] h-153.25 pointer-events-none">
           <img
             src={heroLeftImage}
             alt={"Pasted Image"}
@@ -339,7 +465,7 @@ export default function HomePage() {
           >
             {/* Left Content */}
             <motion.div
-              className="py-16 lg:py-20 flex flex-col justify-center"
+              className="py-16 lg:py-20 flex flex-col justify-center relative z-30"
               initial="initial"
               animate="animate"
               variants={stagger}
@@ -365,18 +491,135 @@ export default function HomePage() {
                 and connect with the right specialist for your needs.
               </motion.p>
 
-              {/* Search Bar */}
+              {/* Interactive Search Bar + Autocomplete Dropdown */}
               <motion.div
+                ref={searchContainerRef}
                 variants={fadeUp}
-                className="bg-white rounded-full flex items-center px-5 py-3.5 max-w-sm shadow-xl shadow-black/20"
+                className="relative max-w-sm w-full"
               >
-                <Search className="w-5 h-5 text-gray-400 mr-3 shrink-0" />
+                <form
+                  onSubmit={handleHeroSearchSubmit}
+                  className="bg-white rounded-full flex items-center px-5 py-3.5 shadow-xl shadow-black/20 focus-within:ring-4 focus-within:ring-white/30 transition-all"
+                >
+                  <button
+                    type="submit"
+                    aria-label="Submit search"
+                    className="mr-3 shrink-0 text-gray-400 hover:text-magenta-600 transition-colors cursor-pointer"
+                  >
+                    <Search className="w-5 h-5" />
+                  </button>
 
-                <input
-                  type="text"
-                  placeholder="Search Derma Clinics in Cebu"
-                  className="flex-1 bg-transparent outline-none text-gray-700 placeholder:text-gray-400 text-sm"
-                />
+                  <input
+                    type="text"
+                    value={heroQuery}
+                    onFocus={() => setDropdownOpen(true)}
+                    onChange={(e) => {
+                      setHeroQuery(e.target.value);
+                      setDropdownOpen(true);
+                    }}
+                    placeholder="Search Derma Clinics in Cebu"
+                    aria-label="Search Derma Clinics in Cebu"
+                    className="flex-1 bg-transparent outline-none text-gray-700 placeholder:text-gray-400 text-sm"
+                  />
+
+                  {heroQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setHeroQuery("")}
+                      aria-label="Clear search"
+                      className="p-1 text-gray-400 hover:text-gray-600 rounded-full cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </form>
+
+                {/* Dropdown Suggestions */}
+                {dropdownOpen && (
+                  <div className="absolute left-0 right-0 top-full mt-2.5 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden z-50">
+                    {/* Matching Clinics */}
+                    <div className="p-3">
+                      <div className="flex items-center justify-between px-2 mb-2">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                          {heroQuery.trim() ? "Matching Clinics" : "Featured Cebu Clinics"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleHeroSearchSubmit()}
+                          className="text-xs font-semibold text-magenta-600 hover:text-magenta-700 flex items-center gap-1 cursor-pointer"
+                        >
+                          View all on map
+                          <ArrowRight className="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      {filteredClinics.length > 0 ? (
+                        <div className="space-y-1">
+                          {filteredClinics.map((clinic) => (
+                            <button
+                              key={clinic.id}
+                              type="button"
+                              onClick={() => handleSelectClinic(clinic)}
+                              className="w-full flex items-center gap-3 px-2.5 py-2 rounded-xl hover:bg-magenta-50/70 transition-colors text-left group cursor-pointer"
+                            >
+                              <div className="w-9 h-9 rounded-lg bg-magenta-50 border border-magenta-100 flex items-center justify-center overflow-hidden shrink-0">
+                                {clinic.logo ? (
+                                  <img
+                                    src={clinic.logo}
+                                    alt={clinic.name}
+                                    className="w-full h-full object-cover"
+                                  />
+                                ) : (
+                                  <Building2 className="w-4 h-4 text-magenta-600" />
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-semibold text-gray-900 truncate group-hover:text-magenta-700">
+                                  {clinic.name}
+                                </p>
+                                <p className="text-xs text-gray-500 truncate flex items-center gap-1">
+                                  <MapPin className="w-3 h-3 text-magenta-500 shrink-0" />
+                                  {clinic.address}
+                                </p>
+                              </div>
+                              <ArrowRight className="w-4 h-4 text-gray-300 group-hover:text-magenta-600 shrink-0" />
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleHeroSearchSubmit()}
+                          className="w-full text-left px-3 py-2.5 rounded-xl bg-magenta-50/60 hover:bg-magenta-50 text-xs text-magenta-800 font-medium flex items-center justify-between cursor-pointer"
+                        >
+                          <span>
+                            Search all clinics for <strong>"{heroQuery.trim()}"</strong>
+                          </span>
+                          <ArrowRight className="w-3.5 h-3.5 text-magenta-600" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Quick Popular Searches */}
+                    <div className="bg-gray-50/80 px-4 py-2.5 border-t border-gray-100">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1.5">
+                        Popular Searches
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {QUICK_SUGGESTIONS.map((tag) => (
+                          <button
+                            key={tag}
+                            type="button"
+                            onClick={() => handleSelectQuickTag(tag)}
+                            className="px-2.5 py-1 rounded-full bg-white border border-gray-200 hover:border-magenta-300 hover:bg-magenta-50 text-gray-700 hover:text-magenta-700 text-xs font-medium transition-colors cursor-pointer"
+                          >
+                            {tag}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </motion.div>
             </motion.div>
 

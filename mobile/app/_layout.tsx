@@ -19,7 +19,7 @@ import {
   Poppins_700Bold,
 } from '@expo-google-fonts/poppins';
 import { supabase } from '@/lib/supabase';
-import { savePatientAccount } from '@/lib/store';
+import { savePatientAccount, verifyMobilePatientAccess } from '@/lib/store';
 
 // Handle incoming authentication/payment redirects for Expo WebBrowser
 WebBrowser.maybeCompleteAuthSession();
@@ -143,6 +143,17 @@ export default function RootLayout() {
 
     (async () => {
       try {
+        const accessCheck = await verifyMobilePatientAccess(user);
+        if (!accessCheck.allowed) {
+          console.warn('[RootLayout] Blocked non-patient account on mobile:', accessCheck.role);
+          await supabase.auth.signOut().catch(() => {});
+          setUser(null);
+          if (!inLogin) {
+            router.replace('/(auth)/login');
+          }
+          return;
+        }
+
         const { data: profile } = await supabase
           .from('user')
           .select('*')

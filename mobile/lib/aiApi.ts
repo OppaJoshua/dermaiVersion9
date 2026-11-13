@@ -87,21 +87,44 @@ async function appendImageField(
   const cleanUri = uri.split('?')[0];
   let rawName = cleanUri.split('/').pop() || defaultName;
   const hasValidExt = /\.(jpe?g|png|webp|heic|bmp|tif|tiff)$/i.test(rawName);
+  const lowerName = rawName.toLowerCase();
+
+  // On native iOS / Android, React Native's FormData expects the { uri, name, type } descriptor
+  if (Platform.OS !== 'web' && !uri.startsWith('data:') && !uri.startsWith('blob:')) {
+    const isPng = lowerName.endsWith('.png');
+    const isWebp = lowerName.endsWith('.webp');
+    const isHeic = lowerName.endsWith('.heic');
+    const finalName = hasValidExt ? rawName : `${rawName || defaultName.split('.')[0]}.jpg`;
+    const mimeType = isPng
+      ? 'image/png'
+      : isWebp
+      ? 'image/webp'
+      : isHeic
+      ? 'image/heic'
+      : 'image/jpeg';
+
+    formData.append(fieldName, {
+      uri,
+      name: finalName,
+      type: mimeType,
+    } as any);
+    return;
+  }
 
   try {
     const res = await fetch(uri);
     const blob = await res.blob();
 
     let ext = '.jpg';
-    if (blob.type === 'image/png' || rawName.toLowerCase().endsWith('.png')) ext = '.png';
-    else if (blob.type === 'image/webp' || rawName.toLowerCase().endsWith('.webp')) ext = '.webp';
-    else if (blob.type === 'image/heic' || rawName.toLowerCase().endsWith('.heic')) ext = '.heic';
+    if (blob.type === 'image/png' || lowerName.endsWith('.png')) ext = '.png';
+    else if (blob.type === 'image/webp' || lowerName.endsWith('.webp')) ext = '.webp';
+    else if (blob.type === 'image/heic' || lowerName.endsWith('.heic')) ext = '.heic';
 
     const finalName = hasValidExt ? rawName : `${rawName || defaultName.split('.')[0]}${ext}`;
     formData.append(fieldName, blob, finalName);
   } catch (err) {
     console.warn(`[aiApi] Blob conversion fallback for ${fieldName}:`, err);
-    const isPng = rawName.toLowerCase().endsWith('.png');
+    const isPng = lowerName.endsWith('.png');
     const finalName = hasValidExt ? rawName : `${rawName || defaultName.split('.')[0]}.jpg`;
     formData.append(fieldName, {
       uri,

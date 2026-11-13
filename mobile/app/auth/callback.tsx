@@ -4,7 +4,7 @@ import { Alert, StyleSheet } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { supabase, processMobileOAuthCallbackUrl } from '@/lib/supabase';
-import { savePatientAccount } from '@/lib/store';
+import { savePatientAccount, verifyMobilePatientAccess } from '@/lib/store';
 
 function syncGooglePatientProfileInBackground(user: any) {
   if (!user?.id) return;
@@ -35,13 +35,22 @@ export default function AuthCallback() {
     let handled = false;
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const completeSignIn = (user: any) => {
+    const completeSignIn = async (user: any) => {
       if (handled || !user) return;
       handled = true;
       if (fallbackTimer) {
         clearTimeout(fallbackTimer);
         fallbackTimer = null;
       }
+
+      const accessCheck = await verifyMobilePatientAccess(user);
+      if (!accessCheck.allowed) {
+        console.warn('[AuthCallback] Stage: blocked non-patient role on mobile:', accessCheck.role);
+        await supabase.auth.signOut().catch(() => {});
+        router.replace('/(auth)/login');
+        return;
+      }
+
       console.log('[AuthCallback] Stage: session active for user:', user.id);
       syncGooglePatientProfileInBackground(user);
       router.replace('/(app)');

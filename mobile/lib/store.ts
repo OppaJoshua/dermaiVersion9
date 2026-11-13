@@ -750,7 +750,87 @@ export async function getCurrentUser(forceRefresh = false): Promise<PatientAccou
 
 }
 
+export interface BlockedRoleNotice {
+  role: string;
+  email: string;
+  message: string;
+}
 
+let _pendingBlockedRoleNotice: BlockedRoleNotice | null = null;
+
+export function setBlockedRoleNotice(notice: BlockedRoleNotice | null): void {
+  _pendingBlockedRoleNotice = notice;
+}
+
+export function consumeBlockedRoleNotice(): BlockedRoleNotice | null {
+  const notice = _pendingBlockedRoleNotice;
+  _pendingBlockedRoleNotice = null;
+  return notice;
+}
+
+/**
+ * Verifies that an authenticated user is allowed to use the DermAI Patient Mobile App.
+ * Blocks `admin`, `clinic`, `doctor`, and `suspended` accounts from signing into Mobile.
+ */
+export async function verifyMobilePatientAccess(authUser: any): Promise<{
+  allowed: boolean;
+  role: string;
+  reason?: string;
+}> {
+  if (!authUser?.id) {
+    return { allowed: false, role: 'unknown', reason: 'Invalid session.' };
+  }
+
+  try {
+    const metaRole = String(
+      authUser.user_metadata?.role || authUser.app_metadata?.role || ''
+    )
+      .toLowerCase()
+      .trim();
+
+    const { data: existing } = await supabase
+      .from('user')
+      .select('role, account_status, email')
+      .eq('user_id', authUser.id)
+      .maybeSingle();
+
+    const dbRole = String(existing?.role || '').toLowerCase().trim();
+    const effectiveRole = dbRole || metaRole || 'patient';
+    const status = String(existing?.account_status || 'active').toLowerCase().trim();
+
+    if (status === 'suspended' || status === 'banned') {
+      const reason =
+        'Your DermAI account has been suspended. Please contact DermAI Support for assistance.';
+      setBlockedRoleNotice({
+        role: effectiveRole,
+        email: authUser.email || existing?.email || '',
+        message: reason,
+      });
+      return { allowed: false, role: effectiveRole, reason };
+    }
+
+    if (effectiveRole !== 'patient') {
+      const roleLabels: Record<string, string> = {
+        admin: 'System Administrator',
+        clinic: 'Clinic Administrator',
+        doctor: 'Dermatologist / Doctor',
+      };
+      const roleTitle = roleLabels[effectiveRole] || effectiveRole.toUpperCase();
+      const reason = `This account (${authUser.email || 'your email'}) is registered as a ${roleTitle}. The DermAI Mobile App is exclusively for Patient accounts. Please sign in to the DermAI Web Portal for ${roleTitle} access, or choose a different Google account.`;
+      setBlockedRoleNotice({
+        role: effectiveRole,
+        email: authUser.email || existing?.email || '',
+        message: reason,
+      });
+      return { allowed: false, role: effectiveRole, reason };
+    }
+
+    return { allowed: true, role: 'patient' };
+  } catch (err) {
+    console.warn('[Store] verifyMobilePatientAccess check warning:', err);
+    return { allowed: true, role: 'patient' };
+  }
+}
 
 export async function savePatientAccount(account: PatientAccount): Promise<void> {
 
@@ -770,11 +850,19 @@ export async function savePatientAccount(account: PatientAccount): Promise<void>
 
       .maybeSingle();
 
-
-
     const { data: authData } = await supabase.auth.getUser();
 
     const meta = authData?.user?.user_metadata || {};
+
+    // Never overwrite or downgrade a non-patient account (admin, clinic, doctor) into a patient row
+    const existingRole = String(existing?.role || meta.role || '').toLowerCase().trim();
+    if (existingRole && existingRole !== 'patient') {
+      console.warn(
+        `[Store] Blocked savePatientAccount from modifying non-patient role (${existingRole}) for user:`,
+        account.id
+      );
+      return;
+    }
 
 
 
