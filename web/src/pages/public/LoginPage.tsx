@@ -31,27 +31,27 @@ function GoogleIcon() {
 const USER_AGREEMENT_SECTIONS = [
   {
     title: "1. Acceptance of User Agreement",
-    body: "By creating an account or signing in to DERMAI, you acknowledge that you have read, understood, and agree to be bound by this User Agreement, our Terms of Service, and our Data Privacy Policy.",
+    body: "By creating an account or signing in to DermAI, you acknowledge that you have read, understood, and agreed to be bound by the DermAI User Agreement, Privacy Policy, and Medical Disclaimer. You must be at least 18 years of age to register and use DermAI (as guardian-assisted minor access is not currently implemented). General acceptance governs your use of the screening platform and clinic appointment services; it does NOT grant consent for future AI model retraining.",
   },
   {
     title: "2. Preliminary AI Skin Assessment Disclaimer",
-    body: "DERMAI's AI skin analysis provides preliminary, educational assessments only. It is NOT a substitute for professional medical diagnosis, advice, or treatment. Always consult a licensed dermatologist regarding any skin condition.",
+    body: "DermAI provides preliminary, educational AI skin assessments only and does NOT provide medical diagnoses, clinical advice, or treatment plans. The model is trained exclusively on five (5) conditions: Acne Vulgaris, Atopic Dermatitis, Contact Dermatitis, Melasma, and Vitiligo. Any unsupported skin condition will be assigned to one of these five classes. Always consult a licensed physician or dermatology specialist for diagnosis and clinical care.",
   },
   {
-    title: "3. Data Privacy & Consent (RA 10173)",
-    body: "In compliance with the Philippine Data Privacy Act of 2012 (Republic Act No. 10173), you consent to the secure collection and processing of your personal profile information, skin scan photos, and symptom responses solely for AI skin analysis and dermatology clinic consultations.",
+    title: "3. Data Privacy & Future AI Retraining (RA 10173)",
+    body: "In compliance with the Philippine Data Privacy Act of 2012 (RA 10173), your personal details, skin photos, and symptom responses are processed for preliminary screening and for clinic consultations that you choose to book. DermAI does NOT sell your skin photographs and does NOT use them for advertising. Accepting this agreement does NOT authorize future AI model retraining; any future secondary AI training will require a separate, voluntary authorization process, and declining will not restrict your access to standard services.",
   },
   {
     title: "4. Account Responsibilities",
-    body: "You are responsible for providing accurate personal information and maintaining the security of your account credentials. You must be at least 18 years old or have parental/guardian consent to use the platform.",
+    body: "You are responsible for providing accurate personal information and safeguarding your authentication access (Google OAuth or Magic Link). You agree not to upload non-skin images, unlawful or indecent content, or attempt unauthorized access to other patients' records or system infrastructure.",
   },
   {
     title: "5. Clinic Consultations & Payments",
-    body: "Appointments booked through DERMAI are subject to the participating dermatology clinic's policies and schedules. Online consultation payments processed via PayMongo (GCash / Maya) are recorded with official transaction references.",
+    body: "Appointments booked through DermAI are independent consultations with licensed dermatology clinics and doctors. Submitting a booking and paying consultation fees via PayMongo (GCash / Maya) secures your request under 'Paid - Awaiting Doctor Review' status. Final schedule confirmation remains subject to clinic verification and doctor acceptance. Payment does not guarantee appointment approval. Billing data is processed by PayMongo; skin photos and symptom answers are never shared with payment processors.",
   },
   {
     title: "6. Emergency Medical Situations",
-    body: "DERMAI is not an emergency medical service. If you experience severe symptoms such as difficulty breathing, rapidly spreading rashes, or high fever, seek immediate emergency medical care or call the DOH Hotline 1555.",
+    body: "DermAI is NOT an emergency medical service. If you experience severe symptoms (such as difficulty breathing, rapid facial/lip swelling, sudden blistering or purpuric rash, severe pain, or high fever), seek immediate care at a hospital emergency department or call the Philippine National Emergency Hotline at 911.",
   },
 ];
 
@@ -232,21 +232,29 @@ export default function LoginPage() {
                   className="mt-0.5 h-4 w-4 rounded border-magenta-300 text-magenta-600 focus:ring-magenta-500 cursor-pointer accent-[#85134a]"
                 />
                 <label htmlFor="user-agreement-checkbox" className="text-xs text-gray-600 leading-relaxed select-none">
-                  I have read and agree to the{" "}
+                  I have read and agree to the DermAI{" "}
                   <button
                     type="button"
                     onClick={() => setShowAgreementModal(true)}
                     className="font-semibold text-magenta-600 hover:text-magenta-700 underline cursor-pointer"
                   >
-                    User Agreement &amp; Medical Disclaimer
-                  </button>{" "}
-                  and{" "}
+                    User Agreement
+                  </button>
+                  {", "}
                   <Link
-                    to="/privacy"
+                    to="/privacy-policy"
                     target="_blank"
                     className="font-semibold text-magenta-600 hover:text-magenta-700 underline"
                   >
                     Privacy Policy
+                  </Link>
+                  {", and "}
+                  <Link
+                    to="/legal/medical-disclaimer"
+                    target="_blank"
+                    className="font-semibold text-magenta-600 hover:text-magenta-700 underline"
+                  >
+                    Medical Disclaimer
                   </Link>
                   .
                 </label>
@@ -320,6 +328,33 @@ export default function LoginPage() {
                   <p className="text-xs text-gray-600 leading-relaxed">{sec.body}</p>
                 </div>
               ))}
+
+              <div className="pt-3 border-t border-gray-100 flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
+                <span className="font-medium text-gray-600">Full legal documents:</span>
+                <Link
+                  to="/legal/user-agreement"
+                  target="_blank"
+                  className="font-semibold text-magenta-600 hover:text-magenta-700 underline"
+                >
+                  User Agreement
+                </Link>
+                <span>&bull;</span>
+                <Link
+                  to="/legal/medical-disclaimer"
+                  target="_blank"
+                  className="font-semibold text-magenta-600 hover:text-magenta-700 underline"
+                >
+                  Medical Disclaimer
+                </Link>
+                <span>&bull;</span>
+                <Link
+                  to="/legal/privacy-policy"
+                  target="_blank"
+                  className="font-semibold text-magenta-600 hover:text-magenta-700 underline"
+                >
+                  Privacy Policy
+                </Link>
+              </div>
             </div>
 
             {/* Modal Footer */}

@@ -17,6 +17,7 @@ import SkinLibraryDetail from "./pages/public/SkinLibraryDetail";
 import HelpCenterPage from "./pages/public/HelpCenterPage";
 import PrivacyPolicyPage from "./pages/public/PrivacyPolicyPage";
 import TermsOfServicePage from "./pages/public/TermsOfServicePage";
+import MedicalDisclaimerPage from "./pages/public/MedicalDisclaimerPage";
 import ContactUsPage from "./pages/public/ContactUsPage";
 import LoginPage from "./pages/public/LoginPage";
 import AuthCallbackPage from "./pages/public/AuthCallbackPage";
@@ -103,8 +104,12 @@ function App() {
         <Route path="/skin-library" element={<SkinLibrary />} />
         <Route path="/skin-library/:id" element={<SkinLibraryDetail />} />
         <Route path="/help-center" element={<HelpCenterPage />} />
+        {/* Public Legal Routes */}
         <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
         <Route path="/terms-of-service" element={<TermsOfServicePage />} />
+        <Route path="/legal/user-agreement" element={<TermsOfServicePage />} />
+        <Route path="/legal/medical-disclaimer" element={<MedicalDisclaimerPage />} />
+        <Route path="/legal/privacy-policy" element={<PrivacyPolicyPage />} />
         <Route path="/contact-us" element={<ContactUsPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<LoginPage />} />
@@ -188,6 +193,13 @@ function App() {
         {/* Library Aliases */}
         <Route path="/library" element={<Navigate to="/skin-library" replace />} />
         <Route path="/library/:id" element={<Navigate to="/skin-library/:id" replace />} />
+
+        {/* Legal Aliases & Fallbacks */}
+        <Route path="/privacy" element={<Navigate to="/privacy-policy" replace />} />
+        <Route path="/terms" element={<Navigate to="/terms-of-service" replace />} />
+        <Route path="/medical-disclaimer" element={<Navigate to="/legal/medical-disclaimer" replace />} />
+        <Route path="/disclaimer" element={<Navigate to="/legal/medical-disclaimer" replace />} />
+        <Route path="/user-agreement" element={<Navigate to="/legal/user-agreement" replace />} />
 
         {/* Catch-all fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />

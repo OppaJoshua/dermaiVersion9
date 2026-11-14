@@ -1177,7 +1177,10 @@ export default function BillingSettingsPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSelectedAppointmentReceipt(null)}
+                  onClick={() => {
+                    setSelectedAppointmentReceipt(null);
+                    navigate("/dashboard");
+                  }}
                   className="px-6 py-3.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-full font-semibold text-xs transition-all text-center cursor-pointer"
                 >
                   Dashboard

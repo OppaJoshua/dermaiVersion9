@@ -106,9 +106,10 @@ function Footer() {
           <p className="text-xs text-white/70">
             © {new Date().getFullYear()} DERMAI. All rights reserved.
           </p>
-          <div className="flex items-center gap-6 text-xs text-white/70">
+          <div className="flex flex-wrap items-center justify-center sm:justify-end gap-6 text-xs text-white/70">
             <Link to="/privacy-policy" className="hover:text-white transition-colors">Privacy Policy</Link>
             <Link to="/terms-of-service" className="hover:text-white transition-colors">Terms of Service</Link>
+            <Link to="/legal/medical-disclaimer" className="hover:text-white transition-colors">Medical Disclaimer</Link>
           </div>
         </div>
       </div>
