@@ -225,6 +225,9 @@ export function SelectAlternateDoctorModal({
   useEffect(() => {
     if (!isOpen) {
       setIsDoctorDropdownOpen(false);
+      setSelectedDoctorId(null);
+      setSelectedDate("");
+      setSelectedTime("");
     }
   }, [isOpen]);
 
@@ -700,11 +703,12 @@ export function SelectAlternateDoctorModal({
 
         if (isMounted) {
           setAvailableDoctors(filtered);
-          if (filtered.length > 0) {
-            setSelectedDoctorId(filtered[0].doctor_id);
-          } else {
-            setSelectedDoctorId(null);
-          }
+          setSelectedDoctorId((prev) => {
+            if (prev && filtered.some((d) => d.doctor_id === prev)) {
+              return prev;
+            }
+            return null;
+          });
         }
       } catch (err: any) {
         console.error("[SelectAlternateDoctorModal] Data load error:", err);
@@ -1813,7 +1817,8 @@ export function SelectAlternateDoctorModal({
                   </p>
                 </div>
               </div>
-              <span className="text-[11px] font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md shrink-0">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full shrink-0 shadow-2xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                 {availableDoctors.length} available
               </span>
             </div>
@@ -1855,19 +1860,19 @@ export function SelectAlternateDoctorModal({
                 {/* Compact Dropdown Trigger Button */}
                 <button
                   type="button"
-                  disabled={availableDoctors.length <= 1}
+                  disabled={availableDoctors.length === 0}
                   onClick={() => setIsDoctorDropdownOpen((prev) => !prev)}
-                  className={`w-full flex items-center justify-between p-2.5 sm:p-3 rounded-2xl border bg-white transition-all text-left ${
+                  className={`w-full flex items-center justify-between p-2.5 sm:p-3 rounded-xl sm:rounded-2xl border bg-white transition-all text-left group ${
                     isDoctorDropdownOpen
                       ? "border-[#801336] ring-2 ring-[#801336]/10 shadow-xs"
-                      : availableDoctors.length > 1
+                      : availableDoctors.length > 0
                         ? "border-pink-200/90 hover:border-pink-300 hover:bg-pink-50/20 cursor-pointer shadow-2xs"
                         : "border-pink-200/80 shadow-2xs cursor-default"
                   }`}
                 >
                   {selectedDoctor ? (
-                    <div className="flex items-center gap-3 sm:gap-3.5 min-w-0 flex-1">
-                      <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full border-2 border-pink-300 p-0.5 shrink-0 flex items-center justify-center bg-white shadow-2xs">
+                    <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+                      <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full border-2 border-pink-300 p-0.5 shrink-0 flex items-center justify-center bg-white shadow-2xs">
                         <DoctorAvatar
                           doctorId={selectedDoctor.doctor_id}
                           userId={selectedDoctor.user_id || undefined}
@@ -1877,24 +1882,24 @@ export function SelectAlternateDoctorModal({
                         />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <span className="font-bold text-gray-900 text-sm sm:text-base block truncate">
+                        <span className="font-bold text-gray-900 text-xs sm:text-sm block truncate">
                           Dr. {selectedDoctor.doctor_name.replace(/^dr\.\s*/i, "")}
                         </span>
-                        <p className="text-[11px] sm:text-xs text-magenta-700 font-medium truncate mt-0.5">
+                        <p className="text-[11px] text-magenta-700 font-medium truncate mt-0.5">
                           {selectedDoctorSpecializations.join(", ")}
                         </p>
                       </div>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-3 sm:gap-3.5 min-w-0 flex-1 py-0.5">
-                      <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full border-2 border-dashed border-pink-300 p-0.5 shrink-0 flex items-center justify-center bg-pink-50/50 text-[#801336]">
-                        <Stethoscope className="w-5 h-5 sm:w-6 sm:h-6" />
+                    <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 py-0.5">
+                      <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full border-2 border-dashed border-pink-300 p-0.5 shrink-0 flex items-center justify-center bg-pink-50/50 text-[#801336]">
+                        <Stethoscope className="w-5 h-5" />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <span className="font-bold text-gray-800 text-sm sm:text-base block">
+                        <span className="font-bold text-gray-900 text-xs sm:text-sm block truncate">
                           Select an attending doctor
                         </span>
-                        <p className="text-[11px] text-gray-500 mt-0.5">
+                        <p className="text-[11px] text-gray-500 mt-0.5 truncate">
                           {availableDoctors.length > 0
                             ? `${availableDoctors.length} ${availableDoctors.length === 1 ? "doctor" : "doctors"} available · Click to choose`
                             : "Click to choose an attending specialist"}
@@ -1903,10 +1908,10 @@ export function SelectAlternateDoctorModal({
                     </div>
                   )}
 
-                  {availableDoctors.length > 1 && (
+                  {availableDoctors.length > 0 && (
                     <ChevronDown
-                      className={`w-4 h-4 text-gray-400 shrink-0 ml-3 transition-transform duration-200 ${
-                        isDoctorDropdownOpen ? "rotate-180 text-[#801336]" : ""
+                      className={`w-4 h-4 text-gray-400 shrink-0 ml-2.5 transition-transform duration-200 ${
+                        isDoctorDropdownOpen ? "rotate-180 text-[#801336]" : "group-hover:text-gray-600"
                       }`}
                     />
                   )}
@@ -1914,7 +1919,7 @@ export function SelectAlternateDoctorModal({
 
                 {/* Dropdown Popover */}
                 {isDoctorDropdownOpen && availableDoctors.length > 0 && (
-                  <div className="absolute left-0 right-0 top-full mt-1.5 max-h-60 overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-2xl z-50 p-1.5 divide-y divide-gray-50 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <div className="absolute left-0 right-0 top-full mt-1.5 max-h-60 overflow-y-auto rounded-xl sm:rounded-2xl border border-gray-100 bg-white shadow-2xl z-50 p-1.5 divide-y divide-gray-50 animate-in fade-in slide-in-from-top-1 duration-150">
                     {availableDoctors.map((doc) => {
                       const isSelected = selectedDoctorId === doc.doctor_id;
                       const specsText = getDoctorSpecializationsList(doc).join(", ");
@@ -1925,10 +1930,11 @@ export function SelectAlternateDoctorModal({
                           type="button"
                           onClick={() => {
                             setSelectedDoctorId(doc.doctor_id);
+                            setSelectedTime("");
                             setSlotConflictWarning(null);
                             setIsDoctorDropdownOpen(false);
                           }}
-                          className={`w-full flex items-center justify-between p-2.5 rounded-xl transition-all text-left cursor-pointer ${
+                          className={`w-full flex items-center justify-between p-2 sm:p-2.5 rounded-xl transition-all text-left cursor-pointer ${
                             isSelected
                               ? "bg-magenta-50/80 text-magenta-900 font-semibold"
                               : "hover:bg-gray-50 text-gray-800"
@@ -1940,13 +1946,13 @@ export function SelectAlternateDoctorModal({
                               userId={doc.user_id || undefined}
                               doctor={doc}
                               name={doc.doctor_name}
-                              className="w-9 h-9 rounded-full border border-pink-200 shrink-0"
+                              className="w-8 h-8 sm:w-9 sm:h-9 rounded-full border border-pink-200 shrink-0 object-cover"
                             />
                             <div className="min-w-0 flex-1">
                               <p className="text-xs sm:text-sm font-bold text-gray-900 truncate">
                                 Dr. {doc.doctor_name.replace(/^dr\.\s*/i, "")}
                               </p>
-                              <p className="text-[11px] text-magenta-700 font-medium truncate mt-0.5">
+                              <p className="text-[10px] sm:text-[11px] text-magenta-700 font-medium truncate mt-0.5">
                                 {specsText}
                               </p>
                             </div>
@@ -1967,19 +1973,26 @@ export function SelectAlternateDoctorModal({
           </section>
 
           {/* Step 2: Slot Picker (Standard 7-Column Calendar Grid & Time Slots) */}
-          {selectedDoctor && (
-            <section>
-              <div className="flex items-center gap-3 mb-3">
-                <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-xs font-semibold flex items-center justify-center shrink-0">2</span>
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-900">
-                    Pick a schedule with Dr. {selectedDoctor.doctor_name.replace(/^dr\.\s*/i, "")}
-                  </h3>
-                  <p className="text-xs text-gray-500">
-                    Available days and hours follow this doctor's weekly duty schedule.
-                  </p>
-                </div>
+          <section>
+            <div className="flex items-center gap-2.5 mb-2.5">
+              <span className={`w-5 h-5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 ${
+                selectedDoctor ? "bg-gray-900 text-white" : "bg-gray-200 text-gray-600"
+              }`}>
+                2
+              </span>
+              <div>
+                <h3 className={`text-xs sm:text-sm font-bold ${selectedDoctor ? "text-gray-900" : "text-gray-600"}`}>
+                  {selectedDoctor ? `Pick a schedule with Dr. ${selectedDoctor.doctor_name.replace(/^dr\.\s*/i, "")}` : "Pick a schedule"}
+                </h3>
+                <p className="text-[11px] text-gray-500">
+                  {selectedDoctor
+                    ? "Available days and hours follow this doctor's weekly duty schedule."
+                    : "Available days and hours will appear once an attending doctor is selected."}
+                </p>
               </div>
+            </div>
+
+            {selectedDoctor ? (
 
               <div className="bg-white rounded-2xl sm:rounded-3xl border border-gray-200/90 p-3.5 sm:p-4.5 shadow-xs space-y-4">
                 {/* Minimal Landscape Calendar Card (Compact for modal) */}
@@ -2245,8 +2258,20 @@ export function SelectAlternateDoctorModal({
                   )}
                 </div>
               </div>
-            </section>
-          )}
+            ) : (
+              <div className="p-4 sm:p-5 text-center border border-dashed border-gray-200 rounded-xl sm:rounded-2xl bg-gray-50/50 flex flex-col items-center justify-center space-y-1.5 min-h-[130px]">
+                <div className="w-8 h-8 rounded-full bg-pink-50 border border-pink-200/80 flex items-center justify-center text-[#801336]">
+                  <Stethoscope className="w-4 h-4" />
+                </div>
+                <p className="text-xs font-bold text-gray-800">
+                  Select an attending doctor
+                </p>
+                <p className="text-gray-500 text-[11px] max-w-xs">
+                  Choose an attending doctor from the dropdown above to view available consultation dates and slots.
+                </p>
+              </div>
+            )}
+          </section>
 
         </div>
 
@@ -2274,7 +2299,9 @@ export function SelectAlternateDoctorModal({
               </>
             ) : (
               <span>
-                Confirm & assign to Dr. {selectedDoctor ? selectedDoctor.doctor_name.replace(/^dr\.\s*/i, "") : "selected doctor"}
+                {selectedDoctor
+                  ? `Confirm & assign to Dr. ${selectedDoctor.doctor_name.replace(/^dr\.\s*/i, "")}`
+                  : "Confirm & assign doctor"}
               </span>
             )}
           </button>
