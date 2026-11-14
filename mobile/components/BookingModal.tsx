@@ -29,6 +29,9 @@ import {
   addAppNotification,
   getOccupiedSlotsForDate,
   acquireAppointmentSlotHold,
+  uploadScanImageToStorage,
+  isValidUuid,
+  normalizeMobileQuestionnaire,
   sanitizePatientSymptoms,
   cancelAppointmentSlotHold,
   releaseAppointmentHoldSafely,
@@ -796,6 +799,86 @@ export function BookingModal({
       }
 
       if (!apptId) {
+        // Resolve persistent skin photo path (ensuring mobile local file URIs are uploaded to Supabase Storage)
+        let resolvedSkinPhotoPath: string | null = null;
+        if (customPhotoUri) {
+          if (customPhotoUri.startsWith('http://') || customPhotoUri.startsWith('https://')) {
+            resolvedSkinPhotoPath = customPhotoUri;
+          } else {
+            const uploadedPath = await uploadScanImageToStorage(activeUser.id, customPhotoUri, 'close_up');
+            resolvedSkinPhotoPath = uploadedPath || customPhotoUri;
+          }
+        } else if (selectedScan) {
+          resolvedSkinPhotoPath = selectedScan.photoUrl || (selectedScan as any).photo_url || null;
+          if (!resolvedSkinPhotoPath && selectedScan.imageUri) {
+            const marker = '/scan-uploads/';
+            const idx = selectedScan.imageUri.indexOf(marker);
+            if (idx !== -1) {
+              resolvedSkinPhotoPath = selectedScan.imageUri.slice(idx + marker.length).split('?')[0];
+            } else {
+              resolvedSkinPhotoPath = selectedScan.imageUri;
+            }
+          }
+        }
+
+        // Authoritatively verify AI pre-assessment details from Supabase to guarantee parity with Web bookings
+        let finalScanId = selectedScanId || undefined;
+        let finalConditionName = activeConditionName;
+        let finalConfidence = selectedScan?.confidence != null ? Number(selectedScan.confidence) : undefined;
+        let finalConditionId = selectedScan?.conditionId || (selectedScan as any)?.condition_id || undefined;
+        let rawQuestionnaireAnswers = (selectedScan as any)?.answers || (selectedScan as any)?.questionnaire_answers || undefined;
+
+        if (selectedScanId && isValidUuid(selectedScanId)) {
+          try {
+            const { data: verifiedScan } = await supabase
+              .from('ai_scan_result')
+              .select(`
+                analysis_id,
+                confidence_score,
+                body_part,
+                scanned_at,
+                photo_url,
+                condition_id,
+                questionnaire_answers,
+                user_id,
+                status,
+                skin_condition:condition_id (
+                  name,
+                  local_name
+                )
+              `)
+              .eq('analysis_id', selectedScanId)
+              .eq('user_id', activeUser.id)
+              .maybeSingle();
+
+            if (verifiedScan) {
+              finalScanId = verifiedScan.analysis_id;
+              if (verifiedScan.photo_url) {
+                resolvedSkinPhotoPath = verifiedScan.photo_url;
+              }
+              const condObj = Array.isArray(verifiedScan.skin_condition)
+                ? verifiedScan.skin_condition[0]
+                : verifiedScan.skin_condition;
+              if (condObj?.name) {
+                finalConditionName = condObj.name;
+              }
+              if (verifiedScan.confidence_score != null) {
+                finalConfidence = Number(verifiedScan.confidence_score);
+              }
+              if (verifiedScan.condition_id) {
+                finalConditionId = verifiedScan.condition_id;
+              }
+              if (verifiedScan.questionnaire_answers) {
+                rawQuestionnaireAnswers = verifiedScan.questionnaire_answers;
+              }
+            }
+          } catch (verifyErr) {
+            console.warn('[BookingModal] Verified scan resolution note:', verifyErr);
+          }
+        }
+
+        const normalizedQAnswers = normalizeMobileQuestionnaire(rawQuestionnaireAnswers);
+
         const holdResult = await acquireAppointmentSlotHold({
           clinicId: selectedClinic.id,
           doctorId: selectedDoctor?.id,
@@ -815,12 +898,12 @@ export function BookingModal({
           clinicNote: docDispName
             ? `Assigned to ${docDispName} for pre-consultation review.`
             : 'Unassigned consultation request.',
-          questionnaireAnswers: (selectedScan as any)?.answers || (selectedScan as any)?.questionnaire_answers || undefined,
-          skinPhotoUrl: activePhotoUri || undefined,
-          aiConditionName: activeConditionName,
-          aiConfidence: selectedScan?.confidence != null ? Number(selectedScan.confidence) : undefined,
-          conditionId: (selectedScan as any)?.conditionId || (selectedScan as any)?.condition_id || undefined,
-          primaryScanId: selectedScanId || undefined,
+          questionnaireAnswers: normalizedQAnswers || undefined,
+          skinPhotoUrl: resolvedSkinPhotoPath || undefined,
+          aiConditionName: finalConditionName,
+          aiConfidence: finalConfidence,
+          conditionId: finalConditionId,
+          primaryScanId: finalScanId,
           userId: activeUser.id,
           holdDurationMinutes: 10,
         });

@@ -329,7 +329,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
               {/* Dropdown panel */}
               {bellOpen && (
-                <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden">
+                <div className="absolute right-0 top-full mt-2 w-[540px] max-w-[calc(100vw-24px)] bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden">
                   <AdminNotifications isDropdown onClose={() => setBellOpen(false)} />
                 </div>
               )}

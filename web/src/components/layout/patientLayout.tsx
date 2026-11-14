@@ -713,7 +713,7 @@ export default function UserLayout({
                 </button>
 
                 {notifOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-[9999] overflow-hidden">
+                  <div className="absolute right-0 top-full mt-2 w-[460px] max-w-[calc(100vw-24px)] bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-[9999] overflow-hidden">
                     <PatientNotifications isDropdown onClose={() => setNotifOpen(false)} />
                   </div>
                 )}

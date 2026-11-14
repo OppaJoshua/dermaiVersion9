@@ -30,13 +30,13 @@ import {
   normalizeDayName,
   isClinicCurrentlyOpen,
   isDoctorCurrentlyOnDuty,
-  getManilaNowParts,
 } from "@/lib/schedulingService";
 import {
   calculateClinicAnnualRevenue,
   getAvailableRevenueYears,
   REFUND_EXTERNAL_DISCLAIMER,
 } from "@/lib/clinicRevenueService";
+import { useManilaYearTransition } from "@/hooks/useManilaYearTransition";
 
 /* ── Types ─────────────────────────────────────────────────── */
 type AppointmentRecord = {
@@ -653,9 +653,8 @@ export default function ClinicDashboardPage() {
       });
   }, [appointments]);
 
-  // 3. Current Manila calendar year and state for annual revenue
-  const currentManilaYear = useMemo(() => getManilaNowParts().year, []);
-  const [selectedRevenueYear, setSelectedRevenueYear] = useState<number>(() => getManilaNowParts().year);
+  // 3. Current Manila calendar year and state for annual revenue with automatic year rollover
+  const { currentManilaYear, selectedRevenueYear, setSelectedRevenueYear } = useManilaYearTransition();
 
   // Available revenue years from clinic appointments + current calendar year
   const availableRevenueYears = useMemo(
@@ -854,6 +853,7 @@ export default function ClinicDashboardPage() {
 
         return {
           id: doc.id,
+          userId: doc.userId || doc.user_id,
           name: doc.name,
           displayName,
           primarySpec,
@@ -869,8 +869,11 @@ export default function ClinicDashboardPage() {
     const seenDoctorKeys = new Set<string>();
     const uniqueOnDuty: typeof rawOnDuty = [];
     for (const docItem of rawOnDuty) {
-      if (!seenDoctorKeys.has(docItem.id)) {
-        seenDoctorKeys.add(docItem.id);
+      // Prioritize authenticated account identity (userId) to merge multiple affiliation/cache records of the same doctor;
+      // fallback to affiliation id (doctorId) to avoid incorrectly merging different doctors who might share a display name.
+      const doctorKey = docItem.userId ? `user:${docItem.userId}` : `doc:${docItem.id}`;
+      if (!seenDoctorKeys.has(doctorKey)) {
+        seenDoctorKeys.add(doctorKey);
         uniqueOnDuty.push(docItem);
       }
     }

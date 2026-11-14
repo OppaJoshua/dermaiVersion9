@@ -260,6 +260,15 @@ function DoctorLayoutContent({ children, onLogoutStart, onLogoutFailed }: Doctor
     window.dispatchEvent(new CustomEvent("dermai_doctor_active_clinic_changed", { detail: activeClinicId }));
   }, [activeClinicId, selectionKey]);
 
+  // Ensure document.body scroll lock is cleaned up on route navigation or branch switch if no modal is active
+  useEffect(() => {
+    const modalCount = Number(document.body.getAttribute("data-modal-count") || "0");
+    if (modalCount === 0 && document.body.style.overflow === "hidden") {
+      document.body.style.overflow = "";
+      document.body.style.paddingRight = "";
+    }
+  }, [location.pathname, activeClinicId]);
+
   const loadProfile = useCallback(async (isBackground = false) => {
     const requestId = ++requestRef.current;
     if (!isBackground) setBranchesLoading(true);
@@ -729,7 +738,7 @@ function DoctorLayoutContent({ children, onLogoutStart, onLogoutFailed }: Doctor
               </button>
 
               {bellOpen && (
-                <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-slate-100 z-[9999] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                <div className="absolute right-0 top-full mt-2 w-[540px] max-w-[calc(100vw-24px)] bg-white rounded-2xl shadow-xl border border-slate-100 z-[9999] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
                   <DoctorNotifications isDropdown onClose={() => setBellOpen(false)} />
                 </div>
               )}

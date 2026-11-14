@@ -292,7 +292,7 @@ export default function DoctorScheduledAppointmentsPage() {
   }, [searchParams, appointments]);
 
 
-  // Close modal with ESC key and prevent background scroll when open
+  // Close modal with ESC key (background scroll locking is handled safely by ModalPortal)
   useEffect(() => {
     if (!viewingAppt) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -301,12 +301,9 @@ export default function DoctorScheduledAppointmentsPage() {
       }
     };
     window.addEventListener("keydown", handleKeyDown);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = prevOverflow;
     };
   }, [viewingAppt]);
 

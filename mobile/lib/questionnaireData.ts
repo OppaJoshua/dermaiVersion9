@@ -702,3 +702,126 @@ export function toggleOptionSelection(
     return [...cleaned, optionId];
   }
 }
+
+export function isValidUuid(val?: string | null): boolean {
+  if (!val) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(val).trim());
+}
+
+export interface NormalizedQuestionnaireAnswer {
+  id: string;
+  number: number;
+  question: string;
+  tagalogQuestion?: string;
+  answer: string;
+  tagalogAnswer?: string;
+  role?: string;
+}
+
+export function normalizeMobileQuestionnaire(raw: any): NormalizedQuestionnaireAnswer[] | null {
+  if (!raw) return null;
+
+  // Case 1: Already an array of question-answer items
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) return null;
+    const list: NormalizedQuestionnaireAnswer[] = [];
+    for (let idx = 0; idx < raw.length; idx++) {
+      const item = raw[idx];
+      if (!item || typeof item !== 'object') continue;
+      const qId = String(item.id || item.question_key || item.key || `q${idx + 1}`);
+      const qDef = QUESTIONNAIRE_QUESTIONS.find(
+        (q) => q.id.toLowerCase() === qId.toLowerCase() || q.number === item.number
+      );
+      const answerVal = String(item.answer || item.answer_value || '').trim();
+      if (answerVal && answerVal !== 'Not answered' && answerVal !== 'Hindi sinagot') {
+        list.push({
+          id: qDef?.id || qId,
+          number: qDef?.number || item.number || idx + 1,
+          question: qDef?.titleEn || item.question || `Question ${idx + 1}`,
+          tagalogQuestion: qDef?.titleTl || item.tagalogQuestion,
+          answer: answerVal,
+          tagalogAnswer: item.tagalogAnswer,
+          role: qDef?.role || item.role,
+        });
+      }
+    }
+    return list.length > 0 ? list : null;
+  }
+
+  // Case 2: Object with questionnaireData string or array
+  if (typeof raw === 'object') {
+    if (raw.questionnaireData) {
+      try {
+        const parsed = typeof raw.questionnaireData === 'string' ? JSON.parse(raw.questionnaireData) : raw.questionnaireData;
+        const normalized = normalizeMobileQuestionnaire(parsed);
+        if (normalized && normalized.length > 0) return normalized;
+      } catch {}
+    }
+
+    if (Array.isArray(raw.answers)) {
+      return normalizeMobileQuestionnaire(raw.answers);
+    }
+
+    // Case 3: Key-value map { q1: [...], q2: [...] }
+    const list: NormalizedQuestionnaireAnswer[] = [];
+    for (const q of QUESTIONNAIRE_QUESTIONS) {
+      const val = raw[q.id] || raw[q.id.toUpperCase()];
+      if (val !== undefined && val !== null) {
+        let optionIds: string[] = [];
+        if (Array.isArray(val)) {
+          optionIds = val.map(String);
+        } else if (typeof val === 'string') {
+          optionIds = [val];
+        }
+
+        let chosenOptions = q.options.filter((o) => optionIds.includes(o.id));
+        if (chosenOptions.length === 0) {
+          for (const optId of optionIds) {
+            const matchOpt = String(optId).match(/opt(\d+)$/i);
+            if (matchOpt) {
+              const optIdx = parseInt(matchOpt[1], 10) - 1;
+              if (q.options[optIdx]) {
+                chosenOptions.push(q.options[optIdx]);
+              }
+            }
+          }
+        }
+        let answerText = '';
+        let answerTl = '';
+        if (chosenOptions.length > 0) {
+          answerText = chosenOptions.map((o) => o.labelEn).join('; ');
+          answerTl = chosenOptions.map((o) => o.labelTl).join('; ');
+        } else if (typeof val === 'string' && val.trim() && !q.options.some((o) => o.id === val)) {
+          answerText = val.trim();
+        }
+
+        if (answerText && answerText !== 'Not answered') {
+          list.push({
+            id: q.id,
+            number: q.number,
+            question: q.titleEn,
+            tagalogQuestion: q.titleTl,
+            answer: answerText,
+            tagalogAnswer: answerTl || undefined,
+            role: q.role,
+          });
+        }
+      }
+    }
+
+    list.sort((a, b) => a.number - b.number);
+    return list.length > 0 ? list : null;
+  }
+
+  // Case 4: JSON string
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return normalizeMobileQuestionnaire(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}

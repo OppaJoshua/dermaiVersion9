@@ -29,7 +29,8 @@ export function ModalPortal({ children, isOpen = true }: ModalPortalProps) {
     document.body.setAttribute("data-modal-count", String(prevCount + 1));
 
     if (prevCount === 0) {
-      const originalOverflow = document.body.style.overflow;
+      const rawOverflow = document.body.style.overflow;
+      const originalOverflow = rawOverflow === "hidden" ? "" : rawOverflow;
       const originalPaddingRight = document.body.style.paddingRight;
       document.body.setAttribute("data-orig-overflow", originalOverflow);
       document.body.setAttribute("data-orig-padding-right", originalPaddingRight);
@@ -55,7 +56,7 @@ export function ModalPortal({ children, isOpen = true }: ModalPortalProps) {
         document.body.removeAttribute("data-orig-overflow");
         document.body.removeAttribute("data-orig-padding-right");
 
-        document.body.style.overflow = storedOverflow;
+        document.body.style.overflow = storedOverflow === "hidden" ? "" : storedOverflow;
         document.body.style.paddingRight = storedPadding;
       } else {
         document.body.setAttribute("data-modal-count", String(remainingCount));

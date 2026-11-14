@@ -1,9 +1,14 @@
 import { useMemo, useState, useEffect } from "react";
-import { CreditCard, RefreshCcw,  PhilippinePeso, Loader2, XCircle } from "lucide-react";
+import { CreditCard, RefreshCcw, PhilippinePeso, Loader2, XCircle, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 import { withVat } from "@/lib/vat";
 import { syncAllExpiredSubscriptions } from "@/lib/subscriptionService";
+import {
+  calculateAdminAnnualRevenue,
+  getAvailableAdminRevenueYears,
+} from "@/lib/adminRevenueService";
+import { useManilaYearTransition } from "@/hooks/useManilaYearTransition";
 
 type SubscriptionStatus = "active" | "expired" | "cancelled";
 
@@ -21,12 +26,14 @@ type PremiumUser = {
 
 type Transaction = {
     id: string;
+    rawPaymentId: string;
     user: string;
     plan: string;
     amount: number;
     date: string;
-    method: "GCash" | "Maya" |  "Unknown";
-    status: "paid";
+    rawPaymentDate: string;
+    method: "GCash" | "Maya" | "Unknown";
+    status: string;
 };
 
 const statusClasses: Record<SubscriptionStatus, string> = {
@@ -186,12 +193,14 @@ export default function AdminSubscriptionManagement() {
 
                         return {
                             id: p.payment_id.slice(0, 8).toUpperCase(),
+                            rawPaymentId: p.payment_id,
                             user: userObj?.full_name || userObj?.email || "Patient",
                             plan: planObj?.name || "Premium Plan",
                             amount: resolvedTotal,
                             date: new Date(p.payment_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+                            rawPaymentDate: p.payment_date,
                             method: p.method === "gcash" ? "GCash" : p.method === "paymaya" ? "Maya" : "Unknown",
-                            status: "paid",
+                            status: p.status || "success",
                         };
                     });
                     setTransactions(txns);
@@ -205,8 +214,33 @@ export default function AdminSubscriptionManagement() {
         loadData();
     }, []);
 
+    const { currentManilaYear, selectedRevenueYear, setSelectedRevenueYear } = useManilaYearTransition();
+
+    const availableRevenueYears = useMemo(() => {
+        return getAvailableAdminRevenueYears(
+            transactions.map((t) => ({
+                payment_id: t.rawPaymentId,
+                amount: t.amount,
+                payment_date: t.rawPaymentDate,
+                status: t.status,
+            })),
+            currentManilaYear
+        );
+    }, [transactions, currentManilaYear]);
+
+    const { totalRevenue: annualRevenue, paidTransactionsCount } = useMemo(() => {
+        return calculateAdminAnnualRevenue({
+            payments: transactions.map((t) => ({
+                payment_id: t.rawPaymentId,
+                amount: t.amount,
+                payment_date: t.rawPaymentDate,
+                status: t.status,
+            })),
+            year: selectedRevenueYear,
+        });
+    }, [transactions, selectedRevenueYear]);
+
     const visibleUsers = premiumUsers.filter((user) => statusFilter === "all" ? true : user.status === statusFilter);
-    const totalRevenue = useMemo(() => transactions.reduce((sum, txn) => sum + txn.amount, 0), [transactions]);
     const activeCount = premiumUsers.filter((u) => u.status === "active").length;
     const cancelledCount = premiumUsers.filter((u) => u.status === "cancelled").length;
 
@@ -248,13 +282,38 @@ export default function AdminSubscriptionManagement() {
           <p className="mt-5 text-4xl font-bold text-black tabular-nums">{premiumUsers.length}</p>
           <p className="mt-2 text-sm text-gray-600">All subscriptions</p>
         </div>
-        <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px]">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-black">Revenue</p>
-            <PhilippinePeso className="w-5 h-5 text-magenta-600"/>
+        <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px] relative">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm font-semibold text-black">
+              {selectedRevenueYear === currentManilaYear ? "Total Revenue This Year" : `Total Revenue (${selectedRevenueYear})`}
+            </p>
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="relative">
+                <select
+                  aria-label="Select Revenue Year"
+                  value={selectedRevenueYear}
+                  onChange={(e) => setSelectedRevenueYear(Number(e.target.value))}
+                  className="appearance-none bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 text-[11px] font-bold rounded-lg pl-2 pr-5 py-0.5 cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-magenta-600 transition-colors"
+                >
+                  {availableRevenueYears.map((yr) => (
+                    <option key={yr} value={yr}>
+                      {yr}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="w-3 h-3 text-gray-500 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+              <PhilippinePeso className="w-5 h-5 text-magenta-600"/>
+            </div>
           </div>
-          <p className="mt-5 text-4xl font-bold text-black tabular-nums">{formatPhp(totalRevenue)}</p>
-          <p className="mt-2 text-sm text-gray-600">Total paid transactions</p>
+          <p className="mt-5 text-4xl font-bold text-black tabular-nums">{formatPhp(annualRevenue)}</p>
+          <p className="mt-2 text-sm text-gray-600">
+            {paidTransactionsCount > 0
+              ? paidTransactionsCount === 1
+                ? `From 1 paid transaction in ${selectedRevenueYear}`
+                : `From ${paidTransactionsCount} paid transactions in ${selectedRevenueYear}`
+              : `₱0.00 earned in ${selectedRevenueYear}`}
+          </p>
         </div>
         <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px]">
           <div className="flex items-center justify-between">

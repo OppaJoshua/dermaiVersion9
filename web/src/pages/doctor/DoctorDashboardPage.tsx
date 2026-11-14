@@ -98,18 +98,15 @@ export default function DoctorDashboardPage() {
     }
   };
 
-  // Close modal on Escape key
+  // Close modal on Escape key (background scroll locking is handled safely by ModalPortal)
   useEffect(() => {
     if (!consultingAppt) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") setConsultingAppt(null);
     };
     window.addEventListener("keydown", handleKeyDown);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = prev;
     };
   }, [consultingAppt]);
 

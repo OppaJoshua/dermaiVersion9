@@ -11,6 +11,7 @@ import { compareDoctorAppointments, scopeDoctorAppointments } from "@/lib/doctor
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
 import { getReviewUrgency, urgentReviewDateBounds } from "@/lib/appointmentUrgency";
 import { sanitizePatientSymptoms } from "@/lib/appointmentPaymentService";
+import { extractConsultationQuestionnaire } from "@/lib/consultationDetailsService";
 
 export type DoctorAppointmentRecord = {
   id: string;
@@ -365,6 +366,22 @@ export function useDoctorAppointments({
                   qAnswers = parsed;
                 } else if (parsed && typeof parsed === "object" && Array.isArray(parsed.answers)) {
                   qAnswers = parsed.answers;
+                }
+              } catch {}
+            }
+
+            // Isolated fallback when existing parser cannot recognize stored questionnaire format (e.g. legacy Mobile question-keyed objects)
+            if ((!qAnswers || qAnswers.length === 0) && row.questionnaire_answers) {
+              try {
+                let target = row.questionnaire_answers;
+                if (typeof target === "string") {
+                  try {
+                    target = JSON.parse(target);
+                  } catch {}
+                }
+                const fallbackExtracted = extractConsultationQuestionnaire(target);
+                if (fallbackExtracted.length > 0) {
+                  qAnswers = fallbackExtracted;
                 }
               } catch {}
             }

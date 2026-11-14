@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
 import { useRoleNotifications } from "@/lib/notificationService";
+import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
 
 interface DoctorNotificationsProps {
   onClose?: () => void;
@@ -21,17 +22,41 @@ interface DoctorNotificationsProps {
 export default function DoctorNotifications({ onClose, isDropdown = false }: DoctorNotificationsProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { notifications, loading, unreadCount, markRead, markAllRead } = useRoleNotifications("doctor", {
+  const [fetchLimit, setFetchLimit] = useState(100);
+  const { notifications, loading, markRead, markAllRead } = useRoleNotifications("doctor", {
     userId: user?.id,
     userEmail: user?.email,
+    limit: fetchLimit,
   });
+
+  let activeClinicId: string | undefined = undefined;
+  try {
+    const clinicCtx = useDoctorClinicContext();
+    activeClinicId = clinicCtx?.activeClinicId;
+  } catch {
+    // Graceful fallback if rendered outside DoctorClinicContext
+  }
 
   const [activeTab, setActiveTab] = useState<"all" | "appointment" | "ticket" | "broadcast">("all");
 
+  const branchFiltered = useMemo(() => {
+    if (!activeClinicId || activeClinicId === "all") {
+      return notifications;
+    }
+    return notifications.filter((n) => {
+      const nClinicId = n.metadata?.clinic_id || n.metadata?.clinicId;
+      // Cross-branch broadcast, announcements, tickets or items with no specific clinic_id remain visible
+      if (!nClinicId || n.category === "broadcast" || n.category === "ticket" || n.type === "broadcast" || n.type === "maintenance_alert") {
+        return true;
+      }
+      return nClinicId === activeClinicId;
+    });
+  }, [notifications, activeClinicId]);
+
   const filtered = useMemo(() => {
-    let list = notifications;
+    let list = branchFiltered;
     if (activeTab === "broadcast") {
-      list = notifications.filter(
+      list = branchFiltered.filter(
         (n) =>
           n.category === "broadcast" ||
           n.type === "broadcast" ||
@@ -40,7 +65,7 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
           n.type === "maintenance_alert"
       );
     } else if (activeTab !== "all") {
-      list = notifications.filter((n) => n.category === activeTab);
+      list = branchFiltered.filter((n) => n.category === activeTab);
     }
 
     const seenIds = new Set<string>();
@@ -50,16 +75,29 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
       if (seenIds.has(n.id)) return false;
       seenIds.add(n.id);
 
-      const normTitle = (n.title || "").trim().toLowerCase();
-      const normMsg = (n.message || "").trim().toLowerCase();
-      const contentKey = `${normTitle}:::${normMsg}`;
-      if (normTitle && normMsg) {
-        if (seenContent.has(contentKey)) return false;
-        seenContent.add(contentKey);
+      // Never deduplicate appointment booking notifications or tickets by text content!
+      // Each appointment booking has its own appointmentId or UUID.
+      const isAppointmentOrTicket =
+        n.category === "appointment" ||
+        n.category === "ticket" ||
+        Boolean(n.metadata?.appointment_id || n.metadata?.appointmentId || n.metadata?.ticket_id);
+
+      if (!isAppointmentOrTicket) {
+        const normTitle = (n.title || "").trim().toLowerCase();
+        const normMsg = (n.message || "").trim().toLowerCase();
+        const contentKey = `${normTitle}:::${normMsg}`;
+        if (normTitle && normMsg) {
+          if (seenContent.has(contentKey)) return false;
+          seenContent.add(contentKey);
+        }
       }
       return true;
     });
-  }, [notifications, activeTab]);
+  }, [branchFiltered, activeTab]);
+
+  const visibleUnreadCount = useMemo(() => {
+    return branchFiltered.filter((n) => !n.isRead).length;
+  }, [branchFiltered]);
 
   const timeAgo = (iso: string) => {
     const diff = Date.now() - new Date(iso).getTime();
@@ -86,18 +124,18 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h3 className="text-base font-semibold text-gray-900">Notification</h3>
-            {unreadCount > 0 && (
+            {visibleUnreadCount > 0 && (
               <span className="px-2 py-0.5 rounded-full bg-magenta-600 text-white text-xs font-semibold leading-none">
-                {unreadCount}
+                {visibleUnreadCount}
               </span>
             )}
           </div>
           <p className="text-xs text-gray-500 mt-0.5">
-            {unreadCount > 0 ? `${unreadCount} unread request${unreadCount > 1 ? "s" : ""}` : "All requests up to date"}
+            {visibleUnreadCount > 0 ? `${visibleUnreadCount} unread request${visibleUnreadCount > 1 ? "s" : ""}` : "All requests up to date"}
           </p>
         </div>
 
-        {unreadCount > 0 && (
+        {visibleUnreadCount > 0 && (
           <button
             onClick={() => markAllRead()}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer shrink-0"
@@ -176,8 +214,6 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
               item.type.includes("appointment") ||
               item.type.includes("booking");
 
-            const clinicId = item.metadata?.clinicId || item.metadata?.clinic_id;
-            const patientId = item.metadata?.patientId || item.metadata?.patient_id || item.metadata?.user_id;
             const appointmentId = item.metadata?.appointmentId || item.metadata?.appointment_id;
 
             const clinicName =
@@ -201,19 +237,38 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
             const rawAvatar = item.senderAvatar || clinicLogo;
             const resolvedAvatar = resolveAvatarUrl(rawAvatar);
 
-            const targetLink = item.link || (
-              item.metadata?.clinicId && item.metadata?.patientId
-                ? `/doctor/clinics/${item.metadata.clinicId}/patients/${item.metadata.patientId}${
-                    item.metadata?.appointmentId ? `?appointmentId=${item.metadata.appointmentId}` : ""
-                  }`
-                : clinicId && patientId
-                ? `/doctor/clinics/${clinicId}/patients/${patientId}${
-                    appointmentId ? `?appointmentId=${appointmentId}` : ""
-                  }`
-                : isAppointmentRequest
-                ? (appointmentId ? `/doctor/appointments?appointmentId=${appointmentId}` : "/doctor/appointments")
-                : null
-            );
+            const apptStatus = String(item.metadata?.appointment_status || item.metadata?.status || "").toLowerCase();
+            const docStatus = String(item.metadata?.doctor_status || "").toLowerCase();
+            const isConfirmed =
+              item.type === "appointment-confirmed" ||
+              item.metadata?.subtype === "confirmed" ||
+              apptStatus === "confirmed" ||
+              apptStatus === "scheduled" ||
+              docStatus === "approved";
+            const isCompleted =
+              apptStatus === "completed" ||
+              item.metadata?.doctorDone === true;
+            const isRejected =
+              apptStatus === "rejected" ||
+              docStatus === "rejected";
+            const isHandled = isConfirmed || isCompleted || isRejected;
+
+            let targetLink: string | null = null;
+            if (isMaintenance) {
+              targetLink = "/doctor/settings";
+            } else if (isCompleted) {
+              targetLink = appointmentId ? `/doctor/history?appointmentId=${appointmentId}` : "/doctor/history";
+            } else if (isConfirmed) {
+              targetLink = appointmentId ? `/doctor/scheduled?appointmentId=${appointmentId}` : "/doctor/scheduled";
+            } else if (isRejected) {
+              targetLink = appointmentId ? `/doctor/history?appointmentId=${appointmentId}` : "/doctor/history";
+            } else if (isAppointmentRequest) {
+              targetLink = isHandled
+                ? (appointmentId ? `/doctor/scheduled?appointmentId=${appointmentId}` : "/doctor/scheduled")
+                : (appointmentId ? `/doctor/appointments?appointmentId=${appointmentId}` : "/doctor/appointments");
+            } else if (item.link) {
+              targetLink = item.link;
+            }
 
             const handleItemClick = () => {
               if (!item.isRead) {
@@ -228,10 +283,14 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
             let actionLabel = "View Consultation";
             if (isMaintenance) {
               actionLabel = "View System Status";
-            } else if (item.type === "appointment-confirmed") {
+            } else if (isCompleted) {
+              actionLabel = "View Consultation Record";
+            } else if (isConfirmed) {
               actionLabel = "View Scheduled Appointment";
+            } else if (isRejected) {
+              actionLabel = "View Appointment Record";
             } else if (isAppointmentRequest) {
-              actionLabel = "Review Patient Request";
+              actionLabel = isHandled ? "View Consultation Details" : "Review Patient Request";
             }
 
             return (
@@ -359,6 +418,17 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
               </div>
             );
           })
+        )}
+        {notifications.length >= fetchLimit && (
+          <div className="p-4 text-center border-t border-gray-100 bg-gray-50/50">
+            <button
+              type="button"
+              onClick={() => setFetchLimit((prev) => prev + 100)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-xs font-medium text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+            >
+              Load older notifications
+            </button>
+          </div>
         )}
       </div>
 

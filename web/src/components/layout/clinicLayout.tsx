@@ -278,7 +278,7 @@ export default function ClinicLayout({ children }: ClinicLayoutProps) {
             </button>
 
             {notifOpen && (
-              <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-[9999] overflow-hidden">
+              <div className="absolute right-0 top-full mt-2 w-[540px] max-w-[calc(100vw-24px)] bg-white rounded-2xl shadow-[0_8px_32px_rgba(160,25,90,0.15)] border border-gray-100 z-[9999] overflow-hidden">
                 <ClinicNotifications isDropdown onClose={() => setNotifOpen(false)} />
               </div>
             )}

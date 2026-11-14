@@ -4,6 +4,13 @@ import { AppState } from 'react-native';
 import { evaluateDiseaseMapping, normalizeAnswers } from './diseaseMappingService';
 import { getConditionGuide } from './conditionGuides';
 import { getConditionUUID } from './aiApi';
+import {
+  QUESTIONNAIRE_QUESTIONS,
+  isValidUuid,
+  normalizeMobileQuestionnaire,
+  type NormalizedQuestionnaireAnswer,
+} from './questionnaireData';
+export { QUESTIONNAIRE_QUESTIONS, isValidUuid, normalizeMobileQuestionnaire, type NormalizedQuestionnaireAnswer };
 import { supabase } from './supabase';
 import { verifyPayMongoIntentOnce } from './paymongo';
 export { supabase };
@@ -69,6 +76,10 @@ export interface ScanResult {
   imageUri?: string;
 
   imageUris?: [string, string];
+
+  photoUrl?: string;
+
+  conditionId?: string;
 
   answers: Record<string, any>;
 
@@ -1424,6 +1435,10 @@ export async function getSkinHistory(userId: string): Promise<ScanResult[]> {
 
           imageUris: imageUrl && wideImageUrl ? [imageUrl, wideImageUrl] : undefined,
 
+          photoUrl: s.photo_url || undefined,
+
+          conditionId: s.condition_id || undefined,
+
           answers: s.questionnaire_answers || (s.body_part ? { bodyLocation: s.body_part } : {}),
 
           condition: conditionName,
@@ -1623,35 +1638,21 @@ export async function saveScanResult(userId: string, result: ScanResult): Promis
 
 
     const bodyLocation = result.answers?.bodyLocation || 'Skin Assessment';
-
-
+    const normalizedQ = normalizeMobileQuestionnaire(result.answers);
 
     const { data: scanData, error } = await supabase
-
       .from('ai_scan_result')
-
       .insert({
-
         user_id: userId,
-
         confidence_score: result.confidence,
-
         condition_id: condId,
-
         status: 'completed',
-
         scanned_at: result.date || new Date().toISOString(),
-
         referral_suggested: result.referralSuggested,
-
         photo_url: closeUpPath || result.imageUri || null,
-
         photo_url_wide: widePath || null,
-
         body_part: bodyLocation,
-
-        questionnaire_answers: result.answers || {},
-
+        questionnaire_answers: normalizedQ || result.answers || {},
       })
 
       .select('analysis_id')
@@ -5394,17 +5395,6 @@ export async function acquireAppointmentSlotHold(params: {
   code?: string;
 
 }> {
-
-  const isValidUuid = (val?: string | null): boolean => {
-
-    if (!val) return false;
-
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(val).trim());
-
-  };
-
-
-
   const timeFormatted = params.time.includes(':')
 
     ? (params.time.split(':').length === 2 ? params.time + ':00' : params.time)
