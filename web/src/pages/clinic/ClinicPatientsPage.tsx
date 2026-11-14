@@ -18,6 +18,9 @@ import {
   RotateCcw,
   Clock,
   AlertCircle,
+  Download,
+  Loader2,
+  ChevronDown,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn, formatConfidencePercent } from "@/lib/utils";
@@ -30,6 +33,12 @@ import { ModalPortal } from "@/components/common/ModalPortal";
 import { resolveAvatarUrl } from "@/utils/storage";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
 import { sanitizePatientSymptoms } from "@/lib/appointmentPaymentService";
+import { extractConsultationQuestionnaire } from "@/lib/consultationDetailsService";
+import {
+  exportIndividualPatientPdf,
+  exportPatientDirectoryCsv,
+  formatPatientDisplayId,
+} from "@/lib/clinicPatientExport";
 
 /* ── Types ────────────────────────────────────────────────────────── */
 
@@ -46,6 +55,7 @@ export type PatientAppointment = {
   conditionName?: string;
   confidence?: number;
   skinPhotoUrl?: string;
+  primaryScanId?: string;
   questionnaireAnswers?: Array<{
     question: string;
     answer: string;
@@ -106,16 +116,7 @@ function parseQuestionnaireAnswers(
   raw: any
 ): Array<{ question: string; answer: string; severity?: number; points?: number }> {
   if (!raw) return [];
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    } catch {
-      return [];
-    }
-  }
-  return [];
+  return extractConsultationQuestionnaire(raw);
 }
 
 function formatApptDate(dateInput?: string | null): string {
@@ -168,6 +169,32 @@ export default function ClinicPatientsPage() {
   const [patients, setPatients] = useState<ClinicPatient[]>([]);
   const [registeredDoctors, setRegisteredDoctors] = useState<RegisteredDoctor[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Export & Download States
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  // Accordion state for appointment history in modal: Map of appt.id -> boolean
+  const [expandedApptIds, setExpandedApptIds] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setDownloadError(null);
+    if (selectedPatient && selectedPatient.appointments.length > 0) {
+      // Default the newest appointment (first in list) to expanded, older ones collapsed
+      setExpandedApptIds({
+        [selectedPatient.appointments[0].id]: true,
+      });
+    } else {
+      setExpandedApptIds({});
+    }
+  }, [selectedPatient]);
+
+  const toggleAppointmentExpanded = (apptId: string) => {
+    setExpandedApptIds((prev) => ({
+      ...prev,
+      [apptId]: !prev[apptId],
+    }));
+  };
 
   // 1. Fetch real Supabase clinic data & deduplicate unique patients
   useEffect(() => {
@@ -494,6 +521,7 @@ export default function ClinicPatientsPage() {
             conditionName: row.ai_condition_name || undefined,
             confidence: row.ai_confidence ? Number(row.ai_confidence) : undefined,
             skinPhotoUrl: row.skin_photo_url || undefined,
+            primaryScanId: row.primary_scan_id ? String(row.primary_scan_id) : undefined,
             questionnaireAnswers: parseQuestionnaireAnswers(row.questionnaire_answers),
             notes: row.notes || undefined,
             clinicNote: row.clinic_note || undefined,
@@ -738,14 +766,63 @@ export default function ClinicPatientsPage() {
     setSelectedDoctorId("all");
   };
 
+  // 3. Export Handlers
+  const handleDownloadPatientPdf = async () => {
+    if (!selectedPatient || isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    setDownloadError(null);
+    try {
+      await exportIndividualPatientPdf(selectedPatient, {
+        clinicName: clinicName || "Affiliated Partner Clinic",
+      });
+    } catch (err) {
+      console.error("[ClinicPatientsPage] Failed to generate patient medical PDF:", err);
+      setDownloadError("Unable to generate PDF document. Please verify record details and try again.");
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
+  const handleExportDirectoryCsv = () => {
+    if (filteredPatients.length === 0) return;
+    try {
+      exportPatientDirectoryCsv(filteredPatients, clinicName || "Clinic");
+    } catch (err) {
+      console.error("[ClinicPatientsPage] Failed to export directory CSV:", err);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* ── 1. Page Header ─────────────────────────────────────────── */}
-      <div>
-        <h1 className="text-2xl font-display font-bold text-gray-900">Patient Records</h1>
-        <p className="text-sm text-gray-400 mt-0.5">
-          View patient details and appointment history from your clinic.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-gray-900">Patient Records</h1>
+          <p className="text-sm text-gray-400 mt-0.5">
+            View patient details and appointment history from your clinic.
+          </p>
+        </div>
+
+        {/* Directory CSV Export Action (Visually secondary, respects active filters) */}
+        <button
+          type="button"
+          onClick={handleExportDirectoryCsv}
+          disabled={filteredPatients.length === 0 || loading}
+          title={
+            loading
+              ? "Loading patient directory..."
+              : filteredPatients.length === 0
+              ? "No patient records match the current filters"
+              : `Export ${filteredPatients.length} patient record${filteredPatients.length === 1 ? "" : "s"} matching current filters (includes their appointment summary at this clinic) as CSV`
+          }
+          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shrink-0 self-start sm:self-auto"
+        >
+          <Download className="w-3.5 h-3.5 text-magenta-600" />
+          <span>Export Directory (CSV)</span>
+          <span className="ml-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-pink-50 text-magenta-700 border border-pink-100">
+            {filteredPatients.length}
+          </span>
+        </button>
       </div>
 
       {/* ── 2. Search and Multi-Dimensional Filters ──────────────────── */}
@@ -839,8 +916,8 @@ export default function ClinicPatientsPage() {
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/50">
                 <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Patient</th>
-                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Assigned Doctor</th>
-                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Last Appointment</th>
+                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Attending Doctor</th>
+                <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Latest Appointment</th>
                 <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5">Total Appointments</th>
                 <th className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-3.5 text-right">Action</th>
               </tr>
@@ -1016,19 +1093,25 @@ export default function ClinicPatientsPage() {
                 className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden text-left relative z-9999"
               >
               {/* Modal Header */}
-              <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between">
-                <div className="flex items-center gap-3.5">
+              <div className="px-6 py-4 border-b border-gray-100 bg-white flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3.5 min-w-0">
                   <PatientAvatar
                     name={selectedPatient.name}
                     photoUrl={selectedPatient.photoUrl}
-                    sizeClass="w-12 h-12 text-lg"
+                    sizeClass="w-12 h-12 text-lg shrink-0"
                     borderClass="border-2 border-pink-200"
                   />
-                  <div>
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-base font-bold text-gray-900">{selectedPatient.name}</h3>
-                      <span className="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-pink-50 text-[#c0166a] border border-pink-200">
-                        {selectedPatient.totalAppointments} Consultation{selectedPatient.totalAppointments > 1 ? "s" : ""} on Record
+                      <h3 className="text-base font-bold text-gray-900 truncate">{selectedPatient.name}</h3>
+                      <span className="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-pink-50 text-[#c0166a] border border-pink-200 shrink-0">
+                        {selectedPatient.totalAppointments} Appointment{selectedPatient.totalAppointments > 1 ? "s" : ""} on Record
+                      </span>
+                      <span
+                        className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-md bg-gray-100 text-gray-600 border border-gray-200 shrink-0 cursor-help"
+                        title="Patient Display Reference ID"
+                      >
+                        {formatPatientDisplayId(selectedPatient)}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
@@ -1048,22 +1131,38 @@ export default function ClinicPatientsPage() {
                     </div>
                   </div>
                 </div>
-                <button
-                  onClick={() => setSelectedPatient(null)}
-                  className="p-2 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-                  title="Close"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setSelectedPatient(null)}
+                    className="p-2 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                    title="Close"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
 
               {/* Scrollable Modal Content */}
               <div className="p-6 space-y-6 overflow-y-auto flex-1">
+                {downloadError && (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3.5 text-xs text-rose-700 flex items-center gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                    <span>{downloadError}</span>
+                  </div>
+                )}
+
                 {/* 1. Patient Profile and Available Contact Details */}
                 <div className="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 space-y-3">
                   <div className="flex items-center justify-between border-b border-gray-200/60 pb-2">
                     <span className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-1.5">
                       <User className="w-3.5 h-3.5 text-magenta-600" /> Patient Profile &amp; Contact Details
+                    </span>
+                    <span
+                      className="text-[11px] font-mono text-gray-500 cursor-help"
+                      title="Display reference derived from patient record ID"
+                    >
+                      Display Ref: {formatPatientDisplayId(selectedPatient)}
                     </span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
@@ -1138,216 +1237,339 @@ export default function ClinicPatientsPage() {
                   </div>
                 </div>
 
-                {/* 2. Chronological Appointment History at This Clinic */}
+                {/* 2. Chronological Appointment History at This Clinic (Accordion Layout) */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between border-b border-gray-100 pb-2">
                     <span className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-1.5">
                       <Calendar className="w-4 h-4 text-[#c0166a]" />
                       Appointment History at Current Clinic ({selectedPatient.appointments.length})
                     </span>
-                    <span className="text-[11px] text-gray-400">Ordered by date (most recent first)</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-gray-400 hidden sm:inline">Ordered by date (most recent first)</span>
+                      {selectedPatient.appointments.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const allExpanded = selectedPatient.appointments.every((a) => expandedApptIds[a.id]);
+                            if (allExpanded) {
+                              setExpandedApptIds({});
+                            } else {
+                              const next: Record<string, boolean> = {};
+                              selectedPatient.appointments.forEach((a) => {
+                                next[a.id] = true;
+                              });
+                              setExpandedApptIds(next);
+                            }
+                          }}
+                          className="text-[11px] font-semibold text-[#c0166a] hover:text-[#a01358] hover:underline cursor-pointer ml-1"
+                        >
+                          {selectedPatient.appointments.every((a) => expandedApptIds[a.id]) ? "Collapse All" : "Expand All"}
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="space-y-4">
-                    {selectedPatient.appointments.map((appt, idx) => {
-                      const isNoShow = appt.checkInStatus === "no-show";
-                      const isCompleted = appt.status === "completed" || appt.checkInStatus === "completed";
-                      const isCancelled = appt.status === "cancelled" || appt.status === "rejected" || appt.doctorStatus === "rejected";
-                      const isScheduled = appt.status === "scheduled" || appt.status === "confirmed";
+                  <div className="space-y-3">
+                    {selectedPatient.appointments.length === 0 ? (
+                      <div className="p-8 text-center text-sm text-gray-500 bg-gray-50/60 rounded-2xl border border-dashed border-gray-200">
+                        <Calendar className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                        No appointment records found for this patient at your clinic.
+                      </div>
+                    ) : (
+                      selectedPatient.appointments.map((appt, idx) => {
+                        const isExpanded = Boolean(expandedApptIds[appt.id]);
+                        const visitNum = selectedPatient.appointments.length - idx;
+                        const isNoShow = appt.checkInStatus === "no-show";
+                        const isCompleted = appt.status === "completed" || appt.checkInStatus === "completed";
+                        const isCancelled = appt.status === "cancelled" || appt.status === "rejected" || appt.doctorStatus === "rejected";
+                        const isScheduled = appt.status === "scheduled" || appt.status === "confirmed";
 
-                      return (
-                        <div
-                          key={appt.id}
-                          className="rounded-2xl border border-gray-100 bg-white p-4 shadow-xs space-y-3 hover:border-pink-200 transition-all"
-                        >
-                          {/* Card Top: Appointment Date, Batch Time, Status Badge */}
-                          <div className="flex items-start justify-between gap-3 flex-wrap">
-                            <div className="space-y-0.5">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-pink-100 text-[#c0166a]">
-                                  Visit #{selectedPatient.appointments.length - idx}
-                                </span>
-                                <h4 className="text-sm font-bold text-gray-900">{appt.dateStr}</h4>
-                              </div>
-                              <p className="text-xs text-gray-500 flex items-center gap-1">
-                                <Clock className="w-3.5 h-3.5 text-gray-400" />
-                                <span>Scheduled: {appt.timeStr}</span>
-                              </p>
-                            </div>
-
-                            {/* Status Pill */}
-                            <div>
-                              {isNoShow ? (
-                                <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-rose-50 text-rose-700 border border-rose-200 inline-flex items-center gap-1">
-                                  <AlertCircle className="w-3.5 h-3.5" /> No-Show
-                                </span>
-                              ) : isCompleted ? (
-                                <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 inline-flex items-center gap-1">
-                                  <CheckCircle2 className="w-3.5 h-3.5" /> Completed Consultation
-                                </span>
-                              ) : isCancelled ? (
-                                <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-gray-100 text-gray-600 border border-gray-200 inline-flex items-center gap-1">
-                                  <X className="w-3.5 h-3.5" /> Cancelled / Declined
-                                </span>
-                              ) : isScheduled ? (
-                                <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-blue-50 text-blue-700 border border-blue-200 inline-flex items-center gap-1">
-                                  <Calendar className="w-3.5 h-3.5" /> Scheduled Visit
-                                </span>
-                              ) : (
-                                <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-amber-50 text-amber-700 border border-amber-200 inline-flex items-center gap-1">
-                                  <Clock className="w-3.5 h-3.5" /> Pending Review
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Assigned Doctor */}
-                          <div className="flex items-center gap-1.5 text-xs text-gray-700 bg-gray-50/70 px-3 py-2 rounded-xl border border-gray-100">
-                            <Stethoscope className="w-3.5 h-3.5 text-[#c0166a] shrink-0" />
-                            <span className="font-semibold text-gray-500">Attending Doctor:</span>
-                            <span className="font-bold text-gray-900">
-                              {appt.assignedDoctorName && appt.assignedDoctorName !== "Unassigned"
-                                ? appt.assignedDoctorName
-                                : "Pending Doctor Assignment"}
-                            </span>
-                            {appt.doctorStatus && (
-                              <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-gray-200 capitalize">
-                                Doctor Review: {appt.doctorStatus === "approved" ? "Approved" : appt.doctorStatus === "rejected" ? "Declined" : "Pending"}
-                              </span>
+                        return (
+                          <div
+                            key={appt.id}
+                            className={cn(
+                              "rounded-2xl border transition-all duration-200 overflow-hidden",
+                              isExpanded
+                                ? "border-pink-200 bg-white shadow-xs"
+                                : "border-gray-200/80 bg-white hover:border-pink-200 hover:shadow-xs"
                             )}
-                          </div>
-
-                          {/* AI Condition Scan & Uploaded Photo if present */}
-                          {(appt.conditionName || appt.skinPhotoUrl) && (
-                            <div className="rounded-xl border border-magenta-100 bg-pink-50/20 p-3 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[11px] font-bold text-magenta-900 flex items-center gap-1.5 uppercase tracking-wide">
-                                  <Sparkles className="w-3.5 h-3.5 text-magenta-600" />
-                                  DermAI Scan &amp; Pre-Consultation Assessment
+                          >
+                            {/* Accordion Clickable Header */}
+                            <button
+                              type="button"
+                              onClick={() => toggleAppointmentExpanded(appt.id)}
+                              className={cn(
+                                "w-full text-left px-4 py-3.5 flex items-center justify-between gap-3 cursor-pointer transition-colors select-none",
+                                isExpanded ? "bg-pink-50/25 border-b border-pink-100" : "bg-white hover:bg-gray-50/70"
+                              )}
+                              aria-expanded={isExpanded}
+                              aria-label={`Toggle appointment details for visit ${visitNum}`}
+                            >
+                              {/* Left: Visit Badge, Date, Time, Doctor */}
+                              <div className="flex items-center gap-2.5 flex-wrap min-w-0">
+                                <span
+                                  className={cn(
+                                    "text-xs font-bold px-2.5 py-0.5 rounded-full shrink-0 transition-colors",
+                                    isExpanded ? "bg-[#c0166a] text-white" : "bg-pink-100 text-[#c0166a]"
+                                  )}
+                                >
+                                  Visit #{visitNum}
                                 </span>
-                                {appt.confidence !== undefined && (
-                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-magenta-100 text-magenta-800">
-                                    {formatConfidencePercent(appt.confidence)} Confidence
+
+                                <span className="text-sm font-bold text-gray-900 shrink-0">
+                                  {appt.dateStr}
+                                </span>
+
+                                <span className="text-gray-300 font-normal shrink-0">•</span>
+
+                                <span className="text-xs font-medium text-gray-500 flex items-center gap-1 shrink-0">
+                                  <Clock className="w-3.5 h-3.5 text-gray-400" />
+                                  {appt.timeStr}
+                                </span>
+
+                                {appt.assignedDoctorName && appt.assignedDoctorName !== "Unassigned" && (
+                                  <span className="hidden sm:inline-flex items-center gap-1 text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200/60 font-medium truncate max-w-[180px]">
+                                    <Stethoscope className="w-3 h-3 text-[#c0166a] shrink-0" />
+                                    <span className="truncate">{appt.assignedDoctorName}</span>
                                   </span>
                                 )}
                               </div>
 
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center pt-1">
+                              {/* Right: Status Pill & Chevron Indicator */}
+                              <div className="flex items-center gap-2.5 shrink-0">
                                 <div>
-                                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Condition Assessed</p>
-                                  <p className="text-xs font-bold text-gray-900 mt-0.5">
-                                    {appt.conditionName || "General Dermatology Consultation"}
-                                  </p>
+                                  {isNoShow ? (
+                                    <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-rose-50 text-rose-700 border border-rose-200 inline-flex items-center gap-1">
+                                      <AlertCircle className="w-3.5 h-3.5" /> <span className="hidden sm:inline">No-Show</span>
+                                    </span>
+                                  ) : isCompleted ? (
+                                    <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 inline-flex items-center gap-1">
+                                      <CheckCircle2 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Completed</span>
+                                    </span>
+                                  ) : isCancelled ? (
+                                    <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-gray-100 text-gray-600 border border-gray-200 inline-flex items-center gap-1">
+                                      <X className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Cancelled</span>
+                                    </span>
+                                  ) : isScheduled ? (
+                                    <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-blue-50 text-blue-700 border border-blue-200 inline-flex items-center gap-1">
+                                      <Calendar className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Scheduled</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-amber-50 text-amber-700 border border-amber-200 inline-flex items-center gap-1">
+                                      <Clock className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Pending</span>
+                                    </span>
+                                  )}
                                 </div>
 
-                                {appt.skinPhotoUrl && (
-                                  <div>
-                                    <div className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                                      <span>Skin Photo</span>
-                                      <button
-                                        type="button"
-                                        onClick={async () => {
-                                          const url = await getSignedSkinPhotoUrl(appt.skinPhotoUrl!);
-                                          if (url) setLightboxPhoto(url);
-                                        }}
-                                        className="text-magenta-600 hover:underline cursor-pointer lowercase"
-                                      >
-                                        enlarge
-                                      </button>
-                                    </div>
-                                    <div
-                                      onClick={async () => {
-                                        const url = await getSignedSkinPhotoUrl(appt.skinPhotoUrl!);
-                                        if (url) setLightboxPhoto(url);
-                                      }}
-                                      className="relative group rounded-xl border border-gray-200 overflow-hidden bg-gray-50 cursor-pointer h-20 w-32 flex items-center justify-center hover:border-magenta-400 transition-all"
-                                    >
-                                      <LazySkinPhoto
-                                        pathOrUrl={appt.skinPhotoUrl}
-                                        alt="Patient skin condition"
-                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                                      />
-                                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-[10px] font-semibold">
-                                        <Maximize2 className="w-3 h-3" /> Expand
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
+                                <div
+                                  className={cn(
+                                    "w-7 h-7 rounded-full flex items-center justify-center transition-all duration-200 shrink-0",
+                                    isExpanded ? "bg-pink-100 text-[#c0166a]" : "bg-gray-100 text-gray-500"
+                                  )}
+                                >
+                                  <ChevronDown
+                                    className={cn(
+                                      "w-4 h-4 transition-transform duration-200",
+                                      isExpanded ? "rotate-180" : "rotate-0"
+                                    )}
+                                  />
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            </button>
 
-                          {/* Pre-Screening Questionnaire Responses if present */}
-                          {appt.questionnaireAnswers && appt.questionnaireAnswers.length > 0 && (
-                            <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 space-y-2">
-                              <span className="text-[11px] font-bold text-gray-800 uppercase tracking-wide flex items-center gap-1.5">
-                                <ClipboardList className="w-3.5 h-3.5 text-magenta-600" />
-                                Pre-Screening Questionnaire ({appt.questionnaireAnswers.length} responses)
-                              </span>
-                              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                                {appt.questionnaireAnswers.map((qa, qIdx) => (
-                                  <div key={qIdx} className="text-xs bg-white p-2 rounded-lg border border-gray-100 space-y-0.5">
-                                    <p className="font-semibold text-gray-800 text-[11px]">{qa.question}</p>
-                                    <div className="flex items-center gap-2 pt-0.5">
-                                      <span className="text-magenta-700 font-medium bg-pink-50 px-2 py-0.5 rounded text-[11px]">
-                                        {qa.answer}
+                            {/* Accordion Expandable Content */}
+                            <AnimatePresence initial={false}>
+                              {isExpanded && (
+                                <motion.div
+                                  initial={{ height: 0, opacity: 0 }}
+                                  animate={{ height: "auto", opacity: 1 }}
+                                  exit={{ height: 0, opacity: 0 }}
+                                  transition={{ duration: 0.2, ease: "easeInOut" }}
+                                  className="overflow-hidden"
+                                >
+                                  <div className="p-4 space-y-3 bg-white">
+                                    {/* Assigned Doctor Banner */}
+                                    <div className="flex items-center gap-1.5 text-xs text-gray-700 bg-gray-50/70 px-3 py-2 rounded-xl border border-gray-100">
+                                      <Stethoscope className="w-3.5 h-3.5 text-[#c0166a] shrink-0" />
+                                      <span className="font-semibold text-gray-500">Attending Doctor:</span>
+                                      <span className="font-bold text-gray-900">
+                                        {appt.assignedDoctorName && appt.assignedDoctorName !== "Unassigned"
+                                          ? appt.assignedDoctorName
+                                          : "Pending Doctor Assignment"}
                                       </span>
-                                      {qa.severity !== undefined && qa.severity !== null && (
-                                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
-                                          Severity {qa.severity}
+                                      {appt.doctorStatus && (
+                                        <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-gray-200 capitalize">
+                                          Doctor Review: {appt.doctorStatus === "approved" ? "Approved" : appt.doctorStatus === "rejected" ? "Declined" : "Pending"}
                                         </span>
                                       )}
                                     </div>
+
+                                    {/* AI Condition Scan & Uploaded Photo if present */}
+                                    {(appt.conditionName || appt.skinPhotoUrl) && (
+                                      <div className="rounded-xl border border-magenta-100 bg-pink-50/20 p-3 space-y-2">
+                                        <div className="flex items-center justify-between flex-wrap gap-1">
+                                          <span className="text-[11px] font-bold text-magenta-900 flex items-center gap-1.5 uppercase tracking-wide">
+                                            <Sparkles className="w-3.5 h-3.5 text-magenta-600" />
+                                            AI Pre-Consultation Screening
+                                          </span>
+                                          {appt.confidence !== undefined && (
+                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-magenta-100 text-magenta-800">
+                                              {formatConfidencePercent(appt.confidence)} Confidence
+                                            </span>
+                                          )}
+                                        </div>
+                                        <p className="text-[10px] text-gray-500 italic">
+                                          Preliminary AI triage assessment — clinical evaluation by attending physician required.
+                                        </p>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center pt-1">
+                                          <div>
+                                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Condition Assessed</p>
+                                            <p className="text-xs font-bold text-gray-900 mt-0.5">
+                                              {appt.conditionName || "General Dermatology Consultation"}
+                                            </p>
+                                          </div>
+
+                                          {appt.skinPhotoUrl && (
+                                            <div>
+                                              <div className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                                                <span>Skin Photo</span>
+                                                <button
+                                                  type="button"
+                                                  onClick={async () => {
+                                                    const url = await getSignedSkinPhotoUrl(appt.skinPhotoUrl!);
+                                                    if (url) setLightboxPhoto(url);
+                                                  }}
+                                                  className="text-magenta-600 hover:underline cursor-pointer lowercase"
+                                                >
+                                                  enlarge
+                                                </button>
+                                              </div>
+                                              <div
+                                                onClick={async () => {
+                                                  const url = await getSignedSkinPhotoUrl(appt.skinPhotoUrl!);
+                                                  if (url) setLightboxPhoto(url);
+                                                }}
+                                                className="relative group rounded-xl border border-gray-200 overflow-hidden bg-gray-50 cursor-pointer h-20 w-32 flex items-center justify-center hover:border-magenta-400 transition-all"
+                                              >
+                                                <LazySkinPhoto
+                                                  pathOrUrl={appt.skinPhotoUrl}
+                                                  alt="Patient skin condition"
+                                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                                />
+                                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-[10px] font-semibold">
+                                                  <Maximize2 className="w-3 h-3" /> Expand
+                                                </div>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* Pre-Screening Questionnaire Responses if present */}
+                                    {appt.questionnaireAnswers && appt.questionnaireAnswers.length > 0 ? (
+                                      <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 space-y-2">
+                                        <span className="text-[11px] font-bold text-gray-800 uppercase tracking-wide flex items-center gap-1.5">
+                                          <ClipboardList className="w-3.5 h-3.5 text-magenta-600" />
+                                          Pre-Screening Questionnaire ({appt.questionnaireAnswers.length} responses)
+                                        </span>
+                                        <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                                          {appt.questionnaireAnswers.map((qa, qIdx) => (
+                                            <div key={qIdx} className="text-xs bg-white p-2 rounded-lg border border-gray-100 space-y-0.5">
+                                              <p className="font-semibold text-gray-800 text-[11px]">{qa.question}</p>
+                                              <div className="flex items-center gap-2 pt-0.5">
+                                                <span className="text-magenta-700 font-medium bg-pink-50 px-2 py-0.5 rounded text-[11px]">
+                                                  {qa.answer}
+                                                </span>
+                                                {qa.severity !== undefined && qa.severity !== null && (
+                                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                                                    Severity {qa.severity}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : (appt.conditionName || appt.skinPhotoUrl || appt.primaryScanId) ? (
+                                      <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/40 px-3.5 py-2.5 flex items-center gap-2 text-gray-500">
+                                        <AlertCircle className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                                        <span className="text-[11px] italic">
+                                          No pre-screening questionnaire responses are available for this appointment.
+                                        </span>
+                                      </div>
+                                    ) : null}
+
+                                    {/* Patient Symptoms / Notes */}
+                                    {appt.notes && (
+                                      <div className="text-xs bg-gray-50 p-2.5 rounded-xl border border-gray-100 space-y-1">
+                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                                          <FileText className="w-3 h-3" /> Patient Symptoms &amp; Notes
+                                        </span>
+                                        <p className="text-gray-800 leading-relaxed">
+                                          {sanitizePatientSymptoms(appt.notes) || "No symptoms or notes provided."}
+                                        </p>
+                                      </div>
+                                    )}
+
+                                    {/* Clinic Scheduling or Decline Note */}
+                                    {appt.clinicNote && (
+                                      <div className="text-xs bg-pink-50/60 p-2.5 rounded-xl border border-pink-100 space-y-1">
+                                        <span className="text-[10px] font-bold text-magenta-700 uppercase tracking-wider block">
+                                          Clinic Scheduling Note:
+                                        </span>
+                                        <p className="text-gray-900 font-medium leading-relaxed">{appt.clinicNote}</p>
+                                      </div>
+                                    )}
+
+                                    {/* Doctor Attending Diagnosis / Notes */}
+                                    {appt.doctorNote && (
+                                      <div className="text-xs bg-blue-50/60 p-3 rounded-xl border border-blue-100 space-y-1">
+                                        <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
+                                          Attending Physician Clinical Notes &amp; Diagnosis:
+                                        </span>
+                                        <p className="text-gray-900 font-medium leading-relaxed">{appt.doctorNote}</p>
+                                      </div>
+                                    )}
                                   </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Patient Symptoms / Notes */}
-                          {appt.notes && (
-                            <div className="text-xs bg-gray-50 p-2.5 rounded-xl border border-gray-100 space-y-1">
-                              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
-                                <FileText className="w-3 h-3" /> Patient Symptoms &amp; Notes
-                              </span>
-                              <p className="text-gray-800 leading-relaxed">
-                                {sanitizePatientSymptoms(appt.notes) || "No symptoms or notes provided."}
-                              </p>
-                            </div>
-                          )}
-
-                          {/* Clinic Scheduling or Decline Note */}
-                          {appt.clinicNote && (
-                            <div className="text-xs bg-pink-50/60 p-2.5 rounded-xl border border-pink-100 space-y-1">
-                              <span className="text-[10px] font-bold text-magenta-700 uppercase tracking-wider block">
-                                Clinic Scheduling Note:
-                              </span>
-                              <p className="text-gray-900 font-medium leading-relaxed">{appt.clinicNote}</p>
-                            </div>
-                          )}
-
-                          {/* Doctor Attending Diagnosis / Notes */}
-                          {appt.doctorNote && (
-                            <div className="text-xs bg-blue-50/60 p-2.5 rounded-xl border border-blue-100 space-y-1">
-                              <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
-                                Attending Doctor Clinical Notes:
-                              </span>
-                              <p className="text-gray-900 font-medium leading-relaxed">{appt.doctorNote}</p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
               </div>
 
               {/* Modal Footer */}
-              <div className="px-6 py-4 border-t border-gray-100 bg-white">
+              <div className="px-6 py-4 border-t border-gray-100 bg-white flex items-center justify-between gap-3 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleDownloadPatientPdf}
+                  disabled={isDownloadingPdf}
+                  className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full font-semibold text-xs bg-magenta-600 hover:bg-magenta-700 text-white shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                  title="Download complete printable medical summary PDF"
+                >
+                  {isDownloadingPdf ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Generating Medical Summary PDF...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4" />
+                      <span>Download Patient Record (PDF)</span>
+                    </>
+                  )}
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setSelectedPatient(null)}
-                  className="w-full py-2.5 rounded-full font-semibold text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors cursor-pointer"
+                  className="px-5 py-2.5 rounded-full font-semibold text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors cursor-pointer"
                 >
                   Close
                 </button>

@@ -14,6 +14,8 @@ export interface NormalizedQuestionnaireAnswer {
   answer: string;
   tagalogAnswer?: string;
   role?: string;
+  severity?: number;
+  points?: number;
 }
 
 /**
@@ -26,6 +28,17 @@ export interface NormalizedQuestionnaireAnswer {
  */
 export function extractConsultationQuestionnaire(raw: any): NormalizedQuestionnaireAnswer[] {
   if (!raw) return [];
+
+  // Support JSON-string representations
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return extractConsultationQuestionnaire(parsed);
+    } catch {
+      return [];
+    }
+  }
+
   const list: NormalizedQuestionnaireAnswer[] = [];
 
   // Operational metadata keys that are NOT clinical pre-questionnaire answers
@@ -41,6 +54,23 @@ export function extractConsultationQuestionnaire(raw: any): NormalizedQuestionna
     "payment_status",
     "previous_doctor_id",
     "reassigned_at",
+    "reassigned_by",
+    "latest_doctor_rejection_at",
+    "latest_declined_doctor_id",
+    "latest_declined_doctor_name",
+    "latest_decline_reason",
+    "reselection_status",
+    "reselection_required",
+    "doctor_declined",
+    "workflow_status",
+    "bodylocation",
+    "body_location",
+    "payment_reference",
+    "payment_amount",
+    "payment_method",
+    "paymentmethod",
+    "questionnairedata",
+    "is_walk_in",
   ]);
 
   // Case 1: Array of question-answer objects (Standard ScanSkin format)
@@ -54,7 +84,7 @@ export function extractConsultationQuestionnaire(raw: any): NormalizedQuestionna
         (q) => q.id.toLowerCase() === qId || q.number === item.number
       );
 
-      let answerEn = item.answer || "";
+      let answerEn = item.answer || item.answer_value || "";
       let answerTl = item.tagalogAnswer || "";
       const optionIds = Array.isArray(item.selectedOptionIds)
         ? item.selectedOptionIds.map(String)
@@ -79,6 +109,8 @@ export function extractConsultationQuestionnaire(raw: any): NormalizedQuestionna
           answer: answerEn,
           tagalogAnswer: answerTl,
           role: qDef?.role || item.role,
+          severity: typeof item.severity === "number" ? item.severity : undefined,
+          points: typeof item.points === "number" ? item.points : undefined,
         });
       }
     }
@@ -93,6 +125,21 @@ export function extractConsultationQuestionnaire(raw: any): NormalizedQuestionna
     }
     if (Array.isArray(raw.questions)) {
       return extractConsultationQuestionnaire(raw.questions);
+    }
+    if (raw.answers && typeof raw.answers === "string") {
+      try {
+        const parsed = JSON.parse(raw.answers);
+        if (Array.isArray(parsed)) return extractConsultationQuestionnaire(parsed);
+      } catch {}
+    }
+    if (raw.questionnaireData) {
+      let qData = raw.questionnaireData;
+      if (typeof qData === "string") {
+        try { qData = JSON.parse(qData); } catch {}
+      }
+      if (Array.isArray(qData)) {
+        return extractConsultationQuestionnaire(qData);
+      }
     }
 
     // Case 3: Key-value map { q1: [...], q2: [...] }
