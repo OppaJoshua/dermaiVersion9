@@ -1664,7 +1664,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
             try {
               await supabase
                 .from("user")
-                .update({ role: "doctor" })
+                .update({ role: "doctor", full_name: doctorName })
                 .eq("user_id", existingUserId)
                 .eq("role", "patient");
             } catch {
@@ -2310,7 +2310,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
           .from("user")
           .update({
             full_name: doctorName,
-            contact_number: doctorContact,
+            phone: doctorContact,
           })
           .eq("email", editingDoctor.email);
       } catch {

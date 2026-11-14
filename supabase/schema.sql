@@ -1267,10 +1267,11 @@ security definer
 set search_path = public
 as $$
 declare
-  matched_doctor_id uuid;
-  matched_clinic_id uuid;
-  assigned_role varchar(20) := 'patient';
-  user_full_name text;
+  matched_doctor_id   uuid;
+  matched_doctor_name varchar(100);
+  matched_clinic_id   uuid;
+  assigned_role       varchar(20) := 'patient';
+  user_full_name      text;
 begin
   -- 1. Determine assigned role based on email
   if lower(trim(coalesce(new.email, ''))) = 'dermaisupport@gmail.com' then
@@ -1284,9 +1285,10 @@ begin
     if matched_clinic_id is not null then
       assigned_role := 'clinic';
     else
-      select doctor_id into matched_doctor_id
+      select doctor_id, doctor_name into matched_doctor_id, matched_doctor_name
       from clinic_doctor
       where lower(trim(email)) = lower(trim(coalesce(new.email, '')))
+      order by created_at asc, doctor_id asc
       limit 1;
 
       if matched_doctor_id is not null then
@@ -1297,8 +1299,9 @@ begin
     end if;
   end if;
 
-  -- 2. Extract full name safely
+  -- 2. Extract full name safely (prioritizing authorized clinic doctor name if converting/registering as doctor)
   user_full_name := coalesce(
+    case when matched_doctor_id is not null and trim(coalesce(matched_doctor_name, '')) <> '' then trim(matched_doctor_name) else null end,
     new.raw_user_meta_data->>'full_name',
     new.raw_user_meta_data->>'name',
     split_part(coalesce(new.email, 'User'), '@', 1),
@@ -1329,7 +1332,10 @@ begin
         when matched_doctor_id is not null then 'doctor'
         else "user".role 
       end,
-      full_name = coalesce(user_full_name, "user".full_name);
+      full_name = case
+        when matched_doctor_id is not null and trim(coalesce(matched_doctor_name, '')) <> '' then trim(matched_doctor_name)
+        else coalesce(user_full_name, "user".full_name)
+      end;
 
   -- 5. Link clinic ownership
   if matched_clinic_id is not null then
@@ -1342,7 +1348,7 @@ begin
   if matched_doctor_id is not null and assigned_role = 'doctor' then
     update clinic_doctor
     set user_id = new.id
-    where doctor_id = matched_doctor_id;
+    where lower(trim(email)) = lower(trim(coalesce(new.email, '')));
   end if;
 
   return new;
@@ -1620,12 +1626,12 @@ begin
 end;
 $$;
 
--- Invite doctor RPC
+-- Invite doctor RPC (SECURITY DEFINER with dynamic account role & display name synchronization)
 create or replace function invite_doctor(
-  target_clinic_id     uuid,
-  doctor_email         varchar,
-  doctor_full_name     varchar,
-  doctor_prc_license   varchar,
+  target_clinic_id      uuid,
+  doctor_email          varchar,
+  doctor_full_name      varchar,
+  doctor_prc_license    varchar,
   doctor_specialization varchar
 )
 returns uuid
@@ -1636,18 +1642,46 @@ as $$
 declare
   new_doctor_id    uuid;
   existing_user_id uuid;
+  current_role     varchar(20);
+  current_name     varchar(100);
   spec_id          uuid;
+  clean_email      varchar;
+  clean_name       varchar;
 begin
   if not (is_clinic_owner(target_clinic_id) or is_admin()) then
     raise exception 'Not authorized to invite doctors for this clinic';
   end if;
 
-  select user_id into existing_user_id from "user" where email = doctor_email;
+  clean_email := lower(trim(doctor_email));
+  clean_name  := trim(doctor_full_name);
 
+  if clean_name = '' then
+    raise exception 'Doctor name cannot be empty';
+  end if;
+
+  if clean_email = '' then
+    raise exception 'Doctor email cannot be empty';
+  end if;
+
+  -- 1. Check if user already exists by email in public."user" or auth.users
+  select user_id into existing_user_id 
+  from "user" 
+  where lower(trim(email)) = clean_email
+  limit 1;
+
+  if existing_user_id is null then
+    select id into existing_user_id
+    from auth.users
+    where lower(trim(email)) = clean_email
+    limit 1;
+  end if;
+
+  -- 2. Insert clinic_doctor record linking existing_user_id if present
   insert into clinic_doctor (clinic_id, doctor_name, email, prc_license, status, user_id)
-  values (target_clinic_id, doctor_full_name, doctor_email, doctor_prc_license, 'Active', existing_user_id)
+  values (target_clinic_id, clean_name, clean_email, doctor_prc_license, 'Active', existing_user_id)
   returning doctor_id into new_doctor_id;
 
+  -- 3. Associate specialization if provided
   if doctor_specialization is not null and trim(doctor_specialization) <> '' then
     select id into spec_id from specializations where lower(name) = lower(trim(doctor_specialization));
     if spec_id is null then
@@ -1661,8 +1695,58 @@ begin
     on conflict do nothing;
   end if;
 
+  -- 4. If existing user account exists, convert role and synchronize display name
   if existing_user_id is not null then
-    update "user" set role = 'doctor' where user_id = existing_user_id and role = 'patient';
+    select role, full_name into current_role, current_name
+    from public."user"
+    where user_id = existing_user_id;
+
+    -- If user record does not exist in public."user" yet (only in auth.users), insert it
+    if current_role is null then
+      insert into public."user" (user_id, full_name, email, role, account_status)
+      values (existing_user_id, clean_name, clean_email, 'doctor', 'active')
+      on conflict (user_id) do update
+        set role = 'doctor',
+            full_name = clean_name;
+    elsif current_role = 'patient' or current_name is null or trim(current_name) = '' or not exists (
+      select 1 from public.clinic_doctor
+      where user_id = existing_user_id
+        and status = 'Active'
+        and lower(trim(doctor_name)) = lower(trim(current_name))
+    ) then
+      -- Synchronize public."user" record for converted patient or stale doctor name
+      update public."user"
+      set 
+        role = 'doctor',
+        full_name = clean_name
+      where user_id = existing_user_id;
+    else
+      -- User is already an established doctor with an active matching professional name;
+      -- ensure role is 'doctor' without overwriting their primary professional name
+      update public."user"
+      set role = 'doctor'
+      where user_id = existing_user_id and role <> 'doctor';
+    end if;
+
+    -- Synchronize auth.users metadata so GoTrue/AuthContext reflect authorized doctor name
+    if current_role is null or current_role = 'patient' or not exists (
+      select 1 from public.clinic_doctor
+      where user_id = existing_user_id
+        and status = 'Active'
+        and lower(trim(doctor_name)) = lower(trim(coalesce(current_name, '')))
+    ) then
+      update auth.users
+      set raw_user_meta_data = jsonb_set(
+        jsonb_set(
+          coalesce(raw_user_meta_data, '{}'::jsonb),
+          '{full_name}',
+          to_jsonb(clean_name)
+        ),
+        '{name}',
+        to_jsonb(clean_name)
+      )
+      where id = existing_user_id;
+    end if;
   end if;
 
   return new_doctor_id;
@@ -1670,7 +1754,8 @@ end;
 $$;
 
 -- Explicitly grant execute permissions on functions to Supabase roles
-grant execute on function invite_doctor(uuid, varchar, varchar, varchar, varchar) to authenticated, anon, service_role;
+revoke execute on function invite_doctor(uuid, varchar, varchar, varchar, varchar) from anon;
+grant execute on function invite_doctor(uuid, varchar, varchar, varchar, varchar) to authenticated, service_role;
 grant execute on function register_new_clinic to authenticated, anon, service_role;
 grant execute on function register_clinic to authenticated, anon, service_role;
 grant execute on function set_clinic_status to authenticated, anon, service_role;

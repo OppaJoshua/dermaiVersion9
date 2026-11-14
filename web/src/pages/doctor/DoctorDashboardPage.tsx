@@ -38,7 +38,7 @@ const MONTH_NAMES = [
 
 export default function DoctorDashboardPage() {
   const now = useAppointmentClock();
-  const { activeClinicId, affiliations, activeAffiliation } = useDoctorClinicContext();
+  const { activeClinicId, affiliations, activeAffiliation, doctorName: contextDoctorName } = useDoctorClinicContext();
   const {
     doctorName,
     appointments: allAppointments,
@@ -47,6 +47,8 @@ export default function DoctorDashboardPage() {
     refresh,
     markAppointmentDone,
   } = useDoctorAppointments();
+
+  const cleanDoctorName = (activeAffiliation?.doctor_name || contextDoctorName || doctorName || "Doctor").replace(/^(?:dr\.?(?:\s+|$))+/i, "").trim() || "Doctor";
 
   // ── Active Clinic Duty Schedule ───────────────────────────────────
   // Consultation & Clinical Result Modal State
@@ -329,7 +331,7 @@ export default function DoctorDashboardPage() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight font-sans">
-            {greeting}, Dr. {doctorName || "Doctor"}!
+            {greeting}, Dr. {cleanDoctorName}!
           </h1>
           {activeClinicId ? (
             <p className="text-sm text-blue-600 mt-0.5 flex items-center gap-1.5 font-bold">

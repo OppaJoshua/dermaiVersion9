@@ -652,6 +652,7 @@ export default function ClinicAppointmentsPage() {
 
     const handleSync = () => loadData();
     window.addEventListener("dermai_appointments_updated", handleSync);
+    window.addEventListener("dermai_session_recovered", handleSync);
     window.addEventListener("appointmentCreated", handleSync);
     window.addEventListener("storage", handleSync);
     window.addEventListener("focus", handleSync);
@@ -659,6 +660,7 @@ export default function ClinicAppointmentsPage() {
     return () => {
       if (channel) supabase.removeChannel(channel);
       window.removeEventListener("dermai_appointments_updated", handleSync);
+      window.removeEventListener("dermai_session_recovered", handleSync);
       window.removeEventListener("appointmentCreated", handleSync);
       window.removeEventListener("storage", handleSync);
       window.removeEventListener("focus", handleSync);

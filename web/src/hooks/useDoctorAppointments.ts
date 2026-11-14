@@ -113,31 +113,44 @@ export function useDoctorAppointments({
   includeNoShow?: boolean;
 } = {}) {
   const { user } = useAuth();
+  const {
+    activeClinicId: activeClinicContextId,
+    affiliations,
+    activeAffiliation,
+    doctorName: contextDoctorName,
+  } = useDoctorClinicContext();
+
   const statusInKey = statusIn ? statusIn.slice().sort().join(",") : "";
+  const stableStatusIn = useMemo(() => {
+    return statusInKey ? statusInKey.split(",") : null;
+  }, [statusInKey]);
   const [appointments, setAppointments] = useState<DoctorAppointmentRecord[]>([]);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [doctorName, setDoctorName] = useState<string>(() => {
-    try {
-      const p = localStorage.getItem("dermai_doctor_profile");
-      if (p) {
-        const parsed = JSON.parse(p);
-        if (parsed?.fullName) return parsed.fullName;
-      }
-    } catch {}
-    return user?.user_metadata?.full_name || user?.email?.split("@")[0] || "";
+    return activeAffiliation?.doctor_name || contextDoctorName || "";
   });
   const [doctorEmail, setDoctorEmail] = useState<string>(user?.email || "");
   const [doctorIds, setDoctorIds] = useState<string[]>([]);
 
+  // Synchronize hook-level doctorName with verified active clinic affiliation when available
+  useEffect(() => {
+    const verifiedName = activeAffiliation?.doctor_name || contextDoctorName;
+    if (verifiedName) {
+      setDoctorName(verifiedName);
+    }
+  }, [activeClinicContextId, activeAffiliation?.doctor_name, contextDoctorName]);
+
   // Keep a ref to the active clinic so fetchAppointments (a useCallback) can
   // read the latest value without being re-created on every context change.
-  const { activeClinicId: activeClinicContextId, affiliations } = useDoctorClinicContext();
   const activeClinicIdRef = useRef<string>(activeClinicContextId);
-  activeClinicIdRef.current = activeClinicContextId;
   const currentUserIdRef = useRef(user?.id);
-  currentUserIdRef.current = user?.id;
+
+  useEffect(() => {
+    activeClinicIdRef.current = activeClinicContextId;
+    currentUserIdRef.current = user?.id;
+  }, [activeClinicContextId, user?.id]);
 
   const isFetchingRef = useRef(false);
   const queuedRefetchRef = useRef(false);
@@ -165,7 +178,7 @@ export function useDoctorAppointments({
       setDoctorEmail(userEmail);
 
       const foundDoctorIds: string[] = user?.id ? [String(user.id)] : [];
-      let docDisplayName = user?.user_metadata?.full_name || user?.user_metadata?.name || "";
+      let docDisplayName = "";
       const clinicNameMap = new Map<string, string>();
       const authorizedClinicIds = new Set<string>();
       const clinicDoctorsMap = new Map<string, string>();
@@ -188,8 +201,14 @@ export function useDoctorAppointments({
               clinicDoctorsMap.set(String(cd.doctor_id), cd.doctor_name);
             }
           }
-          if (cd.doctor_name && !docDisplayName) {
-            docDisplayName = cd.doctor_name;
+          if (cd.doctor_name) {
+            // Priority 1: Match active clinic branch if a specific branch is selected
+            if (currentActiveClinicId !== "all" && cd.clinic_id === currentActiveClinicId) {
+              docDisplayName = cd.doctor_name;
+            } else if (!docDisplayName) {
+              // Priority 2: For consolidated 'all' view, take first active affiliation doctor_name
+              docDisplayName = cd.doctor_name;
+            }
           }
           const cObj = Array.isArray(cd.clinic) ? cd.clinic[0] : cd.clinic;
           if (cd.clinic_id && cObj?.name) {
@@ -198,6 +217,15 @@ export function useDoctorAppointments({
         }
       }
 
+      // Priority 3: Fall back to verified active context doctor name
+      if (!docDisplayName && (activeAffiliation?.doctor_name || contextDoctorName)) {
+        docDisplayName = activeAffiliation?.doctor_name || contextDoctorName;
+      }
+
+      // Priority 4: Safe neutral fallback only if no clinic_doctor affiliation exists
+      if (!docDisplayName) {
+        docDisplayName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "";
+      }
 
       const uniqueDoctorIds = Array.from(new Set(foundDoctorIds.filter(Boolean)));
       setDoctorIds(uniqueDoctorIds);
@@ -221,8 +249,8 @@ export function useDoctorAppointments({
           const bounds = urgentReviewDateBounds(Date.now());
           apptQuery.eq("status", "pending").gte("date", bounds.from).lt("date", bounds.until);
         }
-        if (statusIn && statusIn.length > 0) {
-          const variants = Array.from(new Set(statusIn.flatMap(s => [
+        if (stableStatusIn && stableStatusIn.length > 0) {
+          const variants = Array.from(new Set(stableStatusIn.flatMap(s => [
             s.toLowerCase(),
             s.toUpperCase(),
             s.charAt(0).toUpperCase() + s.slice(1).toLowerCase(),
@@ -508,9 +536,9 @@ export function useDoctorAppointments({
       if (currentUserIdRef.current !== requestUserId || activeClinicIdRef.current !== currentActiveClinicId) return;
       const finalAppointments = Array.from(apptMap.values()).filter(a => {
         if (urgentOnly && getReviewUrgency(a, Date.now()) === null) return false;
-        if (statusIn && statusIn.length > 0) {
+        if (stableStatusIn && stableStatusIn.length > 0) {
           const s = String(a.status || "").toLowerCase();
-          const matches = statusIn.some(expected => expected.toLowerCase() === s) || (includeNoShow && isAppointmentNoShow(a));
+          const matches = stableStatusIn.some(expected => expected.toLowerCase() === s) || (includeNoShow && isAppointmentNoShow(a));
           if (!matches) return false;
         }
         return true;
@@ -520,7 +548,10 @@ export function useDoctorAppointments({
       setLoadedScope(`${requestUserId}:${currentActiveClinicId}`);
     } catch (err) {
       if (currentUserIdRef.current === requestUserId && activeClinicIdRef.current === currentActiveClinicId) {
-        setAppointments([]);
+        // Do not wipe in-memory appointments on background refresh/poll errors (e.g. transient blip or wake-up)
+        if (!isBackground) {
+          setAppointments([]);
+        }
         setError(err instanceof Error ? err.message : String((err as { message?: string } | null)?.message || "Could not load appointments. Please retry."));
       }
       console.error("[useDoctorAppointments] fetchAppointments error:", err);
@@ -532,7 +563,14 @@ export function useDoctorAppointments({
         void latestFetchRef.current(true);
       }
     }
-  }, [user?.id, user?.email, user?.user_metadata?.full_name, urgentOnly, statusInKey, includeNoShow]);
+  }, [
+    user,
+    urgentOnly,
+    stableStatusIn,
+    includeNoShow,
+    activeAffiliation,
+    contextDoctorName,
+  ]);
 
   useEffect(() => {
     latestFetchRef.current = fetchAppointments;
@@ -593,6 +631,7 @@ export function useDoctorAppointments({
     // 2. Custom event & storage listeners for smooth cross-tab updates
     const handleAppointmentsUpdated = () => fetchAppointments(true);
     const handleFocus = () => fetchAppointments(true);
+    const handleSessionRecovered = () => fetchAppointments(true);
     const handleStorage = (e: StorageEvent) => {
       if (
         e.key === "dermai_clinic_appointments" ||
@@ -604,6 +643,7 @@ export function useDoctorAppointments({
     };
 
     window.addEventListener("dermai_appointments_updated", handleAppointmentsUpdated);
+    window.addEventListener("dermai_session_recovered", handleSessionRecovered);
     window.addEventListener("focus", handleFocus);
     window.addEventListener("storage", handleStorage);
 
@@ -615,6 +655,7 @@ export function useDoctorAppointments({
     return () => {
       void supabase.removeChannel(channel);
       window.removeEventListener("dermai_appointments_updated", handleAppointmentsUpdated);
+      window.removeEventListener("dermai_session_recovered", handleSessionRecovered);
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("storage", handleStorage);
       clearInterval(pollInterval);
@@ -634,7 +675,13 @@ export function useDoctorAppointments({
         : note;
 
       const isApproved = decision === "approved";
-      const docLabel = doctorName ? `Dr. ${doctorName.replace(/^dr\.\s*/i, "")}` : "";
+      const existingAppt = appointments.find((a) => a.id === appointmentId);
+      const branchDoctor = affiliations.find(a => a.clinic_id === existingAppt?.clinicId);
+      if (!user?.id || !existingAppt || !branchDoctor || activeClinicIdRef.current !== existingAppt.clinicId) {
+        throw new Error("Select this appointment's clinic before submitting a review.");
+      }
+      const effectiveDoctorName = branchDoctor.doctor_name || doctorName;
+      const docLabel = effectiveDoctorName ? `Dr. ${effectiveDoctorName.replace(/^dr\.\s*/i, "")}` : "";
 
       const updatePayload: Record<string, any> = {
         doctor_status: decision,
@@ -642,17 +689,12 @@ export function useDoctorAppointments({
         doctor_reviewed_at: new Date().toISOString(),
       };
 
-      const existingAppt = appointments.find((a) => a.id === appointmentId);
-      const branchDoctor = affiliations.find(a => a.clinic_id === existingAppt?.clinicId);
-      if (!user?.id || !existingAppt || !branchDoctor || activeClinicIdRef.current !== existingAppt.clinicId) {
-        throw new Error("Select this appointment's clinic before submitting a review.");
-      }
       const historyEntry: AppointmentHistoryEntry = {
         action: isApproved ? "doctor_approved" : "doctor_rejected",
         actor: "doctor",
         timestamp: new Date().toISOString(),
         doctorId: branchDoctor.doctor_id,
-        doctorName: doctorName || undefined,
+        doctorName: effectiveDoctorName || undefined,
         reason: note || undefined,
       };
       const prevHistory = Array.isArray(existingAppt?.appointmentHistory)
@@ -692,7 +734,7 @@ export function useDoctorAppointments({
         nextQa.workflow_status = "doctor_declined";
         nextQa.latest_doctor_rejection_at = updatePayload.doctor_reviewed_at;
         nextQa.latest_declined_doctor_id = branchDoctor.doctor_id;
-        nextQa.latest_declined_doctor_name = doctorName || undefined;
+        nextQa.latest_declined_doctor_name = effectiveDoctorName || undefined;
         nextQa.latest_decline_reason = note || undefined;
       } else {
         nextQa.reselection_status = "approved";
@@ -767,6 +809,7 @@ export function useDoctorAppointments({
       } catch {}
 
       const targetAppt = appointments.find((a) => a.id === appointmentId);
+      const notifDoctorName = (effectiveDoctorName || doctorName || "your doctor").replace(/^dr\.\s*/i, "");
       if (targetAppt?.userId) {
         createPatientNotification({
           userId: targetAppt.userId,
@@ -774,8 +817,8 @@ export function useDoctorAppointments({
           subtype: isApproved ? "doctor-approved" : "doctor-declined",
           title: isApproved ? "Doctor Confirmed Schedule" : "Doctor Review Update",
           body: isApproved
-            ? `Dr. ${doctorName || "your doctor"} has approved your consultation schedule.`
-            : `Dr. ${doctorName || "your doctor"} had a schedule conflict: ${note || "Consultation will be reassigned."}`,
+            ? `Dr. ${notifDoctorName} has approved your consultation schedule.`
+            : `Dr. ${notifDoctorName} had a schedule conflict: ${note || "Consultation will be reassigned."}`,
           metadata: {
             appointment_id: appointmentId,
             declined_at: new Date().toISOString(),
@@ -795,7 +838,7 @@ export function useDoctorAppointments({
 
           const clinicOwnerUserId = clinicRow?.owner_user_id;
           if (clinicOwnerUserId) {
-            const docDisplayName = docLabel || (doctorName ? `Dr. ${doctorName.replace(/^dr\.\s*/i, "")}` : "Attending Doctor");
+            const docDisplayName = docLabel || (effectiveDoctorName ? `Dr. ${effectiveDoctorName.replace(/^dr\.\s*/i, "")}` : "Attending Doctor");
             const patientDisplayName = existingAppt.patientName || targetAppt?.patientName || "Patient";
             const declineReasonText = note?.trim() ? `: "${note.trim()}"` : "";
 
@@ -844,6 +887,7 @@ export function useDoctorAppointments({
         });
       }
 
+      const auditPerformerName = effectiveDoctorName || doctorName || "Doctor";
       logAuditEvent({
         userId: user?.id,
         role: "doctor",
@@ -851,9 +895,9 @@ export function useDoctorAppointments({
         action: isApproved ? "Appointment Accepted" : "Appointment Rejected",
         target: `Appointment #${appointmentId.slice(0, 8)}`,
         details: isApproved
-          ? `Dr. ${doctorName || "Doctor"} accepted and confirmed consultation schedule.`
-          : `Dr. ${doctorName || "Doctor"} declined consultation schedule: "${note || "Schedule conflict"}".`,
-        performerName: doctorName || "Doctor",
+          ? `Dr. ${auditPerformerName.replace(/^dr\.\s*/i, "")} accepted and confirmed consultation schedule.`
+          : `Dr. ${auditPerformerName.replace(/^dr\.\s*/i, "")} declined consultation schedule: "${note || "Schedule conflict"}".`,
+        performerName: auditPerformerName,
         metadata: {
           appointmentId,
           decision,
@@ -879,6 +923,8 @@ export function useDoctorAppointments({
       const targetAppt = appointments.find(
         (a) => a.id === appointmentId || (a as any).appointment_id === appointmentId
       );
+      const targetAffiliation = affiliations.find((a) => a.clinic_id === targetAppt?.clinicId);
+      const effectiveDoneDoctorName = targetAffiliation?.doctor_name || doctorName;
 
       const formattedNote = finalDiagnosis
         ? `Diagnosis: ${finalDiagnosis}${consultationNote ? ` | Note: ${consultationNote}` : ""}`
@@ -930,7 +976,7 @@ export function useDoctorAppointments({
           patientId: targetAppt?.userId,
           doctorId: doctorIds[0] || targetAppt?.assignedDoctorId || undefined,
           patientName: targetAppt?.patientName,
-          doctorName: doctorName || targetAppt?.assignedDoctorName || undefined,
+          doctorName: effectiveDoneDoctorName || targetAppt?.assignedDoctorName || undefined,
           aiPrediction: targetAppt?.aiConditionName || targetAppt?.conditionName,
           confidence: targetAppt?.aiConfidence,
           finalDiagnosis,
@@ -943,7 +989,7 @@ export function useDoctorAppointments({
         // Ensure admin receives immediate notification under AI Scans & Reviews
         notifyAdminDoctorCompletedReview({
           appointmentId,
-          doctorName: doctorName || targetAppt?.assignedDoctorName || undefined,
+          doctorName: effectiveDoneDoctorName || targetAppt?.assignedDoctorName || undefined,
           patientName: targetAppt?.patientName,
           finalDiagnosis,
           aiPrediction: targetAppt?.aiConditionName || targetAppt?.conditionName,
@@ -985,24 +1031,26 @@ export function useDoctorAppointments({
           console.warn("[useDoctorAppointments] Supabase network exception:", supaErr?.message);
         }
       }
+      const notifDoneName = (effectiveDoneDoctorName || doctorName || "your doctor").replace(/^dr\.\s*/i, "");
       if (targetAppt?.userId) {
         createPatientNotification({
           userId: targetAppt.userId,
           type: "appointment-completed",
           subtype: "reviewed",
           title: "Consultation Completed",
-          body: `Dr. ${doctorName || "your doctor"} has completed your consultation review.${finalDiagnosis ? ` Assessment: ${finalDiagnosis}.` : ""}`,
+          body: `Dr. ${notifDoneName} has completed your consultation review.${finalDiagnosis ? ` Assessment: ${finalDiagnosis}.` : ""}`,
         });
       }
 
+      const auditDoneDocName = effectiveDoneDoctorName || doctorName || "Doctor";
       logAuditEvent({
         userId: user?.id,
         role: "doctor",
         category: "Appointment",
         action: "Consultation Completed",
         target: `Appointment #${appointmentId.slice(0, 8)}`,
-        details: `Dr. ${doctorName || "Doctor"} completed consultation.${finalDiagnosis ? ` Diagnosis: ${finalDiagnosis}.` : ""}${consultationNote ? ` Notes: ${consultationNote}` : ""}`,
-        performerName: doctorName || "Doctor",
+        details: `Dr. ${auditDoneDocName.replace(/^dr\.\s*/i, "")} completed consultation.${finalDiagnosis ? ` Diagnosis: ${finalDiagnosis}.` : ""}${consultationNote ? ` Notes: ${consultationNote}` : ""}`,
+        performerName: auditDoneDocName,
         metadata: {
           appointmentId,
           finalDiagnosis,
@@ -1017,8 +1065,8 @@ export function useDoctorAppointments({
           category: "Scan",
           action: "AI Skin Scan Reviewed",
           target: `Scan for ${targetAppt.patientName || "Patient"}`,
-          details: `Dr. ${doctorName || "Doctor"} reviewed and signed off on AI scan prediction (${targetAppt.aiConditionName}). Final clinical diagnosis: ${finalDiagnosis || "Confirmed"}.`,
-          performerName: doctorName || "Doctor",
+          details: `Dr. ${auditDoneDocName.replace(/^dr\.\s*/i, "")} reviewed and signed off on AI scan prediction (${targetAppt.aiConditionName}). Final clinical diagnosis: ${finalDiagnosis || "Confirmed"}.`,
+          performerName: auditDoneDocName,
           metadata: {
             appointmentId,
             aiConditionName: targetAppt.aiConditionName,
@@ -1042,6 +1090,10 @@ export function useDoctorAppointments({
         .update({ check_in_status: "in-consultation" })
         .eq("appointment_id", appointmentId);
 
+      const targetCallAppt = appointments.find((a) => a.id === appointmentId);
+      const targetCallAffiliation = affiliations.find((a) => a.clinic_id === targetCallAppt?.clinicId);
+      const effectiveCallDoctorName = targetCallAffiliation?.doctor_name || doctorName || "Doctor";
+
       setAppointments((prev) =>
         prev.map((a) => (a.id === appointmentId ? { ...a, checkInStatus: "in-consultation" } : a))
       );
@@ -1052,8 +1104,8 @@ export function useDoctorAppointments({
         category: "Appointment",
         action: "Consultation Started",
         target: `Appointment #${appointmentId.slice(0, 8)}`,
-        details: `Dr. ${doctorName || "Doctor"} started consultation session for appointment #${appointmentId.slice(0, 8)}.`,
-        performerName: doctorName || "Doctor",
+        details: `Dr. ${effectiveCallDoctorName.replace(/^dr\.\s*/i, "")} started consultation session for appointment #${appointmentId.slice(0, 8)}.`,
+        performerName: effectiveCallDoctorName,
         metadata: {
           appointmentId,
         },
@@ -1075,7 +1127,7 @@ export function useDoctorAppointments({
     } catch (err: any) {
       console.error("[useDoctorAppointments] callPatientToConsultation error:", err?.message);
     }
-  }, [user?.id, doctorName]);
+  }, [user, doctorName, affiliations, appointments]);
 
   // Hide old results immediately when the active clinic changes.
   const filteredAppointments = useMemo(() => {

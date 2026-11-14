@@ -190,11 +190,12 @@ export function useClinicVerification(): ClinicProfile {
           .from("clinic")
           .select("clinic_id, name, status, verified, logo_url, owner_user_id, email")
           .eq("clinic_id", knownClinicId)
-          .eq("owner_user_id", userId)
           .maybeSingle();
 
         if (byId && !errId) {
-          clinicData = byId;
+          if (!userId || byId.owner_user_id === userId || (userEmail && byId.email?.toLowerCase().trim() === userEmail)) {
+            clinicData = byId;
+          }
         }
       } catch {
         /* ignore */
@@ -202,7 +203,7 @@ export function useClinicVerification(): ClinicProfile {
     }
 
     // Strategy B: By owner_user_id
-    if (!clinicData) {
+    if (!clinicData && userId) {
       try {
         const { data: byOwner, error: errOwner } = await supabase
           .from("clinic")
@@ -225,7 +226,6 @@ export function useClinicVerification(): ClinicProfile {
           .from("clinic")
           .select("clinic_id, name, status, verified, logo_url, owner_user_id, email")
           .ilike("email", userEmail)
-          .is("owner_user_id", null)
           .maybeSingle();
 
         if (byEmail && !errEmail) {
@@ -239,12 +239,12 @@ export function useClinicVerification(): ClinicProfile {
     if (version !== loadVersionRef.current || userId !== activeUserRef.current) return;
     // Handle successful DB retrieval
     if (clinicData) {
-      // Auto-link owner_user_id if missing
-      if (!clinicData.owner_user_id && userId) {
+      // Auto-link owner_user_id if missing or mismatching
+      if ((!clinicData.owner_user_id || clinicData.owner_user_id !== userId) && userId && clinicData.email && clinicData.email.toLowerCase().trim() === userEmail) {
         try {
           await supabase
             .from("clinic")
-            .update({ owner_user_id: userId, verified: true })
+            .update({ owner_user_id: userId })
             .eq("clinic_id", clinicData.clinic_id);
         } catch {}
       }
@@ -317,7 +317,10 @@ export function useClinicVerification(): ClinicProfile {
       const stored = localStorage.getItem("dermai_clinic_applications");
       if (stored) {
         const parsed = JSON.parse(stored);
-        const matchedLocal = parsed.find((a: any) => a.email?.toLowerCase().trim() === userEmail);
+        const matchedLocal = parsed.find((a: any) =>
+          (userEmail && a.email?.toLowerCase().trim() === userEmail) ||
+          (knownClinicId && String(a.id) === String(knownClinicId))
+        );
         if (matchedLocal) {
           const nextProfile = {
             status: (matchedLocal.status === "verified" ? "verified" : "pending") as ClinicVerificationStatus,
@@ -361,7 +364,14 @@ export function useClinicVerification(): ClinicProfile {
       }
     };
 
+    const handleGenericSync = () => {
+      if (active) load();
+    };
+
     window.addEventListener("dermai_clinic_profile_updated", handleCustomSync);
+    window.addEventListener("dermai_session_recovered", handleGenericSync);
+    window.addEventListener("clinicStatusUpdated", handleGenericSync);
+    window.addEventListener("storage", handleGenericSync);
 
     load();
 
@@ -369,6 +379,9 @@ export function useClinicVerification(): ClinicProfile {
       active = false;
       listeners.delete(listener);
       window.removeEventListener("dermai_clinic_profile_updated", handleCustomSync);
+      window.removeEventListener("dermai_session_recovered", handleGenericSync);
+      window.removeEventListener("clinicStatusUpdated", handleGenericSync);
+      window.removeEventListener("storage", handleGenericSync);
     };
   }, [load]);
 

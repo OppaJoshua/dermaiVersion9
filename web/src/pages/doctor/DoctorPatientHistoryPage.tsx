@@ -76,7 +76,7 @@ function isPastHistoryRecord(appt?: { status?: string | null; doctorDone?: boole
 export default function DoctorPatientHistoryPage() {
   const HISTORY_STATUSES = useMemo(() => ["Completed", "Cancelled", "Canceled", "completed", "cancelled", "canceled"], []);
   const { appointments, loading, error, doctorName, doctorIds } = useDoctorAppointments({ statusIn: HISTORY_STATUSES, includeNoShow: true });
-  const { activeClinicId, affiliations } = useDoctorClinicContext();
+  const { activeClinicId, affiliations, activeAffiliation, doctorName: contextDoctorName } = useDoctorClinicContext();
   const [viewingPatientId, setViewingPatientId] = useState<string | null>(null);
   const [historyTab, setHistoryTab] = useState<HistoryTab>("all");
   useEffect(() => { setViewingPatientId(null); }, [activeClinicId]);
@@ -335,7 +335,8 @@ export default function DoctorPatientHistoryPage() {
     doc.text("Attending Doctor: ", col1X, y);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(30, 41, 59);
-    doc.text(doctorName ? `Dr. ${doctorName}` : "Attending Physician", col1X + 26, y);
+    const exportDoctorName = (activeAffiliation?.doctor_name || contextDoctorName || doctorName || "").replace(/^dr\.\s*/i, "");
+    doc.text(exportDoctorName ? `Dr. ${exportDoctorName}` : "Attending Physician", col1X + 26, y);
 
     doc.setFont("helvetica", "normal");
     doc.setTextColor(100, 116, 139);
@@ -583,7 +584,7 @@ export default function DoctorPatientHistoryPage() {
     const pdfFilename = `DermAI_Patient_History_${categorySlug}_${dateSlug}.pdf`;
 
     doc.save(pdfFilename);
-  }, [isExportDisabled, searchFilteredHistory, doctorName, activeClinicName, historyTab, fromDate, toDate]);
+  }, [isExportDisabled, searchFilteredHistory, doctorName, activeAffiliation?.doctor_name, contextDoctorName, activeClinicName, historyTab, fromDate, toDate]);
 
   if (loading && !appointments.length) {
     return (

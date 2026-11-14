@@ -10,6 +10,8 @@ import {
   ChevronDown,
   ChevronUp,
   Send,
+  CheckCircle2,
+  Loader2,
 } from "lucide-react";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { supabase } from "@/lib/supabaseClient";
@@ -48,30 +50,63 @@ const LEGACY_SERVICE_MAP: Record<string, string> = {
   "Melasma (Dark Patches)": "Melasma",
 };
 
+/** Normalizes a service or condition name: trims, strips invalid artifacts, handles legacy mappings and case matching */
+export function normalizeServiceName(name?: string | null): string {
+  if (!name) return "";
+  const trimmed = String(name).trim();
+  if (!trimmed || trimmed === "[]" || trimmed === '[""]' || trimmed === '["[]"]') return "";
+
+  // 1. Check legacy service mapping
+  if (trimmed in LEGACY_SERVICE_MAP) {
+    return LEGACY_SERVICE_MAP[trimmed] || "";
+  }
+
+  // 2. Check case-insensitive match against standard condition options
+  const standardMatch = SERVICES_OPTIONS.find(
+    (opt) => opt.toLowerCase() === trimmed.toLowerCase()
+  );
+  if (standardMatch) {
+    return standardMatch;
+  }
+
+  return trimmed;
+}
+
+/** Deduplicates a list of service names case-insensitively, preserving canonical casing of the first occurrence */
+export function deduplicateServices(services?: (string | null | undefined)[] | null): string[] {
+  if (!services || !Array.isArray(services)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const raw of services) {
+    const normalized = normalizeServiceName(raw);
+    if (!normalized) continue;
+    const lowerKey = normalized.toLowerCase();
+    if (!seen.has(lowerKey)) {
+      seen.add(lowerKey);
+      result.push(normalized);
+    }
+  }
+
+  return result;
+}
+
 /** Parse servicesOffered: handles JSON array string or legacy comma string */
 function parseServices(raw: string): string[] {
   if (!raw || !raw.trim()) return [];
   const trimmedRaw = raw.trim();
   if (trimmedRaw === "[]" || trimmedRaw === '[""]' || trimmedRaw === '["[]"]') return [];
 
-  let list: string[] = [];
   try {
     const parsed = JSON.parse(trimmedRaw);
     if (Array.isArray(parsed)) {
-      return parsed
-        .map((s) => (typeof s === "string" ? s.trim() : String(s).trim()))
-        .filter((s) => Boolean(s) && s !== "[]" && s !== '[""]')
-        .map((s) => (s in LEGACY_SERVICE_MAP ? LEGACY_SERVICE_MAP[s] : s))
-        .filter((s) => Boolean(s) && s !== "[]");
+      return deduplicateServices(parsed.map((s) => (typeof s === "string" ? s : String(s))));
     }
   } catch {
     /* ignore invalid JSON */
   }
 
-  list = trimmedRaw.split(",").map((s) => s.trim()).filter((s) => Boolean(s) && s !== "[]");
-  return list
-    .map((s) => (s in LEGACY_SERVICE_MAP ? LEGACY_SERVICE_MAP[s] : s))
-    .filter((s) => Boolean(s) && s !== "[]");
+  return deduplicateServices(trimmedRaw.split(","));
 }
 
 export type ClinicDoctorSummary = {
@@ -227,31 +262,49 @@ function getInitialSettings(): ClinicSettings {
 
 export default function ClinicSettingsPage() {
   const [settings, setSettings] = useState<ClinicSettings>(getInitialSettings);
-  const [saved, setSaved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  // Auto-dismiss success notification after 5 seconds
+  useEffect(() => {
+    if (saveStatus?.type === "success") {
+      const timer = setTimeout(() => {
+        setSaveStatus(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [saveStatus]);
+
   const [selectedServices, setSelectedServices] = useState<string[]>(() => {
     const initial = getInitialSettings();
     if (initial.servicesOffered) {
-      const svcs = parseServices(initial.servicesOffered).filter((s) => Boolean(s) && s.trim() !== "[]");
-      if (svcs.length > 0) return svcs;
+      const svcs = parseServices(initial.servicesOffered);
+      if (svcs.length > 0) return deduplicateServices(svcs);
     }
     try {
       const appsRaw = localStorage.getItem("dermai_clinic_applications");
       if (appsRaw) {
         const apps = JSON.parse(appsRaw);
         if (Array.isArray(apps) && apps[0]?.servicesOffered) {
-          const svcs = parseServices(apps[0].servicesOffered).filter((s) => Boolean(s) && s.trim() !== "[]");
-          if (svcs.length > 0) return svcs;
+          const svcs = parseServices(apps[0].servicesOffered);
+          if (svcs.length > 0) return deduplicateServices(svcs);
         }
       }
     } catch { }
-    return parseServices(DEFAULT_SETTINGS.servicesOffered).filter((s) => Boolean(s) && s.trim() !== "[]");
+    return deduplicateServices(parseServices(DEFAULT_SETTINGS.servicesOffered));
   });
 
-  // Scrub any legacy empty bracket "[]" artifacts from services state and storage
+  // Scrub any duplicate services or legacy empty bracket "[]" artifacts from services state and storage
   useEffect(() => {
     setSelectedServices((prev) => {
-      const cleaned = prev.filter((s) => Boolean(s) && s.trim() !== "[]");
-      return cleaned.length !== prev.length ? cleaned : prev;
+      const cleaned = deduplicateServices(prev);
+      if (cleaned.length !== prev.length || cleaned.some((s, i) => s !== prev[i])) {
+        return cleaned;
+      }
+      return prev;
     });
 
     try {
@@ -259,7 +312,7 @@ export default function ClinicSettingsPage() {
       if (savedSett) {
         const parsed = JSON.parse(savedSett);
         if (parsed.servicesOffered) {
-          const cleanedSvcs = parseServices(parsed.servicesOffered).filter((s) => Boolean(s) && s.trim() !== "[]");
+          const cleanedSvcs = parseServices(parsed.servicesOffered);
           parsed.servicesOffered = JSON.stringify(cleanedSvcs);
           localStorage.setItem("dermai_clinic_settings", JSON.stringify(parsed));
         }
@@ -313,7 +366,7 @@ export default function ClinicSettingsPage() {
 
   const isCloseTimeInvalid = !operatingHoursValidation.isValid;
   const hasScheduleConflicts = scheduleConflicts.length > 0;
-  const isSaveDisabled = isPending || isCloseTimeInvalid || hasScheduleConflicts;
+  const isSaveDisabled = isPending || isCloseTimeInvalid || hasScheduleConflicts || isSaving;
 
   // Live-sync with clinic verification profile hook
   useEffect(() => {
@@ -570,7 +623,9 @@ export default function ClinicSettingsPage() {
           });
 
           if (dbClinic.clinic_service_offered && dbClinic.clinic_service_offered.length > 0) {
-            const dbSvcs = dbClinic.clinic_service_offered.map((s: any) => s.service_name).filter(Boolean);
+            const dbSvcs = deduplicateServices(
+              dbClinic.clinic_service_offered.map((s: any) => s.service_name).filter(Boolean)
+            );
             if (dbSvcs.length > 0) {
               setSelectedServices(dbSvcs);
             }
@@ -601,7 +656,7 @@ export default function ClinicSettingsPage() {
                 }));
                 if (app.servicesOffered) {
                   const svcs = parseServices(app.servicesOffered);
-                  if (svcs.length > 0) setSelectedServices(svcs);
+                  if (svcs.length > 0) setSelectedServices(deduplicateServices(svcs));
                 }
               }
             }
@@ -623,6 +678,7 @@ export default function ClinicSettingsPage() {
     window.addEventListener("dermai_clinic_profile_updated", handleSync);
     window.addEventListener("dermai_clinic_updated", handleSync);
     window.addEventListener("dermai_doctors_updated", handleSync);
+    window.addEventListener("clinicStatusUpdated", handleSync);
     window.addEventListener("storage", handleSync);
 
     return () => {
@@ -630,12 +686,15 @@ export default function ClinicSettingsPage() {
       window.removeEventListener("dermai_clinic_profile_updated", handleSync);
       window.removeEventListener("dermai_clinic_updated", handleSync);
       window.removeEventListener("dermai_doctors_updated", handleSync);
+      window.removeEventListener("clinicStatusUpdated", handleSync);
       window.removeEventListener("storage", handleSync);
     };
   }, [clinicId, loading]);
 
   const onSave = async () => {
+    if (isSaving || isSavingRef.current) return;
     setScheduleSaveError(null);
+    setSaveStatus(null);
     const targetClinicId = clinicId || dbClinicId;
     const isCurrentlyVerified =
       verificationStatus === "verified" ||
@@ -643,25 +702,33 @@ export default function ClinicSettingsPage() {
 
     const hoursValidation = validateClinicOperatingHours(settings.openTime, settings.closeTime);
     if (!hoursValidation.isValid) {
-      setScheduleSaveError(
-        hoursValidation.error || "Clinic closing time must be later than opening time."
-      );
+      const errMsg = hoursValidation.error || "Clinic closing time must be later than opening time.";
+      setScheduleSaveError(errMsg);
+      setSaveStatus({
+        type: "error",
+        message: errMsg,
+      });
       return;
     }
 
     if (scheduleConflicts.length > 0) {
-      setScheduleSaveError(
-        `Cannot save schedule changes: ${scheduleConflicts.length} doctor shift${scheduleConflicts.length > 1 ? "s are" : " is"
-        } outside clinic operating hours. Please resolve them in Doctor Shifts first.`
-      );
+      const conflictMsg = `Cannot save schedule changes: ${scheduleConflicts.length} doctor shift${
+        scheduleConflicts.length > 1 ? "s are" : " is"
+      } outside clinic operating hours. Please resolve them in Doctor Shifts first.`;
+      setScheduleSaveError(conflictMsg);
+      setSaveStatus({
+        type: "error",
+        message: conflictMsg,
+      });
       return;
     }
 
+    setIsSaving(true);
     isSavingRef.current = true;
 
-    const cleanServicesToSave = selectedServices.filter((s) => Boolean(s) && s.trim() !== "[]");
+    const cleanServicesToSave = deduplicateServices(selectedServices);
 
-    // 1. Prepare settings and update local state and localStorage for instant 0ms synchronization
+    // 1. Prepare settings and update local state and localStorage for instant synchronization
     const settingsToSave: ClinicSettings = {
       ...settings,
       status: isCurrentlyVerified ? "verified" : settings.status,
@@ -706,8 +773,8 @@ export default function ClinicSettingsPage() {
                 closeTime: settings.closeTime,
                 hours: `${settings.operatingDays || "Monday - Saturday"}: ${formatTime12h(settings.openTime || "08:00")} – ${formatTime12h(settings.closeTime || "17:00")}`,
                 slotIntervalMinutes: settings.slotIntervalMinutes || 30,
-                services: selectedServices,
-                servicesOffered: JSON.stringify(selectedServices),
+                services: cleanServicesToSave,
+                servicesOffered: JSON.stringify(cleanServicesToSave),
                 latitude: settings.latitude,
                 longitude: settings.longitude,
               };
@@ -757,7 +824,10 @@ export default function ClinicSettingsPage() {
         } else if (settings.email) {
           query = query.ilike("email", settings.email);
         }
-        const { data: updatedClinic } = await query.select("clinic_id").maybeSingle();
+        const { data: updatedClinic, error: updateClinicError } = await query.select("clinic_id").maybeSingle();
+        if (updateClinicError) {
+          throw new Error(updateClinicError.message || "Failed to update clinic record in database.");
+        }
         const effectiveClinicId = targetClinicId || updatedClinic?.clinic_id;
 
         if (effectiveClinicId) {
@@ -767,32 +837,38 @@ export default function ClinicSettingsPage() {
 
           // Update operating hours
           try {
-            await supabase.from("clinic_operating_hours").delete().eq("clinic_id", effectiveClinicId);
+            const { error: ohDelError } = await supabase.from("clinic_operating_hours").delete().eq("clinic_id", effectiveClinicId);
+            if (ohDelError) console.warn("Could not delete clinic_operating_hours:", ohDelError);
             if (settings.operatingDays) {
-              await supabase.from("clinic_operating_hours").insert({
+              const { error: ohInsError } = await supabase.from("clinic_operating_hours").insert({
                 clinic_id: effectiveClinicId,
                 day_of_week: settings.operatingDays,
                 open_time: settings.openTime || "08:00",
                 close_time: settings.closeTime || "17:00",
               });
+              if (ohInsError) throw new Error(`Failed to save operating hours: ${ohInsError.message}`);
             }
-          } catch (ohEx) {
+          } catch (ohEx: any) {
             console.warn("Could not write clinic_operating_hours:", ohEx);
+            throw ohEx;
           }
 
-          // Update services
+          // Update services - delete previous records and insert deduplicated clean services
           try {
-            await supabase.from("clinic_service_offered").delete().eq("clinic_id", effectiveClinicId);
+            const { error: svDelError } = await supabase.from("clinic_service_offered").delete().eq("clinic_id", effectiveClinicId);
+            if (svDelError) console.warn("Could not delete clinic_service_offered:", svDelError);
             if (cleanServicesToSave.length > 0) {
-              await supabase.from("clinic_service_offered").insert(
+              const { error: svInsError } = await supabase.from("clinic_service_offered").insert(
                 cleanServicesToSave.map((s) => ({
                   clinic_id: effectiveClinicId,
                   service_name: s,
                 }))
               );
+              if (svInsError) throw new Error(`Failed to save services: ${svInsError.message}`);
             }
-          } catch (svEx) {
+          } catch (svEx: any) {
             console.warn("Could not write clinic_service_offered:", svEx);
+            throw svEx;
           }
         }
       }
@@ -810,34 +886,58 @@ export default function ClinicSettingsPage() {
           location: settings.location || settings.address,
         },
       }).catch(() => { });
-    } catch (cErr) {
+
+      // 3. Dispatch global sync events only AFTER all database and storage writes have completed
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new CustomEvent("clinicSettingsUpdated", { detail: settingsToSave }));
+      window.dispatchEvent(new CustomEvent("dermai_clinic_updated", { detail: { source: "ClinicSettingsPage" } }));
+      window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
+
+      setSaveStatus({
+        type: "success",
+        message: "Clinic settings saved successfully.",
+      });
+    } catch (cErr: any) {
       console.error("Error syncing clinic to Supabase:", cErr);
+      setSaveStatus({
+        type: "error",
+        message: cErr?.message || "Could not sync clinic settings to the server. Please check your connection and try again.",
+      });
     } finally {
+      setIsSaving(false);
       isSavingRef.current = false;
     }
-
-    // 3. Dispatch global sync events only AFTER all database and storage writes have completed
-    window.dispatchEvent(new Event("storage"));
-    window.dispatchEvent(new CustomEvent("clinicSettingsUpdated", { detail: settingsToSave }));
-    window.dispatchEvent(new CustomEvent("dermai_clinic_updated", { detail: { source: "ClinicSettingsPage" } }));
-    window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
-
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
   };
 
   const toggleService = (svc: string) => {
-    if (!svc || svc.trim() === "[]") return;
+    const normalized = normalizeServiceName(svc);
+    if (!normalized) return;
+    const lower = normalized.toLowerCase();
+
     setSelectedServices((prev) => {
-      const cleaned = prev.filter((s) => Boolean(s) && s.trim() !== "[]");
-      return cleaned.includes(svc) ? cleaned.filter((s) => s !== svc) : [...cleaned, svc];
+      const exists = prev.some((s) => s.trim().toLowerCase() === lower);
+      if (exists) {
+        return prev.filter((s) => s.trim().toLowerCase() !== lower);
+      } else {
+        return deduplicateServices([...prev, normalized]);
+      }
     });
   };
 
   const addCustomService = () => {
-    const trimmed = customServiceInput.trim();
-    if (trimmed && trimmed !== "[]" && !selectedServices.includes(trimmed)) {
-      setSelectedServices((prev) => [...prev.filter((s) => Boolean(s) && s.trim() !== "[]"), trimmed]);
+    const normalized = normalizeServiceName(customServiceInput);
+    if (!normalized) {
+      setCustomServiceInput("");
+      return;
+    }
+
+    const lower = normalized.toLowerCase();
+    const alreadyExists = selectedServices.some(
+      (s) => s.trim().toLowerCase() === lower
+    );
+
+    if (!alreadyExists) {
+      setSelectedServices((prev) => deduplicateServices([...prev, normalized]));
     }
     setCustomServiceInput("");
   };
@@ -901,7 +1001,42 @@ export default function ClinicSettingsPage() {
   };
 
   return (
-    <div className="space-y-4 pb-12">
+    <div className="space-y-4 pb-12 relative">
+      {/* ── Floating Toast Feedback ── */}
+      {saveStatus && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed top-6 right-6 z-50 max-w-md w-[calc(100vw-3rem)] sm:w-96 shadow-xl rounded-2xl p-4 border transition-all animate-in fade-in slide-in-from-top-4 duration-200 flex items-start gap-3 ${
+            saveStatus.type === "success"
+              ? "bg-white border-emerald-300 text-emerald-950"
+              : "bg-white border-rose-300 text-rose-950"
+          }`}
+        >
+          {saveStatus.type === "success" ? (
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+          ) : (
+            <XCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-bold">
+              {saveStatus.type === "success" ? "Settings Saved" : "Save Failed"}
+            </p>
+            <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">
+              {saveStatus.message}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSaveStatus(null)}
+            className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
+            aria-label="Dismiss notification"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       <div>
         <h1 className="text-2xl font-display font-bold text-gray-900">Clinic Profile & Settings</h1>
         <p className="text-sm text-gray-400 mt-0.5">Manage your clinic information, schedules, and booking capacity</p>
@@ -1096,12 +1231,14 @@ export default function ClinicSettingsPage() {
             {/* Condition Pills */}
             <div className="flex flex-wrap gap-2 pt-1">
               {SERVICES_OPTIONS.map((svc) => {
-                const selected = selectedServices.includes(svc);
+                const selected = selectedServices.some(
+                  (s) => s.trim().toLowerCase() === svc.toLowerCase()
+                );
                 return (
                   <button
                     key={svc}
                     type="button"
-                    disabled={isPending}
+                    disabled={isPending || isSaving}
                     onClick={() => toggleService(svc)}
                     className={`px-3.5 py-1.5 rounded-full text-[13px] font-semibold border transition-all cursor-pointer ${selected
                         ? "bg-[#fbeaf0] text-[#901353] border-[#f3c2d4] shadow-2xs"
@@ -1114,19 +1251,20 @@ export default function ClinicSettingsPage() {
               })}
 
               {/* Any custom selected services not in predefined list */}
-              {selectedServices
-                .filter((s) => Boolean(s) && s.trim() !== "[]" && !SERVICES_OPTIONS.includes(s))
+              {deduplicateServices(selectedServices)
+                .filter((s) => !SERVICES_OPTIONS.some((opt) => opt.toLowerCase() === s.toLowerCase()))
                 .map((svc) => (
                   <span
-                    key={svc}
+                    key={svc.toLowerCase()}
                     className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#fbeaf0] text-[#901353] border border-[#f3c2d4] text-[13px] font-semibold shadow-2xs"
                   >
                     {svc}
-                    {!isPending && (
+                    {!isPending && !isSaving && (
                       <button
                         type="button"
                         onClick={() => toggleService(svc)}
                         className="hover:text-red-700 transition-colors cursor-pointer"
+                        title={`Remove ${svc}`}
                       >
                         <X className="w-3 h-3" />
                       </button>
@@ -1142,7 +1280,7 @@ export default function ClinicSettingsPage() {
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                disabled={isPending}
+                disabled={isPending || isSaving}
                 value={customServiceInput}
                 onChange={(e) => setCustomServiceInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCustomService())}
@@ -1151,7 +1289,7 @@ export default function ClinicSettingsPage() {
               />
               <button
                 type="button"
-                disabled={isPending || !customServiceInput.trim()}
+                disabled={isPending || isSaving || !customServiceInput.trim()}
                 onClick={addCustomService}
                 className="px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-[13px] font-bold text-gray-700 shadow-2xs transition-colors disabled:opacity-50 cursor-pointer"
               >
@@ -1412,7 +1550,24 @@ export default function ClinicSettingsPage() {
       <div className="bg-white border border-gray-200/80 rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-[13px] text-gray-500">Saves your profile, services, fee and schedule.</p>
-          {saved && <span className="text-[13px] text-emerald-600 font-semibold ml-2">✓ Settings saved successfully</span>}
+          {isSaving && (
+            <span className="text-[13px] text-blue-600 font-semibold ml-2 flex items-center gap-1.5">
+              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+              Saving settings...
+            </span>
+          )}
+          {!isSaving && saveStatus?.type === "success" && (
+            <span className="text-[13px] text-emerald-600 font-semibold ml-2 flex items-center gap-1">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              Settings saved successfully
+            </span>
+          )}
+          {!isSaving && saveStatus?.type === "error" && (
+            <span className="text-[13px] text-rose-600 font-semibold ml-2 flex items-center gap-1">
+              <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              {saveStatus.message}
+            </span>
+          )}
           {hasScheduleConflicts && (
             <span className="text-xs text-rose-800 font-semibold flex items-center gap-1.5 bg-rose-50 border border-rose-200 px-3 py-1 rounded-xl">
               <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
@@ -1425,18 +1580,28 @@ export default function ClinicSettingsPage() {
           onClick={onSave}
           disabled={isSaveDisabled}
           title={
-            hasScheduleConflicts
-              ? `Cannot save: ${scheduleConflicts.length} doctor shift conflict${scheduleConflicts.length > 1 ? "s" : ""} must be resolved in Doctor Shifts first`
-              : isCloseTimeInvalid
-                ? "Please select a valid closing time before saving"
-                : "Save settings"
+            isSaving
+              ? "Saving settings in progress..."
+              : hasScheduleConflicts
+                ? `Cannot save: ${scheduleConflicts.length} doctor shift conflict${scheduleConflicts.length > 1 ? "s" : ""} must be resolved in Doctor Shifts first`
+                : isCloseTimeInvalid
+                  ? "Please select a valid closing time before saving"
+                  : "Save settings"
           }
-          className={`px-6 py-2.5 rounded-xl text-white text-xs font-bold transition-all shadow-xs ${isSaveDisabled
+          className={`px-6 py-2.5 rounded-xl text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 ${
+            isSaveDisabled
               ? "bg-gray-400 cursor-not-allowed opacity-60"
               : "bg-[#881337] hover:bg-[#70102d] cursor-pointer"
-            }`}
+          }`}
         >
-          Save settings
+          {isSaving ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+              <span>Saving...</span>
+            </>
+          ) : (
+            <span>Save settings</span>
+          )}
         </button>
       </div>
 
