@@ -18,8 +18,8 @@ type AnalysisRecord = {
 };
 
 const badgeClasses: Record<AnalysisStatus, string> = {
-    valid: "bg-gray-100 border-gray-300 text-black",
-    flagged: "bg-magenta-50 border-magenta-200 text-black",
+    valid: "bg-green-50 border-green-200 text-green-700",
+    flagged: "bg-red-50 border-red-200 text-red-700",
     invalid: "bg-magenta-100 border-magenta-300 text-black",
 };
 
@@ -140,7 +140,7 @@ export default function AdminAiAnalysisManagement() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-7 min-h-[156px]">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-black">Low confidence</p>
+            <p className="text-sm font-semibold text-black">Low Confidence</p>
             <AlertTriangle className="w-5 h-5 text-magenta-600"/>
           </div>
           <p className="mt-5 text-4xl font-bold text-black tabular-nums">{lowConfidenceCount}</p>
@@ -156,7 +156,7 @@ export default function AdminAiAnalysisManagement() {
         </div>
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-7 min-h-[156px]">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-black">Invalid / out-of-scope</p>
+            <p className="text-sm font-semibold text-black">Invalid / Out-of-Scope</p>
             <ShieldX className="w-5 h-5 text-magenta-600"/>
           </div>
           <p className="mt-5 text-4xl font-bold text-black tabular-nums">{invalidCount}</p>

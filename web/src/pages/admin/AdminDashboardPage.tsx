@@ -286,7 +286,7 @@ export default function AdminDashboardPage() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-lg font-semibold text-black">
-              Top 5 detected conditions
+              Top 5 Detected Conditions
             </h3>
             <span className="text-sm text-gray-600">This month</span>
           </div>
@@ -313,7 +313,7 @@ export default function AdminDashboardPage() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-lg font-semibold text-black">
-              Analysis trends
+              Analysis Trends
             </h3>
             <div className="flex gap-1">
               {(["weekly", "monthly"] as const).map((tab) => {
@@ -365,9 +365,9 @@ export default function AdminDashboardPage() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-lg font-semibold text-black">
-              Top 5 detected conditions
+              Top 5 Detected Conditions
             </h3>
-            <span className="text-sm text-gray-600">This month</span>
+            <span className="text-sm text-gray-600">This Month</span>
           </div>
           <div className="h-72">
             {topConditions.length > 0 ? (
@@ -392,7 +392,7 @@ export default function AdminDashboardPage() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-lg font-semibold text-black">
-              Analysis trends
+              Analysis Trends
             </h3>
             <div className="flex gap-1">
               {(["weekly", "monthly"] as const).map((tab) => {
@@ -508,7 +508,7 @@ export default function AdminDashboardPage() {
               <AlertTriangle className="w-6 h-6 text-magenta-600 shrink-0" />
               <div>
                 <p className="text-2xl font-display font-bold text-black tabular-nums">{flaggedScans.length}</p>
-                <p className="text-sm text-gray-600">Out-of-scope alerts</p>
+                <p className="text-sm text-gray-600">Out-Of-Scope Alerts</p>
               </div>
             </div>
             {/* DOH Referrals card removed */}

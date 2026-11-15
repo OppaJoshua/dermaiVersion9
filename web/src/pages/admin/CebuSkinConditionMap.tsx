@@ -251,7 +251,7 @@ export default function CebuSkinConditionMap() {
           <h3 className="font-display font-bold text-gray-900">Skin Condition Distribution Map</h3>
         </div>
         <p className="text-sm text-gray-400">
-          Geographic distribution of AI-analyzed skin conditions across Cebu municipalities
+          Geographic Distribution Of AI-analyzed Skin Conditions Across Cebu Municipalities
         </p>
       </div>
 

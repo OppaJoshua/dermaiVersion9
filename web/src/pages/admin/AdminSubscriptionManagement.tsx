@@ -252,26 +252,6 @@ export default function AdminSubscriptionManagement() {
         </p>
       </div>
 
-      {/* Plan cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm">
-          <p className="text-sm font-semibold text-black">Free plan</p>
-          <p className="text-3xl font-bold text-black mt-4">₱0</p>
-          <p className="text-sm text-gray-600 mt-2">1 free skin scan, then upgrade required</p>
-        </div>
-        <div className="bg-white rounded-xl p-7 border border-magenta-200 shadow-sm">
-          <p className="text-sm font-semibold text-black">Premium monthly</p>
-          <p className="text-3xl font-bold text-black mt-4">₱199 <span className="text-base font-medium text-gray-600">/ month</span></p>
-          <p className="text-sm text-gray-600 mt-2">Unlimited skin scans</p>
-        </div>
-        <div className="bg-white rounded-xl p-7 border-2 border-magenta-500 shadow-sm relative">
-          <span className="absolute top-5 right-5 text-[11px] font-bold px-2.5 py-1 rounded-full bg-magenta-600 text-white">SAVE 16%</span>
-          <p className="text-sm font-semibold text-black">Premium annual</p>
-          <p className="text-3xl font-bold text-black mt-4">₱1,999 <span className="text-base font-medium text-gray-600">/ year</span></p>
-          <p className="text-sm text-gray-600 mt-2">Unlimited skin scans, best value</p>
-        </div>
-      </div>
-
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px]">
@@ -317,7 +297,7 @@ export default function AdminSubscriptionManagement() {
         </div>
         <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px]">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-black">Active plans</p>
+            <p className="text-sm font-semibold text-black">Active Plans</p>
             <RefreshCcw className="w-5 h-5 text-magenta-600"/>
           </div>
           <p className="mt-5 text-4xl font-bold text-black tabular-nums">{activeCount}</p>
@@ -325,7 +305,7 @@ export default function AdminSubscriptionManagement() {
         </div>
         <div className="bg-white rounded-xl p-7 border border-gray-200 shadow-sm min-h-[156px]">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-black">Cancelled plans</p>
+            <p className="text-sm font-semibold text-black">Cancelled Plans</p>
             <XCircle className="w-5 h-5 text-magenta-600"/>
           </div>
           <p className="mt-5 text-4xl font-bold text-black tabular-nums">{cancelledCount}</p>
@@ -372,7 +352,7 @@ export default function AdminSubscriptionManagement() {
       {/* Subscriptions table */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-7 py-5 border-b border-gray-200 flex items-baseline justify-between">
-          <h3 className="text-lg font-semibold text-black">Premium user subscriptions</h3>
+          <h3 className="text-lg font-semibold text-black">Premium User Subscriptions</h3>
           <span className="text-sm text-gray-600">{visibleUsers.length} shown</span>
         </div>
         <div className="overflow-x-auto">
@@ -431,7 +411,7 @@ export default function AdminSubscriptionManagement() {
                     </td>
                     <td className="px-7 py-5">
                       <div className="flex flex-col items-start gap-1.5">
-                        <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold", statusClasses[user.status])}>
+                        <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold", user.status === "active" ? "bg-green-50 border-green-200 text-green-700" : statusClasses[user.status])}>
                           {statusLabels[user.status]}
                         </span>
                         {user.status === "cancelled" && user.isAccessActive && (
@@ -457,7 +437,7 @@ export default function AdminSubscriptionManagement() {
       {/* Transactions table */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-7 py-5 border-b border-gray-200 flex items-baseline justify-between">
-          <h3 className="text-lg font-semibold text-black">Transaction history</h3>
+          <h3 className="text-lg font-semibold text-black">Transaction History</h3>
           <span className="text-sm text-gray-600">{transactions.length} transactions</span>
         </div>
         <div className="overflow-x-auto">
@@ -499,7 +479,7 @@ export default function AdminSubscriptionManagement() {
                     <td className="px-7 py-5 text-sm text-black">{txn.date}</td>
                     <td className="px-7 py-5 text-sm text-black">{txn.method}</td>
                     <td className="px-7 py-5">
-                      <span className="inline-flex px-3 py-1 rounded-full border border-gray-300 bg-gray-100 text-xs font-semibold capitalize text-black">
+                      <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold capitalize", String(txn.status).toLowerCase() === "success" ? "bg-green-50 border-green-200 text-green-700" : "border-gray-300 bg-gray-100 text-black")}>
                         {txn.status}
                       </span>
                     </td>

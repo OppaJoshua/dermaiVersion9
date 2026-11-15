@@ -105,7 +105,7 @@ export default function CebuAnalysisMap({ className = "", onDataLoaded }: CebuAn
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <MapPin className="w-5 h-5 text-magenta-600" />
-            <h3 className="text-lg font-semibold text-black">Cebu analysis map</h3>
+            <h3 className="text-lg font-semibold text-black">Cebu Analysis Map</h3>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs px-3 py-1 rounded-full border border-magenta-200 bg-magenta-50 text-black font-semibold flex items-center gap-1.5">
@@ -124,7 +124,7 @@ export default function CebuAnalysisMap({ className = "", onDataLoaded }: CebuAn
             )}
           </div>
         </div>
-        <p className="text-sm text-gray-600 mt-1">Skin analysis density across Cebu</p>
+        <p className="text-sm text-gray-600 mt-1">Skin Analysis Density Across Cebu</p>
         {error && (
           <div className="mt-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-2.5 flex items-center justify-between">
             <span>Unable to refresh scan counts. Any displayed counts may be out of date.</span>

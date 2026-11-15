@@ -281,9 +281,9 @@ export default function AdminPlanManagement() {
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
         {[
-          { label: "Total plans", value: normalPlans.length, hint: "All active & inactive plans", icon: PackageOpen },
-          { label: "Active plans", value: activePlans, hint: "Visible to users", icon: CheckCircle2 },
-          { label: "Inactive plans", value: inactivePlans, hint: "Hidden from users", icon: ToggleLeft },
+          { label: "Total Plans", value: normalPlans.length, hint: "All active & inactive plans", icon: PackageOpen },
+          { label: "Active Plans", value: activePlans, hint: "Visible to users", icon: CheckCircle2 },
+          { label: "Inactive Plans", value: inactivePlans, hint: "Hidden from users", icon: ToggleLeft },
         ].map(({ label, value, hint, icon: Icon }) => (
           <div key={label} className="bg-white rounded-xl p-7 min-h-[156px] border border-gray-200 shadow-sm">
             <div className="flex items-center justify-between">
@@ -307,7 +307,7 @@ export default function AdminPlanManagement() {
               : "bg-gray-100 text-black hover:bg-gray-200"
           )}
         >
-          <span>Subscription plans</span>
+          <span>Subscription Plans</span>
           <span
             className={cn(
               "px-2 py-0.5 rounded-full text-xs font-bold leading-none",
@@ -330,7 +330,7 @@ export default function AdminPlanManagement() {
           )}
         >
           <Archive className="w-4 h-4" />
-          <span>Archived plans</span>
+          <span>Archived Plans</span>
           <span
             className={cn(
               "px-2 py-0.5 rounded-full text-xs font-bold leading-none",
@@ -348,7 +348,7 @@ export default function AdminPlanManagement() {
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-7 py-5 border-b border-gray-200 flex items-baseline justify-between">
           <h2 className="text-lg font-semibold text-black">
-            {activeTab === "plans" ? "Subscription plans" : "Archived plans"}
+            {activeTab === "plans" ? "Subscription Plans" : "Archived Plans"}
           </h2>
           <span className="text-sm text-gray-600">
             {displayedPlans.length} {activeTab === "plans" ? "total" : "archived"}
@@ -446,7 +446,7 @@ export default function AdminPlanManagement() {
                         className={cn(
                           "inline-flex items-center px-3.5 py-1.5 rounded-full border text-xs font-semibold text-black transition-colors cursor-pointer",
                           plan.status === "active"
-                            ? "bg-magenta-50 border-magenta-200 hover:bg-magenta-100"
+                            ? "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
                             : "bg-gray-100 border-gray-300 hover:bg-gray-200"
                         )}
                         title="Click to toggle status"
