@@ -20,6 +20,18 @@ class EvidencePrediction(BaseModel):
 class PredictionResponse(BaseModel):
     """Successful prediction response"""
     success: bool = True
+    result_status: str = Field(
+        "confident",
+        description="Prediction result status: confident | low_confidence",
+    )
+    confidence_threshold: Optional[float] = Field(
+        None,
+        description="Configured primary confidence threshold percentage",
+    )
+    message: Optional[str] = Field(
+        None,
+        description="Patient-facing status or uncertainty guidance message",
+    )
     predicted_class: str = Field(..., description="Class label (e.g. Acne_Vulgaris)")
     display_name: str = Field(..., description="Human-readable name")
     confidence: float = Field(..., ge=0, le=100, description="Confidence percentage")

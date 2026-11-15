@@ -149,14 +149,14 @@ export default function ScanScreen() {
         sub.plan === 'basic' ||
         sub.statusLabel === 'Premium Active' ||
         sub.statusLabel === 'Basic Active') &&
-        !sub.isExpired
+      !sub.isExpired
     );
     const resolvedLimit =
       hasActivePaidSub && sub.scanLimit === -1
         ? -1
         : typeof sub.scanLimit === 'number' && sub.scanLimit >= 0
-        ? sub.scanLimit
-        : 0;
+          ? sub.scanLimit
+          : 0;
     setIsPremium(hasActivePaidSub);
     setScanLimit(resolvedLimit);
     setPlanName(sub.planName || (hasActivePaidSub ? 'Pro Plan' : 'Free Plan'));
@@ -196,14 +196,14 @@ export default function ScanScreen() {
         sub.plan === 'basic' ||
         sub.statusLabel === 'Premium Active' ||
         sub.statusLabel === 'Basic Active') &&
-        !sub.isExpired
+      !sub.isExpired
     );
     const resolvedLimit =
       hasActivePaidSub && sub.scanLimit === -1
         ? -1
         : typeof sub.scanLimit === 'number' && sub.scanLimit >= 0
-        ? sub.scanLimit
-        : 0;
+          ? sub.scanLimit
+          : 0;
     const isUnlimited =
       (hasActivePaidSub || (sub.freePlanVerified !== false && Boolean(sub.freePlanActive))) &&
       resolvedLimit === -1;
@@ -454,7 +454,7 @@ export default function ScanScreen() {
       setStep('upload');
       setTimeout(() => {
         if (Platform.OS === 'web') {
-          try { (window as any)?.alert?.(userMessage); } catch {}
+          try { (window as any)?.alert?.(userMessage); } catch { }
         } else {
           Alert.alert('Analysis Notice', userMessage);
         }
@@ -465,10 +465,13 @@ export default function ScanScreen() {
     // 4. Derive Primary AI Prediction & Confidence
     const conditionName = aiResult.display_name;
     const conditionGuide = getConditionGuide(conditionName);
-    const isCombined = Boolean(aiResult.is_combined && aiResult.combined_evidence_score != null);
-    const displayConfidence = isCombined
-      ? Math.round(aiResult.combined_evidence_score!)
-      : Math.round(aiResult.confidence);
+    const isLowConfidence = aiResult.result_status === 'low_confidence';
+    const isCombined = Boolean(!isLowConfidence && aiResult.is_combined && aiResult.combined_evidence_score != null);
+    const displayConfidence = isLowConfidence
+      ? Number(aiResult.confidence)
+      : isCombined
+        ? Math.round(aiResult.combined_evidence_score!)
+        : Math.round(aiResult.confidence);
 
     // 5. Compare AI Prediction and Questionnaire Support independently
     const comparison = compareAIAndQuestionnaire(conditionName, displayConfidence, mappingResult);
@@ -494,7 +497,7 @@ export default function ScanScreen() {
         conditionName.toLowerCase().includes(c.condition.toLowerCase())
       );
     const supportingFindings = condEval?.supportingFindings || [];
-    const referralSuggested = activeSafetyAlert.level !== 'none';
+    const referralSuggested = isLowConfidence || activeSafetyAlert.level !== 'none';
 
     const scanResult: ScanResult = {
       id: `scan_${Date.now()}`,
@@ -516,14 +519,22 @@ export default function ScanScreen() {
       symptoms: conditionGuide?.commonSymptoms || [],
       careTips: conditionGuide?.basicCareTips || [],
       referralSuggested,
-      referralReason: referralSuggested ? activeSafetyAlert.message : undefined,
+      referralReason:
+        activeSafetyAlert.level !== 'none'
+          ? activeSafetyAlert.message
+          : isLowConfidence
+            ? 'Low AI confidence result — prioritize consultation with a licensed dermatologist.'
+            : undefined,
       isGovernmentReportable: false,
       isCombined,
       combinedEvidenceScore: isCombined ? aiResult.combined_evidence_score! : undefined,
       patientReportedImpact,
-      agreementStatus: comparison.agreementStatus,
-      agreementSummary: comparison.summary,
+      agreementStatus: isLowConfidence ? 'inconclusive' : comparison.agreementStatus,
+      agreementSummary: isLowConfidence ? undefined : comparison.summary,
       supportingFindings,
+      resultStatus: isLowConfidence ? 'low_confidence' : 'confident',
+      confidenceThreshold: aiResult.confidence_threshold ?? null,
+      lowConfidenceMessage: aiResult.message ?? null,
       status: 'completed',
     };
 
@@ -626,29 +637,29 @@ export default function ScanScreen() {
                     {isAdminDeactivated || isAmbiguousConfig
                       ? 'Free Scanning Unavailable'
                       : isVerificationError
-                      ? 'Scan Allowance Unverified'
-                      : limitReached
-                      ? isPremium
-                        ? `${planName}: Scan limit reached`
-                        : 'Free scans used'
-                      : isPremium
-                      ? `${planName}: Limited — ${effectiveScanLimit} ${effectiveScanLimit === 1 ? 'Scan' : 'Scans'}`
-                      : `Free Plan: ${effectiveScanLimit} ${effectiveScanLimit === 1 ? 'Scan' : 'Scans'}`}
+                        ? 'Scan Allowance Unverified'
+                        : limitReached
+                          ? isPremium
+                            ? `${planName}: Scan limit reached`
+                            : 'Free scans used'
+                          : isPremium
+                            ? `${planName}: Limited — ${effectiveScanLimit} ${effectiveScanLimit === 1 ? 'Scan' : 'Scans'}`
+                            : `Free Plan: ${effectiveScanLimit} ${effectiveScanLimit === 1 ? 'Scan' : 'Scans'}`}
                   </Text>
                   <Text style={styles.quotaSub}>
                     {isAdminDeactivated
                       ? 'Free AI skin scanning is currently unavailable. Please view the available subscription plans to continue scanning.'
                       : isAmbiguousConfig
-                      ? freePlanError || 'Free AI skin scanning is temporarily unavailable due to a plan configuration issue.'
-                      : isVerificationError
-                      ? 'Unable to verify your scan allowance. Please check your internet connection and try again.'
-                      : limitReached
-                      ? isPremium
-                        ? `You have used ${scansUsed} of ${effectiveScanLimit} scans in this billing cycle.`
-                        : 'You have used all your available free AI skin scans. Please subscribe to continue scanning.'
-                      : isPremium
-                      ? `${scansUsed} / ${effectiveScanLimit} used · ${scansLeft} skin scan${scansLeft !== 1 ? 's' : ''} remaining`
-                      : `You have ${scansLeft} one-time free skin scan${scansLeft !== 1 ? 's' : ''} remaining.`}
+                        ? freePlanError || 'Free AI skin scanning is temporarily unavailable due to a plan configuration issue.'
+                        : isVerificationError
+                          ? 'Unable to verify your scan allowance. Please check your internet connection and try again.'
+                          : limitReached
+                            ? isPremium
+                              ? `You have used ${scansUsed} of ${effectiveScanLimit} scans in this billing cycle.`
+                              : 'You have used all your available free AI skin scans. Please subscribe to continue scanning.'
+                            : isPremium
+                              ? `${scansUsed} / ${effectiveScanLimit} used · ${scansLeft} skin scan${scansLeft !== 1 ? 's' : ''} remaining`
+                              : `You have ${scansLeft} one-time free skin scan${scansLeft !== 1 ? 's' : ''} remaining.`}
                   </Text>
                 </View>
                 {limitReached && (
@@ -677,10 +688,10 @@ export default function ScanScreen() {
               onPress={limitReached
                 ? () => router.push('/(app)/subscription')
                 : async () => {
-                    const can = await checkCanScan(false);
-                    if (!can) return;
-                    setStep('questionnaire');
-                  }}
+                  const can = await checkCanScan(false);
+                  if (!can) return;
+                  setStep('questionnaire');
+                }}
             >
               <Text style={[styles.ctaBtnTxt, limitReached && { color: COLORS.primary }]}>
                 {limitReached ? 'Upgrade to Continue' : 'Begin Questionnaire'}
@@ -1206,8 +1217,8 @@ export default function ScanScreen() {
                       {!scansCountVerified
                         ? 'Scan allowance will be verified before analysis begins.'
                         : isPremium
-                        ? `${scansUsed} / ${effectiveScanLimit} used · ${scansLeft} skin scan${scansLeft !== 1 ? 's' : ''} remaining in this billing cycle.`
-                        : `You have ${scansLeft} free skin scan${scansLeft !== 1 ? 's' : ''}. Upgrade for unlimited access.`}
+                          ? `${scansUsed} / ${effectiveScanLimit} used · ${scansLeft} skin scan${scansLeft !== 1 ? 's' : ''} remaining in this billing cycle.`
+                          : `You have ${scansLeft} free skin scan${scansLeft !== 1 ? 's' : ''}. Upgrade for unlimited access.`}
                     </Text>
                   </View>
                   {!isPremium && (
@@ -1268,7 +1279,14 @@ export default function ScanScreen() {
 
   // --- Result -----------------------------------------------------------------
   if (step === 'result' && result) {
-    return <ResultScreen result={result} onReset={reset} onFindClinic={() => router.push('/(app)/clinics')} />;
+    return (
+      <ResultScreen
+        result={result}
+        onReset={reset}
+        onRetakePhoto={() => setStep('upload')}
+        onFindClinic={() => router.push('/(app)/clinics')}
+      />
+    );
   }
 
   return null;
@@ -1279,10 +1297,12 @@ export default function ScanScreen() {
 function ResultScreen({
   result,
   onReset,
+  onRetakePhoto,
   onFindClinic,
 }: {
   result: ScanResult;
   onReset: () => void;
+  onRetakePhoto?: () => void;
   onFindClinic: () => void;
 }) {
   const guide = getConditionGuide(result.condition);
@@ -1296,6 +1316,7 @@ function ResultScreen({
     .filter((c) => c.verified)
     .slice(0, 2);
 
+  const isLowConfidence = result.resultStatus === 'low_confidence';
   const isAligned = result.agreementStatus === 'aligned';
   const isCombined = result.isCombined;
 
@@ -1306,102 +1327,198 @@ function ResultScreen({
         <ScrollView contentContainerStyle={styles.pageContainer} showsVerticalScrollIndicator={false}>
 
           <View style={styles.webResultCard}>
-            {/* Header Badges: AI-generated result & Daily-life impact */}
-            <View style={styles.webHeaderBadgesRow}>
-              <View style={styles.webAiPill}>
-                <Ionicons name="sparkles" size={13} color={COLORS.primary} />
-                <Text style={styles.webAiPillTxt}>AI-generated preliminary result</Text>
-              </View>
-              {result.patientReportedImpact ? (
-                <View style={styles.webImpactPill}>
-                  <Text style={styles.webImpactPillTxt}>
-                    Reported Daily-Life Impact: <Text style={{ fontWeight: '700' }}>{result.patientReportedImpact}</Text>
-                  </Text>
+            {isLowConfidence ? (
+              <>
+                {/* Uncertain AI Result Header */}
+                <View style={styles.webHeaderBadgesRow}>
+                  <View style={[styles.webAiPill, { backgroundColor: '#fef3c7', borderColor: '#f59e0b' }]}>
+                    <Ionicons name="warning" size={13} color="#b45309" />
+                    <Text style={[styles.webAiPillTxt, { color: '#92400e' }]}>Uncertain AI Result</Text>
+                  </View>
                 </View>
-              ) : null}
-            </View>
 
-            {/* Condition Title & Tagalog Subtitle */}
-            <Text style={styles.webConditionTitle}>Possible Condition: {result.condition}</Text>
-            {result.localName ? (
-              <Text style={styles.webConditionSubtitle}>Lokal na tawag: {result.localName}</Text>
-            ) : null}
+                <Text style={styles.webConditionTitle}>Possible skin condition: {result.condition}</Text>
+                {result.localName ? (
+                  <Text style={styles.webConditionSubtitle}>Lokal na tawag: {result.localName}</Text>
+                ) : null}
 
-            {/* Confidence Score Bar */}
-            <View style={styles.webConfidenceSection}>
-              <View style={styles.webConfHeaderRow}>
-                <Text style={styles.webConfTitle}>
-                  {isCombined
-                    ? 'Combined Image Evidence (70% Close-Up + 30% Wide-View)'
-                    : 'Image Model Confidence (ResNet50)'}
+                <Text style={[styles.webSectionBody, { marginTop: 6, marginBottom: 14 }]}>
+                  Based on your photo, the AI found signs that look most like {result.condition}. However, the AI is not confident enough in this result. This is not a diagnosis—please see a doctor for an accurate assessment.
                 </Text>
-                <Text style={styles.webConfValue}>{result.confidence}%</Text>
-              </View>
-              <Text style={styles.webConfSub}>
-                {isCombined
-                  ? 'Derived from multi-view fusion: 70% primary lesion morphology + 30% anatomical distribution.'
-                  : 'Solely based on image inference; not altered by questionnaire answers.'}
-              </Text>
-              <View style={styles.webConfBarTrack}>
-                <View style={[styles.webConfBarFill, { width: `${Math.min(100, Math.max(5, result.confidence))}%` }]} />
-              </View>
-            </View>
 
-            {/* Supportive Alignment Card */}
-            <View style={[styles.webAlignCard, isAligned ? styles.webAlignCardGreen : styles.webAlignCardAmber]}>
-              <View style={styles.webAlignHeaderRow}>
-                <Ionicons
-                  name={isAligned ? 'checkmark-circle' : 'information-circle'}
-                  size={18}
-                  color={isAligned ? '#059669' : '#d97706'}
-                />
-                <Text style={[styles.webAlignTitle, { color: isAligned ? '#065f46' : '#92400e' }]}>
-                  {isAligned
-                    ? 'Supportive Alignment Between Photo & Questionnaire'
-                    : 'Contextual Variation Between Photo & Questionnaire'}
-                </Text>
-              </View>
-              <Text style={[styles.webAlignBody, { color: isAligned ? '#047857' : '#b45309' }]}>
-                {result.agreementSummary ||
-                  'Clinical presentation and patient-reported symptoms were evaluated independently to inform care guidance.'}
-              </Text>
-            </View>
-
-            {/* Questionnaire Evidence Support Card */}
-            <View style={styles.webEvidenceCard}>
-              <View style={styles.webEvidenceHeaderRow}>
-                <Text style={styles.webEvidenceTitle}>Questionnaire Evidence Support</Text>
-                <View style={[styles.webSupportPill, !isAligned && styles.webSupportPillAmber]}>
-                  <Text style={[styles.webSupportPillTxt, !isAligned && styles.webSupportPillTxtAmber]}>
-                    {isAligned ? 'Strong support' : 'Limited support'}
-                  </Text>
-                </View>
-              </View>
-              <Text style={styles.webEvidenceSubtitle}>
-                Rule-based screening grounded in clinical practice guidelines:
-              </Text>
-
-              <View style={styles.webFindingsBox}>
-                <Text style={styles.webFindingsHeader}>
-                  {isAligned ? 'Key Supporting Questionnaire Findings' : 'Reported Symptoms Assessment'}
-                </Text>
-                {result.supportingFindings && result.supportingFindings.length > 0 ? (
-                  result.supportingFindings.map((finding, idx) => (
-                    <View key={idx} style={styles.webFindingRow}>
-                      <Ionicons name="checkmark-circle" size={14} color="#059669" style={{ marginTop: 2, marginRight: 6 }} />
-                      <Text style={styles.webFindingTxt}>{finding}</Text>
-                    </View>
-                  ))
-                ) : (
-                  <View style={styles.webFindingRow}>
-                    <Ionicons name="information-circle" size={14} color="#d97706" style={{ marginTop: 2, marginRight: 6 }} />
-                    <Text style={[styles.webFindingTxt, { color: '#92400e' }]}>
-                      Patient-reported questionnaire symptoms provide limited specific overlap with {result.condition}. In-person clinical dermatological evaluation recommended.
+                {/* Low Confidence Display */}
+                <View style={styles.webConfidenceSection}>
+                  <View style={styles.webConfHeaderRow}>
+                    <Text style={styles.webConfTitle}>
+                      AI Confidence Score: {result.confidence}% — Low Confidence
                     </Text>
                   </View>
-                )}
-              </View>
-            </View>
+                  <View style={styles.webConfBarTrack}>
+                    <View style={[styles.webConfBarFill, { width: `${Math.min(100, Math.max(5, result.confidence))}%`, backgroundColor: '#d97706' }]} />
+                  </View>
+                </View>
+
+                {/* Prominent Dermatologist Priority Recommendation */}
+                <View style={[styles.webAlignCard, { backgroundColor: '#fff1f2', borderColor: '#fecdd3', borderWidth: 1.5 }]}>
+                  <View style={styles.webAlignHeaderRow}>
+                    <Ionicons name="medkit" size={18} color="#be123c" />
+                    <Text style={[styles.webAlignTitle, { color: '#881337' }]}>
+                      Please prioritize consultation with a licensed dermatologist to properly assess your skin condition and confirm what it may be.
+                    </Text>
+                  </View>
+                  <View style={{ marginTop: 8, gap: 6 }}>
+                    {[
+                      'This result is preliminary informational guidance only.',
+                      'The AI cannot confirm a skin disease.',
+                      'A dermatologist should evaluate your symptoms, medical history, and skin in person.',
+                      'The AI result does not replace professional medical assessment.',
+                    ].map((bullet, idx) => (
+                      <View key={idx} style={styles.webBulletRow}>
+                        <View style={[styles.webBulletDot, { backgroundColor: '#e11d48' }]} />
+                        <Text style={[styles.webBulletTxt, { color: '#4c0519' }]}>{bullet}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <View style={{ marginTop: 12, gap: 8 }}>
+                    <TouchableOpacity style={styles.webBtnFilled} onPress={onFindClinic}>
+                      <Text style={styles.webBtnFilledTxt}>Find a Dermatology Clinic</Text>
+                    </TouchableOpacity>
+                    {onRetakePhoto ? (
+                      <TouchableOpacity style={styles.webBtnOutline} onPress={onRetakePhoto}>
+                        <Text style={styles.webBtnOutlineTxt}>Retake Close-Up Photo (Optional)</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                </View>
+
+                {/* Questionnaire Context (Separate from Low-Confidence Image Prediction) */}
+                <View style={styles.webEvidenceCard}>
+                  <View style={styles.webEvidenceHeaderRow}>
+                    <Text style={styles.webEvidenceTitle}>Questionnaire Context</Text>
+                  </View>
+                  <Text style={styles.webEvidenceSubtitle}>
+                    Your answers help give the doctor more context about what you're experiencing. The AI does not use these answers to change its photo analysis.
+                  </Text>
+                  <View style={styles.webFindingsBox}>
+                    <Text style={styles.webFindingsHeader}>Reported Symptoms & Answers Summary</Text>
+                    {result.supportingFindings && result.supportingFindings.length > 0 ? (
+                      result.supportingFindings.map((finding, idx) => (
+                        <View key={idx} style={styles.webFindingRow}>
+                          <Ionicons name="information-circle" size={14} color="#64748b" style={{ marginTop: 2, marginRight: 6 }} />
+                          <Text style={styles.webFindingTxt}>{finding}</Text>
+                        </View>
+                      ))
+                    ) : (
+                      <View style={styles.webFindingRow}>
+                        <Ionicons name="information-circle" size={14} color="#64748b" style={{ marginTop: 2, marginRight: 6 }} />
+                        <Text style={styles.webFindingTxt}>
+                          Your 15 questionnaire responses have been recorded as symptom context for your dermatologist consultation.
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+              </>
+            ) : (
+              <>
+                {/* Header Badges: AI-generated result & Daily-life impact */}
+                <View style={styles.webHeaderBadgesRow}>
+                  <View style={styles.webAiPill}>
+                    <Ionicons name="sparkles" size={13} color={COLORS.primary} />
+                    <Text style={styles.webAiPillTxt}>AI-generated preliminary result</Text>
+                  </View>
+                  {result.patientReportedImpact ? (
+                    <View style={styles.webImpactPill}>
+                      <Text style={styles.webImpactPillTxt}>
+                        Reported Daily-Life Impact: <Text style={{ fontWeight: '700' }}>{result.patientReportedImpact}</Text>
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                {/* Condition Title & Tagalog Subtitle */}
+                <Text style={styles.webConditionTitle}>Possible Condition: {result.condition}</Text>
+                {result.localName ? (
+                  <Text style={styles.webConditionSubtitle}>Lokal na tawag: {result.localName}</Text>
+                ) : null}
+
+                {/* Confidence Score Bar */}
+                <View style={styles.webConfidenceSection}>
+                  <View style={styles.webConfHeaderRow}>
+                    <Text style={styles.webConfTitle}>
+                      {isCombined
+                        ? 'Combined Image Evidence (70% Close-Up + 30% Wide-View)'
+                        : 'Image Model Confidence (ResNet50)'}
+                    </Text>
+                    <Text style={styles.webConfValue}>{result.confidence}%</Text>
+                  </View>
+                  <Text style={styles.webConfSub}>
+                    {isCombined
+                      ? 'Derived from multi-view fusion: 70% primary lesion morphology + 30% anatomical distribution.'
+                      : 'Solely based on image inference; not altered by questionnaire answers.'}
+                  </Text>
+                  <View style={styles.webConfBarTrack}>
+                    <View style={[styles.webConfBarFill, { width: `${Math.min(100, Math.max(5, result.confidence))}%` }]} />
+                  </View>
+                </View>
+
+                {/* Supportive Alignment Card */}
+                <View style={[styles.webAlignCard, isAligned ? styles.webAlignCardGreen : styles.webAlignCardAmber]}>
+                  <View style={styles.webAlignHeaderRow}>
+                    <Ionicons
+                      name={isAligned ? 'checkmark-circle' : 'information-circle'}
+                      size={18}
+                      color={isAligned ? '#059669' : '#d97706'}
+                    />
+                    <Text style={[styles.webAlignTitle, { color: isAligned ? '#065f46' : '#92400e' }]}>
+                      {isAligned
+                        ? 'Supportive Alignment Between Photo & Questionnaire'
+                        : 'Contextual Variation Between Photo & Questionnaire'}
+                    </Text>
+                  </View>
+                  <Text style={[styles.webAlignBody, { color: isAligned ? '#047857' : '#b45309' }]}>
+                    {result.agreementSummary ||
+                      'Clinical presentation and patient-reported symptoms were evaluated independently to inform care guidance.'}
+                  </Text>
+                </View>
+
+                {/* Questionnaire Evidence Support Card */}
+                <View style={styles.webEvidenceCard}>
+                  <View style={styles.webEvidenceHeaderRow}>
+                    <Text style={styles.webEvidenceTitle}>Questionnaire Evidence Support</Text>
+                    <View style={[styles.webSupportPill, !isAligned && styles.webSupportPillAmber]}>
+                      <Text style={[styles.webSupportPillTxt, !isAligned && styles.webSupportPillTxtAmber]}>
+                        {isAligned ? 'Strong support' : 'Limited support'}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.webEvidenceSubtitle}>
+                    Rule-based screening grounded in clinical practice guidelines:
+                  </Text>
+
+                  <View style={styles.webFindingsBox}>
+                    <Text style={styles.webFindingsHeader}>
+                      {isAligned ? 'Key Supporting Questionnaire Findings' : 'Reported Symptoms Assessment'}
+                    </Text>
+                    {result.supportingFindings && result.supportingFindings.length > 0 ? (
+                      result.supportingFindings.map((finding, idx) => (
+                        <View key={idx} style={styles.webFindingRow}>
+                          <Ionicons name="checkmark-circle" size={14} color="#059669" style={{ marginTop: 2, marginRight: 6 }} />
+                          <Text style={styles.webFindingTxt}>{finding}</Text>
+                        </View>
+                      ))
+                    ) : (
+                      <View style={styles.webFindingRow}>
+                        <Ionicons name="information-circle" size={14} color="#d97706" style={{ marginTop: 2, marginRight: 6 }} />
+                        <Text style={[styles.webFindingTxt, { color: '#92400e' }]}>
+                          Patient-reported questionnaire symptoms provide limited specific overlap with {result.condition}. In-person clinical dermatological evaluation recommended.
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+              </>
+            )}
 
             {/* Uploaded Photos Strip */}
             {result.imageUris && result.imageUris.length > 0 ? (
@@ -2617,7 +2734,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#E2E8F0',
   },
-    webSupportPillAmber: {
+  webSupportPillAmber: {
     backgroundColor: '#fef3c7',
   },
   webSupportPillTxtAmber: {

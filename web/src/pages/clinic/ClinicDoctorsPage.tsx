@@ -52,6 +52,7 @@ import {
   validateDoctorShifts,
   getManilaNowParts,
   parseAppointmentTimeMinutes,
+  isClinicCurrentlyOpen,
   isDoctorCurrentlyOnDuty,
 } from "@/lib/schedulingService";
 
@@ -153,7 +154,7 @@ function getShiftDurationHours(startStr: string, endStr: string): number {
 
 
 /* ── Shift Progress Calculation Helper ────────────────────────────── */
-const calculateShiftProgress = (
+export const calculateShiftProgress = (
   startTimeStr?: string,
   endTimeStr?: string,
   currentMinutes?: number
@@ -1180,59 +1181,184 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
   }, [currentTick]);
 
   // Compute doctors who are on duty today based on their active duty schedule
-  // Strictly respects: clinic open hours, clinic open days, shift validity, and current local time
+  // Uses the same authoritative logic as ClinicDashboardPage: includes all active doctors scheduled today
+  // and dynamically evaluates whether their shift is currently active, on break, upcoming, or ended.
   const onDutyDoctors = useMemo(() => {
     const currentMinutes = nowParts.totalMinutes;
+    const clinicSchedule = {
+      openTime: clinicOpenTime,
+      closeTime: clinicCloseTime,
+      operatingDays: clinicOperatingDays,
+    };
+    const clinicStatus = isClinicCurrentlyOpen({
+      ...clinicSchedule,
+      timezone: "Asia/Manila",
+      currentTimeMs: currentTick,
+    });
 
-    return allDoctors
+    const rawOnDuty = allDoctors
       .filter((doc) => doc.status !== "Inactive")
       .map((doc) => {
+        const docSched = parseDoctorSchedule(
+          doc.dutySchedule,
+          doc.dutyDays,
+          doc.dutyStartTime || "08:00",
+          doc.dutyEndTime || "17:00"
+        );
+
+        let shifts: any[] = docSched.weeklyShifts[todayDayName] || [];
+
+        // Fallback 1: Check legacy dutySchedule[todayDayName]
+        if (
+          shifts.length === 0 &&
+          doc.dutySchedule &&
+          typeof doc.dutySchedule === "object"
+        ) {
+          const dayData = doc.dutySchedule[todayDayName];
+          if (dayData && dayData.startTime && dayData.endTime) {
+            shifts = [
+              {
+                id: `shift-${todayDayName.toLowerCase()}-legacy`,
+                label: "Duty Shift",
+                startTime: dayData.startTime,
+                endTime: dayData.endTime,
+              },
+            ];
+          }
+        }
+
+        // Fallback 2: Check dutyDays array
+        if (
+          shifts.length === 0 &&
+          doc.dutyDays &&
+          Array.isArray(doc.dutyDays) &&
+          doc.dutyDays.some((d) => normalizeDayName(d).toLowerCase() === todayDayName.toLowerCase())
+        ) {
+          shifts = [
+            {
+              id: `shift-${todayDayName.toLowerCase()}-default`,
+              label: "Duty Shift",
+              startTime: doc.dutyStartTime || "08:00",
+              endTime: doc.dutyEndTime || "17:00",
+            },
+          ];
+        }
+
+        const validShifts = shifts.filter((s) => s.startTime && s.endTime);
+        if (validShifts.length === 0) return null;
+
+        const hoursDisplay =
+          validShifts.length === 1
+            ? `${formatTime12h(validShifts[0].startTime)} – ${formatTime12h(validShifts[0].endTime)}`
+            : validShifts.map((s) => `${formatTime12h(s.startTime)} – ${formatTime12h(s.endTime)}`).join(", ");
+
+        // Real shift progress based on current Asia/Manila time
+        let totalMinutes = 0;
+        let workedMinutes = 0;
+        let firstStart = Infinity;
+        let lastEnd = -Infinity;
+
+        validShifts.forEach((s) => {
+          const start = parseAppointmentTimeMinutes(s.startTime);
+          const end = parseAppointmentTimeMinutes(s.endTime);
+          if (start === -1 || end === -1 || end <= start) return;
+          totalMinutes += end - start;
+          workedMinutes += Math.min(Math.max(currentMinutes - start, 0), end - start);
+          firstStart = Math.min(firstStart, start);
+          lastEnd = Math.max(lastEnd, end);
+        });
+
+        const shiftProgress = totalMinutes > 0 ? Math.round((workedMinutes / totalMinutes) * 100) : 0;
+
+        // Authoritative evaluation of duty status
         const dutyResult = isDoctorCurrentlyOnDuty({
           doctor: doc,
-          clinicSchedule: {
-            openTime: clinicOpenTime,
-            closeTime: clinicCloseTime,
-            operatingDays: clinicOperatingDays,
-          },
+          clinicSchedule,
           timezone: "Asia/Manila",
           currentTimeMs: currentTick,
         });
 
-        if (!dutyResult.isOnDuty || !dutyResult.activeShift) {
-          return null;
+        let dutyState: "on-duty" | "on-break" | "upcoming" | "finished" = "finished";
+        if (dutyResult.isOnDuty) {
+          dutyState = "on-duty";
+        } else if (!clinicStatus.isOpen) {
+          dutyState = "finished";
+        } else if (currentMinutes < firstStart) {
+          dutyState = "upcoming";
+        } else if (currentMinutes >= lastEnd) {
+          dutyState = "finished";
+        } else {
+          dutyState = "on-break";
         }
 
-        const activeShift = dutyResult.activeShift;
-        const hoursDisplay = `${formatTime12h(activeShift.startTime)} – ${formatTime12h(activeShift.endTime)}`;
-
         const primarySpec =
-          doc.specializations && doc.specializations.length > 0
+          doc.specializations && doc.specializations.length > 0 && doc.specializations[0]?.name
             ? doc.specializations[0].name
             : doc.specialization
               ? doc.specialization.split(",")[0].trim()
-              : "Dermatologist";
+              : "Clinical Dermatology";
 
         const cleanDocName = doc.name.trim();
         const displayName = cleanDocName.startsWith("Dr.") ? cleanDocName : `Dr. ${cleanDocName}`;
-
-        const shiftProgress = calculateShiftProgress(
-          activeShift?.startTime,
-          activeShift?.endTime,
-          currentMinutes
-        );
 
         return {
           doctor: doc,
           displayName,
           primarySpec,
           hoursDisplay,
-          shifts: [activeShift],
-          allTodayShifts: [activeShift],
+          shifts: validShifts,
+          allTodayShifts: validShifts,
           shiftProgress,
+          dutyState,
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
-  }, [allDoctors, clinicOpenTime, clinicCloseTime, clinicOperatingDays, nowParts, currentTick]);
+
+    // Deduplicate doctors per clinic using userId or doctor id (matching ClinicDashboardPage)
+    const seenDoctorKeys = new Set<string>();
+    const uniqueOnDuty: typeof rawOnDuty = [];
+    for (const item of rawOnDuty) {
+      const uid = item.doctor.userId || item.doctor.user_id;
+      const doctorKey = uid ? `user:${uid}` : `doc:${item.doctor.id}`;
+      if (!seenDoctorKeys.has(doctorKey)) {
+        seenDoctorKeys.add(doctorKey);
+        uniqueOnDuty.push(item);
+      }
+    }
+
+    const dutyStateOrder: Record<"on-duty" | "on-break" | "upcoming" | "finished", number> = {
+      "on-duty": 0,
+      "on-break": 1,
+      upcoming: 2,
+      finished: 3,
+    };
+
+    return uniqueOnDuty.sort(
+      (a, b) => dutyStateOrder[a.dutyState] - dutyStateOrder[b.dutyState]
+    );
+  }, [allDoctors, todayDayName, clinicOpenTime, clinicCloseTime, clinicOperatingDays, nowParts, currentTick]);
+
+  // Summary stats derived from live roster + today's duty evaluation (no hardcoded values)
+  const rosterSummary = useMemo(() => {
+    const scheduled = onDutyDoctors.length;
+    const finished = onDutyDoctors.filter((d) => d.dutyState === "finished").length;
+    const upcoming = onDutyDoctors.filter((d) => d.dutyState === "upcoming").length;
+    let label = "No shifts";
+    if (scheduled > 0) {
+      if (finished === scheduled) label = "Completed";
+      else if (upcoming === scheduled) label = "Not started";
+      else label = "In progress";
+    }
+    return { registered: allDoctors.length, scheduled, finished, label };
+  }, [allDoctors, onDutyDoctors]);
+
+  const shortTodayDate = useMemo(() => {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "Asia/Manila",
+    }).format(new Date());
+  }, [currentTick]);
 
   const availableSpecialtyOptions = useMemo(() => {
     const specsSet = new Set<string>();
@@ -1480,7 +1606,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
           localStorage.setItem(rosterCacheKey, JSON.stringify(mapped));
         } catch { }
 
-        
+
       }
     } catch {
       if (requestId === doctorRequestRef.current) {
@@ -2622,6 +2748,56 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
         </div>
       </div>
 
+      {/* ── Summary Stats (roster tab only) ──────────────────────── */}
+      {activeTab === "register" && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {[
+            {
+              key: "registered",
+              label: "Registered Dermatologists",
+              value: loadingDoctors ? "–" : String(rosterSummary.registered),
+              note: "",
+            },
+            {
+              key: "on-duty",
+              label: "On Duty Today",
+              value: loadingDoctors ? "–" : String(rosterSummary.scheduled),
+              note: "scheduled",
+            },
+            {
+              key: "shift-status",
+              label: `Shift Status (${shortTodayDate})`,
+              value: loadingDoctors ? "–" : `${rosterSummary.finished} / ${rosterSummary.scheduled}`,
+              note: loadingDoctors ? "" : rosterSummary.label,
+            },
+          ].map((stat) => (
+            <div
+              key={stat.key}
+              className="bg-white rounded-2xl border border-gray-200 shadow-xs px-5 py-4 sm:py-5 text-left flex items-center justify-between gap-4"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-500 truncate">{stat.label}</p>
+                <p className="mt-1.5 flex items-baseline gap-2.5 flex-wrap">
+                  <span className="text-3xl font-bold text-gray-900 leading-none tracking-tight">{stat.value}</span>
+                  {stat.note && (
+                    <span className="text-sm font-medium text-gray-500">{stat.note}</span>
+                  )}
+                </p>
+              </div>
+              <div className="w-11 h-11 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center shrink-0">
+                {stat.key === "registered" ? (
+                  <Users className="w-5 h-5 text-[#801336]" />
+                ) : stat.key === "on-duty" ? (
+                  <Clock className="w-5 h-5 text-[#801336]" />
+                ) : (
+                  <CheckCircle2 className="w-5 h-5 text-[#801336]" />
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ── Global Success Notification ──────────────────────────── */}
       <AnimatePresence>
         {successMsg && (
@@ -2659,10 +2835,10 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
              DOCTOR DASHBOARD & ROSTER
              ══════════════════════════════════════════════════════════ */
           <div className="flex flex-col lg:flex-row gap-6 items-start">
-            {/* 1. On Duty Today Card (Left Side) */}
-            <div className="w-full lg:w-[360px] xl:w-[380px] shrink-0">
-              <div className="bg-white rounded-2xl border border-gray-200/80 p-4 sm:p-5 shadow-xs text-left">
-                <div className="flex items-center justify-between gap-3">
+            {/* 1. On Duty Today Card (right side; shown after the roster) */}
+            <div className="w-full lg:w-[360px] xl:w-[380px] shrink-0 order-2">
+              <div className="bg-white rounded-2xl border border-gray-200/80 p-4 sm:p-5 shadow-xs text-left flex flex-col h-136 lg:h-144 min-h-0">
+                <div className="flex items-center justify-between gap-3 shrink-0">
                   <div>
                     <div className="flex items-center gap-2">
                       <h2 className="text-base sm:text-lg font-bold text-gray-900 tracking-tight">On Duty Today</h2>
@@ -2677,12 +2853,12 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                 </div>
 
                 {loadingDoctors ? (
-                  <div className="py-8 text-center">
+                  <div className="flex-1 flex flex-col items-center justify-center py-8 text-center">
                     <Loader2 className="w-5 h-5 text-[#801336] animate-spin mx-auto mb-2" />
                     <p className="text-xs text-gray-400">Checking scheduled doctors...</p>
                   </div>
                 ) : onDutyDoctors.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center bg-gray-50/50 mt-4">
+                  <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center bg-gray-50/50 mt-4 flex-1 flex flex-col items-center justify-center">
                     <div className="w-9 h-9 rounded-full bg-pink-50 border border-pink-100 flex items-center justify-center mx-auto mb-2">
                       <Stethoscope className="w-4 h-4 text-[#801336]" />
                     </div>
@@ -2692,11 +2868,11 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                     </p>
                   </div>
                 ) : (
-                  <div className="space-y-3.5 mt-4">
+                  <div className="space-y-3.5 mt-4 flex-1 min-h-0 overflow-y-auto pr-1.5 [scrollbar-width:thin] [scrollbar-color:#d1d5db_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-gray-100 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-300 hover:[&::-webkit-scrollbar-thumb]:bg-gray-400">
                     {onDutyDoctors.map((item) => (
                       <div
                         key={item.doctor.id}
-                        className="bg-white rounded-2xl border border-gray-200 p-4 flex flex-col justify-between text-left shadow-2xs hover:shadow-xs transition-all w-full"
+                        className="bg-pink-50/70 rounded-2xl border border-[#801336]/25 p-4 flex flex-col justify-between text-left shadow-2xs hover:bg-pink-50 hover:border-[#801336]/60 hover:shadow-md hover:ring-2 hover:ring-[#801336]/10 hover:-translate-y-0.5 transition-all duration-200 w-full"
                       >
                         <div>
                           {/* Top row: avatar + name/specialty + On duty pill */}
@@ -2711,30 +2887,51 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                                   name={item.displayName}
                                   photo={item.doctor.photo}
                                 />
-                                <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white" />
+                                <span
+                                  className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-white ${item.dutyState === "on-duty"
+                                      ? "bg-emerald-500"
+                                      : item.dutyState === "on-break"
+                                        ? "bg-amber-400"
+                                        : "bg-gray-300"
+                                    }`}
+                                />
                               </div>
 
                               <div className="min-w-0 flex-1">
                                 <h3
-                                  className="font-bold text-sm text-gray-900 truncate hover:text-[#801336] transition-colors cursor-pointer"
+                                  className="font-bold text-sm text-[#801336] truncate hover:underline transition-colors cursor-pointer"
                                   title={item.displayName}
                                   onClick={() => setSelectedDoctorForDetails(item.doctor)}
                                 >
                                   {item.displayName}
                                 </h3>
-                                <p className="text-xs text-gray-500 truncate mt-0.5">
+                                <p className="text-xs text-[#801336]/70 truncate mt-0.5">
                                   {item.primarySpec}
                                 </p>
                               </div>
                             </div>
 
-                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-[#eafbf0] text-[#16a34a] border border-[#d2f6df] shrink-0">
-                              On duty
-                            </span>
+                            {item.dutyState === "on-duty" ? (
+                              <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-[#eafbf0] text-[#16a34a] border border-[#bbf0cf] shadow-sm shrink-0">
+                                On duty
+                              </span>
+                            ) : item.dutyState === "on-break" ? (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-white text-amber-700 border border-amber-200 shrink-0">
+                                On break
+                              </span>
+                            ) : item.dutyState === "upcoming" ? (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-white text-gray-600 border border-gray-200 shrink-0">
+                                Starts later
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-white text-gray-600 border border-gray-200 shrink-0">
+                                Shift ended
+                              </span>
+                            )}
                           </div>
 
-                          {/* Duty hours box with clock, Today label and shift progress */}
-                          <div className="bg-[#fcfcfd] rounded-xl border border-gray-100 p-2.5 sm:p-3 mt-3">
+                          {/* Duty hours box with clock, status label and shift progress */}
+                          <div className="bg-white rounded-xl border border-pink-100 p-2.5 sm:p-3 mt-3">
                             <div className="flex items-center justify-between gap-2">
                               <div className="flex items-center gap-2 min-w-0">
                                 <Clock className="w-4 h-4 text-[#801336] shrink-0" />
@@ -2745,22 +2942,34 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                                   {item.hoursDisplay}
                                 </span>
                               </div>
-                              <span className="text-xs font-medium text-gray-500 shrink-0">
-                                Today
+                              <span
+                                className={`text-xs shrink-0 ${
+                                  item.dutyState === "on-duty"
+                                    ? "font-bold text-[#16a34a]"
+                                    : "font-medium text-gray-500"
+                                }`}
+                              >
+                                {item.dutyState === "on-duty"
+                                  ? "On duty now"
+                                  : item.dutyState === "on-break"
+                                    ? "On break"
+                                    : item.dutyState === "upcoming"
+                                      ? "Starts later"
+                                      : "Shift ended"}
                               </span>
                             </div>
 
                             <div
-                              className="w-full bg-gray-100 rounded-full h-1.5 mt-2.5 overflow-hidden"
+                              className="w-full bg-pink-100 rounded-full h-1.5 mt-2.5 overflow-hidden"
                               role="progressbar"
                               aria-label={`${item.displayName} shift progress`}
                               aria-valuemin={0}
                               aria-valuemax={100}
-                              aria-valuenow={item.shiftProgress || 35}
+                              aria-valuenow={item.shiftProgress}
                             >
                               <div
                                 className="h-full rounded-full bg-[#801336] transition-all"
-                                style={{ width: `${item.shiftProgress || 35}%` }}
+                                style={{ width: `${item.shiftProgress}%` }}
                               />
                             </div>
                           </div>
@@ -2782,7 +2991,7 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                               setSelectedDoctorId(item.doctor.id);
                               setActiveTab("schedule");
                             }}
-                            className="h-9 w-full px-2 rounded-xl text-xs font-semibold text-[#801336] bg-white hover:bg-pink-50/50 border border-pink-200 transition-colors cursor-pointer inline-flex items-center justify-center"
+                            className="h-9 w-full px-2 rounded-xl text-xs font-semibold text-[#801336] bg-white hover:bg-pink-50 border border-pink-200 transition-colors cursor-pointer inline-flex items-center justify-center"
                           >
                             <span>Set duty hours</span>
                           </button>
@@ -2794,16 +3003,13 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
               </div>
             </div>
 
-            {/* 2. All Registered Doctors Card (Right Side, wider container) */}
-            <div className="w-full lg:flex-1 min-w-0">
+            {/* 2. All Registered Doctors Card (left side, wider container) */}
+            <div className="w-full lg:flex-1 min-w-0 order-1">
               <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs text-left">
                 <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
                   <div>
                     <div className="flex items-center gap-2">
                       <h2 className="text-base font-bold text-gray-900">All Registered Doctors</h2>
-                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-pink-100 text-[#801336]">
-                        {allDoctors.length}
-                      </span>
                     </div>
                   </div>
                 </div>

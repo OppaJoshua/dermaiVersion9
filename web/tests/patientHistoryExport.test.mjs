@@ -153,6 +153,13 @@ test('CSV Export: sanitizes spreadsheet formula injection prefixes and formats c
       emergencyRelationship: undefined,
       emergencyContactPhone: '  ',
     }),
+    mockAppt('4', '2026-02-14', 'pending', {
+      doctorStatus: 'rejected',
+      doctorNote: 'Out of office on requested date',
+      doctorDiagnosis: '',
+      conditionName: 'Vitiligo',
+      patientName: 'Rejected Patient',
+    }),
   ];
 
   const csv = buildCsvContent(maliciousRecords);
@@ -197,10 +204,12 @@ test('CSV Export: sanitizes spreadsheet formula injection prefixes and formats c
   // Quotes and commas are escaped
   assert.ok(csv.includes(`"Normal note with ""quotes"" and, commas"`));
 
-  // Status is accurately mapped
+  // Status is accurately mapped (including Declined for doctor-rejected vs Cancelled for patient-cancelled)
   assert.ok(csv.includes('No-Show'));
   assert.ok(csv.includes('Completed'));
   assert.ok(csv.includes('Cancelled'));
+  assert.ok(csv.includes('Declined'));
+  assert.ok(csv.includes('"Vitiligo"'));
 });
 
 test('PDF Export: generates valid binary PDF with jsPDF, wrapped text, and matching metrics', () => {

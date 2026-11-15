@@ -4968,16 +4968,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                                   </div>
                                 </div>
 
-                                {/* Notice if shift reached capacity */}
-                                {group.isCapacityReached && (
-                                  <div className="mt-2 p-2 rounded-xl bg-rose-50 border border-rose-200 text-[11px] text-rose-800 flex items-center gap-1.5 font-medium">
-                                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                                    <span>
-                                      All {group.effectiveSettings.effectiveCapacity} consultation slots for this shift are fully booked.
-                                    </span>
-                                  </div>
-                                )}
-
                                 {/* Slot Grid */}
                                 {group.slots.length === 0 ? (
                                   <p className="text-[11px] text-gray-400 mt-2 text-center py-2">

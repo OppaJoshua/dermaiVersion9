@@ -27,7 +27,7 @@ import { ModalPortal } from "@/components/common/ModalPortal";
 import { SelectAlternateDoctorModal } from "./SelectAlternateDoctorModal";
 import { extractConsultationQuestionnaire } from "@/lib/consultationDetailsService";
 import { getSignedSkinPhotoUrl } from "@/lib/storageUtils";
-import { extractClinicCancellationReason, detectOnlinePaymentMethod, releaseAppointmentHoldSafely } from "@/lib/appointmentPaymentService";
+import { extractClinicCancellationReason, detectOnlinePaymentMethod } from "@/lib/appointmentPaymentService";
 
 interface Appointment {
   id: string;
@@ -1027,7 +1027,7 @@ function ConsultationDetailsModal({
                 <div className="rounded-2xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200 p-4 space-y-2">
                   <div className="flex items-center gap-1.5 text-blue-800 font-bold text-xs uppercase tracking-wider">
                     <Stethoscope className="w-4 h-4 text-blue-600 shrink-0" />
-                    <span>Attending Dermatologist Assessment (Post-Consultation)</span>
+                    <span>Attending Dermatologist Assessment</span>
                   </div>
                   <p className="text-sm font-bold text-blue-950">{app.doctorDiagnosis}</p>
                   {app.doctorNote && (
@@ -1079,7 +1079,9 @@ const AppointmentStatusPage: React.FC = () => {
   const [allAppointments, setAllAppointments] = useState<Appointment[]>([]);
   const [cancellingAppt, setCancellingAppt] = useState<Appointment | null>(null);
   const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
 
   // Search parameters for notification routing & modal trigger
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1407,10 +1409,10 @@ const AppointmentStatusPage: React.FC = () => {
               a.clinic_note,
               a.payment_reference,
               paymentMap.get(String(a.appointment_id)) ||
-                (a.payment_reference ? paymentMap.get(String(a.payment_reference)) : undefined) ||
-                (a.questionnaire_answers && typeof a.questionnaire_answers === "object"
-                  ? a.questionnaire_answers.paymentMethod || a.questionnaire_answers.payment_method
-                  : undefined)
+              (a.payment_reference ? paymentMap.get(String(a.payment_reference)) : undefined) ||
+              (a.questionnaire_answers && typeof a.questionnaire_answers === "object"
+                ? a.questionnaire_answers.paymentMethod || a.questionnaire_answers.payment_method
+                : undefined)
             ),
             paidAt: a.paid_at || undefined,
           };
@@ -1691,37 +1693,85 @@ const AppointmentStatusPage: React.FC = () => {
   };
 
   const executeCancel = async (target: Appointment) => {
-    if (target.status === "Scheduled" || target.doctorStatus === "approved" || target.status === "Completed") {
+    // 1. Eligibility pre-check: only active pending consultations not yet approved/finalized can be cancelled
+    if (
+      target.status === "Scheduled" ||
+      target.doctorStatus === "approved" ||
+      target.status === "Completed" ||
+      target.status === "Cancelled" ||
+      (target.checkInStatus && target.checkInStatus !== "scheduled")
+    ) {
+      setErrorToast("This consultation request is no longer eligible for cancellation.");
       setCancellingAppt(null);
+      setCancelError(null);
       return;
     }
     const targetId = target.id;
-    if (!targetId) return;
+    if (!targetId) {
+      setErrorToast("Missing appointment identifier.");
+      setCancellingAppt(null);
+      setCancelError(null);
+      return;
+    }
 
     setCancelLoading(true);
+    setCancelError(null);
+
     try {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId);
-      if (isUuid) {
-        // Safe cancellation routed via authoritative payment verification
-        const cancelRes = await releaseAppointmentHoldSafely(targetId, target.clinicId ? String(target.clinicId) : undefined);
-        if (!cancelRes.success) {
-          console.warn("[AppointmentStatusPage] Cancellation refused:", cancelRes.message);
-          alert(cancelRes.message || "Cannot cancel appointment: payment is currently in progress or already confirmed.");
-          setCancelLoading(false);
-          setCancellingAppt(null);
-          return;
-        }
+      // 2. Strict authentication retrieval & ownership check
+      const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+      if (sessionErr) {
+        throw new Error(sessionErr.message || "Failed to retrieve user session.");
+      }
+      const activeUserId = user?.id || sessionData?.session?.user?.id;
+      if (!activeUserId) {
+        setCancelError("You must be signed in to cancel a consultation request.");
+        return;
+      }
+      if (target.userId && target.userId !== activeUserId) {
+        setCancelError("Unauthorized: You do not have permission to cancel this appointment.");
+        return;
       }
 
-      // Synchronize local cache so subsequent re-renders or window focus events do not revert
+      // 3. Strict UUID validation: authoritative cancellation requires valid UUID
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId);
+      if (!isUuid) {
+        setCancelError("Invalid appointment identifier: unable to perform authoritative database cancellation.");
+        return;
+      }
+
+      // 4. Minimal authoritative database update: ONLY status is set to "cancelled"
+      // clinic_note, questionnaire_answers, and payment_status are completely untouched
+      const { data: updatedRows, error: cancelError } = await supabase
+        .from("patient_appointment")
+        .update({
+          status: "cancelled",
+        })
+        .eq("appointment_id", targetId)
+        .eq("user_id", activeUserId)
+        .select("appointment_id, status");
+
+      if (cancelError) {
+        console.error("[AppointmentStatusPage] Cancellation error:", cancelError.message);
+        setCancelError(cancelError.message || "Failed to cancel consultation request. Please try again.");
+        return;
+      }
+
+      // 5. Confirm at least one row was actually updated in Supabase
+      if (!updatedRows || updatedRows.length === 0) {
+        setCancelError("Unable to cancel appointment: record not found, unauthorized, or already cancelled.");
+        return;
+      }
+
+      // 6. Update local cache ONLY after confirmed authoritative DB update
       try {
         const rawLocal = localStorage.getItem("dermai_clinic_appointments");
         if (rawLocal) {
           const parsed = JSON.parse(rawLocal);
           if (Array.isArray(parsed)) {
             const updated = parsed.map((item: any) =>
-              item.id === targetId || (isUuid && item.appointment_id === targetId)
-                ? { ...item, status: "cancelled", clinicNote: "Cancelled by patient." }
+              item.id === targetId || item.appointment_id === targetId
+                ? { ...item, status: "cancelled" }
                 : item
             );
             localStorage.setItem("dermai_clinic_appointments", JSON.stringify(updated));
@@ -1731,19 +1781,18 @@ const AppointmentStatusPage: React.FC = () => {
         console.error("LocalStorage cancel sync error:", e);
       }
 
-      // Update in-memory state immediately
+      // 7. Update in-memory state
       setAllAppointments((prev) =>
-        prev.map((a) =>
-          a.id === targetId ? { ...a, status: "Cancelled", clinicNote: "Cancelled by patient." } : a
-        )
+        prev.map((a) => (a.id === targetId ? { ...a, status: "Cancelled" } : a))
       );
 
-      // Notify other tabs and components (Clinic, Doctor, PatientDashboard)
+      // 8. Dispatch events to notify other components and tabs
       window.dispatchEvent(new Event("dermai_appointments_updated"));
       window.dispatchEvent(new Event("storage"));
 
+      // 9. Log audit trail
       logAuditEvent({
-        userId: user?.id,
+        userId: activeUserId,
         role: "patient",
         category: "Appointment",
         action: "Appointment Cancelled",
@@ -1757,11 +1806,14 @@ const AppointmentStatusPage: React.FC = () => {
         },
       }).catch(() => { });
 
+      // 10. Close modal and show success toast upon confirmed completion
       setCancellingAppt(null);
+      setCancelError(null);
       setSuccessToast("Appointment cancelled successfully. It has been moved to your Past tab.");
       setTimeout(() => setSuccessToast(null), 5000);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error cancelling appointment:", err);
+      setCancelError(err?.message || "An unexpected error occurred while cancelling your consultation request.");
     } finally {
       setCancelLoading(false);
     }
@@ -1856,7 +1908,10 @@ const AppointmentStatusPage: React.FC = () => {
             app={app}
             index={index}
             totalCount={apps.length}
-            onCancel={(item) => setCancellingAppt(item)}
+            onCancel={(item) => {
+              setCancellingAppt(item);
+              setCancelError(null);
+            }}
             onReschedule={(item) => handleOpenRescheduleModal(item)}
             onWithdrawReschedule={(item) => setWithdrawModalAppt(item)}
             onSelectAlternateDoctor={(item) => setReassignModalAppt(item)}
@@ -1884,6 +1939,22 @@ const AppointmentStatusPage: React.FC = () => {
             type="button"
             onClick={() => setSuccessToast(null)}
             className="text-emerald-700 hover:text-emerald-900 cursor-pointer p-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {errorToast && (
+        <div className="mb-4 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs font-medium flex items-center justify-between gap-2 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{errorToast}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setErrorToast(null)}
+            className="text-rose-700 hover:text-rose-900 cursor-pointer p-1"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -2234,11 +2305,20 @@ const AppointmentStatusPage: React.FC = () => {
               <div className="mt-4 p-3 bg-amber-50 rounded-xl border border-amber-200/70 text-amber-900 text-[11px] leading-relaxed">
                 ⚠️ This action cannot be undone. Your reserved appointment slot will be released.
               </div>
+              {cancelError && (
+                <div className="mt-4 p-3 bg-rose-50 rounded-xl border border-rose-200/80 text-rose-800 text-[11px] leading-relaxed flex items-start gap-2 text-left">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span>{cancelError}</span>
+                </div>
+              )}
               <div className="mt-6 flex items-center gap-3">
                 <button
                   type="button"
                   disabled={cancelLoading}
-                  onClick={() => setCancellingAppt(null)}
+                  onClick={() => {
+                    setCancellingAppt(null);
+                    setCancelError(null);
+                  }}
                   className="flex-1 py-2.5 px-4 rounded-xl border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-50 transition cursor-pointer"
                 >
                   Keep Appointment
