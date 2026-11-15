@@ -141,7 +141,7 @@ export default function AdminDoctorAiReviewPage() {
     { key: "all", label: "All records" },
     { key: "correct", label: "AI correct" },
     { key: "wrong", label: "AI wrong" },
-    { key: "retrain", label: "Retrain candidates" },
+    { key: "retrain", label: "Retrain Ccandidates" },
     { key: "high-confidence-wrong", label: "High confidence, wrong" },
     { key: "direct", label: "Direct consultations" },
   ];
@@ -170,7 +170,7 @@ export default function AdminDoctorAiReviewPage() {
         <MetricCard label="AI accuracy" value={`${metrics.accuracy}%`} detail={metrics.total > 0 ? "Matches doctor diagnosis" : "No AI scans evaluated yet"} icon={Activity} />
         <MetricCard label="Correct" value={String(metrics.correct)} detail={`Of ${metrics.total} AI-evaluated records`} icon={CheckCircle2} />
         <MetricCard label="Wrong" value={String(metrics.wrong)} detail="Did not match doctor diagnosis" icon={XCircle} />
-        <MetricCard label="Retrain candidates" value={String(metrics.retrainCandidates)} detail="Wrong at 70%+ confidence" icon={RefreshCw} />
+        <MetricCard label="Retrain Candidates" value={String(metrics.retrainCandidates)} detail="Wrong at 70%+ confidence" icon={RefreshCw} />
       </div>
 
       {/* Filters */}
@@ -201,7 +201,7 @@ export default function AdminDoctorAiReviewPage() {
       {/* Records table */}
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="flex items-baseline justify-between gap-4 border-b border-gray-200 px-7 py-5">
-          <h2 className="text-lg font-semibold text-black">AI vs doctor validation records</h2>
+          <h2 className="text-lg font-semibold text-black">AI vs Doctor Validation Records</h2>
           <p className="text-sm text-gray-600">{visibleRecords.length} shown</p>
         </div>
         <div className="overflow-x-auto">
