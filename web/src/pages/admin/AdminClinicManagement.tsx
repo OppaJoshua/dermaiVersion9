@@ -215,11 +215,13 @@ export default function AdminClinicManagement() {
           longitude: c.longitude != null ? Number(c.longitude) : localMatch?.longitude,
           dateApplied: localMatch?.dateApplied || "Recent",
           status: (
-            String(c.status || "").toLowerCase().trim() === "approved"
+            String(c.status || "").toLowerCase().trim() === "approved" ||
+            String(c.status || "").toLowerCase().trim() === "verified" ||
+            c.verified === true
               ? "verified"
               : String(c.status || "").toLowerCase().trim() === "rejected"
                 ? "rejected"
-                : "pending"
+                : (localMatch?.status === "verified" ? "verified" : "pending")
           ) as ClinicStatus,
         };
       });
@@ -227,14 +229,15 @@ export default function AdminClinicManagement() {
       // Merge local-only apps that have not yet replicated to DB
       const combinedApps = [...dbApps];
       localApps.forEach((la) => {
-        if (
-          !combinedApps.some(
-            (ca) =>
-              String(ca.id) === String(la.id) ||
-              (ca.email && la.email && ca.email.toLowerCase().trim() === la.email.toLowerCase().trim())
-          )
-        ) {
+        const existing = combinedApps.find(
+          (ca) =>
+            String(ca.id) === String(la.id) ||
+            (ca.email && la.email && ca.email.toLowerCase().trim() === la.email.toLowerCase().trim())
+        );
+        if (!existing) {
           combinedApps.push(la);
+        } else if (la.status === "verified" && existing.status !== "verified") {
+          existing.status = "verified";
         }
       });
 
@@ -279,6 +282,8 @@ export default function AdminClinicManagement() {
     const target = applications.find((a) => a.id === id);
     if (!target || isProcessing) return;
 
+    setIsProcessing(true);
+
     // 1. Instant optimistic state & cache update (0ms UI transition)
     const updatedList = applications.map((app) =>
       app.id === id
@@ -289,7 +294,48 @@ export default function AdminClinicManagement() {
     try {
       localStorage.setItem("dermai_cached_admin_clinics", JSON.stringify(updatedList));
       localStorage.setItem("dermai_clinic_applications", JSON.stringify(updatedList));
+
+      // Synchronize clinic profile cache so clinic portal is immediately verified
+      try {
+        const currentProfileRaw = localStorage.getItem("dermai_clinic_profile_cache");
+        const currentProfile = currentProfileRaw ? JSON.parse(currentProfileRaw) : {};
+        localStorage.setItem(
+          "dermai_clinic_profile_cache",
+          JSON.stringify({
+            ...currentProfile,
+            status: "verified",
+            clinicName: target.name || currentProfile.clinicName || "",
+            clinicLogo: target.logo || currentProfile.clinicLogo || "",
+            clinicId: String(id),
+            loading: false,
+          })
+        );
+      } catch {}
+
+      // Heal clinic settings if stored locally
+      try {
+        const settRaw = localStorage.getItem("dermai_clinic_settings");
+        if (settRaw) {
+          const sett = JSON.parse(settRaw);
+          sett.status = "verified";
+          sett.verified = true;
+          localStorage.setItem("dermai_clinic_settings", JSON.stringify(sett));
+        }
+      } catch {}
+
       window.dispatchEvent(new Event("clinicStatusUpdated"));
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(
+        new CustomEvent("dermai_clinic_profile_updated", {
+          detail: {
+            status: "verified",
+            clinicName: target.name,
+            clinicLogo: target.logo || "",
+            clinicId: String(id),
+            loading: false,
+          },
+        })
+      );
     } catch { }
 
     setToast({
@@ -313,18 +359,20 @@ export default function AdminClinicManagement() {
 
     // 2. Background database synchronization & Notification trigger
     try {
-      // Step A: Update clinic status to approved and verified
-      await Promise.allSettled([
-        supabase.rpc("set_clinic_status", {
-          target_clinic_id: String(id),
-          new_status: "approved",
-        }),
-        supabase.from("clinic").update({
+      // Step A: Call authoritative database RPC function
+      const { error: rpcErr } = await supabase.rpc("set_clinic_status", {
+        target_clinic_id: String(id),
+        new_status: "approved",
+      });
+
+      if (rpcErr) {
+        console.warn("set_clinic_status RPC returned error, attempting fallback update:", rpcErr.message);
+        await supabase.from("clinic").update({
           status: "approved",
           verified: true,
           ...(target.logo ? { logo_url: target.logo } : {})
-        }).eq("clinic_id", id),
-      ]);
+        }).eq("clinic_id", id);
+      }
 
       // Step B: Dynamically resolve clinic owner user_id from clinic or user table
       let ownerUserId: string | null = null;
@@ -350,40 +398,12 @@ export default function AdminClinicManagement() {
           ownerUserId = matchedUser.user_id;
           await Promise.allSettled([
             supabase.from("user").update({ role: "clinic" }).eq("user_id", ownerUserId),
-            supabase.from("clinic").update({ owner_user_id: ownerUserId }).eq("clinic_id", id),
+            supabase.from("clinic").update({ owner_user_id: ownerUserId, verified: true, status: "approved" }).eq("clinic_id", id),
           ]);
         }
       }
 
-      // Step C: Insert in-app approval notification targeted to clinic owner
-      if (ownerUserId) {
-        const clinicName = clinicRow?.name || target.name || "your clinic";
-        const notifPayload = {
-          user_id: ownerUserId,
-          type: "clinic_application",
-          subtype: "application_approved",
-          title: "Clinic Application Approved",
-          body: `Congratulations! Your clinic application for ${clinicName} has been approved by the platform administrator. You can now access your full clinic dashboard, manage doctors, and accept patient appointments.`,
-          is_read: false,
-          created_at: new Date().toISOString(),
-        };
-
-        // Attempt insert with metadata column; gracefully fallback without metadata if column is not in schema
-        const { error: metaInsertErr } = await supabase.from("user_notification").insert({
-          ...notifPayload,
-          metadata: { clinic_id: id, status: "approved" },
-        });
-
-        if (metaInsertErr) {
-          await supabase.from("user_notification").insert(notifPayload);
-        }
-
-        // Notify active windows and listeners immediately
-        window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
-        window.dispatchEvent(new Event("clinicStatusUpdated"));
-      }
-
-      // Step D: Send confirmation email if email available
+      // Step C: Send confirmation email if email available
       if (emailTrimmed) {
         await sendClinicApprovalEmail({
           clinicId: id,
@@ -394,6 +414,8 @@ export default function AdminClinicManagement() {
       }
     } catch (err: any) {
       console.warn("Background clinic status sync:", err.message);
+    } finally {
+      setIsProcessing(false);
     }
   };
 

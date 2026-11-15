@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabaseClient";
 import { logAuditEvent } from "../lib/auditLog";
@@ -10,6 +10,7 @@ export interface DoctorAffiliation {
   doctor_id: string;
   clinic_id: string;
   user_id: string;
+  doctor_name?: string;
 }
 
 export function isPatientProfileComplete(profile: {
@@ -64,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [roleLoading, setRoleLoading] = useState(true);
   const [isProfileComplete, setIsProfileComplete] = useState<boolean>(true);
   const [affiliations, setAffiliations] = useState<DoctorAffiliation[]>([]);
+  const syncedDoctorMetaKeyRef = useRef<string>("");
 
   useEffect(() => {
     // Check for an existing session on first load
@@ -76,19 +78,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Check if user still exists in auth.users (prevents zombie session after database wipe)
-      const { error: userErr } = await supabase.auth.getUser();
-      if (userErr) {
-        console.warn("[Auth] Stale session detected, auto-purging cached session.");
-        await supabase.auth.signOut();
-        setSession(null);
-        setRole(null);
-        setRoleLoading(false);
-        setLoading(false);
-        return;
+      let activeSession = data.session;
+      const now = Date.now();
+      const expiresAtMs = (activeSession.expires_at || 0) * 1000;
+      const isExpiringSoon = !activeSession.expires_at || expiresAtMs <= now + 60_000;
+
+      // If token expired while tab was idle or closed, proactively refresh it
+      // instead of purging the session. Only purge if the refresh token is truly invalid/revoked.
+      if (isExpiringSoon) {
+        try {
+          const { data: refreshData, error: refreshErr } = await supabase.auth.refreshSession();
+          if (refreshData?.session) {
+            activeSession = refreshData.session;
+          } else if (refreshErr) {
+            const msg = (refreshErr.message || "").toLowerCase();
+            const isInvalidGrant =
+              msg.includes("invalid_grant") ||
+              msg.includes("refresh token not found") ||
+              (refreshErr as any).status === 400;
+            if (isInvalidGrant) {
+              console.warn("[Auth] Stale session rejected by auth server, clearing cached session.");
+              await supabase.auth.signOut().catch(() => {});
+              setSession(null);
+              setRole(null);
+              setRoleLoading(false);
+              setLoading(false);
+              return;
+            }
+          }
+        } catch (refreshEx) {
+          console.warn("[Auth] Transient refresh error on boot:", refreshEx);
+        }
       }
 
-      setSession(data.session);
+      setSession(activeSession);
       const email = (data.session?.user?.email || "").toLowerCase().trim();
       if (email === "dermaisupport@gmail.com") {
         setRole("admin");
@@ -147,6 +170,66 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     return () => listener.subscription.unsubscribe();
+  }, []);
+
+  // Proactive tab wake-up and auto-recovery listener
+  useEffect(() => {
+    let lastRecoveryCheck = 0;
+    let isRecovering = false;
+
+    const handleWakeUp = async () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      const now = Date.now();
+      // Debounce recovery checks to at most once per 5 seconds
+      if (now - lastRecoveryCheck < 5000 || isRecovering) return;
+      lastRecoveryCheck = now;
+
+      try {
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        if (!currentSession) return;
+
+        const expiresAtMs = (currentSession.expires_at || 0) * 1000;
+        const isExpiringSoon = !currentSession.expires_at || expiresAtMs <= now + 120_000;
+
+        if (isExpiringSoon) {
+          isRecovering = true;
+          const { data, error } = await supabase.auth.refreshSession();
+          if (data?.session) {
+            setSession(data.session);
+            window.dispatchEvent(new CustomEvent("dermai_session_recovered", { detail: data.session }));
+          } else if (error) {
+            const msg = (error.message || "").toLowerCase();
+            const isInvalidGrant =
+              msg.includes("invalid_grant") ||
+              msg.includes("refresh token not found") ||
+              (error as any).status === 400;
+            if (isInvalidGrant) {
+              console.warn("[Auth] Session revoked on wake-up.");
+              await supabase.auth.signOut().catch(() => {});
+              setSession(null);
+              setRole(null);
+            }
+          }
+        } else {
+          // Token is healthy; broadcast recovery so components can retry any failed queries
+          window.dispatchEvent(new CustomEvent("dermai_session_recovered", { detail: currentSession }));
+        }
+      } catch (err) {
+        console.warn("[Auth] Wake-up session check warning:", err);
+      } finally {
+        isRecovering = false;
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleWakeUp);
+    window.addEventListener("focus", handleWakeUp);
+    window.addEventListener("online", handleWakeUp);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleWakeUp);
+      window.removeEventListener("focus", handleWakeUp);
+      window.removeEventListener("online", handleWakeUp);
+    };
   }, []);
 
   useEffect(() => {
@@ -273,12 +356,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         let doctorFound = false;
         let doctorAffiliations: DoctorAffiliation[] = [];
 
-        // Always query affiliations if user is authenticated
+        // Always query affiliations if user is authenticated (matching fetchDoctorBranches ordering)
         if (session?.user?.id) {
           const { data: dById } = await supabase
             .from("clinic_doctor")
-            .select("doctor_id, clinic_id, user_id")
-            .eq("user_id", session.user.id);
+            .select("doctor_id, clinic_id, user_id, doctor_name")
+            .eq("user_id", session.user.id)
+            .ilike("status", "active")
+            .order("created_at", { ascending: true })
+            .order("doctor_id");
 
           if (dById && dById.length > 0) {
             doctorFound = true;
@@ -290,8 +376,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 4b. Fallback to email lookup if user_id was not linked yet
           const { data: dByEmail } = await supabase
             .from("clinic_doctor")
-            .select("doctor_id, clinic_id, user_id")
-            .ilike("email", currentEmail);
+            .select("doctor_id, clinic_id, user_id, doctor_name")
+            .ilike("email", currentEmail)
+            .ilike("status", "active")
+            .order("created_at", { ascending: true })
+            .order("doctor_id");
 
           if (dByEmail && dByEmail.length > 0) {
             doctorFound = true;
@@ -355,7 +444,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // 6. Ensure user row exists and preserve existing account status & profile details
         const meta = session!.user.user_metadata || {};
-        const fullName = dbUser?.full_name || meta.full_name || meta.name || session!.user.email?.split("@")[0] || "User";
+        const verifiedDoctorName = doctorAffiliations.find((a) => a.doctor_name?.trim())?.doctor_name?.trim();
+        const fullName =
+          (finalRole === "doctor" && verifiedDoctorName) ||
+          dbUser?.full_name ||
+          meta.full_name ||
+          meta.name ||
+          session!.user.email?.split("@")[0] ||
+          "User";
+
+        // Keep client auth metadata synchronized with verified doctor identity
+        // Protected by a ref-key lock to prevent repeated unnecessary updateUser calls and eliminate infinite loops
+        const syncKey = `${session!.user.id}:${verifiedDoctorName || ""}`;
+        if (
+          finalRole === "doctor" &&
+          verifiedDoctorName &&
+          meta.full_name?.trim() !== verifiedDoctorName &&
+          syncedDoctorMetaKeyRef.current !== syncKey
+        ) {
+          syncedDoctorMetaKeyRef.current = syncKey;
+          supabase.auth.updateUser({
+            data: {
+              full_name: verifiedDoctorName,
+              name: verifiedDoctorName,
+            },
+          }).catch(() => {
+            // Non-blocking metadata sync
+          });
+        }
 
         let localProfile: any = null;
         try {
@@ -519,6 +635,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
+      syncedDoctorMetaKeyRef.current = "";
       localStorage.removeItem("dermai_patient_profile");
       localStorage.removeItem("dermai_doctor_profile");
       localStorage.removeItem("dermai_clinic_profile_cache");

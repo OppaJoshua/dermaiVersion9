@@ -20,6 +20,7 @@ import {
 } from "@/lib/notificationService";
 import { useAuth } from "@/context/AuthContext";
 import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
+import { NotificationCardMenu } from "@/components/common/NotificationCardMenu";
 
 function AdminNotifAvatar({ item }: { item: NotificationItem }) {
   const [imgError, setImgError] = useState(false);
@@ -71,7 +72,7 @@ export interface AdminNotificationsProps {
 export function AdminNotifications({ onClose, isDropdown = false }: AdminNotificationsProps) {
   const navigate = useNavigate();
   const { session } = useAuth();
-  const { notifications, loading, unreadCount, markRead, markAllRead } = useRoleNotifications("admin", {
+  const { notifications, loading, unreadCount, markRead, markAllRead, deleteNotification } = useRoleNotifications("admin", {
     userId: session?.user?.id,
   });
 
@@ -219,6 +220,11 @@ export function AdminNotifications({ onClose, isDropdown = false }: AdminNotific
                   <span className="flex items-center gap-2 shrink-0">
                     <span className="text-xs text-gray-500 whitespace-nowrap">{timeAgo(item.timestamp)}</span>
                     {!item.isRead && <span className="w-2 h-2 rounded-full bg-magenta-600" />}
+                    <NotificationCardMenu
+                      notificationId={item.id}
+                      metadata={item.metadata}
+                      onDelete={deleteNotification}
+                    />
                   </span>
                 </div>
 

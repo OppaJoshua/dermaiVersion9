@@ -323,6 +323,7 @@ export default function PatientDashboard() {
     };
 
     window.addEventListener("derm_profile_updated", handleProfileUpdate);
+    window.addEventListener("dermai_session_recovered", handleProfileUpdate);
     window.addEventListener("dermai_notifications_updated", handleProfileUpdate);
     window.addEventListener("dermai_appointments_updated", handleProfileUpdate);
     window.addEventListener("appointmentCreated", handleProfileUpdate);
@@ -330,6 +331,7 @@ export default function PatientDashboard() {
 
     return () => {
       window.removeEventListener("derm_profile_updated", handleProfileUpdate);
+      window.removeEventListener("dermai_session_recovered", handleProfileUpdate);
       window.removeEventListener("dermai_notifications_updated", handleProfileUpdate);
       window.removeEventListener("dermai_appointments_updated", handleProfileUpdate);
       window.removeEventListener("appointmentCreated", handleProfileUpdate);

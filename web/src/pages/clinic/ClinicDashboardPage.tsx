@@ -606,6 +606,7 @@ export default function ClinicDashboardPage() {
     window.addEventListener("dermai_appointments_updated", handleSync);
     window.addEventListener("dermai_clinic_doctors_updated", handleSync);
     window.addEventListener("dermai_doctors_updated", handleSync);
+    window.addEventListener("dermai_session_recovered", handleSync);
     window.addEventListener("clinicSettingsUpdated", handleSync);
     window.addEventListener("dermai_clinic_updated", handleSync);
     window.addEventListener("appointmentCreated", handleSync);
@@ -618,6 +619,7 @@ export default function ClinicDashboardPage() {
       window.removeEventListener("dermai_appointments_updated", handleSync);
       window.removeEventListener("dermai_clinic_doctors_updated", handleSync);
       window.removeEventListener("dermai_doctors_updated", handleSync);
+      window.removeEventListener("dermai_session_recovered", handleSync);
       window.removeEventListener("clinicSettingsUpdated", handleSync);
       window.removeEventListener("dermai_clinic_updated", handleSync);
       window.removeEventListener("appointmentCreated", handleSync);

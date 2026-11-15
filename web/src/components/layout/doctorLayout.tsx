@@ -327,6 +327,7 @@ function DoctorLayoutContent({ children, onLogoutStart, onLogoutFailed }: Doctor
     window.addEventListener("storage", handleBackgroundRefresh);
     window.addEventListener("dermai_doctor_profile_updated", handleBackgroundRefresh);
     window.addEventListener("dermai_doctor_avatar_updated", handleBackgroundRefresh);
+    window.addEventListener("dermai_session_recovered", handleBackgroundRefresh);
 
     return () => {
       ++requestRef.current;
@@ -334,6 +335,7 @@ function DoctorLayoutContent({ children, onLogoutStart, onLogoutFailed }: Doctor
       window.removeEventListener("storage", handleBackgroundRefresh);
       window.removeEventListener("dermai_doctor_profile_updated", handleBackgroundRefresh);
       window.removeEventListener("dermai_doctor_avatar_updated", handleBackgroundRefresh);
+      window.removeEventListener("dermai_session_recovered", handleBackgroundRefresh);
     };
   }, [loadProfile, user?.id]);
 

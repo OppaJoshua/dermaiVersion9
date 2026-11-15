@@ -19,6 +19,7 @@ import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { useRoleNotifications, type NotificationItem } from "@/lib/notificationService";
+import { NotificationCardMenu } from "@/components/common/NotificationCardMenu";
 
 interface PatientNotificationsProps {
   onClose?: () => void;
@@ -27,7 +28,7 @@ interface PatientNotificationsProps {
 
 export default function PatientNotifications({ onClose, isDropdown = false }: PatientNotificationsProps) {
   const { user } = useAuth();
-  const { notifications, loading, unreadCount, markRead, markAllRead } = useRoleNotifications("patient", {
+  const { notifications, loading, unreadCount, markRead, markAllRead, deleteNotification } = useRoleNotifications("patient", {
     userId: user?.id,
   });
 
@@ -55,7 +56,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
             )
           `)
           .eq("user_id", user!.id)
-          .eq("status", "completed")
+          .in("status", ["completed", "valid", "flagged", "invalid"])
           .order("scanned_at", { ascending: false })
           .limit(20);
 
@@ -174,10 +175,13 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
       const rApptId =
         n.metadata?.appointment_id ||
         (n.id.startsWith("appt-rejected-") ? n.id.replace("appt-rejected-", "") : undefined);
+      const rejStamp = n.metadata?.declined_at || n.metadata?.rejection_timestamp || n.timestamp || "";
+      const docId = n.metadata?.doctor_id || "";
+      const rejKey = `${rApptId}:::${docId}:::${rejStamp}`;
 
       if (isRej && rApptId) {
-        if (seenRejectionAppts.has(rApptId)) return false;
-        seenRejectionAppts.add(rApptId);
+        if (seenRejectionAppts.has(rejKey)) return false;
+        seenRejectionAppts.add(rejKey);
       }
 
       const normTitle = (n.title || "").trim().toLowerCase();
@@ -581,6 +585,11 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                           )}
                         />
                       )}
+                      <NotificationCardMenu
+                        notificationId={item.id}
+                        metadata={item.metadata}
+                        onDelete={deleteNotification}
+                      />
                     </span>
                   </div>
 

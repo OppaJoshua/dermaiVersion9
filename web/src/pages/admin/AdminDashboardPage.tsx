@@ -43,7 +43,15 @@ export default function AdminDashboardPage() {
     }
     void refreshScans();
     const timer = window.setInterval(() => void refreshScans(), 60000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    const handleSessionRecovered = () => {
+      if (!cancelled) void refreshScans();
+    };
+    window.addEventListener("dermai_session_recovered", handleSessionRecovered);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("dermai_session_recovered", handleSessionRecovered);
+    };
   }, []);
 
   useEffect(() => {
@@ -82,6 +90,14 @@ export default function AdminDashboardPage() {
       }
     }
     loadData();
+
+    const handleSessionRecovered = () => {
+      void loadData();
+    };
+    window.addEventListener("dermai_session_recovered", handleSessionRecovered);
+    return () => {
+      window.removeEventListener("dermai_session_recovered", handleSessionRecovered);
+    };
   }, []);
 
   const flaggedScans = liveScans.filter((s) => s.status === "flagged" || s.status === "invalid");

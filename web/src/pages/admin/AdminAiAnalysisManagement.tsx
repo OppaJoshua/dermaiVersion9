@@ -1,7 +1,8 @@
-import { useMemo, useState, useEffect } from "react";
-import { AlertTriangle, Flag, ShieldX } from "lucide-react";
+import { useMemo, useState, useEffect, useCallback } from "react";
+import { AlertTriangle, Flag, ShieldX, RefreshCw, Loader2, AlertCircle } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { supabase } from "../../lib/supabaseClient";
+import { useAuth } from "../../context/AuthContext";
 
 type AnalysisStatus = "valid" | "flagged" | "invalid";
 
@@ -38,82 +39,70 @@ function formatScanTimestamp(iso?: string | null): string {
 }
 
 export default function AdminAiAnalysisManagement() {
+    const { session, loading: authLoading } = useAuth();
     const [records, setRecords] = useState<AnalysisRecord[]>([]);
     const [filter, setFilter] = useState<"all" | "low-confidence" | AnalysisStatus>("all");
+    const [isLoading, setIsLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
+
+    const loadRecords = useCallback(async () => {
+        if (authLoading) return;
+        setIsLoading(true);
+        setLoadError(null);
+
+        const { data, error } = await supabase
+            .from("ai_scan_result")
+            .select(`
+                analysis_id,
+                confidence_score,
+                status,
+                scanned_at,
+                skin_condition:condition_id ( name ),
+                user:user_id ( full_name )
+            `)
+            .order("scanned_at", { ascending: false })
+            .limit(100);
+
+        if (error) {
+            console.error("[AiAnalysis] load records error:", error.message);
+            setLoadError(error.message);
+            setIsLoading(false);
+            return;
+        }
+
+        const rawList = Array.isArray(data) ? data : [];
+        const mapped = rawList.map((s: any, idx: number) => {
+            const userObj = Array.isArray(s.user) ? s.user[0] : s.user;
+            const condObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
+            const rawTimestamp = s.scanned_at;
+            return {
+                id: idx + 1,
+                _analysisId: s.analysis_id,
+                patient: userObj?.full_name ?? "Unknown",
+                uploadedAt: formatScanTimestamp(rawTimestamp),
+                rawTimestamp,
+                predictedCondition: condObj?.name ?? "Unknown",
+                confidence: Math.round(s.confidence_score),
+                status: (["valid", "flagged", "invalid"].includes(s.status) ? s.status : "valid") as AnalysisStatus,
+            };
+        });
+
+        // Ensure strictly newest-first ordering
+        mapped.sort(
+            (a, b) =>
+                new Date(b.rawTimestamp || 0).getTime() - new Date(a.rawTimestamp || 0).getTime()
+        );
+        mapped.forEach((item, i) => {
+            item.id = i + 1;
+        });
+
+        setRecords(mapped);
+        setIsLoading(false);
+    }, [authLoading]);
 
     useEffect(() => {
-        let cancelled = false;
-        async function loadRecords() {
-            // Query ai_scan_result ordered by created_at descending (newest first)
-            let data: any[] | null = null;
-            const primaryRes = await supabase
-                .from("ai_scan_result")
-                .select(`
-                    analysis_id,
-                    confidence_score,
-                    status,
-                    created_at,
-                    scanned_at,
-                    skin_condition:condition_id ( name ),
-                    user:user_id ( full_name )
-                `)
-                .order("created_at", { ascending: false })
-                .limit(100);
-
-            if (!primaryRes.error && primaryRes.data) {
-                data = primaryRes.data;
-            } else {
-                // Fallback query ordering by scanned_at if created_at is not present in schema
-                const fallbackRes = await supabase
-                    .from("ai_scan_result")
-                    .select(`
-                        analysis_id,
-                        confidence_score,
-                        status,
-                        scanned_at,
-                        skin_condition:condition_id ( name ),
-                        user:user_id ( full_name )
-                    `)
-                    .order("scanned_at", { ascending: false })
-                    .limit(100);
-
-                if (!fallbackRes.error && fallbackRes.data) {
-                    data = fallbackRes.data;
-                }
-            }
-
-            if (cancelled || !data) return;
-
-            const mapped = (data as any[]).map((s: any, idx: number) => {
-                const userObj = Array.isArray(s.user) ? s.user[0] : s.user;
-                const condObj = Array.isArray(s.skin_condition) ? s.skin_condition[0] : s.skin_condition;
-                const rawTimestamp = s.created_at || s.scanned_at;
-                return {
-                    id: idx + 1,
-                    _analysisId: s.analysis_id,
-                    patient: userObj?.full_name ?? "Unknown",
-                    uploadedAt: formatScanTimestamp(rawTimestamp),
-                    rawTimestamp,
-                    predictedCondition: condObj?.name ?? "Unknown",
-                    confidence: Math.round(s.confidence_score),
-                    status: (["valid", "flagged", "invalid"].includes(s.status) ? s.status : "valid") as AnalysisStatus,
-                };
-            });
-
-            // Ensure strictly newest-first ordering
-            mapped.sort(
-                (a, b) =>
-                    new Date(b.rawTimestamp || 0).getTime() - new Date(a.rawTimestamp || 0).getTime()
-            );
-            mapped.forEach((item, i) => {
-                item.id = i + 1;
-            });
-
-            setRecords(mapped);
-        }
         loadRecords();
-        return () => { cancelled = true; };
-    }, []);
+    }, [loadRecords, session]);
 
     const visibleRecords = useMemo(() => {
         if (filter === "all")
@@ -195,9 +184,20 @@ export default function AdminAiAnalysisManagement() {
 
       {/* Table */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-7 py-5 border-b border-gray-200 flex items-baseline justify-between">
+        <div className="px-7 py-5 border-b border-gray-200 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-black">Uploaded skin image analyses</h3>
-          <span className="text-sm text-gray-600">{visibleRecords.length} shown</span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-600">{visibleRecords.length} shown</span>
+            <button
+              onClick={() => loadRecords()}
+              disabled={isLoading}
+              className="p-1.5 rounded-lg border border-gray-200 text-gray-600 hover:text-black hover:bg-gray-50 transition cursor-pointer disabled:opacity-50"
+              title="Refresh analyses"
+              aria-label="Refresh analyses"
+            >
+              <RefreshCw className={cn("w-4 h-4", isLoading && "animate-spin")} />
+            </button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-black">
@@ -213,47 +213,74 @@ export default function AdminAiAnalysisManagement() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {visibleRecords.map((record) => (<tr key={record.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-7 py-5 text-sm font-semibold text-black">#{record.id}</td>
-                  <td className="px-7 py-5 text-sm text-black">
-                    <p className="font-medium">{record.patient}</p>
-                    <p className="text-xs text-gray-600">{record.uploadedAt}</p>
+              {isLoading ? (
+                <tr>
+                  <td colSpan={7} className="px-7 py-16 text-center">
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto text-magenta-600 mb-2" />
+                    <p className="text-sm font-medium text-gray-600">Loading analysis records...</p>
                   </td>
-                  <td className="px-7 py-5 text-sm text-black">{record.predictedCondition}</td>
-                  <td className="px-7 py-5">
-                    <div className="flex items-center gap-3">
-                      <span className="w-10 text-sm font-semibold tabular-nums text-black">{record.confidence}%</span>
-                      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-200">
-                        <div className="h-full rounded-full bg-magenta-500" style={{ width: `${Math.max(0, Math.min(100, record.confidence))}%` }}/>
-                      </div>
-                    </div>
+                </tr>
+              ) : loadError ? (
+                <tr>
+                  <td colSpan={7} className="px-7 py-16 text-center">
+                    <AlertCircle className="w-8 h-8 mx-auto text-red-500 mb-2" />
+                    <p className="text-base font-semibold text-black">Failed to load analyses</p>
+                    <p className="text-sm text-gray-600 mt-1 max-w-md mx-auto">{loadError}</p>
+                    <button
+                      onClick={() => loadRecords()}
+                      className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-magenta-600 text-white text-xs font-semibold hover:bg-magenta-700 transition cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Retry
+                    </button>
                   </td>
-                  <td className="px-7 py-5">
-                    <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold capitalize", badgeClasses[record.status])}>
-                      {record.status}
-                    </span>
-                  </td>
-                  <td className="px-7 py-5 text-sm text-gray-700 max-w-[220px]">{record.reason || "-"}</td>
-                  <td className="px-7 py-5">
-                    <div className="flex flex-wrap gap-2">
-                      {record.status !== "valid" && (<button onClick={() => setRecordStatus(record.id, "valid")} className="px-3.5 py-2 rounded-lg border border-gray-300 bg-white text-black text-xs font-semibold hover:bg-gray-50 cursor-pointer">
-                          Mark valid
-                        </button>)}
-                      {record.status !== "flagged" && (<button onClick={() => setRecordStatus(record.id, "flagged", "Needs manual review due to uncertainty")} className="px-3.5 py-2 rounded-lg border border-gray-300 bg-white text-black text-xs font-semibold hover:bg-gray-50 cursor-pointer">
-                          Flag
-                        </button>)}
-                      {record.status !== "invalid" && (<button onClick={() => setRecordStatus(record.id, "invalid", "Invalid or out-of-scope image upload")} className="px-3.5 py-2 rounded-lg border border-magenta-300 bg-white text-magenta-700 text-xs font-semibold hover:bg-magenta-50 cursor-pointer">
-                          Mark invalid
-                        </button>)}
-                    </div>
-                  </td>
-                </tr>))}
-              {visibleRecords.length === 0 && (<tr>
+                </tr>
+              ) : visibleRecords.length === 0 ? (
+                <tr>
                   <td colSpan={7} className="px-7 py-16 text-center">
                     <p className="text-base font-semibold text-black">No analyses found</p>
                     <p className="text-sm text-gray-600 mt-1">No records match the selected filter.</p>
                   </td>
-                </tr>)}
+                </tr>
+              ) : (
+                visibleRecords.map((record) => (
+                  <tr key={record.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-7 py-5 text-sm font-semibold text-black">#{record.id}</td>
+                    <td className="px-7 py-5 text-sm text-black">
+                      <p className="font-medium">{record.patient}</p>
+                      <p className="text-xs text-gray-600">{record.uploadedAt}</p>
+                    </td>
+                    <td className="px-7 py-5 text-sm text-black">{record.predictedCondition}</td>
+                    <td className="px-7 py-5">
+                      <div className="flex items-center gap-3">
+                        <span className="w-10 text-sm font-semibold tabular-nums text-black">{record.confidence}%</span>
+                        <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-200">
+                          <div className="h-full rounded-full bg-magenta-500" style={{ width: `${Math.max(0, Math.min(100, record.confidence))}%` }}/>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-7 py-5">
+                      <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold capitalize", badgeClasses[record.status])}>
+                        {record.status}
+                      </span>
+                    </td>
+                    <td className="px-7 py-5 text-sm text-gray-700 max-w-[220px]">{record.reason || "-"}</td>
+                    <td className="px-7 py-5">
+                      <div className="flex flex-wrap gap-2">
+                        {record.status !== "valid" && (<button onClick={() => setRecordStatus(record.id, "valid")} className="px-3.5 py-2 rounded-lg border border-gray-300 bg-white text-black text-xs font-semibold hover:bg-gray-50 cursor-pointer">
+                            Mark valid
+                          </button>)}
+                        {record.status !== "flagged" && (<button onClick={() => setRecordStatus(record.id, "flagged", "Needs manual review due to uncertainty")} className="px-3.5 py-2 rounded-lg border border-gray-300 bg-white text-black text-xs font-semibold hover:bg-gray-50 cursor-pointer">
+                            Flag
+                          </button>)}
+                        {record.status !== "invalid" && (<button onClick={() => setRecordStatus(record.id, "invalid", "Invalid or out-of-scope image upload")} className="px-3.5 py-2 rounded-lg border border-magenta-300 bg-white text-magenta-700 text-xs font-semibold hover:bg-magenta-50 cursor-pointer">
+                            Mark invalid
+                          </button>)}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

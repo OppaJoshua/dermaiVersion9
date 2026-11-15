@@ -628,14 +628,14 @@ export default function HomePage() {
               initial={{ opacity: 0, x: 60 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.8, delay: 0.3 }}
-              className="hidden lg:flex items-end justify-end h-full translate-y-3"
+              className="hidden lg:flex items-end justify-end h-full overflow-hidden"
             >
               <img
                 src={heroRightImage}
-                alt={"Pasted Image"}
+                alt="DermAI"
                 width={500}
                 height={500}
-                className={"w-full h-full"}
+                className="w-full h-full object-contain object-bottom select-none pointer-events-none translate-y-1.5"
               />
             </motion.div>
           </div>
