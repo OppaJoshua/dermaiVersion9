@@ -14,6 +14,7 @@ import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
 import { useRoleNotifications, type NotificationItem, type NotificationCategory } from "@/lib/notificationService";
+import { NotificationCardMenu } from "@/components/common/NotificationCardMenu";
 
 interface ClinicNotificationsProps {
   onClose?: () => void;
@@ -149,7 +150,7 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
 
   const { user } = useAuth();
   const { clinicId } = useClinicVerification();
-  const { notifications, loading, unreadCount, markRead, markAllRead } = useRoleNotifications("clinic", {
+  const { notifications, loading, unreadCount, markRead, markAllRead, deleteNotification } = useRoleNotifications("clinic", {
     clinicId: clinicId || undefined,
     userId: user?.id,
     userEmail: user?.email,
@@ -166,54 +167,24 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
     try {
       let rows: any[] = [];
 
-      // 1. Primary: Query user_notification with relational join on profiles / patients table using patient_id
-      // to fetch first_name, last_name, and avatar_url (or profile_picture)
-      let joinSuccess = false;
-      try {
-        const { data: profileJoinData, error: profileJoinErr } = await supabase
-          .from("user_notification")
-          .select(`
-            *,
-            patient:patient_id (
-              first_name,
-              last_name,
-              full_name,
-              avatar_url,
-              profile_picture
-            )
-          `)
-          .in("type", ["booking_created", "doctor_reselection", "reselection_required", "bookings_and_reselections", "appointment"])
-          .or(`subtype.eq.alternate_doctor_selected,type.in.(booking_created,doctor_reselection,reselection_required,bookings_and_reselections)`)
-          .eq("clinic_id", clinicId)
-          .order("created_at", { ascending: false });
+      // 1. Query user_notification for the clinic owner using actual database schema
+      if (user?.id) {
+        try {
+          const { data: directData, error: directErr } = await supabase
+            .from("user_notification")
+            .select("notif_id, user_id, type, subtype, title, body, message, is_read, metadata, created_at")
+            .eq("user_id", user.id)
+            .in("type", ["booking_created", "doctor_reselection", "reselection_required", "bookings_and_reselections", "appointment", "clinic"])
+            .order("created_at", { ascending: false })
+            .limit(40);
 
-        if (!profileJoinErr && Array.isArray(profileJoinData) && profileJoinData.length > 0) {
-          rows = profileJoinData;
-          joinSuccess = true;
-        }
-      } catch { }
-
-      // 1b. Fallback to notifications view or user_notification direct select
-      if (!joinSuccess) {
-        const { data: directData, error: directErr } = await supabase
-          .from("user_notification")
-          .select("*")
-          .in("type", ["booking_created", "doctor_reselection", "reselection_required", "bookings_and_reselections", "appointment"])
-          .or(`subtype.eq.alternate_doctor_selected,type.in.(booking_created,doctor_reselection,reselection_required,bookings_and_reselections)`)
-          .eq("clinic_id", clinicId)
-          .order("created_at", { ascending: false });
-
-        if (!directErr && Array.isArray(directData) && directData.length > 0) {
-          rows = directData;
-        } else {
-          const { data: viewData } = await supabase
-            .from("notifications")
-            .select("*")
-            .in("type", ["booking_created", "doctor_reselection", "reselection_required", "bookings_and_reselections"])
-            .eq("clinic_id", clinicId)
-            .order("created_at", { ascending: false });
-          if (Array.isArray(viewData)) rows = viewData;
-        }
+          if (!directErr && Array.isArray(directData) && directData.length > 0) {
+            rows = directData.filter((r: any) => {
+              const cId = r.metadata?.clinic_id || r.metadata?.clinicId;
+              return !cId || String(cId) === String(clinicId);
+            });
+          }
+        } catch { }
       }
 
       // 1c. Also load clinic's appointments joined with user profiles so we can resolve
@@ -266,32 +237,7 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
           }
         } catch { }
 
-        try {
-          const { data: profData } = await supabase
-            .from("profiles")
-            .select("user_id, patient_id, first_name, last_name, full_name, avatar_url, profile_picture")
-            .in("user_id", patientIds);
-          if (Array.isArray(profData)) {
-            profData.forEach((p: any) => {
-              const pid = String(p.patient_id || p.user_id || "");
-              if (pid && !patientMap.has(pid)) patientMap.set(pid, p);
-            });
-          }
-        } catch { }
 
-        // Also query patients table if profiles view is missing
-        try {
-          const { data: patData } = await supabase
-            .from("patients")
-            .select("user_id, patient_id, first_name, last_name, full_name, avatar_url, profile_picture")
-            .in("user_id", patientIds);
-          if (Array.isArray(patData)) {
-            patData.forEach((p: any) => {
-              const pid = String(p.patient_id || p.user_id || "");
-              if (pid && !patientMap.has(pid)) patientMap.set(pid, p);
-            });
-          }
-        } catch { }
       }
 
       clinicAppts.forEach((a: any) => {
@@ -477,7 +423,7 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
           appointment_id: resolvedApptId,
           link: resolvedLink,
           timestamp: r.created_at || new Date().toISOString(),
-          isRead: Boolean(r.is_read || r.read_at),
+          isRead: Boolean(r.is_read),
           metadata: {
             ...r.metadata,
             category: resolvedCategory,
@@ -508,32 +454,24 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
     if (!clinicId) return;
 
     const channelId = `clinic-bookings-reselections-${clinicId}-${Math.random().toString(36).slice(2, 7)}`;
-    const channel = supabase
-      .channel(channelId)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "notifications",
-          filter: `clinic_id=eq.${clinicId}`,
-        },
-        () => {
-          fetchBookingsAndReselections();
-        }
-      )
-      .on(
+    const channel = supabase.channel(channelId);
+
+    if (user?.id) {
+      channel.on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "user_notification",
-          filter: `clinic_id=eq.${clinicId}`,
+          filter: `user_id=eq.${user.id}`,
         },
         () => {
           fetchBookingsAndReselections();
         }
-      )
+      );
+    }
+
+    channel
       .on(
         "postgres_changes",
         {
@@ -551,7 +489,7 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [clinicId, fetchBookingsAndReselections]);
+  }, [clinicId, user?.id, fetchBookingsAndReselections]);
 
   const handleMarkItemRead = (itemId: string) => {
     markRead(itemId);
@@ -561,13 +499,13 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
     // Persist read status directly to Supabase
     supabase
       .from("notifications")
-      .update({ is_read: true, read_at: new Date().toISOString() })
+      .update({ is_read: true })
       .eq("id", itemId)
       .then(({ error }) => {
         if (error) {
           supabase
             .from("user_notification")
-            .update({ is_read: true, read_at: new Date().toISOString() })
+            .update({ is_read: true })
             .eq("notif_id", itemId)
             .then(() => {});
         }
@@ -906,6 +844,11 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
                           )}
                         />
                       )}
+                      <NotificationCardMenu
+                        notificationId={item.id}
+                        metadata={item.metadata}
+                        onDelete={deleteNotification}
+                      />
                     </span>
                   </div>
 

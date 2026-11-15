@@ -789,7 +789,7 @@ async function fulfillPaymentAndSendEmail({
     };
   }
 
-  let claimResult: { claim_acquired?: boolean; status?: string; outbox_id?: string } | null = null;
+  let claimResult: { claim_acquired?: boolean; status?: string; outbox_id?: string; claim_token?: string } | null = null;
 
   if (recipientEmail && paymongoPaymentId && paymongoPaymentId.startsWith("pay_")) {
     const idempotencyKey = `subscription_receipt:${paymongoPaymentId}`;
@@ -825,6 +825,7 @@ async function fulfillPaymentAndSendEmail({
 
     if (claimResult?.claim_acquired) {
       const outboxId = claimResult.outbox_id;
+      const claimToken = claimResult.claim_token;
       try {
         const dispatchResult = await sendReceiptEmail({
           patientEmail: recipientEmail,
@@ -841,6 +842,7 @@ async function fulfillPaymentAndSendEmail({
           await adminSupabase.rpc("finalize_email_outbox", {
             p_outbox_id: outboxId,
             p_success: true,
+            p_claim_token: claimToken,
           });
 
           await recordAuditLog({
@@ -863,6 +865,7 @@ async function fulfillPaymentAndSendEmail({
             p_outbox_id: outboxId,
             p_success: false,
             p_error: emailErrorMsg,
+            p_claim_token: claimToken,
           });
           await recordAuditLog({
             userId,
@@ -883,6 +886,7 @@ async function fulfillPaymentAndSendEmail({
           p_outbox_id: outboxId,
           p_success: false,
           p_error: emailErrorMsg,
+          p_claim_token: claimToken,
         });
         await recordAuditLog({
           userId,
@@ -1169,6 +1173,7 @@ async function fulfillBookingPaymentAndSendEmail({
     } else if (claimResult?.claim_acquired) {
 
       const outboxId = claimResult.outbox_id;
+      const claimToken = claimResult.claim_token;
 
       try {
 
@@ -1205,6 +1210,8 @@ async function fulfillBookingPaymentAndSendEmail({
             p_outbox_id: outboxId,
 
             p_success: true,
+
+            p_claim_token: claimToken,
 
           });
 
@@ -1246,6 +1253,8 @@ async function fulfillBookingPaymentAndSendEmail({
 
             p_error: emailErrorMsg,
 
+            p_claim_token: claimToken,
+
           });
 
         }
@@ -1263,6 +1272,8 @@ async function fulfillBookingPaymentAndSendEmail({
           p_success: false,
 
           p_error: emailErrorMsg,
+
+          p_claim_token: claimToken,
 
         });
 

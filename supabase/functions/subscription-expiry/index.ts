@@ -88,7 +88,6 @@ async function fetchAllPages<T>(
 // ---------------------------------------------------------------------------
 function renderExpiryEmailHtml(opts: {
   periodLabel: string;
-  upgradeUrl?: string;
 }): string {
   const pink = "#A21D5C";
   const pinkDark = "#7E1448";
@@ -169,7 +168,6 @@ function renderExpiryEmailHtml(opts: {
 
 function renderExpiryEmailText(opts: {
   periodLabel: string;
-  upgradeUrl?: string;
 }): string {
   return [
     "Hello,",
@@ -399,9 +397,6 @@ Deno.serve(async (req: Request) => {
     return json({ error: "SMTP configuration is incomplete" }, 500);
   }
 
-  const appBaseUrl = (Deno.env.get("APP_BASE_URL") || "http://localhost:5173").replace(/\/+$/, "");
-  const upgradeUrl = `${appBaseUrl}/dashboard/upgrade`;
-
   const transporter = nodemailer.createTransport({
     host: smtpHost,
     port: smtpPort,
@@ -600,7 +595,7 @@ Deno.serve(async (req: Request) => {
         .eq("period_end", periodEnd);
 
       sendAttempted = true;
-      const emailOpts = { periodLabel, upgradeUrl };
+      const emailOpts = { periodLabel };
 
       await transporter.sendMail({
         from: `"DermAI" <${smtpUser}>`,

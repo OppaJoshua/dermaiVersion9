@@ -13,6 +13,7 @@ import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
 import { useRoleNotifications } from "@/lib/notificationService";
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
+import { NotificationCardMenu } from "@/components/common/NotificationCardMenu";
 
 interface DoctorNotificationsProps {
   onClose?: () => void;
@@ -23,7 +24,7 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
   const { user } = useAuth();
   const navigate = useNavigate();
   const [fetchLimit, setFetchLimit] = useState(100);
-  const { notifications, loading, markRead, markAllRead } = useRoleNotifications("doctor", {
+  const { notifications, loading, markRead, markAllRead, deleteNotification } = useRoleNotifications("doctor", {
     userId: user?.id,
     userEmail: user?.email,
     limit: fetchLimit,
@@ -380,6 +381,11 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
                           )}
                         />
                       )}
+                      <NotificationCardMenu
+                        notificationId={item.id}
+                        metadata={item.metadata}
+                        onDelete={deleteNotification}
+                      />
                     </span>
                   </div>
 

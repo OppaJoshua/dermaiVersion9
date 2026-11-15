@@ -225,12 +225,14 @@ export default function SubscriptionStatusPage() {
           });
         } else {
           // Free or Expired Subscription Branch (controlled by Admin Free Plan)
-          const freeUsage = await calculateOneTimeFreeScanUsage(user.id);
+          const freeUsage = await calculateOneTimeFreeScanUsage(user.id, {
+            configuredFreeScanLimit: subInfo.freePlanConfiguredLimit,
+          });
           if (!isMounted) return;
 
           const freePlanData = subInfo.freePlanDetails;
           const freePlanVerified = subInfo.freePlanVerified === true;
-          const freePlanAmbiguous = Boolean(subInfo.freePlanAmbiguous || freeUsage.ambiguous);
+          const freePlanAmbiguous = Boolean(subInfo.freePlanAmbiguous);
           const freePlanActive = freePlanVerified && subInfo.freePlanActive === true;
           const configuredFreeMaxScans = resolveMaxScans(
             subInfo.freePlanConfiguredLimit,
@@ -271,7 +273,11 @@ export default function SubscriptionStatusPage() {
             freePlanActive,
             freePlanVerified,
             freePlanAmbiguous,
-            usageVerified: freePlanVerified && freeUsage.verified && !freePlanAmbiguous,
+            usageVerified:
+              freePlanVerified &&
+              freeUsage.verified &&
+              !freePlanAmbiguous &&
+              !freeUsage.ambiguous,
             statusMessage: subInfo.freePlanError || freeUsage.error,
           });
         }
@@ -317,6 +323,7 @@ export default function SubscriptionStatusPage() {
   const isAmbiguousConfig = !isPro && freePlanAmbiguous;
 
   const isUnlimited = maxScans === Infinity;
+  const displayedScansUsed = isUnlimited ? scansUsed : Math.min(scansUsed, maxScans);
   const scansRemaining = isUnlimited
     ? Infinity
     : Math.max(0, maxScans - scansUsed);
@@ -409,25 +416,29 @@ export default function SubscriptionStatusPage() {
                       ? cancelAtPeriodEnd
                         ? "bg-amber-50 text-amber-700 border border-amber-200"
                         : "bg-emerald-50 text-emerald-600 border border-emerald-100"
-                      : subscription?.isExpired
-                      ? "bg-rose-50 text-rose-600 border border-rose-100"
                       : isAdminDeactivated || isAmbiguousConfig
                       ? "bg-amber-50 text-amber-700 border border-amber-200"
+                      : freePlanActive
+                      ? "bg-emerald-50 text-emerald-600 border border-emerald-100"
                       : !usageVerified
                       ? "bg-rose-50 text-rose-700 border border-rose-200"
-                      : "bg-gray-100 text-gray-600 border border-gray-200"
+                      : subscription?.isExpired
+                      ? "bg-rose-50 text-rose-600 border border-rose-100"
+                      : "bg-emerald-50 text-emerald-600 border border-emerald-100"
                   )}
                 >
                   {isPro
                     ? cancelAtPeriodEnd
                       ? "Cancelling"
                       : "Active"
-                    : subscription?.isExpired
-                    ? "Expired"
                     : isAdminDeactivated || isAmbiguousConfig
                     ? "Unavailable"
+                    : freePlanActive
+                    ? "Active"
                     : !usageVerified
                     ? "Verification required"
+                    : subscription?.isExpired
+                    ? "Expired"
                     : "Active"}
                 </span>
               </div>
@@ -441,12 +452,14 @@ export default function SubscriptionStatusPage() {
                       ? `${remainingDays} ${remainingDays === 1 ? "day" : "days"}`
                       : isPro
                       ? "Active"
-                      : subscription?.isExpired
-                      ? "0 days"
                       : isAdminDeactivated || isAmbiguousConfig
                       ? "Unavailable"
+                      : freePlanActive
+                      ? "One-time"
                       : !usageVerified
                       ? "Verify"
+                      : subscription?.isExpired
+                      ? "0 days"
                       : "One-time"}
                   </span>
                 </div>
@@ -591,7 +604,8 @@ export default function SubscriptionStatusPage() {
                 ) : !usageVerified && !isUnlimited ? (
                   <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl text-xs text-rose-800 leading-relaxed mt-2">
                     <p>
-                      Unable to verify your scan allowance. Please check your internet connection and try again.
+                      {statusMessage ||
+                        "Unable to verify your scan allowance. Please check your internet connection and try again."}
                     </p>
                   </div>
                 ) : isUnlimited ? (
@@ -616,7 +630,7 @@ export default function SubscriptionStatusPage() {
                   <>
                     <div className="flex items-center justify-between text-xs font-medium text-gray-700 pt-0.5">
                       <span>
-                        {scansUsed} / {maxScans} {maxScans === 1 ? "scan" : "scans"} used
+                        {displayedScansUsed} / {maxScans} {maxScans === 1 ? "scan" : "scans"} used
                       </span>
                       <span className="font-semibold text-gray-900">
                         {scansRemaining} {scansRemaining === 1 ? "scan" : "scans"} remaining
@@ -638,8 +652,8 @@ export default function SubscriptionStatusPage() {
                     {/* Subtext */}
                     <p className="text-xs text-gray-500 font-normal pt-1">
                       {isPro
-                        ? `You have used ${scansUsed} of ${maxScans} AI skin ${maxScans === 1 ? "scan" : "scans"} in your current ${planName} billing cycle.`
-                        : `You have used ${scansUsed} of ${maxScans} one-time free AI skin ${maxScans === 1 ? "scan" : "scans"}.`}
+                        ? `You have used ${displayedScansUsed} of ${maxScans} AI skin ${maxScans === 1 ? "scan" : "scans"} in your current ${planName} billing cycle.`
+                        : `You have used ${displayedScansUsed} of ${maxScans} one-time free AI skin ${maxScans === 1 ? "scan" : "scans"}.`}
                     </p>
 
                     {scansRemaining <= 0 && (

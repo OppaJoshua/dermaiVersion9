@@ -29,7 +29,7 @@ Deno.serve(async (req: Request) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    const cronSecret = Deno.env.get("CRON_SECRET");
+    const cronSecret = Deno.env.get("EMAIL_OUTBOX_CRON_SECRET") || Deno.env.get("CRON_SECRET");
 
     if (!supabaseUrl || !supabaseServiceRoleKey) {
       throw new Error("Missing Supabase configuration environment variables");
@@ -86,6 +86,7 @@ Deno.serve(async (req: Request) => {
     for (const task of tasks) {
       const payload = task.payload || {};
       const outboxId = task.outbox_id;
+      const claimToken: string = task.claim_token;
       const appointmentId = task.appointment_id || payload.appointmentId;
       const paymongoPaymentId = payload.paymongoPaymentId || task.idempotency_key?.split(":")[1];
 
@@ -125,13 +126,14 @@ Deno.serve(async (req: Request) => {
               .limit(1)
               .maybeSingle();
 
-            if (payRow && payRow.status !== "success") {
-              const cancelMsg = `Subscription receipt aborted: Payment ${paymongoPaymentId} is not in success status (${payRow.status}).`;
+            if (!payRow || payRow.status !== "success") {
+              const cancelMsg = `Subscription receipt aborted: Payment ${paymongoPaymentId} not found or not in success status (${payRow?.status ?? "not found"}).`;
               console.warn(`[email-outbox-worker] ${cancelMsg}`);
               await adminSupabase.rpc("finalize_email_outbox", {
                 p_outbox_id: outboxId,
                 p_success: false,
                 p_error: cancelMsg,
+                p_claim_token: claimToken,
               });
               failed++;
               continue;
@@ -152,6 +154,7 @@ Deno.serve(async (req: Request) => {
             await adminSupabase.rpc("finalize_email_outbox", {
               p_outbox_id: outboxId,
               p_success: true,
+              p_claim_token: claimToken,
             });
 
             if (task.user_id) {
@@ -175,6 +178,7 @@ Deno.serve(async (req: Request) => {
               p_outbox_id: outboxId,
               p_success: false,
               p_error: errMsg,
+              p_claim_token: claimToken,
             });
             failed++;
             console.warn(`[email-outbox-worker] Subscription task ${outboxId} dispatch failed: ${errMsg}`);
@@ -201,6 +205,7 @@ Deno.serve(async (req: Request) => {
             p_outbox_id: outboxId,
             p_success: false,
             p_error: cancelMsg,
+            p_claim_token: claimToken,
           });
           failed++;
           continue;
@@ -220,6 +225,7 @@ Deno.serve(async (req: Request) => {
             p_outbox_id: outboxId,
             p_success: false,
             p_error: cancelMsg,
+            p_claim_token: claimToken,
           });
 
           if (task.user_id) {
@@ -300,6 +306,7 @@ Deno.serve(async (req: Request) => {
           await adminSupabase.rpc("finalize_email_outbox", {
             p_outbox_id: outboxId,
             p_success: true,
+            p_claim_token: claimToken,
           });
 
           if (task.user_id) {
@@ -323,6 +330,7 @@ Deno.serve(async (req: Request) => {
             p_outbox_id: outboxId,
             p_success: false,
             p_error: errMsg,
+            p_claim_token: claimToken,
           });
           failed++;
           console.warn(`[email-outbox-worker] Task ${outboxId} dispatch failed: ${errMsg}`);
@@ -333,6 +341,7 @@ Deno.serve(async (req: Request) => {
           p_outbox_id: outboxId,
           p_success: false,
           p_error: errMsg,
+          p_claim_token: claimToken,
         });
         failed++;
         console.error(`[email-outbox-worker] Task ${outboxId} exception:`, errMsg);

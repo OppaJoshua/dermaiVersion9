@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { logAuditEvent } from "@/utils/auditLogger";
 import { resolveAvatarUrl } from "@/utils/storage";
-import { createPatientNotification, notifyAdminDoctorCompletedReview, createDoctorAppointmentConfirmedNotification } from "@/lib/notificationService";
+import { createPatientNotification, notifyAdminDoctorCompletedReview, createDoctorAppointmentConfirmedNotification, sendAuthorizedNotification } from "@/lib/notificationService";
 import { recordDoctorAiReview } from "@/lib/doctorReviewService";
 import type { AppointmentHistoryEntry } from "@/lib/schedulingService";
 import { compareDoctorAppointments, scopeDoctorAppointments } from "@/lib/doctorAppointmentScope";
@@ -821,7 +821,11 @@ export function useDoctorAppointments({
             : `Dr. ${notifDoctorName} had a schedule conflict: ${note || "Consultation will be reassigned."}`,
           metadata: {
             appointment_id: appointmentId,
+            doctor_id: branchDoctor.doctor_id,
             declined_at: new Date().toISOString(),
+            idempotency_key: isApproved
+              ? `patient_appt_approved_${appointmentId}_${branchDoctor.doctor_id}_${targetAppt.userId}`
+              : `patient_appt_rejected_${appointmentId}_${branchDoctor.doctor_id}_${targetAppt.userId}`,
           },
         });
       }
@@ -842,15 +846,14 @@ export function useDoctorAppointments({
             const patientDisplayName = existingAppt.patientName || targetAppt?.patientName || "Patient";
             const declineReasonText = note?.trim() ? `: "${note.trim()}"` : "";
 
-            await supabase.from("user_notification").insert({
-              user_id: clinicOwnerUserId,
+            await sendAuthorizedNotification({
+              userId: clinicOwnerUserId,
               type: "appointment",
               subtype: isApproved ? "doctor-accepted" : "doctor-declined",
               title: isApproved ? "Doctor Accepted Appointment" : "Doctor Declined Appointment",
               body: isApproved
                 ? `${docDisplayName} accepted the consultation request for ${patientDisplayName}.`
                 : `${docDisplayName} declined the consultation request for ${patientDisplayName}${declineReasonText}. Reassignment required.`,
-              is_read: false,
               metadata: {
                 appointment_id: appointmentId,
                 doctor_id: branchDoctor.doctor_id,
@@ -864,6 +867,7 @@ export function useDoctorAppointments({
                 category: "appointment",
                 type: isApproved ? "doctor-accepted" : "doctor-rejected",
                 link: "/clinic/appointments",
+                idempotency_key: `clinic_doc_decision_${appointmentId}_${branchDoctor.doctor_id}_${isApproved ? "approved" : "declined"}_${clinicOwnerUserId}`,
               },
             });
             window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
@@ -874,6 +878,7 @@ export function useDoctorAppointments({
       }
 
       // When doctor accepts appointment (reaching confirmed state), notify the doctor with Confirmed Appointment
+      // Also immediately persists genuine 24h reminder if scheduled within 24 hours so offline doctors never miss reminders
       if (isApproved && user?.id) {
         createDoctorAppointmentConfirmedNotification({
           doctorUserId: user.id,
@@ -882,6 +887,8 @@ export function useDoctorAppointments({
           appointmentId: appointmentId,
           patientId: targetAppt?.userId || existingAppt.userId,
           patientName: existingAppt.patientName || targetAppt?.patientName,
+          date: existingAppt.date,
+          time: existingAppt.time,
         }).catch((docNotifErr) => {
           console.warn("[useDoctorAppointments] Doctor confirmed notification note:", docNotifErr);
         });

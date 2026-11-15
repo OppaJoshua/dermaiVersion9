@@ -509,7 +509,8 @@ export default function SubscriptionScreen() {
             ) : !usageVerified && !isUnlimitedScans ? (
               <View style={styles.quotaBarSection}>
                 <Text style={styles.freeTierSub}>
-                  Unable to verify your scan allowance. Please check your internet connection and try again.
+                  {sub?.freePlanError ||
+                    'Unable to verify your scan allowance. Please check your internet connection and try again.'}
                 </Text>
               </View>
             ) : isUnlimitedScans ? (
@@ -522,7 +523,7 @@ export default function SubscriptionScreen() {
               <View style={styles.quotaBarSection}>
                 <View style={styles.quotaLabels}>
                   <Text style={styles.quotaCountTxt}>
-                    {scansUsed} of {freeQuota} Scans Used
+                    {Math.min(scansUsed, freeQuota)} of {freeQuota} Scans Used
                   </Text>
                   <Text style={styles.quotaRemainingTxt}>
                     {Math.max(0, freeQuota - scansUsed)} remaining

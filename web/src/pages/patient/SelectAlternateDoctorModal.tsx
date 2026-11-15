@@ -1452,8 +1452,6 @@ export function SelectAlternateDoctorModal({
         try {
           await supabase.from("user_notification").insert({
             user_id: clinicOwnerUserId,
-            clinic_id: appointment.clinicId || null,
-            patient_id: patientUserId || null,
             type: "bookings_and_reselections",
             subtype: "alternate_doctor_selected",
             title: "Alternate Doctor Selected",
@@ -1463,6 +1461,7 @@ export function SelectAlternateDoctorModal({
               category: "bookings_and_reselections",
               type: "bookings_and_reselections",
               subtype: "alternate_doctor_selected",
+              clinic_id: appointment.clinicId || null,
               patient_id: patientUserId || null,
               patient_name: cleanPatientName,
               patient_first_name: patientFirstName,
