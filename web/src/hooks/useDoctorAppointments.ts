@@ -85,17 +85,45 @@ export function isAppointmentArrived(
   return s === "arrived" || c === "arrived";
 }
 
-function calculateAgeFromBirthdate(birthdateStr?: string | null): number | undefined {
+export function calculateAgeFromBirthdate(birthdateStr?: string | null): number | undefined {
   if (!birthdateStr) return undefined;
   try {
-    const bday = new Date(birthdateStr);
-    if (isNaN(bday.getTime())) return undefined;
+    const clean = String(birthdateStr).trim();
+    if (!clean || clean === "—" || clean === "\u2014" || clean === "null" || clean === "undefined") {
+      return undefined;
+    }
+
+    let birthYear: number;
+    let birthMonth: number;
+    let birthDay: number;
+
+    const isoMatch = clean.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (isoMatch) {
+      birthYear = parseInt(isoMatch[1], 10);
+      birthMonth = parseInt(isoMatch[2], 10);
+      birthDay = parseInt(isoMatch[3], 10);
+    } else {
+      const parsed = new Date(clean);
+      if (isNaN(parsed.getTime())) return undefined;
+      birthYear = parsed.getFullYear();
+      birthMonth = parsed.getMonth() + 1;
+      birthDay = parsed.getDate();
+    }
+
+    if (birthYear < 1890 || birthMonth < 1 || birthMonth > 12 || birthDay < 1 || birthDay > 31) {
+      return undefined;
+    }
+
     const today = new Date();
-    let age = today.getFullYear() - bday.getFullYear();
-    const m = today.getMonth() - bday.getMonth();
-    if (m < 0 || (m === 0 && today.getDate() < bday.getDate())) {
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth() + 1;
+    const currentDay = today.getDate();
+
+    let age = currentYear - birthYear;
+    if (currentMonth < birthMonth || (currentMonth === birthMonth && currentDay < birthDay)) {
       age--;
     }
+
     return age >= 0 && age < 130 ? age : undefined;
   } catch {
     return undefined;
@@ -272,19 +300,38 @@ export function useDoctorAppointments({
       }
 
       if (primaryData.length > 0) {
-        // Collect user_ids to enrich missing patient profile info
+        // Collect user_ids and patient emails to enrich missing patient profile info
         const userIdsToFetch = Array.from(
-          new Set((primaryData as any[]).map((r) => r.user_id).filter(Boolean))
+          new Set((primaryData as any[]).map((r) => r.user_id || r.patient_id).filter(Boolean))
+        );
+        const patientEmailsToFetch = Array.from(
+          new Set((primaryData as any[]).map((r) => r.patient_email?.toLowerCase().trim()).filter(Boolean))
         );
         const userProfileMap = new Map<string, any>();
-        if (userIdsToFetch.length > 0) {
+        if (userIdsToFetch.length > 0 || patientEmailsToFetch.length > 0) {
           try {
-            const { data: userData } = await supabase
+            let userQuery = supabase
               .from("user")
-              .select("user_id, full_name, email, phone, gender, birthdate, address, avatar_url")
-              .in("user_id", userIdsToFetch);
+              .select("user_id, full_name, email, phone, gender, birthdate, address, avatar_url");
+
+            if (userIdsToFetch.length > 0 && patientEmailsToFetch.length > 0) {
+              const orFilters = [
+                `user_id.in.(${userIdsToFetch.map((id) => `"${id}"`).join(",")})`,
+                `email.in.(${patientEmailsToFetch.map((e) => `"${e}"`).join(",")})`,
+              ];
+              userQuery = userQuery.or(orFilters.join(","));
+            } else if (userIdsToFetch.length > 0) {
+              userQuery = userQuery.in("user_id", userIdsToFetch);
+            } else {
+              userQuery = userQuery.in("email", patientEmailsToFetch);
+            }
+
+            const { data: userData } = await userQuery;
             if (userData) {
-              userData.forEach((u: any) => userProfileMap.set(u.user_id, u));
+              userData.forEach((u: any) => {
+                if (u.user_id) userProfileMap.set(u.user_id, u);
+                if (u.email) userProfileMap.set(u.email.toLowerCase().trim(), u);
+              });
             }
           } catch {}
         }
@@ -321,7 +368,9 @@ export function useDoctorAppointments({
             : undefined;
 
           {
-            const userProf = row.user_id ? userProfileMap.get(row.user_id) : null;
+            const userProf = (row.user_id ? userProfileMap.get(row.user_id) : null) ||
+              (row.patient_id ? userProfileMap.get(row.patient_id) : null) ||
+              (row.patient_email ? userProfileMap.get(row.patient_email.toLowerCase().trim()) : null);
 
             // Keep original storage path; signed URLs are generated on-demand when viewed
             const photoUrl = row.skin_photo_url || undefined;
@@ -378,7 +427,20 @@ export function useDoctorAppointments({
             const resolvedPhone = row.patient_contact || userProf?.phone || "";
             const resolvedAddress = row.patient_address || userProf?.address || "";
             const resolvedGender = row.patient_gender || userProf?.gender || undefined;
-            const resolvedBirthdate = row.patient_birthdate || userProf?.birthdate || undefined;
+            const resolvedBirthdate =
+              row.patient_birthdate ||
+              row.birthdate ||
+              row.patientBirthdate ||
+              row.patient_dob ||
+              row.dob ||
+              userProf?.birthdate ||
+              userProf?.patient_birthdate ||
+              userProf?.birthday ||
+              userProf?.dob ||
+              (row.questionnaire_answers && typeof row.questionnaire_answers === "object" && !Array.isArray(row.questionnaire_answers)
+                ? (row.questionnaire_answers.birthdate || row.questionnaire_answers.patient_birthdate || row.questionnaire_answers.patientBirthdate)
+                : undefined) ||
+              undefined;
             const calculatedAge = calculateAgeFromBirthdate(resolvedBirthdate);
 
             // Parse questionnaire answers if JSON string or array or object

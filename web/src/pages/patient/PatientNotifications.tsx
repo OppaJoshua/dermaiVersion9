@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
-import { useRoleNotifications, type NotificationItem } from "@/lib/notificationService";
+import { useRoleNotifications, getHiddenIds, type NotificationItem } from "@/lib/notificationService";
 import { NotificationCardMenu } from "@/components/common/NotificationCardMenu";
 
 interface PatientNotificationsProps {
@@ -91,7 +91,8 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
           };
         });
 
-        setScanNotifications(mappedScans);
+        const hiddenSet = getHiddenIds("patient", user!.id);
+        setScanNotifications(mappedScans.filter((s) => !hiddenSet.has(s.id)));
       } catch (err) {
         console.warn("[PatientNotifications] Failed to fetch scan logs:", err);
       } finally {
@@ -99,12 +100,28 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
       }
     }
     fetchScanLogs();
+
+    const handleDeleted = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail?.action === "delete_notification") {
+        const idsToRemove = new Set<string>([
+          ...(detail.id ? [String(detail.id)] : []),
+          ...(Array.isArray(detail.aliases) ? detail.aliases.map(String) : []),
+        ]);
+        if (idsToRemove.size > 0) {
+          setScanNotifications((prev) => prev.filter((item) => !idsToRemove.has(item.id)));
+        }
+      }
+    };
+    window.addEventListener("dermai_notifications_updated", handleDeleted);
     return () => {
       cancelled = true;
+      window.removeEventListener("dermai_notifications_updated", handleDeleted);
     };
   }, [user?.id]);
 
   const filtered = useMemo(() => {
+    const hiddenSet = getHiddenIds("patient", user?.id);
     let list = notifications;
     if (activeTab === "scan") {
       list = [...notifications, ...scanNotifications].filter(
@@ -145,6 +162,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
 
     return list.filter((n) => {
       if (!n || !n.id) return false;
+      if (hiddenSet.has(n.id) || (n as any).hidden_at || n.metadata?.hidden_at) return false;
       // Suppress all subscription/plan notifications (receipts & confirmations are handled strictly via email)
       if (
         n.type === "subscription_expired" ||

@@ -413,7 +413,7 @@ export default function AdminPlanManagement() {
                   </td>
                   <td className="px-5 py-5">
                     <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold", BILLING_COLORS[plan.billingType])}>
-                      {BILLING_LABELS[plan.billingType]}
+                      {plan.price <= 0 || isDefaultFreePlan(plan) ? "Free" : BILLING_LABELS[plan.billingType]}
                     </span>
                   </td>
                   <td className="px-5 py-5 text-black">
@@ -566,6 +566,7 @@ export default function AdminPlanManagement() {
                   <div>
                     <label className="block text-sm font-semibold text-black mb-2">Billing type</label>
                     <select
+                      disabled={form.price <= 0}
                       value={form.billingType}
                       onChange={(e) =>
                         setForm((f) => ({
@@ -580,8 +581,14 @@ export default function AdminPlanManagement() {
                           : "bg-white text-black border-gray-300 focus:border-magenta-500"
                       )}
                     >
-                      <option value="monthly">Monthly</option>
-                      <option value="yearly">Yearly</option>
+                      {form.price <= 0 ? (
+                        <option value={form.billingType}>Free</option>
+                      ) : (
+                        <>
+                          <option value="monthly">Monthly</option>
+                          <option value="yearly">Yearly</option>
+                        </>
+                      )}
                     </select>
 
                     <p className="text-xs mt-2 text-gray-600">

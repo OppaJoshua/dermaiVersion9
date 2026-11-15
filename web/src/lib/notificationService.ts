@@ -128,7 +128,8 @@ export function getHiddenIds(role: NotificationRole, userId?: string, fallbackId
   return combined;
 }
 
-export function saveHiddenId(role: NotificationRole, id: string, userId?: string, fallbackId?: string) {
+export function saveHiddenId(role: NotificationRole, id: string, userId?: string, fallbackId?: string, extraIds?: string[]) {
+  if (!id) return;
   const keys = userId || fallbackId
     ? ([userId, fallbackId].filter(Boolean) as string[])
     : ["default"];
@@ -138,12 +139,18 @@ export function saveHiddenId(role: NotificationRole, id: string, userId?: string
       const key = `dermai_${role}_hidden_ids_${k}`;
       const set = getHiddenIds(role, k);
       set.add(String(id));
+      if (extraIds && Array.isArray(extraIds)) {
+        extraIds.forEach((eid) => {
+          if (eid) set.add(String(eid));
+        });
+      }
       localStorage.setItem(key, JSON.stringify(Array.from(set)));
     } catch { }
   }
 }
 
-export function removeHiddenId(role: NotificationRole, id: string, userId?: string, fallbackId?: string) {
+export function removeHiddenId(role: NotificationRole, id: string, userId?: string, fallbackId?: string, extraIds?: string[]) {
+  if (!id) return;
   const keys = userId || fallbackId
     ? ([userId, fallbackId].filter(Boolean) as string[])
     : ["default"];
@@ -153,9 +160,464 @@ export function removeHiddenId(role: NotificationRole, id: string, userId?: stri
       const key = `dermai_${role}_hidden_ids_${k}`;
       const set = getHiddenIds(role, k);
       set.delete(String(id));
+      if (extraIds && Array.isArray(extraIds)) {
+        extraIds.forEach((eid) => {
+          if (eid) set.delete(String(eid));
+        });
+      }
       localStorage.setItem(key, JSON.stringify(Array.from(set)));
     } catch { }
   }
+}
+
+export function getNotificationHiddenAliases(
+  role: NotificationRole,
+  notifId: string,
+  metadata?: Record<string, any>
+): string[] {
+  const aliases = new Set<string>();
+  if (!notifId) return [];
+  aliases.add(String(notifId));
+
+  const rawType = String(metadata?.type || "").toLowerCase().replace(/_/g, "-");
+  const rawSubtype = String(metadata?.subtype || "").toLowerCase().replace(/_/g, "-");
+  const rawCategory = String(metadata?.category || "").toLowerCase();
+
+  // 1. Broadcast aliases
+  const rawBId =
+    metadata?.broadcast_id ||
+    (notifId.startsWith("broadcast-") ||
+    notifId.startsWith("clinic-broadcast-") ||
+    notifId.startsWith("doc-broadcast-")
+      ? notifId.replace(/^(?:clinic-|doc-)?broadcast-/, "")
+      : undefined);
+  if (rawBId) {
+    const bId = String(rawBId);
+    aliases.add(bId);
+    aliases.add(`broadcast-${bId}`);
+    aliases.add(`clinic-broadcast-${bId}`);
+    aliases.add(`doc-broadcast-${bId}`);
+  }
+
+  // 2. Support Ticket aliases
+  const rawTId =
+    metadata?.ticket_id ||
+    (notifId.startsWith("ticket-update-") ||
+    notifId.startsWith("clinic-ticket-") ||
+    notifId.startsWith("doc-ticket-") ||
+    notifId.startsWith("admin-ticket-")
+      ? notifId.replace(/^(?:ticket-update-|clinic-ticket-|doc-ticket-|admin-ticket-)/, "")
+      : undefined);
+  if (rawTId) {
+    const tId = String(rawTId);
+    aliases.add(`ticket-update-${tId}`);
+    aliases.add(`clinic-ticket-${tId}`);
+    aliases.add(`doc-ticket-${tId}`);
+    aliases.add(`admin-ticket-${tId}`);
+  }
+
+  // 3. AI Scan aliases
+  const rawScanId =
+    metadata?.analysis_id ||
+    (notifId.startsWith("scan-") ? notifId.replace(/^scan-/, "") : undefined);
+  if (rawScanId) {
+    aliases.add(`scan-${rawScanId}`);
+  }
+
+  // 4. Clinic Application / Verification aliases
+  const rawClinicId =
+    metadata?.clinic_id ||
+    metadata?.clinicId ||
+    (notifId.startsWith("admin-clinic-app-")
+      ? notifId.replace(/^admin-clinic-app-/, "")
+      : notifId.startsWith("clinic-approved-")
+      ? notifId.replace(/^clinic-approved-/, "")
+      : undefined);
+  if (rawClinicId) {
+    const cId = String(rawClinicId);
+    if (
+      role === "admin" &&
+      (notifId.startsWith("admin-clinic-app-") ||
+        rawType === "clinic" ||
+        rawType === "clinic-pending" ||
+        rawType === "new-clinic-application" ||
+        rawSubtype === "new-clinic-application" ||
+        rawSubtype === "clinic-registration")
+    ) {
+      aliases.add(`admin-clinic-app-${cId}`);
+    }
+    if (
+      role === "clinic" &&
+      (notifId.startsWith("clinic-approved-") ||
+        rawType === "application-approved" ||
+        rawType === "clinic-application" ||
+        rawSubtype === "application-approved" ||
+        rawSubtype === "clinic-approval" ||
+        (rawCategory === "clinic" && metadata?.status === "approved"))
+    ) {
+      aliases.add(`clinic-approved-${cId}`);
+    }
+  }
+
+  // 5. Appointment lifecycle aliases (strictly scoped to the specific lifecycle event type)
+  const rawApptId =
+    metadata?.appointment_id ||
+    metadata?.appointmentId ||
+    (notifId.startsWith("doc-req-")
+      ? notifId.replace(/^doc-req-/, "")
+      : notifId.startsWith("doc-branch-req-")
+      ? notifId.replace(/^doc-branch-req-/, "")
+      : notifId.startsWith("appt-accepted-")
+      ? notifId.replace(/^appt-accepted-/, "")
+      : notifId.startsWith("appt-completed-")
+      ? notifId.replace(/^appt-completed-/, "")
+      : notifId.startsWith("appt-cancelled-")
+      ? notifId.replace(/^appt-cancelled-/, "")
+      : notifId.startsWith("clinic-req-")
+      ? notifId.replace(/^clinic-req-/, "")
+      : notifId.startsWith("clinic-doc-accept-")
+      ? notifId.replace(/^clinic-doc-accept-/, "")
+      : notifId.startsWith("clinic-doc-reject-")
+      ? notifId.replace(/^clinic-doc-reject-/, "")
+      : notifId.startsWith("clinic-cancel-")
+      ? notifId.replace(/^clinic-cancel-/, "")
+      : notifId.startsWith("clinic-reselect-")
+      ? notifId.replace(/^clinic-reselect-/, "")
+      : notifId.startsWith("clinic-complete-")
+      ? notifId.replace(/^clinic-complete-/, "")
+      : notifId.startsWith("admin-scan-")
+      ? notifId.replace(/^admin-scan-/, "")
+      : notifId.startsWith("admin-review-")
+      ? notifId.replace(/^admin-review-/, "")
+      : undefined);
+
+  if (rawApptId) {
+    const aid = String(rawApptId);
+    if (role === "doctor") {
+      const isReminder =
+        notifId.startsWith("doc-reminder-") ||
+        rawType.includes("reminder") ||
+        rawSubtype.includes("reminder");
+      const isConfirmed =
+        rawType.includes("confirmed") ||
+        rawSubtype === "confirmed";
+      const isAssignmentOrRequest =
+        notifId.startsWith("doc-req-") ||
+        notifId.startsWith("doc-branch-req-") ||
+        rawType === "appointment-request" ||
+        rawType === "appointment-delegated" ||
+        rawType === "new-booking" ||
+        rawType === "appointment-created" ||
+        rawSubtype === "appointment-request" ||
+        rawSubtype === "new-booking" ||
+        rawSubtype === "appointment-created";
+
+      if (isReminder) {
+        if (metadata?.occurrence) {
+          aliases.add(`doc-reminder-${aid}-${metadata.occurrence}`);
+        } else if (!notifId.startsWith(`doc-reminder-${aid}-`)) {
+          aliases.add(`doc-reminder-${aid}`);
+        }
+      } else if (isConfirmed) {
+        aliases.add(`doc-confirmed-${aid}`);
+      } else if (isAssignmentOrRequest) {
+        aliases.add(`doc-req-${aid}`);
+        aliases.add(`doc-branch-req-${aid}`);
+      }
+    } else if (role === "patient") {
+      const isPayment =
+        rawType.includes("payment") ||
+        rawSubtype.includes("payment");
+      const isReschedule =
+        rawType.includes("reschedule") ||
+        rawSubtype.includes("reschedule");
+
+      if (
+        notifId.startsWith("appt-completed-") ||
+        rawType.includes("completed") ||
+        rawSubtype === "reviewed" ||
+        rawSubtype === "appointment-completed"
+      ) {
+        aliases.add(`appt-completed-${aid}`);
+      } else if (
+        notifId.startsWith("appt-cancelled-") ||
+        rawType.includes("cancelled") ||
+        rawType.includes("canceled")
+      ) {
+        aliases.add(`appt-cancelled-${aid}`);
+      } else if (
+        !isReschedule &&
+        (notifId.startsWith("appt-rejected-") ||
+          rawType.includes("rejected") ||
+          rawType.includes("declined") ||
+          rawSubtype.includes("declined") ||
+          rawSubtype.includes("rejected") ||
+          rawSubtype.includes("conflict"))
+      ) {
+        let addedSpecificStamp = false;
+        if (metadata?.declined_at) {
+          const ts = new Date(metadata.declined_at).getTime();
+          if (!isNaN(ts)) {
+            aliases.add(`appt-rejected-${aid}-${ts}`);
+            addedSpecificStamp = true;
+          }
+        }
+        if (metadata?.rejection_timestamp) {
+          const rts = new Date(metadata.rejection_timestamp).getTime();
+          if (!isNaN(rts)) {
+            aliases.add(`appt-rejected-${aid}-${rts}`);
+            addedSpecificStamp = true;
+          }
+        }
+        if (!addedSpecificStamp && !notifId.startsWith(`appt-rejected-${aid}-`)) {
+          aliases.add(`appt-rejected-${aid}-initial`);
+        }
+      } else if (
+        !isPayment &&
+        !isReschedule &&
+        (notifId.startsWith("appt-accepted-") ||
+          notifId.startsWith("appt-scheduled-") ||
+          notifId.startsWith("appt-confirmed-") ||
+          rawType.includes("accepted") ||
+          rawType.includes("scheduled") ||
+          rawType.includes("confirmed") ||
+          rawType.includes("approved") ||
+          rawSubtype.includes("confirmed") ||
+          rawSubtype.includes("approved") ||
+          rawSubtype === "reassigned")
+      ) {
+        aliases.add(`appt-accepted-${aid}`);
+        aliases.add(`appt-scheduled-${aid}`);
+        aliases.add(`appt-confirmed-${aid}`);
+      }
+    } else if (role === "clinic") {
+      if (
+        notifId.startsWith("clinic-doc-accept-") ||
+        rawType.includes("doctor-accepted") ||
+        rawType.includes("doctor-approved") ||
+        rawSubtype.includes("doctor-accepted") ||
+        rawSubtype.includes("doctor-approved")
+      ) {
+        aliases.add(`clinic-doc-accept-${aid}`);
+      } else if (
+        notifId.startsWith("clinic-doc-reject-") ||
+        rawType.includes("doctor-rejected") ||
+        rawType.includes("doctor-declined") ||
+        rawSubtype.includes("doctor-rejected") ||
+        rawSubtype.includes("doctor-declined")
+      ) {
+        aliases.add(`clinic-doc-reject-${aid}`);
+      } else if (
+        notifId.startsWith("clinic-cancel-") ||
+        rawType.includes("cancelled") ||
+        rawType.includes("canceled")
+      ) {
+        aliases.add(`clinic-cancel-${aid}`);
+      } else if (
+        notifId.startsWith("clinic-complete-") ||
+        rawType.includes("completed") ||
+        rawSubtype.includes("completed")
+      ) {
+        aliases.add(`clinic-complete-${aid}`);
+      } else if (
+        notifId.startsWith("clinic-reselect-") ||
+        rawType.includes("reselect") ||
+        rawType.includes("alternate-doctor") ||
+        rawSubtype.includes("reselect") ||
+        rawSubtype.includes("alternate-doctor")
+      ) {
+        aliases.add(`clinic-reselect-${aid}`);
+      } else if (
+        notifId.startsWith("clinic-req-") ||
+        rawType === "appointment-request" ||
+        rawType === "booking-created" ||
+        rawType === "new-booking" ||
+        rawSubtype === "new-booking" ||
+        rawSubtype === "appointment-created" ||
+        rawSubtype === "appointment-request" ||
+        (rawType === "appointment" && (!rawSubtype || rawSubtype === "new-booking" || rawSubtype === "appointment-request"))
+      ) {
+        aliases.add(`clinic-req-${aid}`);
+      }
+    } else if (role === "admin") {
+      if (
+        notifId.startsWith("admin-review-") ||
+        rawType.includes("review") ||
+        rawSubtype.includes("review")
+      ) {
+        aliases.add(`admin-review-${aid}`);
+      } else if (
+        notifId.startsWith("admin-scan-") ||
+        rawType.includes("scan") ||
+        rawCategory === "scan"
+      ) {
+        aliases.add(`admin-scan-${aid}`);
+      }
+    }
+  }
+
+  return Array.from(aliases);
+}
+
+function extractHiddenMarkersFromDbRow(
+  n: any,
+  hiddenSet: Set<string>,
+  hiddenSyntheticIds: Set<string>,
+  hiddenBroadcastIds: Set<string>,
+  role: NotificationRole
+): boolean {
+  if (!n) return false;
+  if (n.type === "broadcast_hidden") {
+    if (n.metadata?.hidden_broadcast_id) {
+      const bId = String(n.metadata.hidden_broadcast_id);
+      hiddenBroadcastIds.add(bId);
+      hiddenSet.add(bId);
+      hiddenSet.add(`broadcast-${bId}`);
+      hiddenSet.add(`clinic-broadcast-${bId}`);
+      hiddenSet.add(`doc-broadcast-${bId}`);
+    }
+    if (n.metadata?.hidden_synthetic_id) {
+      const sId = String(n.metadata.hidden_synthetic_id);
+      hiddenSyntheticIds.add(sId);
+      hiddenSet.add(sId);
+    }
+    if (Array.isArray(n.metadata?.hidden_aliases)) {
+      n.metadata.hidden_aliases.forEach((a: any) => {
+        if (a) {
+          hiddenSyntheticIds.add(String(a));
+          hiddenSet.add(String(a));
+        }
+      });
+    }
+    return true;
+  }
+  if (n.type === "synthetic_hidden") {
+    if (n.metadata?.hidden_synthetic_id) {
+      const sId = String(n.metadata.hidden_synthetic_id);
+      hiddenSyntheticIds.add(sId);
+      hiddenSet.add(sId);
+    }
+    if (Array.isArray(n.metadata?.hidden_aliases)) {
+      n.metadata.hidden_aliases.forEach((a: any) => {
+        if (a) {
+          hiddenSyntheticIds.add(String(a));
+          hiddenSet.add(String(a));
+        }
+      });
+    }
+    return true;
+  }
+
+  const rowId = String(n.notif_id || n.id || "");
+  const isRowHidden =
+    (rowId && hiddenSet.has(rowId)) ||
+    Boolean((n as any).hidden_at) ||
+    Boolean(n.metadata?.hidden_at);
+
+  if (isRowHidden) {
+    if (rowId) {
+      hiddenSet.add(rowId);
+      hiddenSyntheticIds.add(rowId);
+    }
+    if (n.metadata?.broadcast_id) {
+      const bId = String(n.metadata.broadcast_id);
+      hiddenBroadcastIds.add(bId);
+      hiddenSet.add(bId);
+      hiddenSet.add(`broadcast-${bId}`);
+      hiddenSet.add(`clinic-broadcast-${bId}`);
+      hiddenSet.add(`doc-broadcast-${bId}`);
+    }
+    if (Array.isArray(n.metadata?.hidden_aliases)) {
+      n.metadata.hidden_aliases.forEach((a: any) => {
+        if (a) {
+          hiddenSyntheticIds.add(String(a));
+          hiddenSet.add(String(a));
+        }
+      });
+    }
+    const rowAliases = getNotificationHiddenAliases(role, rowId, {
+      ...(n.metadata || {}),
+      type: n.type || n.metadata?.type,
+      subtype: n.subtype || n.metadata?.subtype,
+      category: n.category || n.metadata?.category,
+    });
+    rowAliases.forEach((a) => {
+      hiddenSyntheticIds.add(a);
+      hiddenSet.add(a);
+    });
+    return true;
+  }
+  return false;
+}
+
+function isNotificationItemHidden(
+  item: NotificationItem,
+  role: NotificationRole,
+  hiddenSet: Set<string>,
+  hiddenSyntheticIds: Set<string> = new Set(),
+  hiddenBroadcastIds: Set<string> = new Set()
+): boolean {
+  if (!item || !item.id) return true;
+  if (item.type === "synthetic_hidden" || item.type === "broadcast_hidden") return true;
+  if ((item as any).hidden_at || item.metadata?.hidden_at) return true;
+  if (hiddenSet.has(item.id) || hiddenSyntheticIds.has(item.id)) return true;
+
+  if (item.metadata?.broadcast_id) {
+    const bId = String(item.metadata.broadcast_id);
+    if (
+      hiddenBroadcastIds.has(bId) ||
+      hiddenSet.has(bId) ||
+      hiddenSet.has(`broadcast-${bId}`) ||
+      hiddenSet.has(`clinic-broadcast-${bId}`) ||
+      hiddenSet.has(`doc-broadcast-${bId}`)
+    ) {
+      return true;
+    }
+  }
+
+  const aliases = getNotificationHiddenAliases(role, item.id, {
+    ...(item.metadata || {}),
+    type: item.type || item.metadata?.type,
+    subtype: item.subtype || item.metadata?.subtype,
+    category: item.category || item.metadata?.category,
+    appointment_id: item.appointment_id || item.metadata?.appointment_id || item.metadata?.appointmentId,
+  });
+  for (const alias of aliases) {
+    if (hiddenSet.has(alias) || hiddenSyntheticIds.has(alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function loadUserHiddenMarkersFromDb(
+  role: NotificationRole,
+  userId: string | undefined,
+  hiddenSet: Set<string>,
+  hiddenSyntheticIds: Set<string>,
+  hiddenBroadcastIds: Set<string>,
+  fallbackId?: string
+): Promise<void> {
+  if (!userId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+    return;
+  }
+  try {
+    const { data: markerRows } = await supabase
+      .from("user_notification")
+      .select("notif_id, type, subtype, metadata")
+      .eq("user_id", userId)
+      .or("type.in.(synthetic_hidden,broadcast_hidden),metadata->>hidden_at.not.is.null")
+      .limit(200);
+    if (Array.isArray(markerRows) && markerRows.length > 0) {
+      markerRows.forEach((m: any) => {
+        extractHiddenMarkersFromDbRow(m, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, role);
+      });
+      const hydratedIds = Array.from(hiddenSet);
+      if (hydratedIds.length > 0) {
+        saveHiddenId(role, hydratedIds[0], userId, fallbackId, hydratedIds.slice(1));
+      }
+    }
+  } catch { }
 }
 
 /**
@@ -183,6 +645,40 @@ export function isPhaseAMigrationDeployed(): boolean {
 
 export const IS_PHASE_A_MIGRATION_DEPLOYED = isPhaseAMigrationDeployed();
 
+let phaseARpcSupported: boolean | null = null;
+
+function markPhaseARpcUnsupported() {
+  phaseARpcSupported = false;
+  if (typeof window !== "undefined") {
+    try {
+      window.sessionStorage?.setItem("dermai_phase_a_rpc_supported", "false");
+    } catch {}
+  }
+}
+
+/**
+ * Guards calls to Phase A PostgreSQL RPCs (`soft_delete_user_notification`,
+ * `hide_broadcast_for_user`, `dispatch_authorized_notification`).
+ * Prevents unnecessary 404/PGRST202 RPC requests when the connected Supabase
+ * database has not yet had the Phase A SQL migration applied.
+ */
+export function isPhaseADatabaseRpcDeployed(): boolean {
+  if (phaseARpcSupported === false) return false;
+  if (typeof window !== "undefined") {
+    try {
+      if (window.sessionStorage?.getItem("dermai_phase_a_rpc_supported") === "false") {
+        phaseARpcSupported = false;
+        return false;
+      }
+    } catch {}
+    if ((window as any).__DERMAI_PHASE_A_DB_MIGRATED__ === true) return true;
+  }
+  if (typeof import.meta !== "undefined" && import.meta.env?.VITE_NOTIFICATION_PHASE_A_DB_MIGRATED === "true") {
+    return true;
+  }
+  return false;
+}
+
 export async function softDeleteNotification(
   role: NotificationRole,
   notifId: string,
@@ -198,93 +694,268 @@ export async function softDeleteNotification(
     };
   }
 
-  // 1. Optimistic tracking in recipient-scoped local hidden set
-  saveHiddenId(role, notifId, userId);
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  let resolvedUserId = uuidRegex.test(userId || "") ? userId : "";
+  if (!resolvedUserId) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data?.session?.user?.id && uuidRegex.test(data.session.user.id)) {
+        resolvedUserId = data.session.user.id;
+      }
+    } catch {}
+  }
+  if (!resolvedUserId) {
+    try {
+      const { data } = await supabase.auth.getUser();
+      if (data?.user?.id && uuidRegex.test(data.user.id)) {
+        resolvedUserId = data.user.id;
+      }
+    } catch {}
+  }
+
+  if (!resolvedUserId) {
+    return {
+      success: false,
+      error: "Authenticated user session is required to delete notifications.",
+    };
+  }
+
+  const aliases = getNotificationHiddenAliases(role, notifId, metadata);
+  const fallbackScopeId =
+    metadata?.clinic_id ||
+    metadata?.clinicId ||
+    (userId && !uuidRegex.test(userId) ? userId : undefined);
+
+  // 1. Optimistic tracking in recipient-scoped local hidden set (including synthetic/UUID twin aliases)
+  saveHiddenId(role, notifId, resolvedUserId, fallbackScopeId, aliases);
+  const nowIso = new Date().toISOString();
 
   // 2. Shared broadcast soft deletion
   const isBroadcast =
     notifId.startsWith("broadcast-") ||
     notifId.startsWith("clinic-broadcast-") ||
     notifId.startsWith("doc-broadcast-") ||
-    metadata?.broadcast_id ||
+    Boolean(metadata?.broadcast_id) ||
     metadata?.subtype === "admin_announcement" ||
     metadata?.type === "broadcast";
 
+  let broadcastPersisted = false;
+  let lastDbError: string | undefined;
+
   if (isBroadcast) {
     const rawBId = metadata?.broadcast_id || notifId.replace(/^(?:clinic-|doc-)?broadcast-/, "");
-    if (rawBId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawBId)) {
+    if (rawBId && uuidRegex.test(String(rawBId))) {
+      const bcastAliases = Array.from(
+        new Set([
+          ...aliases,
+          String(rawBId),
+          `broadcast-${rawBId}`,
+          `clinic-broadcast-${rawBId}`,
+          `doc-broadcast-${rawBId}`,
+        ])
+      );
+      saveHiddenId(role, String(rawBId), resolvedUserId, fallbackScopeId, bcastAliases);
       try {
-        const { error: rpcErr } = await supabase.rpc("hide_broadcast_for_user", {
-          p_broadcast_id: rawBId,
-        });
-        if (rpcErr && userId) {
-          await supabase.from("user_notification").insert({
-            user_id: userId,
-            title: "Hidden Broadcast",
-            body: "User soft-deleted broadcast",
-            message: "User soft-deleted broadcast",
-            type: "broadcast_hidden",
-            metadata: {
-              hidden_broadcast_id: rawBId,
-              idempotency_key: `hide_broadcast_${rawBId}`,
-            },
+        let rpcSucceeded = false;
+        if (isPhaseADatabaseRpcDeployed()) {
+          const { error: rpcErr } = await supabase.rpc("hide_broadcast_for_user", {
+            p_broadcast_id: rawBId,
           });
+          if (!rpcErr) {
+            rpcSucceeded = true;
+            broadcastPersisted = true;
+            phaseARpcSupported = true;
+          } else if (rpcErr.code === "PGRST202" || rpcErr.code === "42883") {
+            markPhaseARpcUnsupported();
+          } else {
+            lastDbError = rpcErr.message;
+          }
+        }
+        if (!rpcSucceeded) {
+          const { data: insertedBcast, error: bcastInsertErr } = await supabase
+            .from("user_notification")
+            .insert({
+              user_id: resolvedUserId,
+              title: "Hidden Broadcast",
+              body: "User soft-deleted broadcast",
+              message: "User soft-deleted broadcast",
+              type: "broadcast_hidden",
+              is_read: true,
+              metadata: {
+                ...(metadata || {}),
+                hidden_broadcast_id: rawBId,
+                hidden_synthetic_id: notifId,
+                hidden_aliases: bcastAliases,
+                hidden_at: nowIso,
+                idempotency_key: `hide_broadcast_${rawBId}_${resolvedUserId}`,
+              },
+            })
+            .select("notif_id");
+
+          if ((!bcastInsertErr && Array.isArray(insertedBcast) && insertedBcast.length > 0) || bcastInsertErr?.code === "23505") {
+            broadcastPersisted = true;
+          } else if (bcastInsertErr) {
+            lastDbError = bcastInsertErr.message;
+          }
         }
       } catch (err: any) {
+        lastDbError = err?.message || String(err);
         console.warn("[softDeleteNotification] Broadcast hide notice:", err);
       }
     }
-    return { success: true };
+    if (!uuidRegex.test(notifId)) {
+      if (!broadcastPersisted) {
+        removeHiddenId(role, notifId, resolvedUserId, fallbackScopeId, aliases);
+        return { success: false, error: lastDbError || "Failed to persist broadcast deletion." };
+      }
+      return { success: true };
+    }
   }
 
   // 3. Database user_notification row with UUID primary key
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(notifId);
   if (isUuid) {
+    let uuidPersisted = false;
     try {
-      const { error: rpcErr } = await supabase.rpc("soft_delete_user_notification", {
-        p_notif_id: notifId,
-      });
+      let rpcHandled = false;
+      if (isPhaseADatabaseRpcDeployed()) {
+        const { data: rpcData, error: rpcErr } = await supabase.rpc("soft_delete_user_notification", {
+          p_notif_id: notifId,
+        });
+        if (!rpcErr && rpcData === true) {
+          rpcHandled = true;
+          uuidPersisted = true;
+          phaseARpcSupported = true;
+        } else if (rpcErr && (rpcErr.code === "PGRST202" || rpcErr.code === "42883")) {
+          markPhaseARpcUnsupported();
+        } else if (rpcErr) {
+          lastDbError = rpcErr.message;
+        }
+      }
 
-      if (rpcErr && userId) {
-        const { error: updateErr } = await supabase
+      let updatedRowCount = 0;
+      if (!rpcHandled) {
+        // Fetch existing row first so existing database metadata keys are 100% preserved
+        let existingDbMeta: Record<string, any> = {};
+        let rowOwnedByCaller = false;
+        try {
+          const { data: existingRow } = await supabase
+            .from("user_notification")
+            .select("notif_id, user_id, metadata")
+            .eq("notif_id", notifId)
+            .eq("user_id", resolvedUserId)
+            .maybeSingle();
+          if (existingRow) {
+            rowOwnedByCaller = true;
+            if (existingRow.metadata && typeof existingRow.metadata === "object") {
+              existingDbMeta = existingRow.metadata;
+            }
+          }
+        } catch {}
+
+        if (rowOwnedByCaller) {
+          const updatedMeta = {
+            ...existingDbMeta,
+            ...(metadata || {}),
+            hidden_at: nowIso,
+            hidden_aliases: aliases,
+          };
+
+          const { data: updatedRows, error: updateErr } = await supabase
+            .from("user_notification")
+            .update({ metadata: updatedMeta })
+            .eq("notif_id", notifId)
+            .eq("user_id", resolvedUserId)
+            .select("notif_id");
+
+          if (!updateErr && Array.isArray(updatedRows) && updatedRows.length > 0) {
+            updatedRowCount = updatedRows.length;
+            uuidPersisted = true;
+          } else if (updateErr) {
+            lastDbError = updateErr.message;
+            console.warn("[softDeleteNotification] DB metadata update notice:", updateErr.message);
+          }
+        }
+      }
+
+      // Persist recipient-scoped synthetic_hidden marker if row belonged to another user_id
+      // (e.g. shared clinic application row in Admin) or has synthetic twin aliases
+      if (!rpcHandled && (updatedRowCount === 0 || aliases.length > 1)) {
+        const { data: insertedMarker, error: markerErr } = await supabase
           .from("user_notification")
-          .update({ hidden_at: new Date().toISOString() })
-          .eq("notif_id", notifId)
-          .eq("user_id", userId);
+          .insert({
+            user_id: resolvedUserId,
+            title: "Hidden Synthetic",
+            body: "User soft-deleted synthetic notification",
+            message: "User soft-deleted synthetic notification",
+            type: "synthetic_hidden",
+            is_read: true,
+            metadata: {
+              ...(metadata || {}),
+              hidden_synthetic_id: notifId,
+              hidden_aliases: aliases,
+              hidden_at: nowIso,
+              idempotency_key: `hide_synthetic_${notifId}_${resolvedUserId}`,
+            },
+          })
+          .select("notif_id");
 
-        if (updateErr) {
-          console.warn("[softDeleteNotification] DB update notice:", updateErr.message);
+        if ((!markerErr && Array.isArray(insertedMarker) && insertedMarker.length > 0) || markerErr?.code === "23505") {
+          uuidPersisted = true;
+        } else if (markerErr) {
+          lastDbError = markerErr.message;
         }
       }
     } catch (err: any) {
+      lastDbError = err?.message || String(err);
       console.warn("[softDeleteNotification] Soft delete notice:", err);
+    }
+
+    if (!uuidPersisted && !broadcastPersisted) {
+      removeHiddenId(role, notifId, resolvedUserId, fallbackScopeId, aliases);
+      return {
+        success: false,
+        error: lastDbError || "Failed to soft-delete notification (0 rows affected).",
+      };
     }
     return { success: true };
   }
 
   // 4. Synthetic notification fallback (cross-device sync marker)
-  if (userId) {
-    try {
-      const markerPayload: any = {
-        user_id: userId,
-        title: "Hidden Synthetic",
-        body: "User soft-deleted synthetic notification",
-        message: "User soft-deleted synthetic notification",
-        type: "synthetic_hidden",
-        metadata: {
-          hidden_synthetic_id: notifId,
-          hidden_at: new Date().toISOString(),
-          idempotency_key: `hide_synthetic_${notifId}_${userId}`,
-        },
-      };
-      if (isPhaseAMigrationDeployed()) {
-        markerPayload.hidden_at = new Date().toISOString();
-      }
-      await supabase.from("user_notification").insert(markerPayload);
-    } catch { }
+  try {
+    const markerPayload: any = {
+      user_id: resolvedUserId,
+      title: "Hidden Synthetic",
+      body: "User soft-deleted synthetic notification",
+      message: "User soft-deleted synthetic notification",
+      type: "synthetic_hidden",
+      is_read: true,
+      metadata: {
+        ...(metadata || {}),
+        hidden_synthetic_id: notifId,
+        hidden_aliases: aliases,
+        hidden_at: nowIso,
+        idempotency_key: `hide_synthetic_${notifId}_${resolvedUserId}`,
+      },
+    };
+    const { data: insertedRows, error: insertErr } = await supabase
+      .from("user_notification")
+      .insert(markerPayload)
+      .select("notif_id");
+
+    if ((!insertErr && Array.isArray(insertedRows) && insertedRows.length > 0) || insertErr?.code === "23505") {
+      return { success: true };
+    }
+    lastDbError = insertErr?.message || "Failed to persist synthetic notification deletion (0 rows affected).";
+  } catch (err: any) {
+    lastDbError = err?.message || String(err);
   }
 
-  return { success: true };
+  removeHiddenId(role, notifId, resolvedUserId, fallbackScopeId, aliases);
+  return {
+    success: false,
+    error: lastDbError || "Failed to soft-delete synthetic notification.",
+  };
 }
 
 export function isNotificationRead(
@@ -671,7 +1342,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         .select("notif_id, type, subtype, title, body, is_read, metadata, created_at")
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
-        .limit(40),
+        .limit(80),
       supabase
         .from("patient_appointment")
         .select(`
@@ -697,7 +1368,14 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         .select("user_id, full_name, avatar_url, email, role")
         .eq("role", "admin")
         .limit(10),
+      loadUserHiddenMarkersFromDb("patient", userId, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds),
     ]);
+
+    if (dbNotifs) {
+      dbNotifs.forEach((n) => {
+        extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "patient");
+      });
+    }
 
     const adminProfileById = new Map<string, { fullName?: string; avatarUrl?: string }>();
     let defaultAdminAvatar: string | undefined = undefined;
@@ -823,12 +1501,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     // 1. Direct user_notification records for this patient
     if (dbNotifs) {
       dbNotifs.forEach((n) => {
-        if (n.type === "broadcast_hidden" && n.metadata?.hidden_broadcast_id) {
-          hiddenBroadcastIds.add(String(n.metadata.hidden_broadcast_id));
-          return;
-        }
-        if (n.type === "synthetic_hidden" && n.metadata?.hidden_synthetic_id) {
-          hiddenSyntheticIds.add(String(n.metadata.hidden_synthetic_id));
+        if (extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "patient")) {
           return;
         }
         if (hiddenSet.has(n.notif_id) || (n as any).hidden_at || n.metadata?.hidden_at) {
@@ -1324,7 +1997,13 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
 
     if (broadcasts) {
       broadcasts.forEach((b: any) => {
-        if (hiddenBroadcastIds.has(b.broadcast_id) || hiddenSet.has(`broadcast-${b.broadcast_id}`)) return;
+        if (
+          hiddenBroadcastIds.has(b.broadcast_id) ||
+          hiddenSet.has(`broadcast-${b.broadcast_id}`) ||
+          hiddenSet.has(`doc-broadcast-${b.broadcast_id}`)
+        ) {
+          return;
+        }
         const normBTitle = (b.title || "").trim().toLowerCase();
         const normBMsg = (b.message || "").trim().toLowerCase();
         const alreadyDelivered = items.some((i) => {
@@ -1363,13 +2042,9 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
   }
 
   const deduplicated = deduplicateNotificationItems(items);
-  return deduplicated.filter((item) => {
-    if (hiddenSet.has(item.id)) return false;
-    if (hiddenSyntheticIds.has(item.id)) return false;
-    if (item.metadata?.broadcast_id && (hiddenBroadcastIds.has(item.metadata.broadcast_id) || hiddenSet.has(`broadcast-${item.metadata.broadcast_id}`))) return false;
-    if ((item as any).hidden_at || item.metadata?.hidden_at) return false;
-    return true;
-  });
+  return deduplicated.filter(
+    (item) => !isNotificationItemHidden(item, "patient", hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds)
+  );
 }
 
 /**
@@ -1392,6 +2067,8 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
   const items: NotificationItem[] = [];
 
   try {
+    await loadUserHiddenMarkersFromDb("doctor", userId, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds);
+
     // 1. Resolve Doctor ID & ALL branch clinic_ids from clinic_doctor table
     const docIds: string[] = [userId];
     const branchClinicIds: string[] = [];
@@ -1576,7 +2253,13 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
 
               // Persist genuine reminder if approaching so it remains in DB history indefinitely
               // Anchored to occurrenceKey so rescheduled appointments get distinct genuine reminders
-              if (isApproaching && userId) {
+              if (
+                isApproaching &&
+                userId &&
+                !hiddenSet.has(notifId) &&
+                !hiddenSet.has(legacyNotifId) &&
+                !hiddenSyntheticIds.has(notifId)
+              ) {
                 sendAuthorizedNotification({
                   userId,
                   type: "appointment-reminder",
@@ -1788,7 +2471,13 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
 
     if (broadcasts) {
       broadcasts.forEach((b: any) => {
-        if (hiddenBroadcastIds.has(b.broadcast_id) || hiddenSet.has(`broadcast-${b.broadcast_id}`)) return;
+        if (
+          hiddenBroadcastIds.has(b.broadcast_id) ||
+          hiddenSet.has(`broadcast-${b.broadcast_id}`) ||
+          hiddenSet.has(`doc-broadcast-${b.broadcast_id}`)
+        ) {
+          return;
+        }
         const normBTitle = (b.title || "").trim().toLowerCase();
         const normBMsg = (b.message || "").trim().toLowerCase();
         const alreadyDelivered = items.some((i) => {
@@ -1900,12 +2589,11 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       }
 
       directNotifs.forEach((n) => {
-        if (n.type === "broadcast_hidden" && n.metadata?.hidden_broadcast_id) {
-          hiddenBroadcastIds.add(String(n.metadata.hidden_broadcast_id));
-          return;
-        }
-        if (n.type === "synthetic_hidden" && n.metadata?.hidden_synthetic_id) {
-          hiddenSyntheticIds.add(String(n.metadata.hidden_synthetic_id));
+        extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "doctor");
+      });
+
+      directNotifs.forEach((n) => {
+        if (extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "doctor")) {
           return;
         }
         if (hiddenSet.has(n.notif_id) || (n as any).hidden_at || n.metadata?.hidden_at) {
@@ -2132,13 +2820,9 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
   }
 
   const deduplicated = deduplicateNotificationItems(items);
-  return deduplicated.filter((item) => {
-    if (hiddenSet.has(item.id)) return false;
-    if (hiddenSyntheticIds.has(item.id)) return false;
-    if (item.metadata?.broadcast_id && (hiddenBroadcastIds.has(item.metadata.broadcast_id) || hiddenSet.has(`broadcast-${item.metadata.broadcast_id}`))) return false;
-    if ((item as any).hidden_at || item.metadata?.hidden_at) return false;
-    return true;
-  });
+  return deduplicated.filter(
+    (item) => !isNotificationItemHidden(item, "doctor", hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds)
+  );
 }
 
 /**
@@ -2159,8 +2843,8 @@ export async function fetchClinicNotifications(
   userId?: string,
   clinicEmail?: string
 ): Promise<NotificationItem[]> {
-  const readSet = getReadIds("clinic", userId || clinicId);
-  const hiddenSet = getHiddenIds("clinic", userId || clinicId);
+  const readSet = getReadIds("clinic", userId, clinicId);
+  const hiddenSet = getHiddenIds("clinic", userId, clinicId);
   const hiddenBroadcastIds = new Set<string>();
   const hiddenSyntheticIds = new Set<string>();
   const items: NotificationItem[] = [];
@@ -2227,6 +2911,20 @@ export async function fetchClinicNotifications(
           resolvedUserId = cRow.owner_user_id;
         }
       }
+    }
+
+    if (resolvedUserId || resolvedClinicId) {
+      getHiddenIds("clinic", resolvedUserId, resolvedClinicId).forEach((id) => hiddenSet.add(id));
+    }
+    if (resolvedUserId) {
+      await loadUserHiddenMarkersFromDb(
+        "clinic",
+        resolvedUserId,
+        hiddenSet,
+        hiddenSyntheticIds,
+        hiddenBroadcastIds,
+        resolvedClinicId
+      );
     }
 
     // Pre-fetch live admin profile picture from public.user / public.profiles in Supabase
@@ -3005,7 +3703,13 @@ export async function fetchClinicNotifications(
         }
 
         dbRows.forEach((r: any) => {
+          if (extractHiddenMarkersFromDbRow(r, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "clinic")) {
+            return;
+          }
           const notifId = String(r.id || r.notif_id);
+          if (hiddenSet.has(notifId) || (r as any).hidden_at || r.metadata?.hidden_at) {
+            return;
+          }
           const type = r.type || "booking_created";
           const resolvedPat = resolveClinicActivityPatient(r);
           const patDisplayName = resolvedPat.fullName;
@@ -3087,12 +3791,11 @@ export async function fetchClinicNotifications(
         );
 
         userNotifs.forEach((n: any) => {
-          if (n.type === "broadcast_hidden" && n.metadata?.hidden_broadcast_id) {
-            hiddenBroadcastIds.add(String(n.metadata.hidden_broadcast_id));
-            return;
-          }
-          if (n.type === "synthetic_hidden" && n.metadata?.hidden_synthetic_id) {
-            hiddenSyntheticIds.add(String(n.metadata.hidden_synthetic_id));
+          extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "clinic");
+        });
+
+        userNotifs.forEach((n: any) => {
+          if (extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "clinic")) {
             return;
           }
           if (hiddenSet.has(n.notif_id) || (n as any).hidden_at || n.metadata?.hidden_at) {
@@ -3268,11 +3971,12 @@ export async function fetchClinicNotifications(
       clinicRow?.verified === true;
 
     if (isApprovedClinic && resolvedClinicId) {
+      const approvalNotifId = `clinic-approved-${resolvedClinicId}`;
+      const isApprovalHidden = hiddenSet.has(approvalNotifId) || hiddenSyntheticIds.has(approvalNotifId);
       const hasExistingApproval = items.some(
         (i) => i.type === "application_approved" || i.category === "clinic"
       );
-      if (!hasExistingApproval) {
-        const approvalNotifId = `clinic-approved-${resolvedClinicId}`;
+      if (!hasExistingApproval && !isApprovalHidden) {
         const clinicName = clinicRow?.name || "Clinic";
         items.push({
           id: approvalNotifId,
@@ -3347,7 +4051,13 @@ export async function fetchClinicNotifications(
 
     if (broadcasts) {
       broadcasts.forEach((b: any) => {
-        if (hiddenBroadcastIds.has(b.broadcast_id) || hiddenSet.has(`broadcast-${b.broadcast_id}`)) return;
+        if (
+          hiddenBroadcastIds.has(b.broadcast_id) ||
+          hiddenSet.has(`broadcast-${b.broadcast_id}`) ||
+          hiddenSet.has(`clinic-broadcast-${b.broadcast_id}`)
+        ) {
+          return;
+        }
         const normBTitle = (b.title || "").trim().toLowerCase();
         const normBMsg = (b.message || "").trim().toLowerCase();
         const alreadyDelivered = items.some((i) => {
@@ -3382,13 +4092,9 @@ export async function fetchClinicNotifications(
   }
 
   const deduplicated = deduplicateNotificationItems(items);
-  return deduplicated.filter((item) => {
-    if (hiddenSet.has(item.id)) return false;
-    if (hiddenSyntheticIds.has(item.id)) return false;
-    if (item.metadata?.broadcast_id && (hiddenBroadcastIds.has(item.metadata.broadcast_id) || hiddenSet.has(`broadcast-${item.metadata.broadcast_id}`))) return false;
-    if ((item as any).hidden_at || item.metadata?.hidden_at) return false;
-    return true;
-  });
+  return deduplicated.filter(
+    (item) => !isNotificationItemHidden(item, "clinic", hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds)
+  );
 }
 
 /**
@@ -3404,19 +4110,38 @@ export async function fetchClinicNotifications(
  * ----------------------------------------------------------------------------
  */
 export async function fetchAdminNotifications(userId?: string): Promise<NotificationItem[]> {
+  let resolvedAdminId = userId && userId !== "admin" ? userId : undefined;
+  if (!resolvedAdminId) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data?.session?.user?.id) resolvedAdminId = data.session.user.id;
+    } catch { }
+  }
+
   const readSet = new Set<string>([
     ...Array.from(getReadIds("admin", "admin")),
-    ...(userId ? Array.from(getReadIds("admin", userId)) : []),
+    ...(resolvedAdminId ? Array.from(getReadIds("admin", resolvedAdminId)) : []),
   ]);
   const hiddenSet = new Set<string>([
     ...Array.from(getHiddenIds("admin", "admin")),
-    ...(userId ? Array.from(getHiddenIds("admin", userId)) : []),
+    ...(resolvedAdminId ? Array.from(getHiddenIds("admin", resolvedAdminId)) : []),
   ]);
   const hiddenBroadcastIds = new Set<string>();
   const hiddenSyntheticIds = new Set<string>();
   const items: NotificationItem[] = [];
 
   try {
+    if (resolvedAdminId) {
+      await loadUserHiddenMarkersFromDb(
+        "admin",
+        resolvedAdminId,
+        hiddenSet,
+        hiddenSyntheticIds,
+        hiddenBroadcastIds,
+        "admin"
+      );
+    }
+
     // 0. Pre-load clinics, doctors, and users to resolve real avatars (logos, photos, user avatars)
     const [{ data: allClinics }, { data: allDoctors }, { data: allUsers }] = await Promise.all([
       supabase.from("clinic").select("clinic_id, name, logo_url, owner_user_id, email"),
@@ -3585,6 +4310,13 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
       );
       if (clinicId) {
         seenClinicIds.add(clinicId);
+      }
+      if (
+        extractHiddenMarkersFromDbRow(rn, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "admin") ||
+        hiddenSet.has(nid) ||
+        (clinicId && (hiddenSet.has(`admin-clinic-app-${clinicId}`) || hiddenSyntheticIds.has(`admin-clinic-app-${clinicId}`)))
+      ) {
+        return;
       }
 
       const clinicName =
@@ -3904,11 +4636,11 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
     }
 
     // 7. Direct User Notifications for Admin (including booking events)
-    if (userId) {
+    if (resolvedAdminId) {
       const { data: adminDirectNotifs } = await supabase
         .from("user_notification")
         .select("notif_id, type, subtype, title, body, message, is_read, metadata, created_at")
-        .eq("user_id", userId)
+        .eq("user_id", resolvedAdminId)
         .order("created_at", { ascending: false })
         .limit(30);
 
@@ -3947,12 +4679,11 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
         }
 
         adminDirectNotifs.forEach((n: any) => {
-          if (n.type === "broadcast_hidden" && n.metadata?.hidden_broadcast_id) {
-            hiddenBroadcastIds.add(String(n.metadata.hidden_broadcast_id));
-            return;
-          }
-          if (n.type === "synthetic_hidden" && n.metadata?.hidden_synthetic_id) {
-            hiddenSyntheticIds.add(String(n.metadata.hidden_synthetic_id));
+          extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "admin");
+        });
+
+        adminDirectNotifs.forEach((n: any) => {
+          if (extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "admin")) {
             return;
           }
           if (hiddenSet.has(n.notif_id) || (n as any).hidden_at || n.metadata?.hidden_at) {
@@ -4021,10 +4752,7 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
   const seen = new Set<string>();
   const unique = items.filter((item) => {
     if (seen.has(item.id)) return false;
-    if (hiddenSet.has(item.id)) return false;
-    if (hiddenSyntheticIds.has(item.id)) return false;
-    if (item.metadata?.broadcast_id && (hiddenBroadcastIds.has(item.metadata.broadcast_id) || hiddenSet.has(`broadcast-${item.metadata.broadcast_id}`))) return false;
-    if ((item as any).hidden_at || item.metadata?.hidden_at) return false;
+    if (isNotificationItemHidden(item, "admin", hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds)) return false;
     seen.add(item.id);
     return true;
   });
@@ -4258,6 +4986,12 @@ function normalizeCachedNotificationItem(item: NotificationItem): NotificationIt
 
 function readHydratedRoleStoreCache(key: string, fallbackKey?: string): NotificationItem[] | null {
   if (typeof window === "undefined") return null;
+  const parts = key.split(":");
+  const rolePart = (parts[0] || "patient") as NotificationRole;
+  const idPart = parts[1] && parts[1] !== "global" ? parts[1] : undefined;
+  const fallbackIdPart = fallbackKey ? fallbackKey.split(":")[1] : undefined;
+  const hiddenSet = getHiddenIds(rolePart, idPart, fallbackIdPart || (rolePart === "admin" ? "admin" : undefined));
+
   const keysToTry = [
     `${ROLE_STORE_CACHE_PREFIX}${key}`,
     ...(fallbackKey ? [`${ROLE_STORE_CACHE_PREFIX}${fallbackKey}`] : []),
@@ -4269,7 +5003,10 @@ function readHydratedRoleStoreCache(key: string, fallbackKey?: string): Notifica
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map(normalizeCachedNotificationItem);
+          const normalized = parsed
+            .map(normalizeCachedNotificationItem)
+            .filter((item) => !isNotificationItemHidden(item, rolePart, hiddenSet));
+          return normalized;
         }
       }
     } catch { }
@@ -4441,9 +5178,9 @@ export function useRoleNotifications(
               : prev?.senderName || normalized.senderName,
         };
       });
-      const hiddenSet = getHiddenIds(role, userId, clinicId);
+      const hiddenSet = getHiddenIds(role, userId, clinicId || (role === "admin" ? "admin" : undefined));
       const visibleData = deduplicated.filter(
-        (n) => !hiddenSet.has(n.id) && !(n as any).hidden_at && !n.metadata?.hidden_at
+        (n) => !isNotificationItemHidden(n, role, hiddenSet)
       );
       const unread = visibleData.filter((n) => !n.isRead).length;
       store.state = {
@@ -4569,7 +5306,11 @@ export function useRoleNotifications(
 
     const handleCustomUpdate = (e: Event) => {
       const custom = e as CustomEvent;
-      if (custom?.detail?.action === "mark_all_read" || custom?.detail?.action === "mark_read") {
+      if (
+        custom?.detail?.action === "mark_all_read" ||
+        custom?.detail?.action === "mark_read" ||
+        custom?.detail?.action === "delete_notification"
+      ) {
         return;
       }
       fetchFn();
@@ -4617,33 +5358,78 @@ export function useRoleNotifications(
     async (id: string, metadata?: Record<string, any>) => {
       if (!id) return { success: false, error: "Missing notification ID" };
 
-      // 1. Optimistic removal from store
+      // 1. Optimistic removal from store and sibling stores matching role/user
       const prevNotifications = store.state.notifications;
       const prevUnreadCount = store.state.unreadCount;
       const target = prevNotifications.find((n) => n.id === id);
-      const isUnread = target ? !target.isRead : false;
-
-      const updatedNotifications = prevNotifications.filter((n) => n.id !== id);
-      const updatedUnreadCount = isUnread ? Math.max(0, prevUnreadCount - 1) : prevUnreadCount;
-
-      store.state = {
-        ...store.state,
-        notifications: updatedNotifications,
-        unreadCount: updatedUnreadCount,
+      const enrichedMeta: Record<string, any> = {
+        ...(target?.metadata || {}),
+        ...(metadata || {}),
+        ...(target?.type ? { type: metadata?.type || target.type } : {}),
+        ...(target?.subtype ? { subtype: metadata?.subtype || target.subtype } : {}),
+        ...(target?.category ? { category: metadata?.category || target.category } : {}),
+        ...(target?.appointment_id ? { appointment_id: metadata?.appointment_id || target.appointment_id } : {}),
       };
-      writeHydratedRoleStoreCache(storeKey, updatedNotifications, userId);
+      const aliasesToHide = new Set<string>([
+        id,
+        ...getNotificationHiddenAliases(role, id, enrichedMeta),
+      ]);
+
+      const siblingSnapshots = new Map<string, { notifications: NotificationItem[]; unreadCount: number }>();
+      roleStores.forEach((s, key) => {
+        if (
+          key === storeKey ||
+          key.startsWith(`${role}:`) ||
+          (userId && key.includes(userId)) ||
+          (clinicId && key.includes(clinicId))
+        ) {
+          siblingSnapshots.set(key, {
+            notifications: s.state.notifications,
+            unreadCount: s.state.unreadCount,
+          });
+          const nextItems = s.state.notifications.filter((n) => !aliasesToHide.has(n.id));
+          const nextUnread = nextItems.filter((n) => !n.isRead).length;
+          s.state = {
+            ...s.state,
+            notifications: nextItems,
+            unreadCount: nextUnread,
+          };
+          writeHydratedRoleStoreCache(key, nextItems, userId);
+          s.listeners.forEach((l) => {
+            try {
+              l();
+            } catch { }
+          });
+        }
+      });
       setTick((t) => t + 1);
 
       // 2. Perform soft deletion
-      const res = await softDeleteNotification(role, id, userId || clinicId || "admin", metadata);
+      const res = await softDeleteNotification(role, id, userId || clinicId || "admin", enrichedMeta);
       if (!res.success) {
         // Rollback state on failure
+        siblingSnapshots.forEach((snap, key) => {
+          const s = roleStores.get(key);
+          if (s) {
+            s.state = {
+              ...s.state,
+              notifications: snap.notifications,
+              unreadCount: snap.unreadCount,
+            };
+            writeHydratedRoleStoreCache(key, snap.notifications, userId);
+            s.listeners.forEach((l) => {
+              try {
+                l();
+              } catch { }
+            });
+          }
+        });
         store.state = {
           ...store.state,
           notifications: prevNotifications,
           unreadCount: prevUnreadCount,
         };
-        removeHiddenId(role, id, userId || clinicId);
+        removeHiddenId(role, id, userId, clinicId, Array.from(aliasesToHide));
         writeHydratedRoleStoreCache(storeKey, prevNotifications, userId);
         setTick((t) => t + 1);
         return res;
@@ -4653,7 +5439,14 @@ export function useRoleNotifications(
       try {
         window.dispatchEvent(
           new CustomEvent("dermai_notifications_updated", {
-            detail: { action: "delete_notification", id, role, userId, clinicId },
+            detail: {
+              action: "delete_notification",
+              id,
+              aliases: Array.from(aliasesToHide),
+              role,
+              userId,
+              clinicId,
+            },
           })
         );
       } catch {}
@@ -4712,7 +5505,7 @@ export async function sendAuthorizedNotification(params: {
   };
 
   // 1. Authorized server-side RPC under Phase A deployment
-  if (isPhaseAMigrationDeployed()) {
+  if (isPhaseAMigrationDeployed() && isPhaseADatabaseRpcDeployed()) {
     try {
       const { data, error } = await supabase.rpc("dispatch_authorized_notification", {
         p_recipient_user_id: userId,
@@ -4730,6 +5523,9 @@ export async function sendAuthorizedNotification(params: {
         return { success: true, notifId: data };
       }
       if (error) {
+        if (error.code === "PGRST202" || error.code === "42883") {
+          markPhaseARpcUnsupported();
+        }
         console.warn("[sendAuthorizedNotification] RPC notice:", error.message);
       }
     } catch (rpcErr: any) {

@@ -13,7 +13,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
 import { useClinicVerification } from "@/hooks/useClinicVerification";
-import { useRoleNotifications, type NotificationItem, type NotificationCategory } from "@/lib/notificationService";
+import { useRoleNotifications, getHiddenIds, type NotificationItem, type NotificationCategory } from "@/lib/notificationService";
 import { NotificationCardMenu } from "@/components/common/NotificationCardMenu";
 
 interface ClinicNotificationsProps {
@@ -179,7 +179,18 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
             .limit(40);
 
           if (!directErr && Array.isArray(directData) && directData.length > 0) {
+            const hiddenSet = getHiddenIds("clinic", user.id, clinicId || undefined);
             rows = directData.filter((r: any) => {
+              const rId = String(r.notif_id || r.id || "");
+              if (
+                hiddenSet.has(rId) ||
+                r.type === "synthetic_hidden" ||
+                r.type === "broadcast_hidden" ||
+                r.hidden_at ||
+                r.metadata?.hidden_at
+              ) {
+                return false;
+              }
               const cId = r.metadata?.clinic_id || r.metadata?.clinicId;
               return !cId || String(cId) === String(clinicId);
             });
@@ -440,7 +451,17 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
         };
       });
 
-      setBookingNotifs(mapped);
+      const hiddenSet = getHiddenIds("clinic", user?.id, clinicId || undefined);
+      setBookingNotifs(
+        mapped.filter(
+          (m) =>
+            !hiddenSet.has(m.id) &&
+            !(m as any).hidden_at &&
+            !m.metadata?.hidden_at &&
+            !(m.appointment_id && hiddenSet.has(`clinic-req-${m.appointment_id}`)) &&
+            !(m.appointment_id && hiddenSet.has(`clinic-reselect-${m.appointment_id}`))
+        )
+      );
     } catch (err) {
       console.warn("[ClinicNotifications] Failed to query booking & reselection notifications:", err);
     } finally {
@@ -486,7 +507,29 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
       )
       .subscribe();
 
+    const handleDeleted = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail?.action === "delete_notification") {
+        const idsToRemove = new Set<string>([
+          ...(detail.id ? [String(detail.id)] : []),
+          ...(Array.isArray(detail.aliases) ? detail.aliases.map(String) : []),
+        ]);
+        if (idsToRemove.size > 0) {
+          setBookingNotifs((prev) =>
+            prev.filter(
+              (item) =>
+                !idsToRemove.has(item.id) &&
+                !(item.appointment_id && idsToRemove.has(`clinic-req-${item.appointment_id}`)) &&
+                !(item.appointment_id && idsToRemove.has(`clinic-reselect-${item.appointment_id}`))
+            )
+          );
+        }
+      }
+    };
+    window.addEventListener("dermai_notifications_updated", handleDeleted);
+
     return () => {
+      window.removeEventListener("dermai_notifications_updated", handleDeleted);
       supabase.removeChannel(channel);
     };
   }, [clinicId, user?.id, fetchBookingsAndReselections]);
@@ -513,6 +556,7 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
   };
 
   const filtered = useMemo(() => {
+    const hiddenSet = getHiddenIds("clinic", user?.id, clinicId || undefined);
     let list = notifications;
     if (activeTab === "clinic") {
       list = notifications.filter((n) => n.category === "clinic" || n.type === "application_approved" || n.type === "clinic_application");
@@ -562,6 +606,7 @@ export default function ClinicNotifications({ onClose, isDropdown = false }: Cli
     const seenContent = new Set<string>();
     return list.filter((n) => {
       if (!n || !n.id) return false;
+      if (hiddenSet.has(n.id) || (n as any).hidden_at || n.metadata?.hidden_at) return false;
       if (seenIds.has(n.id)) return false;
       seenIds.add(n.id);
 

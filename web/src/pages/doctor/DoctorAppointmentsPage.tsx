@@ -516,13 +516,13 @@ export default function DoctorAppointmentsPage() {
                   <td className="py-4 px-3 sm:px-4">
                     <div className="min-w-23.75">
                       <p className="text-slate-800 font-medium">
-                        {appt.patientAge
-                          ? `${appt.patientAge} years old`
-                          : "\u2014"}
-                      </p>
-
-                      <p className="text-slate-500 mt-0.5">
-                        {appt.patientGender || "\u2014"}
+                        {Number.isFinite(appt.patientAge)
+                          ? appt.patientAge
+                          : "\u2014"}{" "}
+                        /{" "}
+                        <span className="text-slate-600 font-normal">
+                          {appt.patientGender || "\u2014"}
+                        </span>
                       </p>
                     </div>
                   </td>
