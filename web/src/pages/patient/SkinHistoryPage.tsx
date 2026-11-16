@@ -76,6 +76,7 @@ export interface SkinHistoryItem {
   comparison?: AIQuestionnaireComparison | null;
   conditionGuide?: ConditionGuide | null;
   isCombined?: boolean;
+  status?: string;
 }
 
 /**
@@ -217,6 +218,8 @@ export default function PatientSkinHistory() {
   const [searchParams] = useSearchParams();
   const [history, setHistory] = useState<SkinHistoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [reloadCounter, setReloadCounter] = useState(0);
   const [selectedItem, setSelectedItem] = useState<SkinHistoryItem | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "questionnaire" | "guide">("overview");
   const [lightboxImage, setLightboxImage] = useState<{ url: string; title: string } | null>(null);
@@ -265,6 +268,7 @@ export default function PatientSkinHistory() {
         .select(`
           analysis_id,
           confidence_score,
+          status,
           body_part,
           scanned_at,
           photo_url,
@@ -280,16 +284,19 @@ export default function PatientSkinHistory() {
           )
         `)
         .eq("user_id", userId)
-        .eq("status", "completed")
+        .in("status", ["completed", "valid", "flagged", "invalid"])
         .order("scanned_at", { ascending: false });
 
       if (cancelled) return;
 
       if (error) {
         console.error("[SkinHistory] fetch error:", error.message);
+        setFetchError(error.message);
         setIsLoading(false);
         return;
       }
+
+      setFetchError(null);
 
       const mapped: SkinHistoryItem[] = await Promise.all(
         ((data ?? []) as any[]).map(async (s: any) => {
@@ -533,6 +540,7 @@ export default function PatientSkinHistory() {
             comparison,
             conditionGuide: guide,
             isCombined,
+            status: s.status,
           };
         })
       );
@@ -558,7 +566,7 @@ export default function PatientSkinHistory() {
     return () => {
       cancelled = true;
     };
-  }, [searchParams]);
+  }, [searchParams, reloadCounter]);
 
   const confirmDelete = async () => {
     if (!deleteTarget || isDeleting) return;
@@ -620,6 +628,18 @@ export default function PatientSkinHistory() {
           <p className="text-gray-500 font-medium animate-pulse">
             Loading analysis history and skin scan records...
           </p>
+        </div>
+      ) : fetchError ? (
+        <div className="bg-white rounded-3xl border border-rose-200 p-12 text-center shadow-xs">
+          <p className="text-rose-600 font-semibold mb-2">Failed to load skin analysis history</p>
+          <p className="text-gray-500 text-sm mb-6">{fetchError}</p>
+          <button
+            type="button"
+            onClick={() => setReloadCounter((c) => c + 1)}
+            className="bg-magenta-600 text-white px-6 py-2.5 rounded-xl font-semibold hover:bg-magenta-700 transition-all cursor-pointer"
+          >
+            Retry
+          </button>
         </div>
       ) : history.length > 0 ? (
         <div className="grid grid-cols-1 gap-4">
@@ -689,6 +709,22 @@ export default function PatientSkinHistory() {
                       {item.questionnaireAnswers && item.questionnaireAnswers.length > 0 && (
                         <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 px-2 py-0.5 rounded-lg border border-slate-200 text-[11px] font-medium">
                           <ClipboardList className="w-3 h-3" /> {item.questionnaireAnswers.length} Answers
+                        </span>
+                      )}
+
+                      {item.status === "invalid" && (
+                        <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-700 px-2 py-0.5 rounded-lg border border-rose-200 text-[11px] font-semibold">
+                          Invalid / Out of Scope
+                        </span>
+                      )}
+                      {item.status === "flagged" && (
+                        <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-700 px-2 py-0.5 rounded-lg border border-amber-200 text-[11px] font-semibold">
+                          Under Review
+                        </span>
+                      )}
+                      {item.status === "valid" && (
+                        <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-lg border border-emerald-200 text-[11px] font-semibold">
+                          Reviewed
                         </span>
                       )}
                     </div>
@@ -930,6 +966,33 @@ export default function PatientSkinHistory() {
                   {/* TAB 1: OVERVIEW & THE 2 REAL PHOTOS */}
                   {activeTab === "overview" && (
                     <div className="space-y-6">
+                      {selectedItem.status === "invalid" && (
+                        <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3">
+                          <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-sm font-semibold text-rose-900">
+                              Analysis Flagged as Invalid / Out of Scope
+                            </p>
+                            <p className="text-xs text-rose-700 mt-0.5">
+                              This image upload was reviewed and marked as invalid or out-of-scope. It should not be used as a medical reference.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      {selectedItem.status === "flagged" && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
+                          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-sm font-semibold text-amber-900">
+                              Preliminary Assessment (Pending Clinical Review)
+                            </p>
+                            <p className="text-xs text-amber-700 mt-0.5">
+                              This assessment is currently undergoing clinical review. Consult a licensed dermatologist for diagnosis and care.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Confidence Score Bar */}
                       <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-xs">
                         <div className="flex items-center justify-between mb-1.5">

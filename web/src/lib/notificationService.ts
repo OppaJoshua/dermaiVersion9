@@ -110,6 +110,854 @@ function saveAllReadIds(role: NotificationRole, ids: string[], userId?: string, 
   }
 }
 
+export function getHiddenIds(role: NotificationRole, userId?: string, fallbackId?: string): Set<string> {
+  const combined = new Set<string>();
+  const keys = userId || fallbackId
+    ? ([userId, fallbackId].filter(Boolean) as string[])
+    : ["default"];
+
+  for (const k of keys) {
+    try {
+      const raw = localStorage.getItem(`dermai_${role}_hidden_ids_${k}`);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) arr.forEach((id) => combined.add(String(id)));
+      }
+    } catch { }
+  }
+  return combined;
+}
+
+export function saveHiddenId(role: NotificationRole, id: string, userId?: string, fallbackId?: string, extraIds?: string[]) {
+  if (!id) return;
+  const keys = userId || fallbackId
+    ? ([userId, fallbackId].filter(Boolean) as string[])
+    : ["default"];
+
+  for (const k of keys) {
+    try {
+      const key = `dermai_${role}_hidden_ids_${k}`;
+      const set = getHiddenIds(role, k);
+      set.add(String(id));
+      if (extraIds && Array.isArray(extraIds)) {
+        extraIds.forEach((eid) => {
+          if (eid) set.add(String(eid));
+        });
+      }
+      localStorage.setItem(key, JSON.stringify(Array.from(set)));
+    } catch { }
+  }
+}
+
+export function removeHiddenId(role: NotificationRole, id: string, userId?: string, fallbackId?: string, extraIds?: string[]) {
+  if (!id) return;
+  const keys = userId || fallbackId
+    ? ([userId, fallbackId].filter(Boolean) as string[])
+    : ["default"];
+
+  for (const k of keys) {
+    try {
+      const key = `dermai_${role}_hidden_ids_${k}`;
+      const set = getHiddenIds(role, k);
+      set.delete(String(id));
+      if (extraIds && Array.isArray(extraIds)) {
+        extraIds.forEach((eid) => {
+          if (eid) set.delete(String(eid));
+        });
+      }
+      localStorage.setItem(key, JSON.stringify(Array.from(set)));
+    } catch { }
+  }
+}
+
+export function getNotificationHiddenAliases(
+  role: NotificationRole,
+  notifId: string,
+  metadata?: Record<string, any>
+): string[] {
+  const aliases = new Set<string>();
+  if (!notifId) return [];
+  aliases.add(String(notifId));
+
+  const rawType = String(metadata?.type || "").toLowerCase().replace(/_/g, "-");
+  const rawSubtype = String(metadata?.subtype || "").toLowerCase().replace(/_/g, "-");
+  const rawCategory = String(metadata?.category || "").toLowerCase();
+
+  // 1. Broadcast aliases
+  const rawBId =
+    metadata?.broadcast_id ||
+    (notifId.startsWith("broadcast-") ||
+    notifId.startsWith("clinic-broadcast-") ||
+    notifId.startsWith("doc-broadcast-")
+      ? notifId.replace(/^(?:clinic-|doc-)?broadcast-/, "")
+      : undefined);
+  if (rawBId) {
+    const bId = String(rawBId);
+    aliases.add(bId);
+    aliases.add(`broadcast-${bId}`);
+    aliases.add(`clinic-broadcast-${bId}`);
+    aliases.add(`doc-broadcast-${bId}`);
+  }
+
+  // 2. Support Ticket aliases
+  const rawTId =
+    metadata?.ticket_id ||
+    (notifId.startsWith("ticket-update-") ||
+    notifId.startsWith("clinic-ticket-") ||
+    notifId.startsWith("doc-ticket-") ||
+    notifId.startsWith("admin-ticket-")
+      ? notifId.replace(/^(?:ticket-update-|clinic-ticket-|doc-ticket-|admin-ticket-)/, "")
+      : undefined);
+  if (rawTId) {
+    const tId = String(rawTId);
+    aliases.add(`ticket-update-${tId}`);
+    aliases.add(`clinic-ticket-${tId}`);
+    aliases.add(`doc-ticket-${tId}`);
+    aliases.add(`admin-ticket-${tId}`);
+  }
+
+  // 3. AI Scan aliases
+  const rawScanId =
+    metadata?.analysis_id ||
+    (notifId.startsWith("scan-") ? notifId.replace(/^scan-/, "") : undefined);
+  if (rawScanId) {
+    aliases.add(`scan-${rawScanId}`);
+  }
+
+  // 4. Clinic Application / Verification aliases
+  const rawClinicId =
+    metadata?.clinic_id ||
+    metadata?.clinicId ||
+    (notifId.startsWith("admin-clinic-app-")
+      ? notifId.replace(/^admin-clinic-app-/, "")
+      : notifId.startsWith("clinic-approved-")
+      ? notifId.replace(/^clinic-approved-/, "")
+      : undefined);
+  if (rawClinicId) {
+    const cId = String(rawClinicId);
+    if (
+      role === "admin" &&
+      (notifId.startsWith("admin-clinic-app-") ||
+        rawType === "clinic" ||
+        rawType === "clinic-pending" ||
+        rawType === "new-clinic-application" ||
+        rawSubtype === "new-clinic-application" ||
+        rawSubtype === "clinic-registration")
+    ) {
+      aliases.add(`admin-clinic-app-${cId}`);
+    }
+    if (
+      role === "clinic" &&
+      (notifId.startsWith("clinic-approved-") ||
+        rawType === "application-approved" ||
+        rawType === "clinic-application" ||
+        rawSubtype === "application-approved" ||
+        rawSubtype === "clinic-approval" ||
+        (rawCategory === "clinic" && metadata?.status === "approved"))
+    ) {
+      aliases.add(`clinic-approved-${cId}`);
+    }
+  }
+
+  // 5. Appointment lifecycle aliases (strictly scoped to the specific lifecycle event type)
+  const rawApptId =
+    metadata?.appointment_id ||
+    metadata?.appointmentId ||
+    (notifId.startsWith("doc-req-")
+      ? notifId.replace(/^doc-req-/, "")
+      : notifId.startsWith("doc-branch-req-")
+      ? notifId.replace(/^doc-branch-req-/, "")
+      : notifId.startsWith("appt-accepted-")
+      ? notifId.replace(/^appt-accepted-/, "")
+      : notifId.startsWith("appt-completed-")
+      ? notifId.replace(/^appt-completed-/, "")
+      : notifId.startsWith("appt-cancelled-")
+      ? notifId.replace(/^appt-cancelled-/, "")
+      : notifId.startsWith("clinic-req-")
+      ? notifId.replace(/^clinic-req-/, "")
+      : notifId.startsWith("clinic-doc-accept-")
+      ? notifId.replace(/^clinic-doc-accept-/, "")
+      : notifId.startsWith("clinic-doc-reject-")
+      ? notifId.replace(/^clinic-doc-reject-/, "")
+      : notifId.startsWith("clinic-cancel-")
+      ? notifId.replace(/^clinic-cancel-/, "")
+      : notifId.startsWith("clinic-reselect-")
+      ? notifId.replace(/^clinic-reselect-/, "")
+      : notifId.startsWith("clinic-complete-")
+      ? notifId.replace(/^clinic-complete-/, "")
+      : notifId.startsWith("admin-scan-")
+      ? notifId.replace(/^admin-scan-/, "")
+      : notifId.startsWith("admin-review-")
+      ? notifId.replace(/^admin-review-/, "")
+      : undefined);
+
+  if (rawApptId) {
+    const aid = String(rawApptId);
+    if (role === "doctor") {
+      const isReminder =
+        notifId.startsWith("doc-reminder-") ||
+        rawType.includes("reminder") ||
+        rawSubtype.includes("reminder");
+      const isConfirmed =
+        rawType.includes("confirmed") ||
+        rawSubtype === "confirmed";
+      const isAssignmentOrRequest =
+        notifId.startsWith("doc-req-") ||
+        notifId.startsWith("doc-branch-req-") ||
+        rawType === "appointment-request" ||
+        rawType === "appointment-delegated" ||
+        rawType === "new-booking" ||
+        rawType === "appointment-created" ||
+        rawSubtype === "appointment-request" ||
+        rawSubtype === "new-booking" ||
+        rawSubtype === "appointment-created";
+
+      if (isReminder) {
+        if (metadata?.occurrence) {
+          aliases.add(`doc-reminder-${aid}-${metadata.occurrence}`);
+        } else if (!notifId.startsWith(`doc-reminder-${aid}-`)) {
+          aliases.add(`doc-reminder-${aid}`);
+        }
+      } else if (isConfirmed) {
+        aliases.add(`doc-confirmed-${aid}`);
+      } else if (isAssignmentOrRequest) {
+        aliases.add(`doc-req-${aid}`);
+        aliases.add(`doc-branch-req-${aid}`);
+      }
+    } else if (role === "patient") {
+      const isPayment =
+        rawType.includes("payment") ||
+        rawSubtype.includes("payment");
+      const isReschedule =
+        rawType.includes("reschedule") ||
+        rawSubtype.includes("reschedule");
+
+      if (
+        notifId.startsWith("appt-completed-") ||
+        rawType.includes("completed") ||
+        rawSubtype === "reviewed" ||
+        rawSubtype === "appointment-completed"
+      ) {
+        aliases.add(`appt-completed-${aid}`);
+      } else if (
+        notifId.startsWith("appt-cancelled-") ||
+        rawType.includes("cancelled") ||
+        rawType.includes("canceled")
+      ) {
+        aliases.add(`appt-cancelled-${aid}`);
+      } else if (
+        !isReschedule &&
+        (notifId.startsWith("appt-rejected-") ||
+          rawType.includes("rejected") ||
+          rawType.includes("declined") ||
+          rawSubtype.includes("declined") ||
+          rawSubtype.includes("rejected") ||
+          rawSubtype.includes("conflict"))
+      ) {
+        let addedSpecificStamp = false;
+        if (metadata?.declined_at) {
+          const ts = new Date(metadata.declined_at).getTime();
+          if (!isNaN(ts)) {
+            aliases.add(`appt-rejected-${aid}-${ts}`);
+            addedSpecificStamp = true;
+          }
+        }
+        if (metadata?.rejection_timestamp) {
+          const rts = new Date(metadata.rejection_timestamp).getTime();
+          if (!isNaN(rts)) {
+            aliases.add(`appt-rejected-${aid}-${rts}`);
+            addedSpecificStamp = true;
+          }
+        }
+        if (!addedSpecificStamp && !notifId.startsWith(`appt-rejected-${aid}-`)) {
+          aliases.add(`appt-rejected-${aid}-initial`);
+        }
+      } else if (
+        !isPayment &&
+        !isReschedule &&
+        (notifId.startsWith("appt-accepted-") ||
+          notifId.startsWith("appt-scheduled-") ||
+          notifId.startsWith("appt-confirmed-") ||
+          rawType.includes("accepted") ||
+          rawType.includes("scheduled") ||
+          rawType.includes("confirmed") ||
+          rawType.includes("approved") ||
+          rawSubtype.includes("confirmed") ||
+          rawSubtype.includes("approved") ||
+          rawSubtype === "reassigned")
+      ) {
+        aliases.add(`appt-accepted-${aid}`);
+        aliases.add(`appt-scheduled-${aid}`);
+        aliases.add(`appt-confirmed-${aid}`);
+      }
+    } else if (role === "clinic") {
+      if (
+        notifId.startsWith("clinic-doc-accept-") ||
+        rawType.includes("doctor-accepted") ||
+        rawType.includes("doctor-approved") ||
+        rawSubtype.includes("doctor-accepted") ||
+        rawSubtype.includes("doctor-approved")
+      ) {
+        aliases.add(`clinic-doc-accept-${aid}`);
+      } else if (
+        notifId.startsWith("clinic-doc-reject-") ||
+        rawType.includes("doctor-rejected") ||
+        rawType.includes("doctor-declined") ||
+        rawSubtype.includes("doctor-rejected") ||
+        rawSubtype.includes("doctor-declined")
+      ) {
+        aliases.add(`clinic-doc-reject-${aid}`);
+      } else if (
+        notifId.startsWith("clinic-cancel-") ||
+        rawType.includes("cancelled") ||
+        rawType.includes("canceled")
+      ) {
+        aliases.add(`clinic-cancel-${aid}`);
+      } else if (
+        notifId.startsWith("clinic-complete-") ||
+        rawType.includes("completed") ||
+        rawSubtype.includes("completed")
+      ) {
+        aliases.add(`clinic-complete-${aid}`);
+      } else if (
+        notifId.startsWith("clinic-reselect-") ||
+        rawType.includes("reselect") ||
+        rawType.includes("alternate-doctor") ||
+        rawSubtype.includes("reselect") ||
+        rawSubtype.includes("alternate-doctor")
+      ) {
+        aliases.add(`clinic-reselect-${aid}`);
+      } else if (
+        notifId.startsWith("clinic-req-") ||
+        rawType === "appointment-request" ||
+        rawType === "booking-created" ||
+        rawType === "new-booking" ||
+        rawSubtype === "new-booking" ||
+        rawSubtype === "appointment-created" ||
+        rawSubtype === "appointment-request" ||
+        (rawType === "appointment" && (!rawSubtype || rawSubtype === "new-booking" || rawSubtype === "appointment-request"))
+      ) {
+        aliases.add(`clinic-req-${aid}`);
+      }
+    } else if (role === "admin") {
+      if (
+        notifId.startsWith("admin-review-") ||
+        rawType.includes("review") ||
+        rawSubtype.includes("review")
+      ) {
+        aliases.add(`admin-review-${aid}`);
+      } else if (
+        notifId.startsWith("admin-scan-") ||
+        rawType.includes("scan") ||
+        rawCategory === "scan"
+      ) {
+        aliases.add(`admin-scan-${aid}`);
+      }
+    }
+  }
+
+  return Array.from(aliases);
+}
+
+function extractHiddenMarkersFromDbRow(
+  n: any,
+  hiddenSet: Set<string>,
+  hiddenSyntheticIds: Set<string>,
+  hiddenBroadcastIds: Set<string>,
+  role: NotificationRole
+): boolean {
+  if (!n) return false;
+  if (n.type === "broadcast_hidden") {
+    if (n.metadata?.hidden_broadcast_id) {
+      const bId = String(n.metadata.hidden_broadcast_id);
+      hiddenBroadcastIds.add(bId);
+      hiddenSet.add(bId);
+      hiddenSet.add(`broadcast-${bId}`);
+      hiddenSet.add(`clinic-broadcast-${bId}`);
+      hiddenSet.add(`doc-broadcast-${bId}`);
+    }
+    if (n.metadata?.hidden_synthetic_id) {
+      const sId = String(n.metadata.hidden_synthetic_id);
+      hiddenSyntheticIds.add(sId);
+      hiddenSet.add(sId);
+    }
+    if (Array.isArray(n.metadata?.hidden_aliases)) {
+      n.metadata.hidden_aliases.forEach((a: any) => {
+        if (a) {
+          hiddenSyntheticIds.add(String(a));
+          hiddenSet.add(String(a));
+        }
+      });
+    }
+    return true;
+  }
+  if (n.type === "synthetic_hidden") {
+    if (n.metadata?.hidden_synthetic_id) {
+      const sId = String(n.metadata.hidden_synthetic_id);
+      hiddenSyntheticIds.add(sId);
+      hiddenSet.add(sId);
+    }
+    if (Array.isArray(n.metadata?.hidden_aliases)) {
+      n.metadata.hidden_aliases.forEach((a: any) => {
+        if (a) {
+          hiddenSyntheticIds.add(String(a));
+          hiddenSet.add(String(a));
+        }
+      });
+    }
+    return true;
+  }
+
+  const rowId = String(n.notif_id || n.id || "");
+  const isRowHidden =
+    (rowId && hiddenSet.has(rowId)) ||
+    Boolean((n as any).hidden_at) ||
+    Boolean(n.metadata?.hidden_at);
+
+  if (isRowHidden) {
+    if (rowId) {
+      hiddenSet.add(rowId);
+      hiddenSyntheticIds.add(rowId);
+    }
+    if (n.metadata?.broadcast_id) {
+      const bId = String(n.metadata.broadcast_id);
+      hiddenBroadcastIds.add(bId);
+      hiddenSet.add(bId);
+      hiddenSet.add(`broadcast-${bId}`);
+      hiddenSet.add(`clinic-broadcast-${bId}`);
+      hiddenSet.add(`doc-broadcast-${bId}`);
+    }
+    if (Array.isArray(n.metadata?.hidden_aliases)) {
+      n.metadata.hidden_aliases.forEach((a: any) => {
+        if (a) {
+          hiddenSyntheticIds.add(String(a));
+          hiddenSet.add(String(a));
+        }
+      });
+    }
+    const rowAliases = getNotificationHiddenAliases(role, rowId, {
+      ...(n.metadata || {}),
+      type: n.type || n.metadata?.type,
+      subtype: n.subtype || n.metadata?.subtype,
+      category: n.category || n.metadata?.category,
+    });
+    rowAliases.forEach((a) => {
+      hiddenSyntheticIds.add(a);
+      hiddenSet.add(a);
+    });
+    return true;
+  }
+  return false;
+}
+
+function isNotificationItemHidden(
+  item: NotificationItem,
+  role: NotificationRole,
+  hiddenSet: Set<string>,
+  hiddenSyntheticIds: Set<string> = new Set(),
+  hiddenBroadcastIds: Set<string> = new Set()
+): boolean {
+  if (!item || !item.id) return true;
+  if (item.type === "synthetic_hidden" || item.type === "broadcast_hidden") return true;
+  if ((item as any).hidden_at || item.metadata?.hidden_at) return true;
+  if (hiddenSet.has(item.id) || hiddenSyntheticIds.has(item.id)) return true;
+
+  if (item.metadata?.broadcast_id) {
+    const bId = String(item.metadata.broadcast_id);
+    if (
+      hiddenBroadcastIds.has(bId) ||
+      hiddenSet.has(bId) ||
+      hiddenSet.has(`broadcast-${bId}`) ||
+      hiddenSet.has(`clinic-broadcast-${bId}`) ||
+      hiddenSet.has(`doc-broadcast-${bId}`)
+    ) {
+      return true;
+    }
+  }
+
+  const aliases = getNotificationHiddenAliases(role, item.id, {
+    ...(item.metadata || {}),
+    type: item.type || item.metadata?.type,
+    subtype: item.subtype || item.metadata?.subtype,
+    category: item.category || item.metadata?.category,
+    appointment_id: item.appointment_id || item.metadata?.appointment_id || item.metadata?.appointmentId,
+  });
+  for (const alias of aliases) {
+    if (hiddenSet.has(alias) || hiddenSyntheticIds.has(alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function loadUserHiddenMarkersFromDb(
+  role: NotificationRole,
+  userId: string | undefined,
+  hiddenSet: Set<string>,
+  hiddenSyntheticIds: Set<string>,
+  hiddenBroadcastIds: Set<string>,
+  fallbackId?: string
+): Promise<void> {
+  if (!userId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+    return;
+  }
+  try {
+    const { data: markerRows } = await supabase
+      .from("user_notification")
+      .select("notif_id, type, subtype, metadata")
+      .eq("user_id", userId)
+      .or("type.in.(synthetic_hidden,broadcast_hidden),metadata->>hidden_at.not.is.null")
+      .limit(200);
+    if (Array.isArray(markerRows) && markerRows.length > 0) {
+      markerRows.forEach((m: any) => {
+        extractHiddenMarkersFromDbRow(m, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, role);
+      });
+      const hydratedIds = Array.from(hiddenSet);
+      if (hydratedIds.length > 0) {
+        saveHiddenId(role, hydratedIds[0], userId, fallbackId, hydratedIds.slice(1));
+      }
+    }
+  } catch { }
+}
+
+/**
+ * Feature Gate: Soft Deletion via Three-Dot Menu
+ *
+ * SAFETY CONTRACT:
+ * - Defaults to FALSE to ensure unmigrated production environments remain 100% safe.
+ * - In a migrated testing environment (or post-deployment production), can be activated via:
+ *     1. VITE_NOTIFICATION_PHASE_A_DEPLOYED="true" in .env / .env.local
+ *     2. localStorage.getItem("dermai_phase_a_deployed") === "true"
+ *     3. window.__DERMAI_ENABLE_NOTIFICATION_SOFT_DELETE__ === true
+ */
+export function isPhaseAMigrationDeployed(): boolean {
+  if (typeof import.meta !== "undefined" && import.meta.env?.VITE_NOTIFICATION_PHASE_A_DEPLOYED === "true") {
+    return true;
+  }
+  if (typeof window !== "undefined") {
+    if ((window as any).__DERMAI_ENABLE_NOTIFICATION_SOFT_DELETE__ === true) return true;
+    try {
+      if (window.localStorage?.getItem("dermai_phase_a_deployed") === "true") return true;
+    } catch {}
+  }
+  return false;
+}
+
+export const IS_PHASE_A_MIGRATION_DEPLOYED = isPhaseAMigrationDeployed();
+
+let phaseARpcSupported: boolean | null = null;
+
+function markPhaseARpcUnsupported() {
+  phaseARpcSupported = false;
+  if (typeof window !== "undefined") {
+    try {
+      window.sessionStorage?.setItem("dermai_phase_a_rpc_supported", "false");
+    } catch {}
+  }
+}
+
+/**
+ * Guards calls to Phase A PostgreSQL RPCs (`soft_delete_user_notification`,
+ * `hide_broadcast_for_user`, `dispatch_authorized_notification`).
+ * Prevents unnecessary 404/PGRST202 RPC requests when the connected Supabase
+ * database has not yet had the Phase A SQL migration applied.
+ */
+export function isPhaseADatabaseRpcDeployed(): boolean {
+  if (phaseARpcSupported === false) return false;
+  if (typeof window !== "undefined") {
+    try {
+      if (window.sessionStorage?.getItem("dermai_phase_a_rpc_supported") === "false") {
+        phaseARpcSupported = false;
+        return false;
+      }
+    } catch {}
+    if ((window as any).__DERMAI_PHASE_A_DB_MIGRATED__ === true) return true;
+  }
+  if (typeof import.meta !== "undefined" && import.meta.env?.VITE_NOTIFICATION_PHASE_A_DB_MIGRATED === "true") {
+    return true;
+  }
+  return false;
+}
+
+export async function softDeleteNotification(
+  role: NotificationRole,
+  notifId: string,
+  userId: string,
+  metadata?: Record<string, any>
+): Promise<{ success: boolean; error?: string }> {
+  if (!notifId) return { success: false, error: "Missing notification ID" };
+
+  if (!isPhaseAMigrationDeployed()) {
+    return {
+      success: false,
+      error: "Backend database migration (Phase A) is required before soft-deleting notifications.",
+    };
+  }
+
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  let resolvedUserId = uuidRegex.test(userId || "") ? userId : "";
+  if (!resolvedUserId) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data?.session?.user?.id && uuidRegex.test(data.session.user.id)) {
+        resolvedUserId = data.session.user.id;
+      }
+    } catch {}
+  }
+  if (!resolvedUserId) {
+    try {
+      const { data } = await supabase.auth.getUser();
+      if (data?.user?.id && uuidRegex.test(data.user.id)) {
+        resolvedUserId = data.user.id;
+      }
+    } catch {}
+  }
+
+  if (!resolvedUserId) {
+    return {
+      success: false,
+      error: "Authenticated user session is required to delete notifications.",
+    };
+  }
+
+  const aliases = getNotificationHiddenAliases(role, notifId, metadata);
+  const fallbackScopeId =
+    metadata?.clinic_id ||
+    metadata?.clinicId ||
+    (userId && !uuidRegex.test(userId) ? userId : undefined);
+
+  // 1. Optimistic tracking in recipient-scoped local hidden set (including synthetic/UUID twin aliases)
+  saveHiddenId(role, notifId, resolvedUserId, fallbackScopeId, aliases);
+  const nowIso = new Date().toISOString();
+
+  // 2. Shared broadcast soft deletion
+  const isBroadcast =
+    notifId.startsWith("broadcast-") ||
+    notifId.startsWith("clinic-broadcast-") ||
+    notifId.startsWith("doc-broadcast-") ||
+    Boolean(metadata?.broadcast_id) ||
+    metadata?.subtype === "admin_announcement" ||
+    metadata?.type === "broadcast";
+
+  let broadcastPersisted = false;
+  let lastDbError: string | undefined;
+
+  if (isBroadcast) {
+    const rawBId = metadata?.broadcast_id || notifId.replace(/^(?:clinic-|doc-)?broadcast-/, "");
+    if (rawBId && uuidRegex.test(String(rawBId))) {
+      const bcastAliases = Array.from(
+        new Set([
+          ...aliases,
+          String(rawBId),
+          `broadcast-${rawBId}`,
+          `clinic-broadcast-${rawBId}`,
+          `doc-broadcast-${rawBId}`,
+        ])
+      );
+      saveHiddenId(role, String(rawBId), resolvedUserId, fallbackScopeId, bcastAliases);
+      try {
+        let rpcSucceeded = false;
+        if (isPhaseADatabaseRpcDeployed()) {
+          const { error: rpcErr } = await supabase.rpc("hide_broadcast_for_user", {
+            p_broadcast_id: rawBId,
+          });
+          if (!rpcErr) {
+            rpcSucceeded = true;
+            broadcastPersisted = true;
+            phaseARpcSupported = true;
+          } else if (rpcErr.code === "PGRST202" || rpcErr.code === "42883") {
+            markPhaseARpcUnsupported();
+          } else {
+            lastDbError = rpcErr.message;
+          }
+        }
+        if (!rpcSucceeded) {
+          const { data: insertedBcast, error: bcastInsertErr } = await supabase
+            .from("user_notification")
+            .insert({
+              user_id: resolvedUserId,
+              title: "Hidden Broadcast",
+              body: "User soft-deleted broadcast",
+              message: "User soft-deleted broadcast",
+              type: "broadcast_hidden",
+              is_read: true,
+              metadata: {
+                ...(metadata || {}),
+                hidden_broadcast_id: rawBId,
+                hidden_synthetic_id: notifId,
+                hidden_aliases: bcastAliases,
+                hidden_at: nowIso,
+                idempotency_key: `hide_broadcast_${rawBId}_${resolvedUserId}`,
+              },
+            })
+            .select("notif_id");
+
+          if ((!bcastInsertErr && Array.isArray(insertedBcast) && insertedBcast.length > 0) || bcastInsertErr?.code === "23505") {
+            broadcastPersisted = true;
+          } else if (bcastInsertErr) {
+            lastDbError = bcastInsertErr.message;
+          }
+        }
+      } catch (err: any) {
+        lastDbError = err?.message || String(err);
+        console.warn("[softDeleteNotification] Broadcast hide notice:", err);
+      }
+    }
+    if (!uuidRegex.test(notifId)) {
+      if (!broadcastPersisted) {
+        removeHiddenId(role, notifId, resolvedUserId, fallbackScopeId, aliases);
+        return { success: false, error: lastDbError || "Failed to persist broadcast deletion." };
+      }
+      return { success: true };
+    }
+  }
+
+  // 3. Database user_notification row with UUID primary key
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(notifId);
+  if (isUuid) {
+    let uuidPersisted = false;
+    try {
+      let rpcHandled = false;
+      if (isPhaseADatabaseRpcDeployed()) {
+        const { data: rpcData, error: rpcErr } = await supabase.rpc("soft_delete_user_notification", {
+          p_notif_id: notifId,
+        });
+        if (!rpcErr && rpcData === true) {
+          rpcHandled = true;
+          uuidPersisted = true;
+          phaseARpcSupported = true;
+        } else if (rpcErr && (rpcErr.code === "PGRST202" || rpcErr.code === "42883")) {
+          markPhaseARpcUnsupported();
+        } else if (rpcErr) {
+          lastDbError = rpcErr.message;
+        }
+      }
+
+      let updatedRowCount = 0;
+      if (!rpcHandled) {
+        // Fetch existing row first so existing database metadata keys are 100% preserved
+        let existingDbMeta: Record<string, any> = {};
+        let rowOwnedByCaller = false;
+        try {
+          const { data: existingRow } = await supabase
+            .from("user_notification")
+            .select("notif_id, user_id, metadata")
+            .eq("notif_id", notifId)
+            .eq("user_id", resolvedUserId)
+            .maybeSingle();
+          if (existingRow) {
+            rowOwnedByCaller = true;
+            if (existingRow.metadata && typeof existingRow.metadata === "object") {
+              existingDbMeta = existingRow.metadata;
+            }
+          }
+        } catch {}
+
+        if (rowOwnedByCaller) {
+          const updatedMeta = {
+            ...existingDbMeta,
+            ...(metadata || {}),
+            hidden_at: nowIso,
+            hidden_aliases: aliases,
+          };
+
+          const { data: updatedRows, error: updateErr } = await supabase
+            .from("user_notification")
+            .update({ metadata: updatedMeta })
+            .eq("notif_id", notifId)
+            .eq("user_id", resolvedUserId)
+            .select("notif_id");
+
+          if (!updateErr && Array.isArray(updatedRows) && updatedRows.length > 0) {
+            updatedRowCount = updatedRows.length;
+            uuidPersisted = true;
+          } else if (updateErr) {
+            lastDbError = updateErr.message;
+            console.warn("[softDeleteNotification] DB metadata update notice:", updateErr.message);
+          }
+        }
+      }
+
+      // Persist recipient-scoped synthetic_hidden marker if row belonged to another user_id
+      // (e.g. shared clinic application row in Admin) or has synthetic twin aliases
+      if (!rpcHandled && (updatedRowCount === 0 || aliases.length > 1)) {
+        const { data: insertedMarker, error: markerErr } = await supabase
+          .from("user_notification")
+          .insert({
+            user_id: resolvedUserId,
+            title: "Hidden Synthetic",
+            body: "User soft-deleted synthetic notification",
+            message: "User soft-deleted synthetic notification",
+            type: "synthetic_hidden",
+            is_read: true,
+            metadata: {
+              ...(metadata || {}),
+              hidden_synthetic_id: notifId,
+              hidden_aliases: aliases,
+              hidden_at: nowIso,
+              idempotency_key: `hide_synthetic_${notifId}_${resolvedUserId}`,
+            },
+          })
+          .select("notif_id");
+
+        if ((!markerErr && Array.isArray(insertedMarker) && insertedMarker.length > 0) || markerErr?.code === "23505") {
+          uuidPersisted = true;
+        } else if (markerErr) {
+          lastDbError = markerErr.message;
+        }
+      }
+    } catch (err: any) {
+      lastDbError = err?.message || String(err);
+      console.warn("[softDeleteNotification] Soft delete notice:", err);
+    }
+
+    if (!uuidPersisted && !broadcastPersisted) {
+      removeHiddenId(role, notifId, resolvedUserId, fallbackScopeId, aliases);
+      return {
+        success: false,
+        error: lastDbError || "Failed to soft-delete notification (0 rows affected).",
+      };
+    }
+    return { success: true };
+  }
+
+  // 4. Synthetic notification fallback (cross-device sync marker)
+  try {
+    const markerPayload: any = {
+      user_id: resolvedUserId,
+      title: "Hidden Synthetic",
+      body: "User soft-deleted synthetic notification",
+      message: "User soft-deleted synthetic notification",
+      type: "synthetic_hidden",
+      is_read: true,
+      metadata: {
+        ...(metadata || {}),
+        hidden_synthetic_id: notifId,
+        hidden_aliases: aliases,
+        hidden_at: nowIso,
+        idempotency_key: `hide_synthetic_${notifId}_${resolvedUserId}`,
+      },
+    };
+    const { data: insertedRows, error: insertErr } = await supabase
+      .from("user_notification")
+      .insert(markerPayload)
+      .select("notif_id");
+
+    if ((!insertErr && Array.isArray(insertedRows) && insertedRows.length > 0) || insertErr?.code === "23505") {
+      return { success: true };
+    }
+    lastDbError = insertErr?.message || "Failed to persist synthetic notification deletion (0 rows affected).";
+  } catch (err: any) {
+    lastDbError = err?.message || String(err);
+  }
+
+  removeHiddenId(role, notifId, resolvedUserId, fallbackScopeId, aliases);
+  return {
+    success: false,
+    error: lastDbError || "Failed to soft-delete synthetic notification.",
+  };
+}
+
 export function isNotificationRead(
   id: string,
   dbIsRead: boolean,
@@ -168,6 +1016,65 @@ export function isNotificationRead(
   }
 
   return false;
+}
+
+/**
+ * Standardized occurrence key for appointment reminders.
+ * Produces canonical format: YYYY-MM-DD_HH-MI (e.g. '2026-11-20_14-30') in Asia/Manila.
+ * Exactly matches the SQL pg_cron generator in dispatch_upcoming_appointment_reminders().
+ */
+export function getStandardAppointmentOccurrenceKey(dateVal?: string | null, timeVal?: string | null): string {
+  if (!dateVal) return "unknown_00-00";
+
+  // Resolve Manila calendar date (YYYY-MM-DD)
+  let datePart = "";
+  if (typeof dateVal === "string" && /^\d{4}-\d{2}-\d{2}/.test(dateVal)) {
+    datePart = dateVal.slice(0, 10);
+  } else {
+    try {
+      const d = new Date(dateVal);
+      if (!isNaN(d.getTime())) {
+        datePart = new Intl.DateTimeFormat("en-CA", {
+          timeZone: "Asia/Manila",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(d);
+      }
+    } catch {}
+  }
+  if (!datePart) datePart = String(dateVal).slice(0, 10);
+
+  // Resolve Manila time (HH-MI, 24-hour format)
+  let timePart = "00-00";
+  const cleanTime = (timeVal || "").trim();
+  if (cleanTime) {
+    const match24 = cleanTime.match(/^(\d{1,2})[:\-](\d{2})/);
+    const isPm = /pm/i.test(cleanTime);
+    const isAm = /am/i.test(cleanTime);
+    if (match24) {
+      let h = parseInt(match24[1], 10);
+      const m = match24[2];
+      if (isPm && h < 12) h += 12;
+      if (isAm && h === 12) h = 0;
+      timePart = `${String(h).padStart(2, "0")}-${m}`;
+    }
+  } else if (typeof dateVal === "string" && dateVal.includes("T")) {
+    try {
+      const d = new Date(dateVal);
+      if (!isNaN(d.getTime())) {
+        const parts = new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Asia/Manila",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).format(d);
+        timePart = parts.replace(":", "-");
+      }
+    } catch {}
+  }
+
+  return `${datePart}_${timePart}`;
 }
 
 export function resolveAppointmentTimestamp(appt: any, preferredTimestamp?: string): string {
@@ -324,14 +1231,46 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
       apptId &&
       (isDoctorAction ||
         normType === "appointment-cancelled" ||
+        normType === "appointment-canceled" ||
         normType === "appointment-request" ||
         normType === "appointment-delegated" ||
         normType === "appointment-confirmed" ||
         normType === "appointment-completed" ||
+        normType === "consultation-completed" ||
         normType === "appointment-accepted" ||
-        normType === "appointment-scheduled")
+        normType === "appointment-scheduled" ||
+        normType === "new-booking")
     ) {
-      const apptActionKey = `${apptId}:::${normType}`;
+      // Canonicalize appointment actions to avoid duplicate cards when persistent DB rows
+      // and synthetic live appointment items represent the same lifecycle event
+      let canonicalAction = normType;
+      if (
+        normType === "appointment-scheduled" ||
+        normType === "appointment-accepted" ||
+        normType === "appointment-approved" ||
+        normType === "appointment-confirmed"
+      ) {
+        canonicalAction = "booking-confirmed";
+      } else if (
+        normType === "appointment-request" ||
+        normType === "appointment_request" ||
+        normType === "appointment-delegated" ||
+        normType === "new-booking"
+      ) {
+        canonicalAction = "booking-request";
+      } else if (
+        normType === "appointment-completed" ||
+        normType === "consultation-completed"
+      ) {
+        canonicalAction = "booking-completed";
+      } else if (
+        normType === "appointment-cancelled" ||
+        normType === "appointment-canceled"
+      ) {
+        canonicalAction = "booking-cancelled";
+      }
+
+      const apptActionKey = `${apptId}:::${canonicalAction}`;
       if (seenApptActions.has(apptActionKey)) {
         const existing = itemByKey.get(`appt:${apptActionKey}`);
         if (existing && item.isRead) existing.isRead = true;
@@ -389,6 +1328,9 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
 export async function fetchPatientNotifications(userId: string): Promise<NotificationItem[]> {
   if (!userId) return [];
   const readSet = getReadIds("patient", userId);
+  const hiddenSet = getHiddenIds("patient", userId);
+  const hiddenBroadcastIds = new Set<string>();
+  const hiddenSyntheticIds = new Set<string>();
   const items: NotificationItem[] = [];
 
   try {
@@ -400,7 +1342,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         .select("notif_id, type, subtype, title, body, is_read, metadata, created_at")
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
-        .limit(40),
+        .limit(80),
       supabase
         .from("patient_appointment")
         .select(`
@@ -424,9 +1366,16 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
       supabase
         .from("user")
         .select("user_id, full_name, avatar_url, email, role")
-        .or("role.eq.admin,email.eq.dermaisupport@gmail.com,user_id.eq.03c4dbd4-5d15-4c78-872e-93811b3afa23")
+        .eq("role", "admin")
         .limit(10),
+      loadUserHiddenMarkersFromDb("patient", userId, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds),
     ]);
+
+    if (dbNotifs) {
+      dbNotifs.forEach((n) => {
+        extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "patient");
+      });
+    }
 
     const adminProfileById = new Map<string, { fullName?: string; avatarUrl?: string }>();
     let defaultAdminAvatar: string | undefined = undefined;
@@ -443,7 +1392,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
       }
     });
 
-    // Also check profiles table for admin avatar or specific admin_id / resolved_by in ticket metadata
+    // Also check user table for admin avatar or specific admin_id / resolved_by in ticket metadata
     const ticketAdminIds = Array.from(
       new Set(
         (dbNotifs || [])
@@ -453,7 +1402,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     );
     if (!defaultAdminAvatar || ticketAdminIds.length > 0) {
       try {
-        let profQuery = supabase.from("profiles").select("user_id, full_name, avatar_url, profile_picture, role");
+        let profQuery = supabase.from("user").select("user_id, full_name, avatar_url, role");
         if (ticketAdminIds.length > 0) {
           profQuery = profQuery.or(`role.eq.admin,user_id.in.(${ticketAdminIds.join(",")})`);
         } else {
@@ -461,7 +1410,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         }
         const { data: adminProfs } = await profQuery.limit(10);
         (adminProfs || []).forEach((ap: any) => {
-          const rawAv = ap.avatar_url || ap.profile_picture;
+          const rawAv = ap.avatar_url;
           const resolvedUrl = rawAv ? (resolveAvatarUrl(rawAv) || rawAv) : undefined;
           if (ap.user_id) {
             const existing = adminProfileById.get(String(ap.user_id));
@@ -552,6 +1501,13 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     // 1. Direct user_notification records for this patient
     if (dbNotifs) {
       dbNotifs.forEach((n) => {
+        if (extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "patient")) {
+          return;
+        }
+        if (hiddenSet.has(n.notif_id) || (n as any).hidden_at || n.metadata?.hidden_at) {
+          return;
+        }
+
         // Suppress all subscription/plan notifications (receipts & confirmations are handled strictly via email)
         if (
           n.type === "subscription_expired" ||
@@ -867,6 +1823,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         // A. Confirmed / Accepted Appointment
         if (appt.status === "confirmed" || appt.doctor_status === "approved") {
           const notifId = `appt-accepted-${appt.appointment_id}`;
+          const acceptTime = appt.doctor_reviewed_at || appt.created_at || new Date().toISOString();
           items.push({
             id: notifId,
             type: "appointment-accepted",
@@ -877,7 +1834,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             senderType: "clinic",
             senderAvatar: clinicLogo,
             link: "/dashboard/appointment-status",
-            timestamp: appt.created_at || new Date().toISOString(),
+            timestamp: acceptTime,
             isRead: isNotificationRead(notifId, false, readSet, {
               appointmentId: appt.appointment_id,
               title: "Appointment Confirmed",
@@ -928,6 +1885,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         // B2. Patient-Initiated or Administrative Cancellation
         if (appt.status === "cancelled") {
           const notifId = `appt-cancelled-${appt.appointment_id}`;
+          const cancelTime = appt.cancelled_at || appt.updated_at || appt.created_at || new Date().toISOString();
           const noteText = appt.clinic_note ? ` Note: "${appt.clinic_note}".` : "";
           const cancelMsg = `Your consultation request with ${clinicName} on ${dateStr} was cancelled.${noteText}`;
 
@@ -941,7 +1899,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             senderType: "clinic",
             senderAvatar: clinicLogo,
             link: "/dashboard/appointment-status",
-            timestamp: appt.created_at || new Date().toISOString(),
+            timestamp: cancelTime,
             isRead: isNotificationRead(notifId, false, readSet, {
               appointmentId: appt.appointment_id,
               title: "Appointment Cancelled",
@@ -954,6 +1912,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
         // C. Completed Consultation
         if (appt.status === "completed") {
           const notifId = `appt-completed-${appt.appointment_id}`;
+          const compTime = appt.doctor_reviewed_at || appt.updated_at || appt.created_at || new Date().toISOString();
           items.push({
             id: notifId,
             type: "appointment-completed",
@@ -964,7 +1923,7 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
             senderType: "clinic",
             senderAvatar: clinicLogo,
             link: "/dashboard/history",
-            timestamp: appt.created_at || new Date().toISOString(),
+            timestamp: compTime,
             isRead: isNotificationRead(notifId, false, readSet, {
               appointmentId: appt.appointment_id,
               title: "Consultation Completed",
@@ -1038,6 +1997,13 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
 
     if (broadcasts) {
       broadcasts.forEach((b: any) => {
+        if (
+          hiddenBroadcastIds.has(b.broadcast_id) ||
+          hiddenSet.has(`broadcast-${b.broadcast_id}`) ||
+          hiddenSet.has(`doc-broadcast-${b.broadcast_id}`)
+        ) {
+          return;
+        }
         const normBTitle = (b.title || "").trim().toLowerCase();
         const normBMsg = (b.message || "").trim().toLowerCase();
         const alreadyDelivered = items.some((i) => {
@@ -1075,7 +2041,10 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
     console.warn("[notificationService] Error fetching patient notifications:", err);
   }
 
-  return deduplicateNotificationItems(items);
+  const deduplicated = deduplicateNotificationItems(items);
+  return deduplicated.filter(
+    (item) => !isNotificationItemHidden(item, "patient", hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds)
+  );
 }
 
 /**
@@ -1092,9 +2061,14 @@ export async function fetchPatientNotifications(userId: string): Promise<Notific
 export async function fetchDoctorNotifications(userId: string, userEmail?: string, limit: number = 100): Promise<NotificationItem[]> {
   if (!userId) return [];
   const readSet = getReadIds("doctor", userId);
+  const hiddenSet = getHiddenIds("doctor", userId);
+  const hiddenBroadcastIds = new Set<string>();
+  const hiddenSyntheticIds = new Set<string>();
   const items: NotificationItem[] = [];
 
   try {
+    await loadUserHiddenMarkersFromDb("doctor", userId, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds);
+
     // 1. Resolve Doctor ID & ALL branch clinic_ids from clinic_doctor table
     const docIds: string[] = [userId];
     const branchClinicIds: string[] = [];
@@ -1131,24 +2105,12 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       const { data: adminUser } = await supabase
         .from("user")
         .select("avatar_url")
-        .or("role.eq.admin,email.eq.dermaisupport@gmail.com,user_id.eq.03c4dbd4-5d15-4c78-872e-93811b3afa23")
+        .eq("role", "admin")
         .not("avatar_url", "is", null)
         .limit(1)
         .maybeSingle();
       if (adminUser?.avatar_url) {
         adminAvatar = resolveAvatarUrl(adminUser.avatar_url) || adminUser.avatar_url;
-      }
-      if (!adminAvatar) {
-        const { data: adminProf } = await supabase
-          .from("profiles")
-          .select("avatar_url, profile_picture")
-          .eq("role", "admin")
-          .limit(1)
-          .maybeSingle();
-        const rawAv = (adminProf as any)?.avatar_url || (adminProf as any)?.profile_picture;
-        if (rawAv) {
-          adminAvatar = resolveAvatarUrl(rawAv) || rawAv;
-        }
       }
     } catch { }
 
@@ -1270,28 +2232,73 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
             },
           });
 
-          // B. Genuine upcoming consultation reminder (approaching scheduled time within 24 hours)
+          // B. Genuine upcoming consultation reminder (approaching scheduled time within 24 hours, or past scheduled time)
+          // Preserves genuinely issued reminders in history, marks them expired once appointment time passes, and never auto-removes.
           // Suppresses redundant self-confirmation ("... has been confirmed") when doctor approves the appointment
           if (appt.doctor_status === "approved" && appt.status !== "completed" && appt.date) {
             const parsedApptTime = resolveAppointmentTimestamp(appt, appt.date);
             const apptTimestamp = new Date(parsedApptTime).getTime();
             const now = Date.now();
             const isApproaching = !isNaN(apptTimestamp) && apptTimestamp >= now && apptTimestamp - now <= 24 * 60 * 60 * 1000;
-            if (isApproaching) {
-              const notifId = `doc-reminder-${appt.appointment_id}`;
+            const isRecentPastScheduled = !isNaN(apptTimestamp) && apptTimestamp < now;
+            if (isApproaching || isRecentPastScheduled) {
+              const isExpired = isRecentPastScheduled;
+              const occurrenceKey = getStandardAppointmentOccurrenceKey(appt.date, appt.time);
+              const notifId = `doc-reminder-${appt.appointment_id}-${occurrenceKey}`;
+              const legacyNotifId = `doc-reminder-${appt.appointment_id}`;
               const timeStr = appt.time ? ` at ${appt.time}` : "";
+              const reminderTimestamp = !isNaN(apptTimestamp)
+                ? new Date(Math.max(new Date(appt.created_at || 0).getTime(), apptTimestamp - 24 * 60 * 60 * 1000)).toISOString()
+                : (appt.created_at || new Date().toISOString());
+
+              // Persist genuine reminder if approaching so it remains in DB history indefinitely
+              // Anchored to occurrenceKey so rescheduled appointments get distinct genuine reminders
+              if (
+                isApproaching &&
+                userId &&
+                !hiddenSet.has(notifId) &&
+                !hiddenSet.has(legacyNotifId) &&
+                !hiddenSyntheticIds.has(notifId)
+              ) {
+                sendAuthorizedNotification({
+                  userId,
+                  type: "appointment-reminder",
+                  subtype: "reminder_24h",
+                  title: "Upcoming Consultation Reminder",
+                  body: `Reminder: Consultation with ${patient}${condition} is scheduled for ${dateStr}${timeStr} at ${clinic}.`,
+                  metadata: {
+                    appointment_id: appt.appointment_id,
+                    appointmentId: appointmentId,
+                    clinic_id: clinicId,
+                    clinicId: clinicId,
+                    clinic_name: clinic,
+                    branch_name: clinic,
+                    patient_id: patientId,
+                    patientId: patientId,
+                    category: "appointment",
+                    link: isExpired ? undefined : "/doctor/scheduled",
+                    is_expired: isExpired,
+                    disabled: isExpired,
+                    occurrence: occurrenceKey,
+                    idempotency_key: `doc_reminder_${appt.appointment_id}_${occurrenceKey}_${userId}`,
+                  },
+                }).catch(() => {});
+              }
+
               items.push({
                 id: notifId,
                 type: "appointment-reminder",
                 category: "appointment",
-                title: "Upcoming Consultation Reminder",
-                message: `Reminder: Consultation with ${patient}${condition} is scheduled for ${dateStr}${timeStr} at ${clinic}.`,
+                title: isExpired ? "Past Consultation Reminder" : "Upcoming Consultation Reminder",
+                message: isExpired
+                  ? `Consultation with ${patient}${condition} scheduled for ${dateStr}${timeStr} at ${clinic} has passed its scheduled time.`
+                  : `Reminder: Consultation with ${patient}${condition} is scheduled for ${dateStr}${timeStr} at ${clinic}.`,
                 senderName: clinic,
                 senderType: "clinic",
                 senderAvatar: clinicLogo || undefined,
-                link: "/doctor/scheduled",
-                timestamp: appt.created_at || new Date().toISOString(),
-                isRead: readSet.has(notifId),
+                link: isExpired ? undefined : "/doctor/scheduled",
+                timestamp: reminderTimestamp,
+                isRead: readSet.has(notifId) || readSet.has(legacyNotifId),
                 metadata: {
                   appointment_id: appt.appointment_id,
                   appointmentId: appointmentId,
@@ -1301,6 +2308,12 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
                   branch_name: clinic,
                   patient_id: patientId,
                   patientId: patientId,
+                  category: "appointment",
+                  link: isExpired ? undefined : "/doctor/scheduled",
+                  is_expired: isExpired,
+                  disabled: isExpired,
+                  occurrence: occurrenceKey,
+                  idempotency_key: `doc_reminder_${appt.appointment_id}_${occurrenceKey}_${userId}`,
                 },
               });
             }
@@ -1309,13 +2322,12 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       }
     }
 
-    // 2B. Cross-Branch: Fetch NEW unassigned pending appointment requests
+    // 2B. Cross-Branch: Fetch unassigned and claimed appointment requests
     //     from ALL clinic branches this doctor belongs to.
     //     This fires for any branch — even one not currently active in the UI.
     let fetchedBranchRequests: any[] = [];
     if (validBranchIds.length > 0) {
       const alreadyTrackedIds = new Set(items.map((i) => {
-        // extract appointment_id suffix from notifId like "doc-req-<uuid>"
         return i.metadata?.appointment_id;
       }).filter(Boolean));
 
@@ -1329,7 +2341,6 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           check_in_status,
           doctor_status,
           patient_name,
-          ai_condition_name,
           assigned_doctor_id,
           created_at,
           user_id,
@@ -1337,8 +2348,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           clinic:clinic_id(name, logo_url)
         `)
         .in("clinic_id", validBranchIds)
-        .is("assigned_doctor_id", null)       // unassigned requests only
-        .in("status", ["pending", "requested"]) // only new incoming requests
+        .in("status", ["pending", "requested", "confirmed", "scheduled"])
         .order("created_at", { ascending: false })
         .limit(30);
 
@@ -1350,9 +2360,15 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           // Skip if we already added a notification for this appointment
           if (alreadyTrackedIds.has(appt.appointment_id)) return;
 
+          // If assigned to this doctor, skip here as it's handled above in doctor's own appointments
+          if (appt.assigned_doctor_id && validDoctorIds.includes(appt.assigned_doctor_id)) {
+            return;
+          }
+
           const notifId = `doc-branch-req-${appt.appointment_id}`;
+          const isUnassigned = !appt.assigned_doctor_id;
+          const isClaimedByOther = Boolean(appt.assigned_doctor_id && !validDoctorIds.includes(appt.assigned_doctor_id));
           const patient = appt.patient_name || "A patient";
-          const condition = appt.ai_condition_name ? ` for ${appt.ai_condition_name}` : "";
           const dateStr = appt.date
             ? new Date(appt.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
             : "a scheduled date";
@@ -1370,16 +2386,21 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           const patientId = appt.user_id || appt.appointment_id;
           const clinicId = appt.clinic_id;
           const appointmentId = appt.appointment_id;
-          const targetNav = clinicId && patientId
-            ? `/doctor/clinics/${clinicId}/patients/${patientId}?appointmentId=${appointmentId}`
-            : "/doctor/appointments";
+          // Privacy protection: unassigned branch requests navigate to incoming review queue, never to private patient chart
+          const targetNav = isClaimedByOther
+            ? undefined
+            : isUnassigned
+            ? "/doctor/appointments"
+            : (clinicId && patientId ? `/doctor/clinics/${clinicId}/patients/${patientId}?appointmentId=${appointmentId}` : "/doctor/appointments");
 
           items.push({
             id: notifId,
             type: "appointment_request",
             category: "appointment",
-            title: "New Appointment Request",
-            message: `${patient} has requested a consultation${condition} at ${clinic} on ${dateStr}. Tap to review.`,
+            title: isClaimedByOther ? "Appointment Claimed by Colleague" : "New Appointment Request",
+            message: isClaimedByOther
+              ? `This consultation request at ${clinic} has already been claimed by another doctor.`
+              : `${patient} has requested a consultation at ${clinic} on ${dateStr}. Tap to review.`,
             senderName: patient,
             senderType: "patient",
             senderAvatar: patientAvatar || undefined,
@@ -1398,6 +2419,13 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
               category: "appointment",
               type: "appointment_request",
               link: targetNav,
+              is_unassigned: isUnassigned,
+              is_handled: isClaimedByOther,
+              can_claim: !isClaimedByOther,
+              disabled: isClaimedByOther,
+              ai_condition_name: null, // Medical details strictly masked from unassigned requests
+              patient_condition: null,
+              findings: null,
             },
           });
         });
@@ -1443,6 +2471,13 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
 
     if (broadcasts) {
       broadcasts.forEach((b: any) => {
+        if (
+          hiddenBroadcastIds.has(b.broadcast_id) ||
+          hiddenSet.has(`broadcast-${b.broadcast_id}`) ||
+          hiddenSet.has(`doc-broadcast-${b.broadcast_id}`)
+        ) {
+          return;
+        }
         const normBTitle = (b.title || "").trim().toLowerCase();
         const normBMsg = (b.message || "").trim().toLowerCase();
         const alreadyDelivered = items.some((i) => {
@@ -1554,6 +2589,16 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       }
 
       directNotifs.forEach((n) => {
+        extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "doctor");
+      });
+
+      directNotifs.forEach((n) => {
+        if (extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "doctor")) {
+          return;
+        }
+        if (hiddenSet.has(n.notif_id) || (n as any).hidden_at || n.metadata?.hidden_at) {
+          return;
+        }
         const isBroadcast = n.type === "broadcast" || n.subtype === "admin_announcement";
         const isMaintenance = n.subtype === "maintenance_alert" || n.type === "maintenance_alert";
         const isTicket =
@@ -1694,13 +2739,52 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
 
         const matchingAppt = resolvedApptId ? allDoctorAppointments.find((a: any) => a.appointment_id === resolvedApptId) : undefined;
 
+        // Enhanced Doctor Reminder Lifecycle & Retention
+        const isReminder = n.type === "appointment-reminder" || n.subtype === "reminder_24h";
+        let isExpiredReminder = Boolean(meta.is_expired);
+        if (isReminder && !isExpiredReminder) {
+          if (matchingAppt?.date) {
+            const parsedTime = resolveAppointmentTimestamp(matchingAppt, matchingAppt.date);
+            const apptTimestamp = new Date(parsedTime).getTime();
+            if (!isNaN(apptTimestamp) && apptTimestamp < Date.now()) {
+              isExpiredReminder = true;
+            }
+          } else if (meta.scheduled_time || meta.date) {
+            const apptTimestamp = new Date(meta.scheduled_time || meta.date).getTime();
+            if (!isNaN(apptTimestamp) && apptTimestamp < Date.now()) {
+              isExpiredReminder = true;
+            }
+          }
+        }
+
+        // Enhanced Branch Request Colleague Claim & Privacy Protection
+        const isBranchReq = n.type === "appointment_request" && (meta.is_unassigned || !matchingAppt?.assigned_doctor_id);
+        const isClaimedByColleague = Boolean(
+          matchingAppt?.assigned_doctor_id && !validDoctorIds.includes(matchingAppt.assigned_doctor_id)
+        );
+
+        let finalTitle = n.title;
+        let finalMessage = n.body || "";
+        let finalLink = resolvedLink;
+
+        if (isExpiredReminder) {
+          finalTitle = "Past Consultation Reminder";
+          finalLink = undefined;
+        } else if (isClaimedByColleague) {
+          finalTitle = "Appointment Claimed by Colleague";
+          finalMessage = `This consultation request at ${enrichedClinic?.name || "your clinic branch"} has already been claimed by another doctor.`;
+          finalLink = undefined;
+        } else if (isBranchReq && !matchingAppt?.assigned_doctor_id) {
+          finalLink = "/doctor/appointments";
+        }
+
         items.push({
           id: n.notif_id,
           type: n.type || (isBookingNotif ? "appointment_request" : "system"),
           category,
-          title: n.title,
-          message: n.body || "",
-          link: resolvedLink,
+          title: finalTitle,
+          message: finalMessage,
+          link: finalLink,
           senderName: finalSenderName,
           senderType: finalSenderType,
           senderAvatar: finalSenderAvatar || undefined,
@@ -1720,6 +2804,13 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
             appointmentId: resolvedApptId,
             appointment_status: matchingAppt?.status || meta.appointment_status || meta.status,
             doctor_status: matchingAppt?.doctor_status || meta.doctor_status,
+            is_expired: isExpiredReminder || meta.is_expired,
+            disabled: isExpiredReminder || isClaimedByColleague || meta.disabled,
+            is_handled: isClaimedByColleague || meta.is_handled,
+            can_claim: !isClaimedByColleague && !matchingAppt?.assigned_doctor_id && Boolean(meta.can_claim ?? true),
+            ai_condition_name: isBranchReq || isClaimedByColleague ? null : meta.ai_condition_name,
+            findings: isBranchReq || isClaimedByColleague ? null : meta.findings,
+            patient_condition: isBranchReq || isClaimedByColleague ? null : meta.patient_condition,
           },
         });
       });
@@ -1728,7 +2819,10 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
     console.warn("[notificationService] Error fetching doctor notifications:", err);
   }
 
-  return deduplicateNotificationItems(items);
+  const deduplicated = deduplicateNotificationItems(items);
+  return deduplicated.filter(
+    (item) => !isNotificationItemHidden(item, "doctor", hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds)
+  );
 }
 
 /**
@@ -1749,7 +2843,10 @@ export async function fetchClinicNotifications(
   userId?: string,
   clinicEmail?: string
 ): Promise<NotificationItem[]> {
-  const readSet = getReadIds("clinic", userId || clinicId);
+  const readSet = getReadIds("clinic", userId, clinicId);
+  const hiddenSet = getHiddenIds("clinic", userId, clinicId);
+  const hiddenBroadcastIds = new Set<string>();
+  const hiddenSyntheticIds = new Set<string>();
   const items: NotificationItem[] = [];
 
   try {
@@ -1816,30 +2913,32 @@ export async function fetchClinicNotifications(
       }
     }
 
+    if (resolvedUserId || resolvedClinicId) {
+      getHiddenIds("clinic", resolvedUserId, resolvedClinicId).forEach((id) => hiddenSet.add(id));
+    }
+    if (resolvedUserId) {
+      await loadUserHiddenMarkersFromDb(
+        "clinic",
+        resolvedUserId,
+        hiddenSet,
+        hiddenSyntheticIds,
+        hiddenBroadcastIds,
+        resolvedClinicId
+      );
+    }
+
     // Pre-fetch live admin profile picture from public.user / public.profiles in Supabase
     let adminAvatar: string | null = null;
     try {
       const { data: adminUser } = await supabase
         .from("user")
         .select("avatar_url")
-        .or("role.eq.admin,email.eq.dermaisupport@gmail.com,user_id.eq.03c4dbd4-5d15-4c78-872e-93811b3afa23")
+        .eq("role", "admin")
         .not("avatar_url", "is", null)
         .limit(1)
         .maybeSingle();
       if (adminUser?.avatar_url) {
         adminAvatar = resolveAvatarUrl(adminUser.avatar_url) || adminUser.avatar_url;
-      }
-      if (!adminAvatar) {
-        const { data: adminProf } = await supabase
-          .from("profiles")
-          .select("avatar_url, profile_picture")
-          .eq("role", "admin")
-          .limit(1)
-          .maybeSingle();
-        const rawAv = (adminProf as any)?.avatar_url || (adminProf as any)?.profile_picture;
-        if (rawAv) {
-          adminAvatar = resolveAvatarUrl(rawAv) || rawAv;
-        }
       }
     } catch { }
 
@@ -2205,50 +3304,6 @@ export async function fetchClinicNotifications(
           });
         }
       } catch { }
-
-      try {
-        const { data: profRows } = await supabase
-          .from("profiles")
-          .select("user_id, patient_id, first_name, last_name, full_name, avatar_url, profile_picture")
-          .in("user_id", missingIds);
-        if (Array.isArray(profRows)) {
-          profRows.forEach((p: any) => {
-            const uid = String(p.patient_id || p.user_id || "");
-            if (!uid) return;
-            const existing = patientProfileByUserId.get(uid);
-            const fullName =
-              existing?.fullName ||
-              cleanClinicPatientName(p.full_name) ||
-              cleanClinicPatientName([p.first_name, p.last_name].filter(Boolean).join(" "));
-            const avatarUrl = existing?.avatarUrl || p.avatar_url || p.profile_picture || undefined;
-            if (fullName || avatarUrl) {
-              patientProfileByUserId.set(uid, { fullName, avatarUrl });
-            }
-          });
-        }
-      } catch { }
-
-      try {
-        const { data: patRows } = await supabase
-          .from("patients")
-          .select("user_id, patient_id, first_name, last_name, full_name, avatar_url, profile_picture")
-          .in("user_id", missingIds);
-        if (Array.isArray(patRows)) {
-          patRows.forEach((p: any) => {
-            const uid = String(p.patient_id || p.user_id || "");
-            if (!uid) return;
-            const existing = patientProfileByUserId.get(uid);
-            const fullName =
-              existing?.fullName ||
-              cleanClinicPatientName(p.full_name) ||
-              cleanClinicPatientName([p.first_name, p.last_name].filter(Boolean).join(" "));
-            const avatarUrl = existing?.avatarUrl || p.avatar_url || p.profile_picture || undefined;
-            if (fullName || avatarUrl) {
-              patientProfileByUserId.set(uid, { fullName, avatarUrl });
-            }
-          });
-        }
-      } catch { }
     };
 
     const resolveClinicActivityPatient = (notifRow: any): { fullName: string; avatarUrl?: string; appointmentId?: string; patientId?: string } => {
@@ -2483,15 +3538,8 @@ export async function fetchClinicNotifications(
           const docStatus = (appt.doctor_status || appt.doctorStatus || "").toLowerCase();
           const apptStatus = (appt.status || "").toLowerCase();
 
-          // A. New Appointment Request / Pending Doctor Review
-          // ONLY if not already approved, rejected, or cancelled
-          if (
-            (apptStatus === "pending" || docStatus === "pending-review" || docStatus === "pending") &&
-            docStatus !== "rejected" &&
-            docStatus !== "approved" &&
-            apptStatus !== "cancelled" &&
-            apptStatus !== "rejected"
-          ) {
+          // A. New Appointment Request (Preserved across appointment status transitions)
+          if (apptId) {
             const notifId = `clinic-req-${apptId}`;
             const reqTime = resolveAppointmentTimestamp(appt, appt.created_at || appt.createdAt);
             const targetLink = apptId ? `/clinic/appointments?appointment=${apptId}` : "/clinic/appointments";
@@ -2512,8 +3560,8 @@ export async function fetchClinicNotifications(
             });
           }
 
-          // B. Doctor Action: Accepted Booking
-          if (docStatus === "approved" && apptStatus !== "completed" && apptStatus !== "cancelled") {
+          // B. Doctor Action: Accepted Booking (Preserved in history across completion)
+          if (docStatus === "approved" && apptStatus !== "cancelled") {
             const notifId = `clinic-doc-accept-${apptId}`;
             const acceptTime = resolveAppointmentTimestamp(appt, appt.doctor_reviewed_at || appt.doctorReviewedAt);
             const targetLink = apptId ? `/clinic/appointments?appointment=${apptId}` : "/clinic/appointments";
@@ -2609,7 +3657,7 @@ export async function fetchClinicNotifications(
           // F. Consultation Completed
           if (apptStatus === "completed") {
             const notifId = `clinic-complete-${apptId}`;
-            const compTime = resolveAppointmentTimestamp(appt, appt.created_at || appt.createdAt);
+            const compTime = resolveAppointmentTimestamp(appt, appt.doctor_reviewed_at || appt.doctorReviewedAt || appt.updated_at);
             const targetLink = apptId ? `/clinic/appointments?appointment=${apptId}` : "/clinic/appointments";
             items.push({
               id: notifId,
@@ -2635,22 +3683,12 @@ export async function fetchClinicNotifications(
     if (resolvedClinicId) {
       try {
         let dbRows: any[] = [];
-        const { data: nData, error: nErr } = await supabase
-          .from("notifications")
-          .select("*")
-          .in("type", ["booking_created", "doctor_reselection", "reselection_required"])
-          .eq("clinic_id", resolvedClinicId)
-          .order("created_at", { ascending: false })
-          .limit(30);
-
-        if (!nErr && Array.isArray(nData)) {
-          dbRows = nData;
-        } else {
+        if (resolvedUserId) {
           const { data: unData } = await supabase
             .from("user_notification")
             .select("*")
+            .eq("user_id", resolvedUserId)
             .in("type", ["booking_created", "doctor_reselection", "reselection_required"])
-            .eq("clinic_id", resolvedClinicId)
             .order("created_at", { ascending: false })
             .limit(30);
           if (Array.isArray(unData)) dbRows = unData;
@@ -2665,7 +3703,13 @@ export async function fetchClinicNotifications(
         }
 
         dbRows.forEach((r: any) => {
+          if (extractHiddenMarkersFromDbRow(r, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "clinic")) {
+            return;
+          }
           const notifId = String(r.id || r.notif_id);
+          if (hiddenSet.has(notifId) || (r as any).hidden_at || r.metadata?.hidden_at) {
+            return;
+          }
           const type = r.type || "booking_created";
           const resolvedPat = resolveClinicActivityPatient(r);
           const patDisplayName = resolvedPat.fullName;
@@ -2747,6 +3791,16 @@ export async function fetchClinicNotifications(
         );
 
         userNotifs.forEach((n: any) => {
+          extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "clinic");
+        });
+
+        userNotifs.forEach((n: any) => {
+          if (extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "clinic")) {
+            return;
+          }
+          if (hiddenSet.has(n.notif_id) || (n as any).hidden_at || n.metadata?.hidden_at) {
+            return;
+          }
           const isApproval =
             n.type === "clinic_application" ||
             n.subtype === "application_approved" ||
@@ -2917,11 +3971,12 @@ export async function fetchClinicNotifications(
       clinicRow?.verified === true;
 
     if (isApprovedClinic && resolvedClinicId) {
+      const approvalNotifId = `clinic-approved-${resolvedClinicId}`;
+      const isApprovalHidden = hiddenSet.has(approvalNotifId) || hiddenSyntheticIds.has(approvalNotifId);
       const hasExistingApproval = items.some(
         (i) => i.type === "application_approved" || i.category === "clinic"
       );
-      if (!hasExistingApproval) {
-        const approvalNotifId = `clinic-approved-${resolvedClinicId}`;
+      if (!hasExistingApproval && !isApprovalHidden) {
         const clinicName = clinicRow?.name || "Clinic";
         items.push({
           id: approvalNotifId,
@@ -2996,6 +4051,13 @@ export async function fetchClinicNotifications(
 
     if (broadcasts) {
       broadcasts.forEach((b: any) => {
+        if (
+          hiddenBroadcastIds.has(b.broadcast_id) ||
+          hiddenSet.has(`broadcast-${b.broadcast_id}`) ||
+          hiddenSet.has(`clinic-broadcast-${b.broadcast_id}`)
+        ) {
+          return;
+        }
         const normBTitle = (b.title || "").trim().toLowerCase();
         const normBMsg = (b.message || "").trim().toLowerCase();
         const alreadyDelivered = items.some((i) => {
@@ -3029,7 +4091,10 @@ export async function fetchClinicNotifications(
     console.warn("[notificationService] Error fetching clinic notifications:", err);
   }
 
-  return deduplicateNotificationItems(items);
+  const deduplicated = deduplicateNotificationItems(items);
+  return deduplicated.filter(
+    (item) => !isNotificationItemHidden(item, "clinic", hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds)
+  );
 }
 
 /**
@@ -3045,13 +4110,38 @@ export async function fetchClinicNotifications(
  * ----------------------------------------------------------------------------
  */
 export async function fetchAdminNotifications(userId?: string): Promise<NotificationItem[]> {
+  let resolvedAdminId = userId && userId !== "admin" ? userId : undefined;
+  if (!resolvedAdminId) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data?.session?.user?.id) resolvedAdminId = data.session.user.id;
+    } catch { }
+  }
+
   const readSet = new Set<string>([
     ...Array.from(getReadIds("admin", "admin")),
-    ...(userId ? Array.from(getReadIds("admin", userId)) : []),
+    ...(resolvedAdminId ? Array.from(getReadIds("admin", resolvedAdminId)) : []),
   ]);
+  const hiddenSet = new Set<string>([
+    ...Array.from(getHiddenIds("admin", "admin")),
+    ...(resolvedAdminId ? Array.from(getHiddenIds("admin", resolvedAdminId)) : []),
+  ]);
+  const hiddenBroadcastIds = new Set<string>();
+  const hiddenSyntheticIds = new Set<string>();
   const items: NotificationItem[] = [];
 
   try {
+    if (resolvedAdminId) {
+      await loadUserHiddenMarkersFromDb(
+        "admin",
+        resolvedAdminId,
+        hiddenSet,
+        hiddenSyntheticIds,
+        hiddenBroadcastIds,
+        "admin"
+      );
+    }
+
     // 0. Pre-load clinics, doctors, and users to resolve real avatars (logos, photos, user avatars)
     const [{ data: allClinics }, { data: allDoctors }, { data: allUsers }] = await Promise.all([
       supabase.from("clinic").select("clinic_id, name, logo_url, owner_user_id, email"),
@@ -3146,13 +4236,12 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
       return `${clinicDisplay} has submitted a new application for platform approval.`;
     };
 
-    // 1a. Query pending/submitted clinic registration applications directly from Supabase public.clinic
+    // 1a. Query clinic registration applications directly from Supabase public.clinic (all recent applications)
     let pendingClinics: any[] = [];
     try {
       const { data: clinicsData } = await supabase
         .from("clinic")
         .select("clinic_id, name, created_at, email, status, logo_url, address, district")
-        .in("status", ["pending", "submitted"])
         .order("created_at", { ascending: false })
         .limit(30);
       if (clinicsData) {
@@ -3161,31 +4250,6 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
     } catch (clinicErr) {
       console.warn("[fetchAdminNotifications] clinic table lookup warning:", clinicErr);
     }
-
-    // Fallback: Query public.clinic_registration if present
-    try {
-      const { data: regData } = await supabase
-        .from("clinic_registration")
-        .select("id, clinic_id, name, created_at, email, status, logo_url")
-        .in("status", ["pending", "submitted"])
-        .order("created_at", { ascending: false })
-        .limit(30);
-      if (regData && regData.length > 0) {
-        regData.forEach((r: any) => {
-          const rId = String(r.clinic_id || r.id);
-          if (!pendingClinics.some((c) => String(c.clinic_id || c.id) === rId)) {
-            pendingClinics.push({
-              clinic_id: rId,
-              name: r.name,
-              created_at: r.created_at,
-              email: r.email,
-              status: r.status,
-              logo_url: r.logo_url,
-            });
-          }
-        });
-      }
-    } catch {}
 
     // Fallback: Local storage mirrors for newly registered clinics
     if (typeof window !== "undefined") {
@@ -3199,7 +4263,6 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
               const laStatus = (la.status || "pending").toLowerCase();
               if (
                 laId &&
-                (laStatus === "pending" || laStatus === "submitted") &&
                 !pendingClinics.some((c) => String(c.clinic_id || c.id) === laId)
               ) {
                 pendingClinics.push({
@@ -3222,7 +4285,7 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
     try {
       const { data: cNotifs } = await supabase
         .from("user_notification")
-        .select("notif_id, type, subtype, title, body, message, metadata, is_read, read_at, created_at, user_id")
+        .select("notif_id, type, subtype, title, body, message, metadata, is_read, created_at, user_id")
         .or("type.eq.clinic,type.eq.clinic-pending,type.eq.new_clinic_application,subtype.eq.clinic_registration,subtype.eq.new_clinic_application")
         .order("created_at", { ascending: false })
         .limit(50);
@@ -3247,6 +4310,13 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
       );
       if (clinicId) {
         seenClinicIds.add(clinicId);
+      }
+      if (
+        extractHiddenMarkersFromDbRow(rn, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "admin") ||
+        hiddenSet.has(nid) ||
+        (clinicId && (hiddenSet.has(`admin-clinic-app-${clinicId}`) || hiddenSyntheticIds.has(`admin-clinic-app-${clinicId}`)))
+      ) {
+        return;
       }
 
       const clinicName =
@@ -3316,7 +4386,7 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
       });
     });
 
-    // 2. Open Support Tickets Across All Roles
+    // 2. Support Tickets Across All Roles (Preserved across status transitions)
     const { data: tickets } = await supabase
       .from("user_support_ticket")
       .select(`
@@ -3330,9 +4400,8 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
         user_id,
         user:user_id (user_id, full_name, email, role, avatar_url)
       `)
-      .in("status", ["pending", "open"])
       .order("created_at", { ascending: false })
-      .limit(15);
+      .limit(20);
 
     if (tickets) {
       tickets.forEach((t: any) => {
@@ -3341,20 +4410,24 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
         const roleStr = userObj?.role ? ` (${userObj.role})` : "";
         const notifId = `admin-ticket-${t.ticket_id}`;
         const avatar = resolveUserAvatar(userObj, sender) || (t.user_id && clinicByOwner.get(t.user_id)) || null;
+        const isResolved = t.status === "resolved" || t.status === "closed";
+        const ticketTitle = isResolved
+          ? `Support Ticket Resolved: ${t.subject || "User Inquiry"}`
+          : `Support Ticket: ${t.subject || "User Inquiry"}`;
 
         items.push({
           id: notifId,
-          type: "new-ticket",
+          type: isResolved ? "ticket-resolved" : "new-ticket",
           category: "ticket",
-          title: `Support Ticket: ${t.subject || "User Inquiry"}`,
+          title: ticketTitle,
           message: `${sender}${roleStr} submitted an inquiry: "${(t.message || "").slice(0, 80)}..."`,
           senderName: sender,
           senderType: (userObj?.role as any) || "user",
           senderAvatar: avatar,
           link: "/admin/helpdesk",
           timestamp: t.created_at || new Date().toISOString(),
-          isRead: readSet.has(notifId),
-          metadata: { ticket_id: t.ticket_id },
+          isRead: readSet.has(notifId) || isResolved,
+          metadata: { ticket_id: t.ticket_id, status: t.status },
         });
       });
     }
@@ -3562,34 +4635,12 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
       });
     }
 
-    // 7. General Admin Alerts / Notifications
-    const { data: adminAlerts } = await supabase
-      .from("admin_alert")
-      .select("notif_id, type, title, message, is_read, created_at")
-      .order("created_at", { ascending: false })
-      .limit(10);
-
-    if (adminAlerts) {
-      adminAlerts.forEach((a: any) => {
-        items.push({
-          id: a.notif_id,
-          type: a.type || "system",
-          category: "system",
-          title: a.title,
-          message: a.message,
-          senderType: "system",
-          timestamp: a.created_at,
-          isRead: Boolean(a.is_read || readSet.has(a.notif_id)),
-        });
-      });
-    }
-
-    // 8. Direct User Notifications for Admin (including booking events)
-    if (userId) {
+    // 7. Direct User Notifications for Admin (including booking events)
+    if (resolvedAdminId) {
       const { data: adminDirectNotifs } = await supabase
         .from("user_notification")
         .select("notif_id, type, subtype, title, body, message, is_read, metadata, created_at")
-        .eq("user_id", userId)
+        .eq("user_id", resolvedAdminId)
         .order("created_at", { ascending: false })
         .limit(30);
 
@@ -3628,6 +4679,16 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
         }
 
         adminDirectNotifs.forEach((n: any) => {
+          extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "admin");
+        });
+
+        adminDirectNotifs.forEach((n: any) => {
+          if (extractHiddenMarkersFromDbRow(n, hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds, "admin")) {
+            return;
+          }
+          if (hiddenSet.has(n.notif_id) || (n as any).hidden_at || n.metadata?.hidden_at) {
+            return;
+          }
           const notifId = String(n.notif_id || n.id || "");
           if (!notifId || items.some((i) => i.id === notifId)) return;
 
@@ -3691,6 +4752,7 @@ export async function fetchAdminNotifications(userId?: string): Promise<Notifica
   const seen = new Set<string>();
   const unique = items.filter((item) => {
     if (seen.has(item.id)) return false;
+    if (isNotificationItemHidden(item, "admin", hiddenSet, hiddenSyntheticIds, hiddenBroadcastIds)) return false;
     seen.add(item.id);
     return true;
   });
@@ -3753,9 +4815,6 @@ export async function markNotificationAsRead(
         query = query.eq("user_id", userId);
       }
       await query;
-    } catch { }
-    try {
-      await supabase.from("admin_alert").update({ is_read: true }).eq("notif_id", id);
     } catch { }
   } else if (id.startsWith("appt-") && userId) {
     const rawApptId = id.replace(/^appt-[a-z]+-/, "");
@@ -3853,9 +4912,6 @@ export async function markAllNotificationsAsRead(
       }
       await query;
     } catch { }
-    try {
-      await supabase.from("admin_alert").update({ is_read: true }).in("notif_id", uuidIds);
-    } catch { }
   }
 }
 
@@ -3930,6 +4986,12 @@ function normalizeCachedNotificationItem(item: NotificationItem): NotificationIt
 
 function readHydratedRoleStoreCache(key: string, fallbackKey?: string): NotificationItem[] | null {
   if (typeof window === "undefined") return null;
+  const parts = key.split(":");
+  const rolePart = (parts[0] || "patient") as NotificationRole;
+  const idPart = parts[1] && parts[1] !== "global" ? parts[1] : undefined;
+  const fallbackIdPart = fallbackKey ? fallbackKey.split(":")[1] : undefined;
+  const hiddenSet = getHiddenIds(rolePart, idPart, fallbackIdPart || (rolePart === "admin" ? "admin" : undefined));
+
   const keysToTry = [
     `${ROLE_STORE_CACHE_PREFIX}${key}`,
     ...(fallbackKey ? [`${ROLE_STORE_CACHE_PREFIX}${fallbackKey}`] : []),
@@ -3941,7 +5003,10 @@ function readHydratedRoleStoreCache(key: string, fallbackKey?: string): Notifica
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map(normalizeCachedNotificationItem);
+          const normalized = parsed
+            .map(normalizeCachedNotificationItem)
+            .filter((item) => !isNotificationItemHidden(item, rolePart, hiddenSet));
+          return normalized;
         }
       }
     } catch { }
@@ -4113,13 +5178,17 @@ export function useRoleNotifications(
               : prev?.senderName || normalized.senderName,
         };
       });
-      const unread = deduplicated.filter((n) => !n.isRead).length;
+      const hiddenSet = getHiddenIds(role, userId, clinicId || (role === "admin" ? "admin" : undefined));
+      const visibleData = deduplicated.filter(
+        (n) => !isNotificationItemHidden(n, role, hiddenSet)
+      );
+      const unread = visibleData.filter((n) => !n.isRead).length;
       store.state = {
-        notifications: deduplicated,
+        notifications: visibleData,
         unreadCount: unread,
         loading: false,
       };
-      writeHydratedRoleStoreCache(storeKey, deduplicated, userId);
+      writeHydratedRoleStoreCache(storeKey, visibleData, userId);
       store.listeners.forEach((l) => {
         try {
           l();
@@ -4186,20 +5255,10 @@ export function useRoleNotifications(
             { event: "*", schema: "public", table: "patient_appointment", filter: `clinic_id=eq.${clinicId}` },
             () => fetchFn()
           );
-          channel.on(
-            "postgres_changes",
-            { event: "*", schema: "public", table: "notifications", filter: `clinic_id=eq.${clinicId}` },
-            () => fetchFn()
-          );
         } else {
           channel.on(
             "postgres_changes",
             { event: "*", schema: "public", table: "patient_appointment" },
-            () => fetchFn()
-          );
-          channel.on(
-            "postgres_changes",
-            { event: "*", schema: "public", table: "notifications" },
             () => fetchFn()
           );
         }
@@ -4247,7 +5306,11 @@ export function useRoleNotifications(
 
     const handleCustomUpdate = (e: Event) => {
       const custom = e as CustomEvent;
-      if (custom?.detail?.action === "mark_all_read" || custom?.detail?.action === "mark_read") {
+      if (
+        custom?.detail?.action === "mark_all_read" ||
+        custom?.detail?.action === "mark_read" ||
+        custom?.detail?.action === "delete_notification"
+      ) {
         return;
       }
       fetchFn();
@@ -4291,6 +5354,108 @@ export function useRoleNotifications(
     await markAllNotificationsAsRead(ids, role, userId);
   }, [role, userId, clinicId, store]);
 
+  const deleteNotification = useCallback(
+    async (id: string, metadata?: Record<string, any>) => {
+      if (!id) return { success: false, error: "Missing notification ID" };
+
+      // 1. Optimistic removal from store and sibling stores matching role/user
+      const prevNotifications = store.state.notifications;
+      const prevUnreadCount = store.state.unreadCount;
+      const target = prevNotifications.find((n) => n.id === id);
+      const enrichedMeta: Record<string, any> = {
+        ...(target?.metadata || {}),
+        ...(metadata || {}),
+        ...(target?.type ? { type: metadata?.type || target.type } : {}),
+        ...(target?.subtype ? { subtype: metadata?.subtype || target.subtype } : {}),
+        ...(target?.category ? { category: metadata?.category || target.category } : {}),
+        ...(target?.appointment_id ? { appointment_id: metadata?.appointment_id || target.appointment_id } : {}),
+      };
+      const aliasesToHide = new Set<string>([
+        id,
+        ...getNotificationHiddenAliases(role, id, enrichedMeta),
+      ]);
+
+      const siblingSnapshots = new Map<string, { notifications: NotificationItem[]; unreadCount: number }>();
+      roleStores.forEach((s, key) => {
+        if (
+          key === storeKey ||
+          key.startsWith(`${role}:`) ||
+          (userId && key.includes(userId)) ||
+          (clinicId && key.includes(clinicId))
+        ) {
+          siblingSnapshots.set(key, {
+            notifications: s.state.notifications,
+            unreadCount: s.state.unreadCount,
+          });
+          const nextItems = s.state.notifications.filter((n) => !aliasesToHide.has(n.id));
+          const nextUnread = nextItems.filter((n) => !n.isRead).length;
+          s.state = {
+            ...s.state,
+            notifications: nextItems,
+            unreadCount: nextUnread,
+          };
+          writeHydratedRoleStoreCache(key, nextItems, userId);
+          s.listeners.forEach((l) => {
+            try {
+              l();
+            } catch { }
+          });
+        }
+      });
+      setTick((t) => t + 1);
+
+      // 2. Perform soft deletion
+      const res = await softDeleteNotification(role, id, userId || clinicId || "admin", enrichedMeta);
+      if (!res.success) {
+        // Rollback state on failure
+        siblingSnapshots.forEach((snap, key) => {
+          const s = roleStores.get(key);
+          if (s) {
+            s.state = {
+              ...s.state,
+              notifications: snap.notifications,
+              unreadCount: snap.unreadCount,
+            };
+            writeHydratedRoleStoreCache(key, snap.notifications, userId);
+            s.listeners.forEach((l) => {
+              try {
+                l();
+              } catch { }
+            });
+          }
+        });
+        store.state = {
+          ...store.state,
+          notifications: prevNotifications,
+          unreadCount: prevUnreadCount,
+        };
+        removeHiddenId(role, id, userId, clinicId, Array.from(aliasesToHide));
+        writeHydratedRoleStoreCache(storeKey, prevNotifications, userId);
+        setTick((t) => t + 1);
+        return res;
+      }
+
+      // 3. Broadcast notification update
+      try {
+        window.dispatchEvent(
+          new CustomEvent("dermai_notifications_updated", {
+            detail: {
+              action: "delete_notification",
+              id,
+              aliases: Array.from(aliasesToHide),
+              role,
+              userId,
+              clinicId,
+            },
+          })
+        );
+      } catch {}
+
+      return { success: true };
+    },
+    [role, userId, clinicId, store, storeKey]
+  );
+
   return {
     notifications: store.state.notifications,
     loading: store.state.loading,
@@ -4298,6 +5463,7 @@ export function useRoleNotifications(
     refresh: fetchFn,
     markRead,
     markAllRead,
+    deleteNotification,
   };
 }
 
@@ -4312,32 +5478,110 @@ export function useNotifications(
 }
 
 /**
+ * Authorized notification dispatcher:
+ * - Calls PostgreSQL `dispatch_authorized_notification` RPC under Phase A deployment,
+ *   which solves Cross-User RLS issues (Doctor -> Patient, Doctor -> Clinic Owner, etc.)
+ *   with strict relationship verification and idempotency.
+ * - Provides seamless fallback to direct `user_notification` insert when pre-Phase A.
+ */
+export async function sendAuthorizedNotification(params: {
+  userId: string;
+  title: string;
+  body: string;
+  type: string;
+  subtype?: string | null;
+  metadata?: Record<string, any>;
+}): Promise<{ success: boolean; notifId?: string; error?: string }> {
+  const { userId, title, body, type, subtype, metadata } = params;
+  if (!userId) return { success: false, error: "Missing recipient user ID" };
+
+  const finalMetadata = {
+    ...metadata,
+    ...(metadata?.idempotency_key
+      ? {}
+      : metadata?.appointment_id
+      ? { idempotency_key: `notif_${metadata.appointment_id}_${type}_${subtype || "default"}_${userId}` }
+      : {}),
+  };
+
+  // 1. Authorized server-side RPC under Phase A deployment
+  if (isPhaseAMigrationDeployed() && isPhaseADatabaseRpcDeployed()) {
+    try {
+      const { data, error } = await supabase.rpc("dispatch_authorized_notification", {
+        p_recipient_user_id: userId,
+        p_title: title,
+        p_message: body,
+        p_type: type,
+        p_subtype: subtype || null,
+        p_metadata: finalMetadata,
+      });
+
+      if (!error && data) {
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+        }
+        return { success: true, notifId: data };
+      }
+      if (error) {
+        if (error.code === "PGRST202" || error.code === "42883") {
+          markPhaseARpcUnsupported();
+        }
+        console.warn("[sendAuthorizedNotification] RPC notice:", error.message);
+      }
+    } catch (rpcErr: any) {
+      console.warn("[sendAuthorizedNotification] RPC exception:", rpcErr?.message || rpcErr);
+    }
+  }
+
+  // 2. Direct insert fallback
+  try {
+    const { data, error } = await supabase
+      .from("user_notification")
+      .insert({
+        user_id: userId,
+        type,
+        subtype: subtype || null,
+        title,
+        body,
+        message: body,
+        is_read: false,
+        metadata: Object.keys(finalMetadata).length > 0 ? finalMetadata : null,
+      })
+      .select("notif_id")
+      .maybeSingle();
+
+    if (error) {
+      console.warn("[sendAuthorizedNotification] Direct insert warning:", error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
+    }
+    return { success: true, notifId: data?.notif_id };
+  } catch (err: any) {
+    console.warn("[sendAuthorizedNotification] Fallback error:", err?.message || err);
+    return { success: false, error: err?.message || String(err) };
+  }
+}
+
+/**
  * Legacy support for createPatientNotification
  */
 export async function createPatientNotification(payload: PatientNotificationPayload): Promise<boolean> {
   const { userId, type, subtype, title, body, metadata } = payload;
   if (!userId) return false;
 
-  try {
-    const { error } = await supabase.from("user_notification").insert({
-      user_id: userId,
-      type,
-      subtype: subtype || null,
-      title,
-      body,
-      is_read: false,
-      metadata: metadata || null,
-    });
-    if (error) {
-      console.warn("[notificationService] Supabase insert warning:", error.message);
-      return false;
-    }
-    window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
-    return true;
-  } catch (err: any) {
-    console.warn("[notificationService] Notification dispatch error:", err?.message || err);
-    return false;
-  }
+  const res = await sendAuthorizedNotification({
+    userId,
+    title,
+    body,
+    type,
+    subtype: subtype || null,
+    metadata,
+  });
+
+  return res.success;
 }
 
 export interface DoctorAppointmentNotificationInput {
@@ -4452,14 +5696,20 @@ export async function createDoctorAppointmentNotification(input: DoctorAppointme
           category: "appointment",
           type: "appointment_request",
           link: navLink,
+          idempotency_key: `doc_appt_req_${appointmentId}_${uid}`,
         },
       }));
 
     if (rows.length > 0) {
-      const { error } = await supabase.from("user_notification").insert(rows);
-      if (error) {
-        console.warn("[notificationService] Error generating doctor appointment notification:", error.message);
-        return false;
+      for (const row of rows) {
+        await sendAuthorizedNotification({
+          userId: row.user_id,
+          title: row.title,
+          body: row.body,
+          type: row.type,
+          subtype: row.subtype,
+          metadata: row.metadata,
+        });
       }
     }
 
@@ -4478,6 +5728,8 @@ export interface DoctorConfirmedNotificationInput {
   appointmentId: string;
   patientId?: string;
   patientName?: string;
+  date?: string;
+  time?: string;
 }
 
 /**
@@ -4487,7 +5739,7 @@ export interface DoctorConfirmedNotificationInput {
 export async function createDoctorAppointmentConfirmedNotification(
   input: DoctorConfirmedNotificationInput
 ): Promise<boolean> {
-  const { doctorUserId, clinicId, clinicName, appointmentId, patientId, patientName } = input;
+  const { doctorUserId, clinicId, clinicName, appointmentId, patientId, patientName, date, time } = input;
   if (!doctorUserId || !appointmentId) return false;
 
   try {
@@ -4504,35 +5756,74 @@ export async function createDoctorAppointmentConfirmedNotification(
         return metaApptId === appointmentId;
       });
 
-      if (alreadyExists) return true;
-    } catch {}
+      if (!alreadyExists) {
+        const res = await sendAuthorizedNotification({
+          userId: doctorUserId,
+          type: "appointment-confirmed",
+          subtype: "confirmed",
+          title: "Confirmed Appointment",
+          body: "You have accepted this patient's appointment. The consultation is now confirmed and scheduled.",
+          metadata: {
+            clinic_id: clinicId,
+            clinicId: clinicId,
+            clinic_name: clinicName || "Clinic",
+            branch_name: clinicName || "Clinic",
+            patient_id: patientId,
+            patientId: patientId,
+            patient_name: patientName,
+            appointment_id: appointmentId,
+            appointmentId: appointmentId,
+            category: "appointment",
+            type: "appointment-confirmed",
+            link: "/doctor/scheduled",
+            idempotency_key: `doc_appt_conf_${appointmentId}_${doctorUserId}`,
+          },
+        });
 
-    const { error } = await supabase.from("user_notification").insert({
-      user_id: doctorUserId,
-      type: "appointment-confirmed",
-      subtype: "confirmed",
-      title: "Confirmed Appointment",
-      body: "You have accepted this patient's appointment. The consultation is now confirmed and scheduled.",
-      is_read: false,
-      metadata: {
-        clinic_id: clinicId,
-        clinicId: clinicId,
-        clinic_name: clinicName || "Clinic",
-        branch_name: clinicName || "Clinic",
-        patient_id: patientId,
-        patientId: patientId,
-        patient_name: patientName,
-        appointment_id: appointmentId,
-        appointmentId: appointmentId,
-        category: "appointment",
-        type: "appointment-confirmed",
-        link: "/doctor/scheduled",
-      },
-    });
+        if (!res.success) {
+          console.warn("[notificationService] Error generating doctor confirmed notification:", res.error);
+        }
+      }
+    } catch (confErr) {
+      console.warn("[notificationService] Confirmation notification note:", confErr);
+    }
 
-    if (error) {
-      console.warn("[notificationService] Error generating doctor confirmed notification:", error.message);
-      return false;
+    // Persist genuine 24h reminder immediately if appointment is approaching within 24 hours
+    // Ensures offline doctors have permanent reminder records in database without requiring page visits
+    if (date) {
+      try {
+        const parsedApptTime = resolveAppointmentTimestamp({ date, time }, date);
+        const apptTimestamp = new Date(parsedApptTime).getTime();
+        const now = Date.now();
+        const isApproaching = !isNaN(apptTimestamp) && apptTimestamp >= now && apptTimestamp - now <= 24 * 60 * 60 * 1000;
+        if (isApproaching) {
+          const occurrenceKey = getStandardAppointmentOccurrenceKey(date, time);
+          const timeStr = time ? ` at ${time}` : "";
+          await sendAuthorizedNotification({
+            userId: doctorUserId,
+            type: "appointment-reminder",
+            subtype: "reminder_24h",
+            title: "Upcoming Consultation Reminder",
+            body: `Reminder: Consultation with ${patientName || "Patient"} is scheduled for ${date}${timeStr} at ${clinicName || "Clinic"}.`,
+            metadata: {
+              appointment_id: appointmentId,
+              appointmentId: appointmentId,
+              clinic_id: clinicId,
+              clinicId: clinicId,
+              clinic_name: clinicName || "Clinic",
+              branch_name: clinicName || "Clinic",
+              patient_id: patientId,
+              patientId: patientId,
+              category: "appointment",
+              link: "/doctor/scheduled",
+              occurrence: occurrenceKey,
+              idempotency_key: `doc_reminder_${appointmentId}_${occurrenceKey}_${doctorUserId}`,
+            },
+          });
+        }
+      } catch (reminderErr) {
+        console.warn("[notificationService] Immediate 24h reminder persistence note:", reminderErr);
+      }
     }
 
     window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
@@ -4540,6 +5831,64 @@ export async function createDoctorAppointmentConfirmedNotification(
   } catch (err: any) {
     console.warn("[notificationService] Doctor confirmed notification error:", err?.message || err);
     return false;
+  }
+}
+
+/**
+ * Opportunistically ensure genuine 24-hour reminders exist in Supabase for approved upcoming appointments.
+ * Covers appointments approved days in advance when they enter the 24-hour window, ensuring offline doctors
+ * have permanent reminders in their database without gaps.
+ */
+export async function ensureUpcomingAppointmentReminders(
+  appointments: any[],
+  currentUserId?: string
+): Promise<void> {
+  if (!appointments || appointments.length === 0) return;
+  const now = Date.now();
+  const windowEnd = now + 24 * 60 * 60 * 1000;
+
+  for (const appt of appointments) {
+    if (!appt.date || appt.status === "completed" || appt.status === "cancelled") continue;
+    const isApproved = appt.doctor_status === "approved" || appt.status === "confirmed" || appt.status === "scheduled";
+    if (!isApproved) continue;
+
+    const parsedTime = resolveAppointmentTimestamp(appt, appt.date);
+    const apptTimestamp = new Date(parsedTime).getTime();
+    if (isNaN(apptTimestamp) || apptTimestamp < now || apptTimestamp > windowEnd) continue;
+
+    const apptId = appt.appointment_id || appt.id;
+    if (!apptId) continue;
+
+    const occurrenceKey = getStandardAppointmentOccurrenceKey(appt.date, appt.time);
+    const clinicObj = Array.isArray(appt.clinic) ? appt.clinic[0] : appt.clinic;
+    const clinicName = clinicObj?.name || appt.clinic_name || "Clinic";
+    const clinicId = appt.clinic_id;
+    const patientName = appt.patient_name || appt.user?.full_name || "Patient";
+    const patientUserId = appt.user_id || appt.userId;
+    const doctorUserId = appt.assigned_doctor_user_id || appt.assigned_doctor_id || appt.doctor_id;
+    const timeStr = appt.time ? ` at ${appt.time}` : "";
+
+    if (doctorUserId && (!currentUserId || doctorUserId === currentUserId)) {
+      sendAuthorizedNotification({
+        userId: doctorUserId,
+        type: "appointment-reminder",
+        subtype: "reminder_24h",
+        title: "Upcoming Consultation Reminder",
+        body: `Reminder: Consultation with ${patientName} is scheduled for ${appt.date}${timeStr} at ${clinicName}.`,
+        metadata: {
+          appointment_id: apptId,
+          appointmentId: apptId,
+          clinic_id: clinicId,
+          clinic_name: clinicName,
+          patient_id: patientUserId,
+          patient_name: patientName,
+          category: "appointment",
+          link: "/doctor/scheduled",
+          occurrence: occurrenceKey,
+          idempotency_key: `doc_reminder_${apptId}_${occurrenceKey}_${doctorUserId}`,
+        },
+      }).catch(() => {});
+    }
   }
 }
 
@@ -4807,6 +6156,7 @@ export async function dispatchAdminBroadcastNotification(params: {
           sender_name: "Platform Administrator",
           audience: dbAudience,
           priority: "normal",
+          idempotency_key: `broadcast_${broadcastId}_${uid}`,
         },
       }));
       const { error: insErr } = await supabase.from("user_notification").insert(rows);
@@ -4909,6 +6259,7 @@ export async function dispatchSystemMaintenanceAlert(params: {
           sender_name: "Platform Administrator",
           scheduled_window: params.scheduledWindow,
           estimated_downtime: params.estimatedDowntime,
+          idempotency_key: `maint_${params.scheduledWindow}_${uid}`,
         },
       }));
       const { error: insErr } = await supabase.from("user_notification").insert(rows);
@@ -4983,7 +6334,7 @@ export async function notifyAdminNewClinicApplication(
     const { data: adminUsers } = await supabase
       .from("user")
       .select("user_id, email, role")
-      .or("role.eq.admin,email.eq.dermaisupport@gmail.com");
+      .eq("role", "admin");
 
     const targetUserIds = new Set<string>();
     if (adminUsers && adminUsers.length > 0) {
@@ -4991,28 +6342,25 @@ export async function notifyAdminNewClinicApplication(
         if (a.user_id) targetUserIds.add(String(a.user_id));
       });
     }
-    // Always include the primary admin account
-    targetUserIds.add("03c4dbd4-5d15-4c78-872e-93811b3afa23");
 
-    const rows = Array.from(targetUserIds).map((uid) => ({
-      user_id: uid,
-      type: "clinic",
-      subtype: "new_clinic_application",
-      title,
-      body: bodyText,
-      message: bodyText,
-      is_read: false,
-      metadata: {
-        clinic_id: cId,
-        clinic_name: rawName,
-        category: "clinic",
-        link,
-        logo_url: logoUrl || null,
-        priority: "high",
-      },
-    }));
-
-    await supabase.from("user_notification").insert(rows);
+    for (const uid of targetUserIds) {
+      await sendAuthorizedNotification({
+        userId: uid,
+        type: "clinic",
+        subtype: "new_clinic_application",
+        title,
+        body: bodyText,
+        metadata: {
+          clinic_id: cId,
+          clinic_name: rawName,
+          category: "clinic",
+          link,
+          logo_url: logoUrl || null,
+          priority: "high",
+          idempotency_key: `admin_new_clinic_${cId}_${uid}`,
+        },
+      });
+    }
   } catch (err) {
     console.warn("[notifyAdminNewClinicApplication] Database notice insert warning:", err);
   }
@@ -5057,7 +6405,7 @@ export async function notifyAdminDoctorCompletedReview(payload: {
     const { data: adminUsers } = await supabase
       .from("user")
       .select("user_id, email, role")
-      .or("role.eq.admin,email.eq.dermaisupport@gmail.com");
+      .eq("role", "admin");
 
     const targetUserIds = new Set<string>();
     if (adminUsers && adminUsers.length > 0) {
@@ -5065,29 +6413,27 @@ export async function notifyAdminDoctorCompletedReview(payload: {
         if (a.user_id) targetUserIds.add(String(a.user_id));
       });
     }
-    // Always include the verified primary admin account
-    targetUserIds.add("03c4dbd4-5d15-4c78-872e-93811b3afa23");
 
-    const rows = Array.from(targetUserIds).map((uid) => ({
-      user_id: uid,
-      type: "scan",
-      subtype: "doctor_completed_review",
-      title,
-      body: bodyText,
-      message: bodyText,
-      is_read: false,
-      metadata: {
-        appointment_id: payload.appointmentId,
-        category: "scan",
-        link: "/admin/doctor-ai-review",
-        doctor_name: formattedDoctor,
-        patient_name: patient,
-        final_diagnosis: payload.finalDiagnosis.trim(),
-        ai_prediction: payload.aiPrediction || null,
-        confidence: payload.confidence || null,
-      },
-    }));
-    await supabase.from("user_notification").insert(rows);
+    for (const uid of targetUserIds) {
+      await sendAuthorizedNotification({
+        userId: uid,
+        type: "scan",
+        subtype: "doctor_completed_review",
+        title,
+        body: bodyText,
+        metadata: {
+          appointment_id: payload.appointmentId,
+          category: "scan",
+          link: "/admin/doctor-ai-review",
+          doctor_name: formattedDoctor,
+          patient_name: patient,
+          final_diagnosis: payload.finalDiagnosis.trim(),
+          ai_prediction: payload.aiPrediction || null,
+          confidence: payload.confidence || null,
+          idempotency_key: `admin_doc_completed_${payload.appointmentId}_${uid}`,
+        },
+      });
+    }
   } catch (err) {
     console.warn("[notifyAdminDoctorCompletedReview] Database notice insert warning:", err);
   }
@@ -5118,13 +6464,12 @@ export async function notifyPatientPendingSupportTicket(params: {
   const body = `Your support ticket #${displayCode} ('${cleanSubject}') has been received and is currently pending review.`;
 
   try {
-    const { error } = await supabase.from("user_notification").insert({
-      user_id: userId,
+    const res = await sendAuthorizedNotification({
+      userId,
       type: "support",
       subtype: "support_ticket",
       title,
       body,
-      is_read: false,
       metadata: {
         category: "support",
         ticket_id: ticketId,
@@ -5132,11 +6477,12 @@ export async function notifyPatientPendingSupportTicket(params: {
         subject: cleanSubject,
         link: "/patient/support",
         sender_name: "DERMAI Support",
+        idempotency_key: `ticket_pending_${ticketId}_${userId}`,
       },
     });
 
-    if (error) {
-      console.warn("[notificationService] Failed to insert patient support ticket notification:", error.message);
+    if (!res.success) {
+      console.warn("[notificationService] Failed to insert patient support ticket notification:", res.error);
       return false;
     }
 
@@ -5149,5 +6495,62 @@ export async function notifyPatientPendingSupportTicket(params: {
   } catch (err: any) {
     console.warn("[notificationService] notifyPatientPendingSupportTicket error:", err?.message || err);
     return false;
+  }
+}
+
+/**
+ * Dispatches and persists real-time admin notification when a new user registers on the platform.
+ */
+export async function notifyAdminNewUserRegistered(user: {
+  userId: string;
+  email: string;
+  fullName?: string;
+  role: string;
+  createdAt?: string;
+}): Promise<void> {
+  if (!user.userId) return;
+
+  const name = user.fullName || user.email;
+  const role = user.role || "patient";
+  let title = "New Patient Registered";
+  if (role === "doctor") title = "New Doctor Onboarded";
+  else if (role === "clinic") title = "New Clinic Registered";
+
+  const bodyText = `${name} registered on DERMAI as a ${role}.`;
+  const link = role === "clinic" ? "/admin/clinics" : "/admin/users";
+
+  try {
+    const { data: adminUsers } = await supabase
+      .from("user")
+      .select("user_id, email, role")
+      .eq("role", "admin");
+
+    const targetUserIds = new Set<string>();
+    if (adminUsers && adminUsers.length > 0) {
+      adminUsers.forEach((a: any) => {
+        if (a.user_id) targetUserIds.add(String(a.user_id));
+      });
+    }
+
+    for (const adminId of targetUserIds) {
+      await sendAuthorizedNotification({
+        userId: adminId,
+        type: `new-${role}`,
+        subtype: "user_registration",
+        title,
+        body: bodyText,
+        metadata: {
+          category: "user",
+          user_id: user.userId,
+          user_email: user.email,
+          user_name: name,
+          user_role: role,
+          link,
+          idempotency_key: `admin_new_user_${user.userId}_${adminId}`,
+        },
+      });
+    }
+  } catch (err) {
+    console.warn("[notifyAdminNewUserRegistered] Dispatch warning:", err);
   }
 }

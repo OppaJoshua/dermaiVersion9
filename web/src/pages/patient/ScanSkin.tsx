@@ -280,9 +280,11 @@ export default function ScanSkinPage() {
             loaded: true,
           });
         } else {
-          const freeUsage = await calculateOneTimeFreeScanUsage(user.id);
+          const freeUsage = await calculateOneTimeFreeScanUsage(user.id, {
+            configuredFreeScanLimit: subInfo.freePlanConfiguredLimit,
+          });
           const freePlanVerified = subInfo.freePlanVerified === true;
-          const freePlanAmbiguous = Boolean(subInfo.freePlanAmbiguous || freeUsage.ambiguous);
+          const freePlanAmbiguous = Boolean(subInfo.freePlanAmbiguous);
           const freePlanActive = freePlanVerified && subInfo.freePlanActive === true;
           const planScanLimit = freePlanActive && typeof subInfo.scanLimit === "number"
             ? subInfo.scanLimit
@@ -295,7 +297,7 @@ export default function ScanSkinPage() {
             freePlanActive,
             freePlanVerified,
             freePlanAmbiguous,
-            usageVerified: freePlanVerified && freeUsage.verified && !freePlanAmbiguous,
+            usageVerified: freePlanVerified && freeUsage.verified && !freePlanAmbiguous && !freeUsage.ambiguous,
             statusMessage: subInfo.freePlanError || freeUsage.error,
             loaded: true,
           });
@@ -557,7 +559,9 @@ export default function ScanSkinPage() {
         return;
       }
 
-      const freeUsage = await calculateOneTimeFreeScanUsage(user.id);
+      const freeUsage = await calculateOneTimeFreeScanUsage(user.id, {
+        configuredFreeScanLimit: freshSub.freePlanConfiguredLimit,
+      });
       if (!freeUsage.verified) {
         const msg =
           freeUsage.ambiguous
@@ -570,7 +574,7 @@ export default function ScanSkinPage() {
           isPro: false,
           freePlanActive: true,
           freePlanVerified: true,
-          freePlanAmbiguous: Boolean(freeUsage.ambiguous),
+          freePlanAmbiguous: false,
           usageVerified: false,
           statusMessage: msg,
           loaded: true,
@@ -889,8 +893,17 @@ export default function ScanSkinPage() {
         createPatientNotification({
           userId: user.id,
           type: "scan-completed",
+          subtype: "ai_analysis",
           title: "AI Skin Scan Complete",
           body: `Preliminary assessment: ${aiResult.display_name} (${formatConfidencePercent(effectiveConfidence)} confidence). View details in your skin history.`,
+          metadata: {
+            analysis_id: analysisId || undefined,
+            condition: aiResult.display_name,
+            confidence_score: effectiveConfidence,
+            category: "scan",
+            link: analysisId ? `/patient/scans/${analysisId}` : "/patient/history",
+            idempotency_key: analysisId ? `patient_scan_${analysisId}_${user.id}` : undefined,
+          },
         });
       }
     } catch (err) {
@@ -1014,7 +1027,7 @@ export default function ScanSkinPage() {
                   "Free AI skin scanning is temporarily unavailable due to a plan configuration issue."
                   : subData.freePlanVerified && !subData.freePlanActive
                     ? "Free AI skin scanning is currently unavailable. Please view the available subscription plans to continue scanning."
-                    : "Unable to verify your scan allowance. Please check your internet connection and try again."}
+                    : subData.statusMessage || "Unable to verify your scan allowance. Please check your internet connection and try again."}
               </p>
             </div>
             <Link

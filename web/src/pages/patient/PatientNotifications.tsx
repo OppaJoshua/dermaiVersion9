@@ -18,7 +18,8 @@ import { cn } from "@/lib/utils";
 import { resolveAvatarUrl } from "@/lib/avatarUrlResolver";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
-import { useRoleNotifications, type NotificationItem } from "@/lib/notificationService";
+import { useRoleNotifications, getHiddenIds, type NotificationItem } from "@/lib/notificationService";
+import { NotificationCardMenu } from "@/components/common/NotificationCardMenu";
 
 interface PatientNotificationsProps {
   onClose?: () => void;
@@ -27,7 +28,7 @@ interface PatientNotificationsProps {
 
 export default function PatientNotifications({ onClose, isDropdown = false }: PatientNotificationsProps) {
   const { user } = useAuth();
-  const { notifications, loading, unreadCount, markRead, markAllRead } = useRoleNotifications("patient", {
+  const { notifications, loading, unreadCount, markRead, markAllRead, deleteNotification } = useRoleNotifications("patient", {
     userId: user?.id,
   });
 
@@ -55,7 +56,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
             )
           `)
           .eq("user_id", user!.id)
-          .eq("status", "completed")
+          .in("status", ["completed", "valid", "flagged", "invalid"])
           .order("scanned_at", { ascending: false })
           .limit(20);
 
@@ -90,7 +91,8 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
           };
         });
 
-        setScanNotifications(mappedScans);
+        const hiddenSet = getHiddenIds("patient", user!.id);
+        setScanNotifications(mappedScans.filter((s) => !hiddenSet.has(s.id)));
       } catch (err) {
         console.warn("[PatientNotifications] Failed to fetch scan logs:", err);
       } finally {
@@ -98,12 +100,28 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
       }
     }
     fetchScanLogs();
+
+    const handleDeleted = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail?.action === "delete_notification") {
+        const idsToRemove = new Set<string>([
+          ...(detail.id ? [String(detail.id)] : []),
+          ...(Array.isArray(detail.aliases) ? detail.aliases.map(String) : []),
+        ]);
+        if (idsToRemove.size > 0) {
+          setScanNotifications((prev) => prev.filter((item) => !idsToRemove.has(item.id)));
+        }
+      }
+    };
+    window.addEventListener("dermai_notifications_updated", handleDeleted);
     return () => {
       cancelled = true;
+      window.removeEventListener("dermai_notifications_updated", handleDeleted);
     };
   }, [user?.id]);
 
   const filtered = useMemo(() => {
+    const hiddenSet = getHiddenIds("patient", user?.id);
     let list = notifications;
     if (activeTab === "scan") {
       list = [...notifications, ...scanNotifications].filter(
@@ -144,6 +162,7 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
 
     return list.filter((n) => {
       if (!n || !n.id) return false;
+      if (hiddenSet.has(n.id) || (n as any).hidden_at || n.metadata?.hidden_at) return false;
       // Suppress all subscription/plan notifications (receipts & confirmations are handled strictly via email)
       if (
         n.type === "subscription_expired" ||
@@ -174,10 +193,13 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
       const rApptId =
         n.metadata?.appointment_id ||
         (n.id.startsWith("appt-rejected-") ? n.id.replace("appt-rejected-", "") : undefined);
+      const rejStamp = n.metadata?.declined_at || n.metadata?.rejection_timestamp || n.timestamp || "";
+      const docId = n.metadata?.doctor_id || "";
+      const rejKey = `${rApptId}:::${docId}:::${rejStamp}`;
 
       if (isRej && rApptId) {
-        if (seenRejectionAppts.has(rApptId)) return false;
-        seenRejectionAppts.add(rApptId);
+        if (seenRejectionAppts.has(rejKey)) return false;
+        seenRejectionAppts.add(rejKey);
       }
 
       const normTitle = (n.title || "").trim().toLowerCase();
@@ -581,6 +603,11 @@ export default function PatientNotifications({ onClose, isDropdown = false }: Pa
                           )}
                         />
                       )}
+                      <NotificationCardMenu
+                        notificationId={item.id}
+                        metadata={item.metadata}
+                        onDelete={deleteNotification}
+                      />
                     </span>
                   </div>
 

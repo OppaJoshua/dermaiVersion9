@@ -542,11 +542,25 @@ export default function ClinicSettingsPage() {
 
           let loadedDoctors: ClinicDoctorSummary[] = [];
           if (dbClinic.clinic_id) {
-            const { data: docList } = await supabase
+            const { data: rawDocList } = await supabase
               .from("clinic_doctor")
-              .select("doctor_id, doctor_name, email, status, specialization, duty_schedule, duty_days, duty_start_time, duty_end_time")
+              .select("doctor_id, doctor_name, email, status, duty_schedule, duty_days, duty_start_time, duty_end_time, doctor_specializations ( specialization_id, specializations ( id, name ) )")
               .eq("clinic_id", dbClinic.clinic_id)
               .neq("status", "Inactive");
+
+            // Specializations live in doctor_specializations -> specializations (no flat column).
+            const docList = rawDocList
+              ? rawDocList.map((d: any) => {
+                  const { doctor_specializations, ...rest } = d;
+                  const specNames = (Array.isArray(doctor_specializations) ? doctor_specializations : [])
+                    .map((ds: any) => {
+                      const s = Array.isArray(ds?.specializations) ? ds.specializations[0] : ds?.specializations;
+                      return s?.name;
+                    })
+                    .filter(Boolean);
+                  return { ...rest, specialization: specNames.length > 0 ? specNames.join(", ") : undefined };
+                })
+              : rawDocList;
 
             if (cancelled) return;
             setClinicDoctors(docList || []);
@@ -557,7 +571,7 @@ export default function ClinicSettingsPage() {
               loadedDoctors = docList.map((d: any) => ({
                 id: d.doctor_id,
                 name: d.doctor_name,
-                specialization: d.specialization || "General Dermatology",
+                specialization: d.specialization || undefined,
               }));
             }
           }

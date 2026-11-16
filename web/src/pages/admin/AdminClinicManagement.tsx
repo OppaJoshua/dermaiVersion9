@@ -640,7 +640,7 @@ export default function AdminClinicManagement() {
       {/* Table */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-7 py-5 border-b border-gray-200 flex items-baseline justify-between">
-          <h2 className="text-lg font-semibold text-black">Clinic applications</h2>
+          <h2 className="text-lg font-semibold text-black">Clinic Applications</h2>
           <span className="text-sm text-gray-600">{filtered.length} shown</span>
         </div>
         <div className="overflow-x-auto">
@@ -683,7 +683,7 @@ export default function AdminClinicManagement() {
                     <p className="text-gray-600 truncate max-w-[180px] mt-0.5">{clinic.email || ""}</p>
                   </td>
                   <td className="px-7 py-5">
-                    <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold capitalize", statusBadge[clinic.status])}>
+                    <span className={cn("inline-flex px-3 py-1 rounded-full border text-xs font-semibold capitalize", clinic.status === "verified" ? "bg-green-50 border-green-200 text-green-700" : statusBadge[clinic.status])}>
                       {clinic.status}
                     </span>
                   </td>

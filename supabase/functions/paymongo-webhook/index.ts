@@ -413,6 +413,7 @@ Deno.serve(async (req: Request) => {
             console.error("[webhook] Failed to claim email outbox:", claimErr);
           } else if (claimResult?.claim_acquired) {
             const outboxId = claimResult.outbox_id;
+            const claimToken = claimResult.claim_token;
             try {
               const dispatchResult = await sendBookingReceiptEmail({
                 patientEmail: recipientEmail,
@@ -431,6 +432,7 @@ Deno.serve(async (req: Request) => {
                 await supabase.rpc("finalize_email_outbox", {
                   p_outbox_id: outboxId,
                   p_success: true,
+                  p_claim_token: claimToken,
                 });
 
                 await recordAuditLog({
@@ -449,6 +451,7 @@ Deno.serve(async (req: Request) => {
                   p_outbox_id: outboxId,
                   p_success: false,
                   p_error: dispatchResult.error || "Failed to dispatch email",
+                  p_claim_token: claimToken,
                 });
               }
             } catch (mailErr: unknown) {
@@ -458,6 +461,7 @@ Deno.serve(async (req: Request) => {
                 p_outbox_id: outboxId,
                 p_success: false,
                 p_error: errText,
+                p_claim_token: claimToken,
               });
             }
           } else {
@@ -916,6 +920,7 @@ Deno.serve(async (req: Request) => {
         console.error("[Webhook] Failed to claim email outbox for subscription receipt:", claimErr);
       } else if (claimResult?.claim_acquired) {
         const outboxId = claimResult.outbox_id;
+        const claimToken = claimResult.claim_token;
         try {
           const emailResult = await sendReceiptEmail({
             patientEmail: recipientEmail,
@@ -931,6 +936,7 @@ Deno.serve(async (req: Request) => {
             await supabase.rpc("finalize_email_outbox", {
               p_outbox_id: outboxId,
               p_success: true,
+              p_claim_token: claimToken,
             });
 
             await recordAuditLog({
@@ -954,6 +960,7 @@ Deno.serve(async (req: Request) => {
               p_outbox_id: outboxId,
               p_success: false,
               p_error: errMessage,
+              p_claim_token: claimToken,
             });
 
             await recordAuditLog({
@@ -971,6 +978,7 @@ Deno.serve(async (req: Request) => {
             p_outbox_id: outboxId,
             p_success: false,
             p_error: errMessage,
+            p_claim_token: claimToken,
           });
 
           await recordAuditLog({

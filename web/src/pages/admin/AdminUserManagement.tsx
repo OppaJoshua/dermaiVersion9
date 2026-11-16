@@ -334,7 +334,7 @@ export default function AdminUserManagement() {
                     <td className="px-5 py-5 text-sm text-black whitespace-nowrap">{user.joinedAt}</td>
 
                     <td className="px-5 py-5 whitespace-nowrap">
-                      <span className={cn("inline-block px-3 py-1 rounded-full border text-xs font-semibold capitalize whitespace-nowrap shrink-0", statusBadge[user.status])}>
+                      <span className={cn("inline-block px-3 py-1 rounded-full border text-xs font-semibold capitalize whitespace-nowrap shrink-0", user.status === "active" ? "bg-green-50 border-green-200 text-green-700" : statusBadge[user.status])}>
                         {user.status}
                       </span>
                     </td>

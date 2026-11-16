@@ -1870,6 +1870,8 @@ export interface MobileFreeScanUsageResult {
   ambiguous: boolean;
   freeScansUsed: number;
   error: string | null;
+  allowanceExhausted?: boolean;
+  historyFullyVerified?: boolean;
 }
 
 export const MOBILE_CONSUMED_SCAN_STATUSES = [
@@ -2001,7 +2003,14 @@ export async function fetchMobileAdminFreePlanConfig(): Promise<MobileFreePlanCo
  *   overlaps an overwritten or unverified historical paid subscription period, returns `verified: false, ambiguous: true`.
  */
 export async function calculateMobileOneTimeFreeScanUsage(
-  userId: string
+  userId: string,
+  preloaded?: {
+    completedScans?: Array<{ analysis_id: string; scanned_at: string | null }>;
+    subRows?: any[];
+    paymentRows?: any[];
+    auditRows?: any[];
+    configuredFreeScanLimit?: number | null;
+  }
 ): Promise<MobileFreeScanUsageResult> {
   if (!userId) {
     return {
@@ -2016,27 +2025,121 @@ export async function calculateMobileOneTimeFreeScanUsage(
 
   try {
     // 1. Paginated retrieval of all completed scan records (including admin-reviewed valid/flagged/invalid scans)
-    const completedScans: Array<{ analysis_id: string; scanned_at: string | null }> = [];
-    for (let offset = 0; ; offset += PAGE_SIZE) {
-      const { data, error } = await supabase
-        .from('ai_scan_result')
-        .select('analysis_id, scanned_at')
-        .eq('user_id', userId)
-        .in('status', [...MOBILE_CONSUMED_SCAN_STATUSES])
-        .order('scanned_at', { ascending: true })
-        .order('analysis_id', { ascending: true })
-        .range(offset, offset + PAGE_SIZE - 1);
+    const completedScans: Array<{ analysis_id: string; scanned_at: string | null }> = preloaded?.completedScans
+      ? [...preloaded.completedScans]
+      : [];
+    if (!preloaded?.completedScans) {
+      for (let offset = 0; ; offset += PAGE_SIZE) {
+        const { data, error } = await supabase
+          .from('ai_scan_result')
+          .select('analysis_id, scanned_at')
+          .eq('user_id', userId)
+          .in('status', [...MOBILE_CONSUMED_SCAN_STATUSES])
+          .order('scanned_at', { ascending: true })
+          .order('analysis_id', { ascending: true })
+          .range(offset, offset + PAGE_SIZE - 1);
 
-      if (error || !Array.isArray(data)) {
-        return {
-          verified: false,
-          ambiguous: false,
-          freeScansUsed: 0,
-          error: 'Unable to verify your scan allowance. Please check your internet connection and try again.',
-        };
+        if (error || !Array.isArray(data)) {
+          return {
+            verified: false,
+            ambiguous: false,
+            freeScansUsed: 0,
+            error: 'Unable to verify your scan allowance. Please check your internet connection and try again.',
+          };
+        }
+        completedScans.push(...(data as any[]));
+        if (data.length < PAGE_SIZE) break;
       }
-      completedScans.push(...(data as any[]));
-      if (data.length < PAGE_SIZE) break;
+    }
+
+    // Include authoritative completed scan events recorded in system_audit_log
+    // (e.g. historical scans whose ai_scan_result rows were removed by user history deletion
+    // while their immutable "AI Skin Scan Completed" audit records remain).
+    const scanAuditRows: any[] = [];
+    if (preloaded?.auditRows) {
+      for (const r of preloaded.auditRows) {
+        if (
+          String(r?.user_id || '') === userId &&
+          String(r?.log_type || '').toLowerCase() === 'scan' &&
+          String(r?.action || '') === 'AI Skin Scan Completed'
+        ) {
+          scanAuditRows.push(r);
+        }
+      }
+    } else if (!preloaded?.completedScans) {
+      for (let offset = 0; ; offset += PAGE_SIZE) {
+        const { data, error } = await supabase
+          .from('system_audit_log')
+          .select('log_id, timestamp, user_id, log_type, action, details')
+          .eq('user_id', userId)
+          .eq('log_type', 'scan')
+          .eq('action', 'AI Skin Scan Completed')
+          .order('timestamp', { ascending: true })
+          .order('log_id', { ascending: true })
+          .range(offset, offset + PAGE_SIZE - 1);
+
+        if (error || !Array.isArray(data)) {
+          return {
+            verified: false,
+            ambiguous: false,
+            freeScansUsed: 0,
+            error: 'Unable to verify your scan allowance. Please check your internet connection and try again.',
+          };
+        }
+        scanAuditRows.push(...data);
+        if (data.length < PAGE_SIZE) break;
+      }
+    }
+
+    if (scanAuditRows.length > 0) {
+      const knownAnalysisIds = new Set(
+        completedScans
+          .map((s) => String(s.analysis_id || '').trim())
+          .filter(Boolean)
+      );
+      for (const row of scanAuditRows) {
+        if (String(row?.user_id || '') !== userId) continue;
+        if (String(row?.log_type || '').toLowerCase() !== 'scan') continue;
+        if (String(row?.action || '') !== 'AI Skin Scan Completed') continue;
+
+        const detailsStr = typeof row?.details === 'string' ? row.details : '';
+        let auditAnalysisId = '';
+        const ctxIdx = detailsStr.lastIndexOf('Context:');
+        if (ctxIdx !== -1) {
+          try {
+            const ctx = JSON.parse(detailsStr.slice(ctxIdx + 'Context:'.length).trim());
+            auditAnalysisId = String(ctx?.analysisId || ctx?.analysis_id || '').trim();
+          } catch {
+            // Ignore malformed context JSON
+          }
+        }
+        if (auditAnalysisId && knownAnalysisIds.has(auditAnalysisId)) continue;
+
+        const tsRaw = typeof row?.timestamp === 'string' ? row.timestamp : null;
+        const tsMs = tsRaw ? Date.parse(tsRaw) : NaN;
+        if (Number.isFinite(tsMs)) {
+          const alreadyRepresentedByTimestamp = completedScans.some((existing) => {
+            const existingMs = existing.scanned_at ? Date.parse(existing.scanned_at) : NaN;
+            return Number.isFinite(existingMs) && Math.abs(existingMs - tsMs) <= 60 * 1000;
+          });
+          if (alreadyRepresentedByTimestamp) continue;
+        }
+
+        const resolvedId =
+          auditAnalysisId || `audit:${String(row?.log_id || tsRaw || completedScans.length)}`;
+        knownAnalysisIds.add(resolvedId);
+        completedScans.push({
+          analysis_id: resolvedId,
+          scanned_at: tsRaw,
+        });
+      }
+
+      completedScans.sort((a, b) => {
+        const aMs = a.scanned_at ? Date.parse(a.scanned_at) : NaN;
+        const bMs = b.scanned_at ? Date.parse(b.scanned_at) : NaN;
+        if (Number.isFinite(aMs) && Number.isFinite(bMs)) return aMs - bMs;
+        return 0;
+      });
     }
 
     if (completedScans.length === 0) {
@@ -2049,76 +2152,128 @@ export async function calculateMobileOneTimeFreeScanUsage(
     }
 
     // 2. Paginated retrieval of all subscription rows for the user
-    const subRows: any[] = [];
-    for (let offset = 0; ; offset += PAGE_SIZE) {
-      const { data, error } = await supabase
-        .from('user_plan_subscription')
-        .select(`
-          subscription_id,
-          started_at,
-          current_period_start,
-          current_period_end,
-          renews_at,
-          status,
-          billing_cycle,
-          cancel_at_period_end,
-          cancelled_at,
-          plan_id,
-          plan:plan_id (
+    const subRows: any[] = preloaded?.subRows ? [...preloaded.subRows] : [];
+    if (!preloaded?.subRows) {
+      for (let offset = 0; ; offset += PAGE_SIZE) {
+        const { data, error } = await supabase
+          .from('user_plan_subscription')
+          .select(`
+            subscription_id,
+            started_at,
+            current_period_start,
+            current_period_end,
+            renews_at,
+            status,
+            billing_cycle,
+            cancel_at_period_end,
+            cancelled_at,
             plan_id,
-            name,
-            price,
-            scan_limit,
-            billing_type
-          )
-        `)
-        .eq('user_id', userId)
-        .order('started_at', { ascending: true })
-        .order('subscription_id', { ascending: true })
-        .range(offset, offset + PAGE_SIZE - 1);
+            plan:plan_id (
+              plan_id,
+              name,
+              price,
+              scan_limit,
+              billing_type
+            )
+          `)
+          .eq('user_id', userId)
+          .order('started_at', { ascending: true })
+          .order('subscription_id', { ascending: true })
+          .range(offset, offset + PAGE_SIZE - 1);
 
-      if (error || !Array.isArray(data)) {
-        return {
-          verified: false,
-          ambiguous: false,
-          freeScansUsed: 0,
-          error: 'Unable to verify your scan allowance. Please check your internet connection and try again.',
-        };
+        if (error || !Array.isArray(data)) {
+          return {
+            verified: false,
+            ambiguous: false,
+            freeScansUsed: 0,
+            error: 'Unable to verify your scan allowance. Please check your internet connection and try again.',
+          };
+        }
+        subRows.push(...data);
+        if (data.length < PAGE_SIZE) break;
       }
-      subRows.push(...data);
-      if (data.length < PAGE_SIZE) break;
     }
 
     // 3. Paginated retrieval of all successful payment records for the user
-    const paymentRows: any[] = [];
-    for (let offset = 0; ; offset += PAGE_SIZE) {
-      const { data, error } = await supabase
-        .from('user_payment')
-        .select(`
-          *,
-          plan:plan_id (
-            plan_id,
-            name,
-            price,
-            billing_type
-          )
-        `)
-        .eq('user_id', userId)
-        .eq('status', 'success')
-        .order('payment_date', { ascending: true })
-        .order('payment_id', { ascending: true })
-        .range(offset, offset + PAGE_SIZE - 1);
+    const paymentRows: any[] = preloaded?.paymentRows ? [...preloaded.paymentRows] : [];
+    if (!preloaded?.paymentRows) {
+      for (let offset = 0; ; offset += PAGE_SIZE) {
+        const { data, error } = await supabase
+          .from('user_payment')
+          .select(`
+            *,
+            plan:plan_id (
+              plan_id,
+              name,
+              price,
+              billing_type
+            )
+          `)
+          .eq('user_id', userId)
+          .eq('status', 'success')
+          .order('payment_date', { ascending: true })
+          .order('payment_id', { ascending: true })
+          .range(offset, offset + PAGE_SIZE - 1);
 
-      if (error || !Array.isArray(data)) {
-        return {
-          verified: false,
-          ambiguous: false,
-          freeScansUsed: 0,
-          error: 'Unable to verify your scan allowance. Please check your internet connection and try again.',
-        };
+        if (error || !Array.isArray(data)) {
+          return {
+            verified: false,
+            ambiguous: false,
+            freeScansUsed: 0,
+            error: 'Unable to verify your scan allowance. Please check your internet connection and try again.',
+          };
+        }
+        paymentRows.push(...data);
+        if (data.length < PAGE_SIZE) break;
       }
-      paymentRows.push(...data);
-      if (data.length < PAGE_SIZE) break;
+    }
+
+    // Ensure all plan objects are resolved for subRows and paymentRows
+    if (!preloaded?.subRows && !preloaded?.paymentRows) {
+      const missingPlanIds = new Set<string>();
+      for (const s of subRows) {
+        const planObj = Array.isArray(s.plan) ? s.plan[0] : s.plan;
+        if (!planObj && s.plan_id) missingPlanIds.add(s.plan_id);
+      }
+      for (const p of paymentRows) {
+        const planObj = Array.isArray(p.plan) ? p.plan[0] : p.plan;
+        if (!planObj && p.plan_id) missingPlanIds.add(p.plan_id);
+      }
+      if (missingPlanIds.size > 0) {
+        const { data: fetchedPlans } = await supabase
+          .from('plan')
+          .select('plan_id, name, price, scan_limit, billing_type')
+          .in('plan_id', Array.from(missingPlanIds));
+        if (Array.isArray(fetchedPlans)) {
+          const planMap = new Map(fetchedPlans.map((p: any) => [p.plan_id, p]));
+          for (const s of subRows) {
+            if (!s.plan && s.plan_id && planMap.has(s.plan_id)) {
+              s.plan = planMap.get(s.plan_id);
+            }
+          }
+          for (const p of paymentRows) {
+            if (!p.plan && p.plan_id && planMap.has(p.plan_id)) {
+              p.plan = planMap.get(p.plan_id);
+            }
+          }
+        }
+      }
+    }
+
+    // Fail closed if any subscription row references a plan_id whose plan metadata could not be resolved.
+    // Never assume an unresolved plan is Free.
+    const hasUnresolvedSubPlan = subRows.some((s: any) => {
+      const planObj = Array.isArray(s.plan) ? s.plan[0] : s.plan;
+      return s.plan_id != null && !planObj;
+    });
+    if (hasUnresolvedSubPlan) {
+      return {
+        verified: false,
+        ambiguous: true,
+        freeScansUsed: 0,
+        error:
+          'Unable to verify plan details for a historical subscription record. Free scan allowance cannot be verified automatically.',
+      };
     }
 
     // Filter to actual paid subscription payments (excluding consultation appointments)
@@ -2137,12 +2292,12 @@ export async function calculateMobileOneTimeFreeScanUsage(
       return (p.plan_id != null || planPrice > 0) && paidAmt > 0;
     });
 
-    // Filter to paid subscription rows
+    // Filter to paid subscription rows strictly by price > 0 or unlimited scan limit (-1)
     const paidSubRows = subRows.filter((s: any) => {
       const planObj = Array.isArray(s.plan) ? s.plan[0] : s.plan;
       const price = Number(planObj?.price ?? 0);
       const limit = Number(planObj?.scan_limit);
-      return price > 0 || limit === -1 || s.plan_id != null;
+      return price > 0 || limit === -1;
     });
 
     // Fast-path: user has never had any paid subscription or subscription payment
@@ -2211,6 +2366,9 @@ export async function calculateMobileOneTimeFreeScanUsage(
       });
       verifiedWindows.push({ startMs, endMs: effectiveEndMs });
 
+      // If `started_at` precedes `current_period_start` (e.g. earlier subscription periods on renewal),
+      // record the overwritten gap so verified audit logs can reconstruct genuine continuous renewals
+      // without assuming unpaid gaps between separate subscriptions were paid.
       if (Number.isFinite(startedAtMs) && startedAtMs < startMs - 10 * 60 * 1000) {
         rawOverwrittenGaps.push({ startMs: startedAtMs, endMs: startMs });
       }
@@ -2231,29 +2389,30 @@ export async function calculateMobileOneTimeFreeScanUsage(
     const historicalAuditWindows: Array<{ startMs: number; endMs: number }> = [];
 
     if (needsHistoricalAuditVerification) {
-      try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const sessionUserId = sessionData?.session?.user?.id;
-        if (sessionUserId && sessionUserId !== userId) {
-          return {
-            verified: false,
-            ambiguous: false,
-            freeScansUsed: 0,
-            error: 'Unable to verify scan allowance for another user.',
-          };
+      const auditRows: any[] = preloaded?.auditRows ? [...preloaded.auditRows] : [];
+      if (!preloaded?.auditRows) {
+        try {
+          const { data: sessionData } = await supabase.auth.getSession();
+          const sessionUserId = sessionData?.session?.user?.id;
+          if (sessionUserId && sessionUserId !== userId) {
+            return {
+              verified: false,
+              ambiguous: false,
+              freeScansUsed: 0,
+              error: 'Unable to verify scan allowance for another user.',
+            };
+          }
+        } catch {
+          // Proceed if auth session helper is unavailable in the current runtime context
         }
-      } catch {
-        // Proceed if auth session helper is unavailable in the current runtime context
-      }
 
-      const auditRows: any[] = [];
-      for (let offset = 0; ; offset += PAGE_SIZE) {
+        for (let offset = 0; ; offset += PAGE_SIZE) {
         const { data, error } = await supabase
           .from('system_audit_log')
           .select('log_id, timestamp, user_id, log_type, action, details')
           .eq('user_id', userId)
           .eq('log_type', 'subscription')
-          .eq('action', 'Subscription Upgraded')
+          .in('action', ['Subscription Upgraded', 'Payment Completed', 'Receipt Email Sent'])
           .order('timestamp', { ascending: true })
           .order('log_id', { ascending: true })
           .range(offset, offset + PAGE_SIZE - 1);
@@ -2267,8 +2426,37 @@ export async function calculateMobileOneTimeFreeScanUsage(
               'Unable to verify your scan allowance. Please check your internet connection and try again.',
           };
         }
-        auditRows.push(...data);
-        if (data.length < PAGE_SIZE) break;
+          auditRows.push(...data);
+          if (data.length < PAGE_SIZE) break;
+        }
+      }
+
+      // Extract verified subscription payment audit records (Payment Completed / Receipt Email Sent)
+      // to corroborate Subscription Upgraded events when user_payment insert was non-blocking or lacked gateway IDs
+      const auditSubscriptionPayments: Array<{ txId: string; logMs: number }> = [];
+      for (const row of auditRows) {
+        if (String(row?.user_id || '') !== userId) continue;
+        if (String(row?.log_type || '').toLowerCase() !== 'subscription') continue;
+        const actionStr = String(row?.action || '');
+        if (actionStr !== 'Payment Completed' && actionStr !== 'Receipt Email Sent') continue;
+
+        const detailsStr = typeof row?.details === 'string' ? row.details : '';
+        const ctxIdx = detailsStr.lastIndexOf('Context:');
+        if (ctxIdx === -1) continue;
+        try {
+          const ctx = JSON.parse(detailsStr.slice(ctxIdx + 'Context:'.length).trim());
+          if (!ctx || typeof ctx !== 'object') continue;
+          if (ctx.appointmentId || ctx.appointment_id) continue;
+          const amountNum = Number(ctx.amount ?? 0);
+          if (!Number.isFinite(amountNum) || amountNum <= 0) continue;
+          const txId = String(ctx.paymentId || ctx.transactionId || '').trim();
+          const logMs = row?.timestamp ? Date.parse(row.timestamp) : NaN;
+          if (txId && Number.isFinite(logMs)) {
+            auditSubscriptionPayments.push({ txId, logMs });
+          }
+        } catch {
+          continue;
+        }
       }
 
       const dedupAuditMap = new Map<
@@ -2320,40 +2508,49 @@ export async function calculateMobileOneTimeFreeScanUsage(
           const payMs = pay.payment_date ? Date.parse(pay.payment_date) : NaN;
           if (!Number.isFinite(payMs)) return false;
 
+          const externalTxIds = [
+            pay.paymongo_payment_id,
+            pay.reference_number,
+            pay.paymongo_payment_intent_id,
+          ]
+            .map((v) => String(v || '').trim())
+            .filter(Boolean);
+
+          if (auditTxId && externalTxIds.includes(auditTxId)) {
+            return Math.abs(payMs - startMs) <= 24 * 60 * 60 * 1000;
+          }
+
           const payPlanId = String(pay.plan_id || '').trim();
           if (auditPlanId && payPlanId && auditPlanId !== payPlanId) {
             return false;
           }
 
-          const payTxIds = [
-            pay.paymongo_payment_id,
-            pay.reference_number,
-            pay.paymongo_payment_intent_id,
-            pay.payment_id,
-          ]
-            .map((v) => String(v || '').trim())
-            .filter(Boolean);
-
-          if (auditTxId && payTxIds.length > 0) {
-            return (
-              payTxIds.includes(auditTxId) &&
-              Math.abs(payMs - startMs) <= 24 * 60 * 60 * 1000
-            );
+          if (auditTxId && externalTxIds.length > 0) {
+            return false;
           }
 
           return Math.abs(payMs - startMs) <= SKEW_MS;
         });
 
-        if (!matchedPay) continue;
+        const matchedAuditPay =
+          !matchedPay && auditTxId
+            ? auditSubscriptionPayments.find(
+                (ap) =>
+                  ap.txId === auditTxId &&
+                  Math.abs(ap.logMs - startMs) <= 24 * 60 * 60 * 1000
+              )
+            : null;
 
-        // 4. Do not allow audit records to override or conflict with authoritative user_plan_subscription records
-        const overlapsOrFollowsAuthoritativeSub = authoritativeSubWindows.some(
-          (subWin) => startMs >= subWin.startMs - SKEW_MS
+        if (!matchedPay && !matchedAuditPay) continue;
+
+        // 4. Do not allow audit records to override an authoritative user_plan_subscription record for the same activation
+        const sameAsAuthoritativeSub = authoritativeSubWindows.some(
+          (subWin) => Math.abs(startMs - subWin.startMs) <= SKEW_MS
         );
-        if (overlapsOrFollowsAuthoritativeSub) continue;
+        if (sameAsAuthoritativeSub) continue;
 
         // 5. Deduplicate multiple audit events for the same subscription activation
-        const dedupKey = matchedPay.payment_id
+        const dedupKey = matchedPay?.payment_id
           ? `pay:${String(matchedPay.payment_id)}`
           : auditTxId
             ? `tx:${auditTxId}`
@@ -2407,19 +2604,51 @@ export async function calculateMobileOneTimeFreeScanUsage(
       }
     }
 
-    // Only retain overwrittenGaps whose original `started_at` is not accounted for by a verified historical audit window
-    const overwrittenGaps = rawOverwrittenGaps.filter(
-      (gap) =>
-        !historicalAuditWindows.some(
-          (hw) => Math.abs(hw.startMs - gap.startMs) <= SKEW_MS
-        )
+    // Clamp rawOverwrittenGaps so a preserved initial Free Plan registration timestamp (`started_at`)
+    // prior to the user's earliest paid subscription evidence is not treated as an overwritten paid period.
+    const earliestPaidEvidenceMs = Math.min(
+      ...subscriptionPayments
+        .map((p: any) => (p.payment_date ? Date.parse(p.payment_date) : NaN))
+        .filter((ms: number) => Number.isFinite(ms)),
+      ...historicalAuditWindows.map((hw) => hw.startMs)
     );
+
+    // Only retain overwrittenGaps whose original `started_at` is not accounted for by a verified historical audit window
+    const overwrittenGaps = rawOverwrittenGaps
+      .map((gap) => {
+        const effectiveGapStartMs = Number.isFinite(earliestPaidEvidenceMs)
+          ? Math.max(gap.startMs, earliestPaidEvidenceMs - SKEW_MS)
+          : gap.startMs;
+        return { startMs: effectiveGapStartMs, endMs: gap.endMs };
+      })
+      .filter(
+        (gap) =>
+          gap.endMs > gap.startMs + 10 * 60 * 1000 &&
+          !historicalAuditWindows.some(
+            (hw) => Math.abs(hw.startMs - gap.startMs) <= SKEW_MS
+          )
+      );
 
     // Sort verified paid windows chronologically
     verifiedWindows.sort((a, b) => a.startMs - b.startMs);
 
+    // Merge overlapping / contiguous verified windows
+    const mergedVerifiedWindows: Array<{ startMs: number; endMs: number }> = [];
+    for (const w of verifiedWindows) {
+      if (mergedVerifiedWindows.length === 0) {
+        mergedVerifiedWindows.push({ startMs: w.startMs, endMs: w.endMs });
+      } else {
+        const last = mergedVerifiedWindows[mergedVerifiedWindows.length - 1];
+        if (w.startMs <= last.endMs + SKEW_MS) {
+          last.endMs = Math.max(last.endMs, w.endMs);
+        } else {
+          mergedVerifiedWindows.push({ startMs: w.startMs, endMs: w.endMs });
+        }
+      }
+    }
+
     // Check whether any successful subscription payment is not covered by a verified subscription window.
-    // Bound each unmatched payment's uncertainty to [payMs - SKEW_MS, nextVerifiedWindow.startMs)
+    // Bound each unmatched payment's uncertainty to [payMs - SKEW_MS, Math.min(nextVerifiedWindow.startMs, payMs + cycleDurationMs))
     // so an older unmatched payment does not block scans taken after a later verified subscription expires.
     const unmatchedPaymentWindows: Array<{ startMs: number; endMs: number }> = [];
 
@@ -2434,21 +2663,34 @@ export async function calculateMobileOneTimeFreeScanUsage(
         };
       }
 
-      const isCoveredByVerifiedWindow = verifiedWindows.some(
+      const isCoveredByVerifiedWindow = mergedVerifiedWindows.some(
         (w) => payMs >= w.startMs - SKEW_MS && payMs <= w.endMs
       );
       if (!isCoveredByVerifiedWindow) {
-        const nextVerifiedWindow = verifiedWindows.find(
-          (w) => w.startMs > payMs - SKEW_MS
+        const planObj = Array.isArray(pay.plan) ? pay.plan[0] : pay.plan;
+        const billingCycle = String(pay.billing_cycle || planObj?.billing_type || 'monthly').toLowerCase();
+        const cycleDurationMs =
+          billingCycle === 'yearly'
+            ? 370 * 24 * 60 * 60 * 1000
+            : 36 * 24 * 60 * 60 * 1000;
+
+        const nextVerifiedWindow = mergedVerifiedWindows.find(
+          (w) => w.startMs > payMs
         );
+        const maxBoundedEndMs = nextVerifiedWindow
+          ? Math.min(nextVerifiedWindow.startMs, payMs + cycleDurationMs)
+          : payMs + cycleDurationMs;
+
         unmatchedPaymentWindows.push({
           startMs: payMs - SKEW_MS,
-          endMs: nextVerifiedWindow ? nextVerifiedWindow.startMs : Number.POSITIVE_INFINITY,
+          endMs: maxBoundedEndMs,
         });
       }
     }
 
     let freeScansUsed = 0;
+    let ambiguousScansCount = 0;
+    let firstAmbiguousError: string | null = null;
 
     for (const scan of completedScans) {
       const scanMs = scan.scanned_at ? Date.parse(scan.scanned_at) : NaN;
@@ -2461,7 +2703,7 @@ export async function calculateMobileOneTimeFreeScanUsage(
         };
       }
 
-      const inVerifiedPaidWindow = verifiedWindows.some(
+      const inVerifiedPaidWindow = mergedVerifiedWindows.some(
         (w) => scanMs >= w.startMs - SKEW_MS && scanMs <= w.endMs
       );
       if (inVerifiedPaidWindow) {
@@ -2472,34 +2714,81 @@ export async function calculateMobileOneTimeFreeScanUsage(
         (g) => scanMs >= g.startMs - SKEW_MS && scanMs < g.endMs
       );
       if (inOverwrittenGap) {
-        return {
-          verified: false,
-          ambiguous: true,
-          freeScansUsed: 0,
-          error:
-            'Historical scan usage overlaps an earlier subscription period that was updated on renewal and cannot be classified unambiguously.',
-        };
+        ambiguousScansCount += 1;
+        if (!firstAmbiguousError) {
+          firstAmbiguousError =
+            'Historical scan usage overlaps an earlier subscription period that was updated on renewal and cannot be classified unambiguously.';
+        }
+        continue;
       }
 
       const inUnmatchedPaymentPeriod = unmatchedPaymentWindows.some(
         (uw) => scanMs >= uw.startMs && scanMs < uw.endMs
       );
       if (inUnmatchedPaymentPeriod) {
-        return {
-          verified: false,
-          ambiguous: true,
-          freeScansUsed: 0,
-          error:
-            'Historical scan records overlap a prior subscription payment whose exact entitlement period is no longer stored. Free scan allowance cannot be verified automatically.',
-        };
+        ambiguousScansCount += 1;
+        if (!firstAmbiguousError) {
+          firstAmbiguousError =
+            'Historical scan records overlap a prior subscription payment whose exact entitlement period is no longer stored. Free scan allowance cannot be verified automatically.';
+        }
+        continue;
       }
 
       freeScansUsed += 1;
     }
 
+    if (ambiguousScansCount > 0) {
+      let resolvedFreeLimit: number | null = null;
+      if (preloaded && 'configuredFreeScanLimit' in preloaded) {
+        const raw = preloaded.configuredFreeScanLimit;
+        if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+          resolvedFreeLimit = Math.floor(raw);
+        }
+      }
+      if (resolvedFreeLimit === null) {
+        const freePlanConfig = await fetchMobileAdminFreePlanConfig();
+        if (
+          freePlanConfig.verified &&
+          !freePlanConfig.ambiguous &&
+          typeof freePlanConfig.configuredScanLimit === 'number' &&
+          Number.isFinite(freePlanConfig.configuredScanLimit) &&
+          freePlanConfig.configuredScanLimit >= 0
+        ) {
+          resolvedFreeLimit = Math.floor(freePlanConfig.configuredScanLimit);
+        }
+      }
+
+      if (resolvedFreeLimit !== null && freeScansUsed >= resolvedFreeLimit) {
+        return {
+          verified: true,
+          ambiguous: false,
+          allowanceExhausted: true,
+          historyFullyVerified: false,
+          freeScansUsed,
+          error: null,
+        };
+      }
+
+      return {
+        verified: false,
+        ambiguous: true,
+        allowanceExhausted: false,
+        historyFullyVerified: false,
+        freeScansUsed: 0,
+        error: firstAmbiguousError,
+      };
+    }
+
     return {
       verified: true,
       ambiguous: false,
+      allowanceExhausted:
+        typeof preloaded?.configuredFreeScanLimit === 'number' &&
+        Number.isFinite(preloaded.configuredFreeScanLimit) &&
+        preloaded.configuredFreeScanLimit >= 0
+          ? freeScansUsed >= Math.floor(preloaded.configuredFreeScanLimit)
+          : undefined,
+      historyFullyVerified: true,
       freeScansUsed,
       error: null,
     };
@@ -2608,7 +2897,9 @@ export async function getUserSubscription(userId?: string): Promise<Subscription
 
     if (!data || error) {
       const freeUsage = !error
-        ? await calculateMobileOneTimeFreeScanUsage(effectiveUserId)
+        ? await calculateMobileOneTimeFreeScanUsage(effectiveUserId, {
+            configuredFreeScanLimit: freePlanConfig.configuredScanLimit,
+          })
         : {
             verified: false,
             ambiguous: false,
@@ -2625,7 +2916,7 @@ export async function getUserSubscription(userId?: string): Promise<Subscription
         planFeatures: freeFeatures,
         billingCycle: 'monthly',
         scansUsed: freeUsage.freeScansUsed,
-        scansCountVerified: !error && freePlanVerified && freeUsage.verified,
+        scansCountVerified: !error && freePlanVerified && freeUsage.verified && !freePlanConfig.ambiguous && !freeUsage.ambiguous,
         scanLimit: freeScanLimit,
         status: 'none',
         statusLabel: 'No Active Subscription',
@@ -2637,7 +2928,7 @@ export async function getUserSubscription(userId?: string): Promise<Subscription
         totalPrice: 0,
         freePlanActive,
         freePlanVerified,
-        freePlanAmbiguous: freePlanConfig.ambiguous || freeUsage.ambiguous,
+        freePlanAmbiguous: freePlanConfig.ambiguous,
         freePlanConfiguredLimit: freePlanConfig.configuredScanLimit,
         freePlanError: freePlanConfig.error || freeUsage.error,
       };
@@ -2787,7 +3078,6 @@ export async function getUserSubscription(userId?: string): Promise<Subscription
     let scansCountVerified = false;
     let resolvedActiveScanLimit = 0;
     let activeError: string | null = null;
-    let freeUsageAmbiguous = false;
 
     if (isPaidActive) {
       const paidLimit = resolveMobilePlanScanLimit(planObj?.scan_limit, -2);
@@ -2821,12 +3111,13 @@ export async function getUserSubscription(userId?: string): Promise<Subscription
         scansCountVerified = true;
       }
     } else {
-      const freeUsage = await calculateMobileOneTimeFreeScanUsage(effectiveUserId);
+      const freeUsage = await calculateMobileOneTimeFreeScanUsage(effectiveUserId, {
+        configuredFreeScanLimit: freePlanConfig.configuredScanLimit,
+      });
       usedScans = freeUsage.freeScansUsed;
-      scansCountVerified = freePlanVerified && freeUsage.verified;
+      scansCountVerified = freePlanVerified && freeUsage.verified && !freePlanConfig.ambiguous && !freeUsage.ambiguous;
       resolvedActiveScanLimit = freeScanLimit;
       activeError = freePlanConfig.error || freeUsage.error;
-      freeUsageAmbiguous = freeUsage.ambiguous;
     }
 
     let planFeatures: string[] = Array.isArray(planObj?.plan_feature)
@@ -2881,7 +3172,7 @@ export async function getUserSubscription(userId?: string): Promise<Subscription
       billingAddress: data.billing_address || undefined,
       freePlanActive: isPaidActive ? true : freePlanActive,
       freePlanVerified: isPaidActive ? true : freePlanVerified,
-      freePlanAmbiguous: isPaidActive ? false : freePlanConfig.ambiguous || freeUsageAmbiguous,
+      freePlanAmbiguous: isPaidActive ? false : freePlanConfig.ambiguous,
       freePlanConfiguredLimit: freePlanConfig.configuredScanLimit,
       freePlanError: isPaidActive ? null : activeError,
     };
@@ -3852,6 +4143,8 @@ export async function getAppNotifications(userId: string): Promise<AppNotificati
 
   const readSet = await getLocalReadIds(userId);
   const items: AppNotification[] = [];
+  const hiddenBroadcastIds = new Set<string>();
+  const hiddenSyntheticIds = new Set<string>();
 
   try {
     // Run notification + live clinic/admin avatar queries in parallel
@@ -4008,6 +4301,18 @@ export async function getAppNotifications(userId: string): Promise<AppNotificati
     // 1. Direct user_notification records for this patient
     if (dbNotifs) {
       dbNotifs.forEach((n: any) => {
+        if (n.type === 'broadcast_hidden' && n.metadata?.hidden_broadcast_id) {
+          hiddenBroadcastIds.add(String(n.metadata.hidden_broadcast_id));
+          return;
+        }
+        if (n.type === 'synthetic_hidden' && n.metadata?.hidden_synthetic_id) {
+          hiddenSyntheticIds.add(String(n.metadata.hidden_synthetic_id));
+          return;
+        }
+        if ((n as any).hidden_at || n.metadata?.hidden_at) {
+          return;
+        }
+
         // Suppress all subscription/plan notifications (receipts & confirmations are handled strictly via email)
         if (
           n.type === 'subscription_expired' ||
@@ -4441,7 +4746,7 @@ export async function getAppNotifications(userId: string): Promise<AppNotificati
           const iMsg = (i.message || '').trim().toLowerCase();
           return iTitle === normBTitle && iMsg === normBMsg;
         });
-        if (alreadyDelivered) return;
+        if (alreadyDelivered || hiddenBroadcastIds.has(String(b.broadcast_id))) return;
 
         const notifId = `broadcast-${b.broadcast_id}`;
         items.push({
@@ -4500,7 +4805,13 @@ export async function getAppNotifications(userId: string): Promise<AppNotificati
     console.warn('[Store] getAppNotifications error:', err);
   }
 
-  return deduplicateAppNotificationItems(items);
+  const visibleItems = items.filter(
+    (item) =>
+      !hiddenSyntheticIds.has(item.id) &&
+      !(item.metadata?.broadcast_id && hiddenBroadcastIds.has(String(item.metadata.broadcast_id)))
+  );
+
+  return deduplicateAppNotificationItems(visibleItems);
 }
 
 export async function addAppNotification(
