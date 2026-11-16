@@ -206,24 +206,6 @@ export default function AdminUserManagement() {
   const deactivateUser = (id: string) => setUserStatus(id, "inactive", "User Deactivated");
   const reactivateUser = (id: string) => setUserStatus(id, "active", "User Reactivated");
 
-  const changeUserRole = async (id: string, newRole: UserRole) => {
-    const targetUser = users.find((u) => u.id === id);
-    if (!targetUser) return;
-
-    setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, role: newRole } : u)));
-
-    try {
-      await supabase
-        .from("user")
-        .update({ role: newRole })
-        .eq("user_id", id);
-    } catch (err: any) {
-      console.warn("Failed to persist user role in Supabase:", err.message);
-    }
-
-    logAdminAction("Role Changed", targetUser.name, `Role updated to ${newRole} by admin.`, "user");
-  };
-
   return (
     <div className="space-y-8">
       <div>
@@ -405,23 +387,10 @@ export default function AdminUserManagement() {
 
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600">Platform role</span>
-                  {modalUser.id === currentAuthUser?.id ? (
-                    <span className={cn("inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border", roleBadge[modalUser.role]?.bg)}>
-                      <ShieldCheck className="w-3.5 h-3.5 text-magenta-600" />
-                      {roleBadge[modalUser.role]?.label || modalUser.role}
-                    </span>
-                  ) : (
-                    <select
-                      value={modalUser.role}
-                      onChange={(e) => changeUserRole(modalUser.id, e.target.value as UserRole)}
-                      className="px-3 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-black focus:outline-none focus:border-magenta-500 cursor-pointer"
-                    >
-                      <option value="patient">Patient</option>
-                      <option value="clinic">Clinic Owner</option>
-                      <option value="doctor">Doctor</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  )}
+                  <span className={cn("inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border", roleBadge[modalUser.role]?.bg)}>
+                    {modalUser.role === "admin" && <ShieldCheck className="w-3.5 h-3.5 text-magenta-600" />}
+                    {roleBadge[modalUser.role]?.label || modalUser.role}
+                  </span>
                 </div>
 
                 <div className="rounded-xl border border-gray-200 bg-gray-50 divide-y divide-gray-200">
