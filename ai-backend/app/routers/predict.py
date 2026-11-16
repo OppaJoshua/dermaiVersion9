@@ -118,16 +118,38 @@ async def predict_skin_condition(
     # STEP 5: Confidence fallback on primary image (safety net)
     # ==========================================================
     if primary_result["confidence"] < CLASSIFIER_CONFIDENCE_FALLBACK:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "success": False,
-                "error": (
-                    "We couldn't get a clear enough look at your photo to give you an accurate result. "
-                    "Please try uploading a new close-up photo. Make sure the area is well-lit and in sharp focus."
-                ),
-                "error_type": "low_confidence",
+        quality_metrics = {
+            "blur_score": quality.get("blur_score", 0.0),
+            "brightness": quality.get("brightness", 0.0),
+            "contrast": quality.get("contrast", 0.0),
+        }
+        return PredictionResponse(
+            success=True,
+            result_status="low_confidence",
+            confidence_threshold=CLASSIFIER_CONFIDENCE_FALLBACK,
+            message=(
+                f"DermAI identified {primary_result['display_name']} as the closest matching "
+                "category based on the uploaded image. However, the AI confidence is below the "
+                "required confidence threshold. This means the prediction is uncertain and "
+                "should not be treated as a diagnosis. Please prioritize consultation with a "
+                "licensed dermatologist to properly assess your skin condition and confirm what it may be."
+            ),
+            predicted_class=primary_result["predicted_class"],
+            display_name=primary_result["display_name"],
+            confidence=primary_result["confidence"],
+            confidence_level=primary_result["confidence_level"],
+            probabilities=primary_result["probabilities"],
+            inference_time_ms=primary_result.get("inference_time_ms", 0),
+            skin_score=round(skin_score, 4),
+            quality_metrics=quality_metrics,
+            is_combined=False,
+            agreement=None,
+            combined_evidence_score=None,
+            primary_prediction={
+                **primary_result,
+                "status": "valid",
             },
+            supporting_prediction=None,
         )
 
     # ==========================================================

@@ -14,18 +14,41 @@ export function isNoShowAppointment(a?: Partial<DoctorAppointmentRecord> | { sta
   return s === "no-show" || c === "no-show";
 }
 
+export function isPastHistoryRecord(
+  appt?: Partial<DoctorAppointmentRecord> | { status?: string | null; doctorStatus?: string | null; doctor_status?: string | null; doctorDone?: boolean; checkInStatus?: string | null; check_in_status?: string | null } | null
+): boolean {
+  if (!appt) return false;
+  if (isNoShowAppointment(appt)) return true;
+  const s = String(appt.status || '').trim().toLowerCase();
+  const ds = String((appt as any).doctorStatus || (appt as any).doctor_status || '').trim().toLowerCase();
+  return (
+    s === 'completed' ||
+    s === 'cancelled' ||
+    s === 'canceled' ||
+    s === 'rejected' ||
+    ds === 'rejected' ||
+    Boolean(appt.doctorDone)
+  );
+}
+
 export function historyStatus(a: DoctorAppointmentRecord): Exclude<HistoryTab, 'all'> {
   if (isNoShowAppointment(a)) return 'no-show';
-  if (a.status === 'completed' || a.doctorDone || a.checkInStatus === 'completed') return 'completed';
-  if (a.status === 'rejected' || a.status === 'cancelled' || a.doctorStatus === 'rejected') return 'rejected';
-  if (a.doctorStatus === 'approved' || a.status === 'confirmed' || a.status === 'scheduled') return 'approved';
+  const s = String(a.status || '').trim().toLowerCase();
+  const c = String(a.checkInStatus || '').trim().toLowerCase();
+  const ds = String(a.doctorStatus || '').trim().toLowerCase();
+  if (s === 'completed' || a.doctorDone || c === 'completed') return 'completed';
+  if (s === 'rejected' || s === 'cancelled' || s === 'canceled' || ds === 'rejected') return 'rejected';
+  if (ds === 'approved' || s === 'confirmed' || s === 'scheduled') return 'approved';
   return 'pending';
 }
 
 export function historyStatusLabel(a: DoctorAppointmentRecord): string {
   if (isNoShowAppointment(a)) return 'No-Show';
-  if (a.checkInStatus === 'arrived' || a.status === 'arrived') return 'Arrived';
-  if (a.status === 'cancelled' && historyStatus(a) === 'rejected') return 'Cancelled';
+  const s = String(a.status || '').trim().toLowerCase();
+  const c = String(a.checkInStatus || '').trim().toLowerCase();
+  const ds = String(a.doctorStatus || '').trim().toLowerCase();
+  if (c === 'arrived' || s === 'arrived') return 'Arrived';
+  if ((s === 'cancelled' || s === 'canceled') && ds !== 'rejected' && historyStatus(a) === 'rejected') return 'Cancelled';
   return { completed: 'Completed', approved: 'Approved', pending: 'Pending Review', rejected: 'Declined', 'no-show': 'No-Show' }[historyStatus(a)] || 'Reviewed';
 }
 

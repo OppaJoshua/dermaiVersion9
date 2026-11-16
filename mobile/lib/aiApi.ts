@@ -13,12 +13,21 @@ export interface EvidencePrediction {
 
 export interface PredictionResult {
   success: boolean;
+  result_status?: 'confident' | 'low_confidence';
+  confidence_threshold?: number | null;
+  message?: string | null;
   predicted_class: string;
   display_name: string;
   confidence: number;
   confidence_level: 'high' | 'medium' | 'low';
   probabilities: Record<string, number>;
   inference_time_ms: number;
+  skin_score?: number;
+  quality_metrics?: {
+    blur_score: number;
+    brightness: number;
+    contrast: number;
+  };
   is_combined?: boolean;
   agreement?: boolean | null;
   combined_evidence_score?: number | null;

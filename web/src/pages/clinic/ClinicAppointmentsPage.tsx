@@ -37,7 +37,6 @@ import { createPatientNotification } from "@/lib/notificationService";
 import {
   findAvailableDoctorsForSlot,
   validateDoctorReassignment,
-  computeNextQueueNumber,
   sortAppointmentsByDailyQueue,
   isAppointmentExcludedFromIncomingQueue,
   type AppointmentHistoryEntry,
@@ -244,6 +243,70 @@ function isAppointmentPastDue(appt: {
   const currentTotalMinutes = manilaNow.hour * 60 + manilaNow.minute;
 
   return currentTotalMinutes >= apptEndTotalMinutes;
+}
+
+/**
+ * AUD-01 Safe Questionnaire Updater:
+ * Preserves clinical answers, severity ratings, scan references, and operational history.
+ * Distinguishes:
+ * - null/undefined: preserves null (does not silently fabricate an empty object {})
+ * - object: preserves all existing properties, merging operational updates
+ * - array: preserves the original array under { answers: parsed, ...operationalUpdates }
+ * - uninterpretable: returns safe: false so calling handlers halt safely rather than corrupting data
+ */
+function prepareNextQuestionnaireAnswers(
+  rawQa: any,
+  operationalUpdates: Record<string, any>
+): { safe: true; nextQa: any } | { safe: false; error: string } {
+  // Case 1: Explicitly null or undefined
+  // Preserve null without destructive replacement or fabricating an empty object
+  if (rawQa === null || rawQa === undefined) {
+    return { safe: true, nextQa: null };
+  }
+
+  let parsed = rawQa;
+  if (typeof rawQa === "string") {
+    try {
+      parsed = JSON.parse(rawQa);
+    } catch {
+      return {
+        safe: false,
+        error: "Questionnaire data contains invalid JSON and cannot safely be interpreted.",
+      };
+    }
+  }
+
+  if (parsed === null || parsed === undefined) {
+    return { safe: true, nextQa: null };
+  }
+
+  // Case 2: Valid existing object (preserves all existing clinical properties, severity ratings, scan references)
+  if (typeof parsed === "object" && !Array.isArray(parsed)) {
+    return {
+      safe: true,
+      nextQa: {
+        ...parsed,
+        ...operationalUpdates,
+      },
+    };
+  }
+
+  // Case 3: Valid existing array (preserves array under answers according to database contract)
+  if (Array.isArray(parsed)) {
+    return {
+      safe: true,
+      nextQa: {
+        answers: parsed,
+        ...operationalUpdates,
+      },
+    };
+  }
+
+  // Case 4: Any other unsupported/uninterpretable type
+  return {
+    safe: false,
+    error: "Questionnaire data has an unrecognized format and cannot safely be interpreted.",
+  };
 }
 
 export default function ClinicAppointmentsPage() {
@@ -620,6 +683,7 @@ export default function ClinicAppointmentsPage() {
           paymentAmount: payAmount,
           paymentMethod: payMethod || undefined,
           paymentReference: payRef || undefined,
+          questionnaireAnswers: a.questionnaire_answers || undefined,
         };
       });
 
@@ -816,6 +880,12 @@ export default function ClinicAppointmentsPage() {
     });
   }, [currentMonth]);
 
+  // Local calendar-day key for highlighting "today" (same derivation as handleGoToToday)
+  const todayKey = useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  }, [urgencyNow]);
+
   const appointmentsByDate = useMemo(() => {
     return appointments.reduce<Record<string, AppointmentRecord[]>>((acc, item) => {
       if (!item.date || item.status === "rejected" || item.status === "cancelled") return acc;
@@ -931,13 +1001,20 @@ export default function ClinicAppointmentsPage() {
 
   const selectedDateQueue = useMemo(() => {
     const dateAppointments = scheduleAppointmentsByDate[selectedDate] || [];
+
+    // When viewing Completed Consultations, queue stage filters (needs_doctor, in_review, etc.)
+    // do not apply because completed visits are not part of incoming triage queues.
+    if (scheduleTab === "completed") {
+      return sortAppointmentsByDailyQueue(dateAppointments);
+    }
+
     const dateMatches = (appointment: AppointmentRecord) => {
       const dateKey = appointment.date?.includes("T") ? appointment.date.split("T")[0] : appointment.date;
       const isCompleted =
         appointment.status === "completed" ||
         appointment.checkInStatus === "completed" ||
         appointment.checkInStatus === "no-show";
-      return dateKey === selectedDate && (scheduleTab === "completed" ? isCompleted : !isCompleted);
+      return dateKey === selectedDate && !isCompleted;
     };
 
     if (queueFilter === "needs_doctor") return needsDoctorQueue.filter(dateMatches);
@@ -1448,14 +1525,37 @@ export default function ClinicAppointmentsPage() {
     };
     const updatedHistory = [...(targetAppt?.appointmentHistory || []), historyEntry];
 
-    // Rule 5: Doctor reassignment must retain original appointment date, time, and primary_scan_id
-    const currentQa = (targetAppt as any)?.questionnaire_answers || (targetAppt as any)?.questionnaireAnswers;
-    const nextQa: Record<string, any> = (currentQa && typeof currentQa === "object" && !Array.isArray(currentQa))
-      ? { ...currentQa }
-      : (Array.isArray(currentQa) ? { answers: currentQa } : {});
-    nextQa.primary_scan_id = targetAppt?.primaryScanId;
-    nextQa.appointment_history = updatedHistory;
-    nextQa.needs_patient_reschedule = false;
+    // Rule 5 & AUD-01: Fetch fresh questionnaire_answers from DB. Do not fall back to stale local state or fabrications.
+    const { data: qData, error: qErr } = await supabase
+      .from("patient_appointment")
+      .select("questionnaire_answers, primary_scan_id")
+      .eq("appointment_id", assignDoctorModal.appointmentId)
+      .maybeSingle();
+
+    if (qErr) {
+      console.error("Failed to fetch fresh appointment record:", qErr.message);
+      setAssignError(`Failed to verify appointment data: ${qErr.message}`);
+      return;
+    }
+    if (!qData) {
+      console.error("Appointment not found in database:", assignDoctorModal.appointmentId);
+      setAssignError("Appointment record not found in the database. Please refresh.");
+      return;
+    }
+
+    const effectiveScanId = targetAppt?.primaryScanId || qData.primary_scan_id || (typeof qData.questionnaire_answers === "object" ? qData.questionnaire_answers?.primary_scan_id : undefined);
+
+    const prepResult = prepareNextQuestionnaireAnswers(qData.questionnaire_answers, {
+      primary_scan_id: effectiveScanId,
+      appointment_history: updatedHistory,
+      needs_patient_reschedule: false,
+    });
+
+    if (!prepResult.safe) {
+      console.error("Cannot interpret questionnaire data safely:", prepResult.error);
+      setAssignError(prepResult.error);
+      return;
+    }
 
     const updatePayload: Record<string, any> = {
       assigned_doctor_id: targetDoctorId,
@@ -1463,8 +1563,8 @@ export default function ClinicAppointmentsPage() {
       doctor_note: null,
       doctor_reviewed_at: null,
       clinic_note: clinicNoteMsg,
-      primary_scan_id: targetAppt?.primaryScanId || null,
-      questionnaire_answers: nextQa,
+      primary_scan_id: effectiveScanId || null,
+      questionnaire_answers: prepResult.nextQa,
     };
 
     try {
@@ -1515,6 +1615,7 @@ export default function ClinicAppointmentsPage() {
           clinicNote: clinicNoteMsg,
           needsPatientReschedule: false,
           appointmentHistory: updatedHistory,
+          questionnaireAnswers: prepResult.nextQa ?? undefined,
         };
       });
       try {
@@ -1565,20 +1666,48 @@ export default function ClinicAppointmentsPage() {
       const updatedHistory = [...(targetAppt.appointmentHistory || []), historyEntry];
       const noteText = `Doctor declined schedule. No replacement doctor available for ${targetAppt.date} at ${formatAppointmentTime(targetAppt.time)}. Patient notified to select new schedule.`;
 
-      const currentQa2 = (targetAppt as any)?.questionnaire_answers || (targetAppt as any)?.questionnaireAnswers;
-      const nextQa2: Record<string, any> = (currentQa2 && typeof currentQa2 === "object" && !Array.isArray(currentQa2))
-        ? { ...currentQa2 }
-        : (Array.isArray(currentQa2) ? { answers: currentQa2 } : {});
-      nextQa2.needs_patient_reschedule = true;
-      nextQa2.appointment_history = updatedHistory;
+      // AUD-01: Fetch fresh questionnaire_answers from DB. Do not fall back to stale local state or fabrications.
+      const { data: qData2, error: qErr2 } = await supabase
+        .from("patient_appointment")
+        .select("questionnaire_answers")
+        .eq("appointment_id", targetAppt.id)
+        .maybeSingle();
 
-      await supabase
+      if (qErr2) {
+        console.error("Failed to fetch fresh appointment record:", qErr2.message);
+        setAssignError(`Failed to fetch current appointment data: ${qErr2.message}`);
+        return;
+      }
+      if (!qData2) {
+        console.error("Appointment not found in database:", targetAppt.id);
+        setAssignError("Appointment record not found in the database. Please refresh.");
+        return;
+      }
+
+      const prepResult2 = prepareNextQuestionnaireAnswers(qData2.questionnaire_answers, {
+        needs_patient_reschedule: true,
+        appointment_history: updatedHistory,
+      });
+
+      if (!prepResult2.safe) {
+        console.error("Cannot interpret questionnaire data safely:", prepResult2.error);
+        setAssignError(prepResult2.error);
+        return;
+      }
+
+      const { error: notifyErr } = await supabase
         .from("patient_appointment")
         .update({
           clinic_note: noteText,
-          questionnaire_answers: nextQa2,
+          questionnaire_answers: prepResult2.nextQa,
         })
         .eq("appointment_id", targetAppt.id);
+
+      if (notifyErr) {
+        console.error("Failed to update appointment in Supabase:", notifyErr.message);
+        setAssignError(`Failed to notify patient: ${notifyErr.message}`);
+        return;
+      }
 
       if (targetAppt.userId) {
         await createPatientNotification({
@@ -1598,6 +1727,7 @@ export default function ClinicAppointmentsPage() {
             needsPatientReschedule: true,
             clinicNote: noteText,
             appointmentHistory: updatedHistory,
+            questionnaireAnswers: prepResult2.nextQa ?? undefined,
           };
         });
         try {
@@ -1624,11 +1754,6 @@ export default function ClinicAppointmentsPage() {
       const newDateStr = appointment.rescheduleDate;
       const newTimeStr = appointment.rescheduleTime;
       const fullIsoDate = `${newDateStr}T${newTimeStr}:00+08:00`;
-      const destQueueNumber = computeNextQueueNumber(
-        appointments,
-        appointment.assignedDoctorId,
-        newDateStr
-      );
       const historyEntry: AppointmentHistoryEntry = {
         action: "reschedule_accepted",
         actor: "clinic",
@@ -1641,23 +1766,42 @@ export default function ClinicAppointmentsPage() {
       };
       const updatedHistory = [...(appointment.appointmentHistory || []), historyEntry];
 
-      const currentQa3 = (appointment as any)?.questionnaireAnswers || (appointment as any)?.questionnaire_answers;
-      const nextQa3: Record<string, any> = (currentQa3 && typeof currentQa3 === "object" && !Array.isArray(currentQa3))
-        ? { ...currentQa3 }
-        : (Array.isArray(currentQa3) ? { answers: currentQa3 } : {});
-      nextQa3.reschedule_requested = false;
-      nextQa3.reschedule_date = null;
-      nextQa3.reschedule_time = null;
-      nextQa3.reschedule_reason = null;
-      nextQa3.needs_patient_reschedule = false;
-      nextQa3.appointment_history = updatedHistory;
+      // AUD-01: Fetch fresh questionnaire_answers from DB. Do not fall back to stale local state or fabrications.
+      const { data: qData3, error: qErr3 } = await supabase
+        .from("patient_appointment")
+        .select("questionnaire_answers")
+        .eq("appointment_id", appointment.id)
+        .maybeSingle();
 
+      if (qErr3) {
+        console.error("Failed to fetch fresh appointment record:", qErr3.message);
+        return;
+      }
+      if (!qData3) {
+        console.error("Appointment not found in database:", appointment.id);
+        return;
+      }
+
+      const prepResult3 = prepareNextQuestionnaireAnswers(qData3.questionnaire_answers, {
+        reschedule_requested: false,
+        reschedule_date: null,
+        reschedule_time: null,
+        reschedule_reason: null,
+        needs_patient_reschedule: false,
+        appointment_history: updatedHistory,
+      });
+
+      if (!prepResult3.safe) {
+        console.error("Cannot interpret questionnaire data safely:", prepResult3.error);
+        return;
+      }
+
+      // AUD-03: Do not submit direct queue_number updates to avoid trigger rejection
       const updatePayload: Record<string, any> = {
         date: fullIsoDate,
         time: newTimeStr,
-        queue_number: destQueueNumber,
         clinic_note: `Reschedule request accepted by clinic for ${newDateStr} at ${formatAppointmentTime(newTimeStr)}.`,
-        questionnaire_answers: nextQa3,
+        questionnaire_answers: prepResult3.nextQa,
       };
 
       const { error: updateErr } = await supabase
@@ -1667,6 +1811,7 @@ export default function ClinicAppointmentsPage() {
 
       if (updateErr) {
         console.error("Failed to accept reschedule in Supabase:", updateErr.message);
+        return;
       }
 
       if (appointment.userId) {
@@ -1686,7 +1831,6 @@ export default function ClinicAppointmentsPage() {
             ...a,
             date: newDateStr,
             time: newTimeStr,
-            queueNumber: destQueueNumber,
             rescheduleRequested: false,
             rescheduleDate: undefined,
             rescheduleTime: undefined,
@@ -1694,6 +1838,7 @@ export default function ClinicAppointmentsPage() {
             needsPatientReschedule: false,
             clinicNote: `Reschedule request accepted by clinic for ${newDateStr} at ${formatAppointmentTime(newTimeStr)}.`,
             appointmentHistory: updatedHistory,
+            questionnaireAnswers: prepResult3.nextQa ?? undefined,
           };
         });
         try {
@@ -1727,19 +1872,44 @@ export default function ClinicAppointmentsPage() {
       };
       const updatedHistory = [...(appt?.appointmentHistory || []), historyEntry];
 
-      const currentQa4 = (appt as any)?.questionnaireAnswers || (appt as any)?.questionnaire_answers;
-      const nextQa4: Record<string, any> = (currentQa4 && typeof currentQa4 === "object" && !Array.isArray(currentQa4))
-        ? { ...currentQa4 }
-        : (Array.isArray(currentQa4) ? { answers: currentQa4 } : {});
-      nextQa4.reschedule_requested = false;
-      nextQa4.reschedule_date = null;
-      nextQa4.reschedule_time = null;
-      nextQa4.reschedule_reason = null;
-      nextQa4.appointment_history = updatedHistory;
+      // AUD-01: Fetch fresh questionnaire_answers from DB. Do not fall back to stale local state or fabrications.
+      const { data: qData4, error: qErr4 } = await supabase
+        .from("patient_appointment")
+        .select("questionnaire_answers")
+        .eq("appointment_id", declinePatientRescheduleModal.appointmentId)
+        .maybeSingle();
+
+      if (qErr4) {
+        console.error("Failed to fetch fresh appointment record:", qErr4.message);
+        setDeclineRescheduleError(`Failed to fetch current appointment data: ${qErr4.message}`);
+        setDeclineRescheduleSaving(false);
+        return;
+      }
+      if (!qData4) {
+        console.error("Appointment not found in database:", declinePatientRescheduleModal.appointmentId);
+        setDeclineRescheduleError("Appointment record not found in the database. Please refresh.");
+        setDeclineRescheduleSaving(false);
+        return;
+      }
+
+      const prepResult4 = prepareNextQuestionnaireAnswers(qData4.questionnaire_answers, {
+        reschedule_requested: false,
+        reschedule_date: null,
+        reschedule_time: null,
+        reschedule_reason: null,
+        appointment_history: updatedHistory,
+      });
+
+      if (!prepResult4.safe) {
+        console.error("Cannot interpret questionnaire data safely:", prepResult4.error);
+        setDeclineRescheduleError(prepResult4.error);
+        setDeclineRescheduleSaving(false);
+        return;
+      }
 
       const updatePayload: Record<string, any> = {
         clinic_note: `Reschedule request declined: ${reasonText}. Original schedule (${declinePatientRescheduleModal.currentDate} at ${formatAppointmentTime(declinePatientRescheduleModal.currentTime)}) remains active.`,
-        questionnaire_answers: nextQa4,
+        questionnaire_answers: prepResult4.nextQa,
       };
 
       const { error: updateErr } = await supabase
@@ -1749,6 +1919,9 @@ export default function ClinicAppointmentsPage() {
 
       if (updateErr) {
         console.error("Failed to decline reschedule in Supabase:", updateErr.message);
+        setDeclineRescheduleError(`Failed to decline reschedule: ${updateErr.message}`);
+        setDeclineRescheduleSaving(false);
+        return;
       }
 
       if (declinePatientRescheduleModal.userId) {
@@ -1772,6 +1945,7 @@ export default function ClinicAppointmentsPage() {
             rescheduleReason: undefined,
             clinicNote: `Reschedule request declined: ${reasonText}. Original schedule remains active.`,
             appointmentHistory: updatedHistory,
+            questionnaireAnswers: prepResult4.nextQa ?? undefined,
           };
         });
         try {
@@ -1814,16 +1988,38 @@ export default function ClinicAppointmentsPage() {
       const updatedHistory = [...(appt?.appointmentHistory || []), historyEntry];
       const noteText = `Clinic requested patient reschedule: ${reasonText}`;
 
-      const currentQa5 = (appt as any)?.questionnaireAnswers || (appt as any)?.questionnaire_answers;
-      const nextQa5: Record<string, any> = (currentQa5 && typeof currentQa5 === "object" && !Array.isArray(currentQa5))
-        ? { ...currentQa5 }
-        : (Array.isArray(currentQa5) ? { answers: currentQa5 } : {});
-      nextQa5.needs_patient_reschedule = true;
-      nextQa5.appointment_history = updatedHistory;
+      // AUD-01: Fetch fresh questionnaire_answers from DB. Do not fall back to stale local state or fabrications.
+      const { data: qData5, error: qErr5 } = await supabase
+        .from("patient_appointment")
+        .select("questionnaire_answers")
+        .eq("appointment_id", requestPatientRescheduleModal.appointmentId)
+        .maybeSingle();
+
+      if (qErr5) {
+        console.error("Failed to fetch fresh appointment record:", qErr5.message);
+        setReschedulePromptError(`Failed to fetch current appointment data: ${qErr5.message}`);
+        return;
+      }
+      if (!qData5) {
+        console.error("Appointment not found in database:", requestPatientRescheduleModal.appointmentId);
+        setReschedulePromptError("Appointment record not found in the database. Please refresh.");
+        return;
+      }
+
+      const prepResult5 = prepareNextQuestionnaireAnswers(qData5.questionnaire_answers, {
+        needs_patient_reschedule: true,
+        appointment_history: updatedHistory,
+      });
+
+      if (!prepResult5.safe) {
+        console.error("Cannot interpret questionnaire data safely:", prepResult5.error);
+        setReschedulePromptError(prepResult5.error);
+        return;
+      }
 
       const updatePayload: Record<string, any> = {
         clinic_note: noteText,
-        questionnaire_answers: nextQa5,
+        questionnaire_answers: prepResult5.nextQa,
       };
 
       const { error: updateErr } = await supabase
@@ -1833,6 +2029,8 @@ export default function ClinicAppointmentsPage() {
 
       if (updateErr) {
         console.error("Failed to request patient reschedule in Supabase:", updateErr.message);
+        setReschedulePromptError(`Failed to request reschedule: ${updateErr.message}`);
+        return;
       }
 
       if (requestPatientRescheduleModal.userId) {
@@ -1853,6 +2051,7 @@ export default function ClinicAppointmentsPage() {
             needsPatientReschedule: true,
             clinicNote: noteText,
             appointmentHistory: updatedHistory,
+            questionnaireAnswers: prepResult5.nextQa ?? undefined,
           };
         });
         try {
@@ -1899,22 +2098,15 @@ export default function ClinicAppointmentsPage() {
 
     const appt = appointments.find((a) => a.id === finalizeScheduleModal.appointmentId);
     const doctorDisplayName = finalizeScheduleModal.assignedDoctorName || appt?.assignedDoctorName || "Doctor";
-    const docId = finalizeScheduleModal.assignedDoctorId || appt?.assignedDoctorId;
-    const isDateChanged = Boolean(appt?.date && !appt.date.startsWith(finalizeScheduleModal.date));
-    const finalQueueNumber = isDateChanged
-      ? computeNextQueueNumber(appointments, docId, finalizeScheduleModal.date)
-      : (appt?.queueNumber || 1);
 
     try {
+      // AUD-03: Do not submit direct queue_number updates to avoid trigger rejection
       const updateData: Record<string, any> = {
         status: "confirmed",
         date: `${finalizeScheduleModal.date}T${finalizeScheduleModal.time}:00+08:00`,
         schedule_sent_to_doctor: true,
         clinic_note: `Consultation schedule confirmed for ${finalizeScheduleModal.date} at ${finalizeScheduleModal.time} with Dr. ${doctorDisplayName.replace(/^dr\.\s*/i, "")}.`,
       };
-      if (isDateChanged) {
-        updateData.queue_number = finalQueueNumber;
-      }
       const { error: updateErr } = await supabase
         .from("patient_appointment")
         .update(updateData)
@@ -1922,9 +2114,13 @@ export default function ClinicAppointmentsPage() {
 
       if (updateErr) {
         console.error("Failed to finalize schedule in Supabase:", updateErr.message);
+        setScheduleError(`Failed to finalize schedule: ${updateErr.message}`);
+        return;
       }
     } catch (err: any) {
       console.error("Failed to finalize schedule in Supabase:", err.message);
+      setScheduleError(err?.message || "Failed to finalize schedule.");
+      return;
     }
 
     if (appt?.userId) {
@@ -1946,7 +2142,6 @@ export default function ClinicAppointmentsPage() {
           time: finalizeScheduleModal.time,
           status: "scheduled" as const,
           scheduleSentToDoctor: true,
-          queueNumber: finalQueueNumber,
           clinicNote: `Consultation schedule confirmed for ${finalizeScheduleModal.date} at ${finalizeScheduleModal.time} with Dr. ${doctorDisplayName.replace(/^dr\.\s*/i, "")}.`,
         };
       });
@@ -2035,36 +2230,39 @@ export default function ClinicAppointmentsPage() {
           <button
             key={tab.key}
             type="button"
-            onClick={() => setScheduleTab(tab.key)}
-            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors cursor-pointer flex items-center shrink-0 ${
-              scheduleTab === tab.key
+            onClick={() => {
+              setScheduleTab(tab.key);
+              if (tab.key === "completed") {
+                setQueueFilter("all");
+              }
+            }}
+            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors cursor-pointer flex items-center shrink-0 ${scheduleTab === tab.key
                 ? "border-[#c0166a] text-[#c0166a]"
                 : "border-transparent text-gray-500 hover:text-gray-700"
-            }`}
+              }`}
           >
             {tab.label}
             <span
-              className={`ml-2 text-[11px] px-2 py-0.5 rounded-full font-bold ${
-                scheduleTab === tab.key
+              className={`ml-2 text-[11px] px-2 py-0.5 rounded-full font-bold ${scheduleTab === tab.key
                   ? "bg-rose-50 text-[#c0166a]"
                   : "bg-gray-100 text-gray-500"
-              }`}
+                }`}
             >
               {tab.key === "upcoming"
                 ? appointments.filter(
-                    (appointment) =>
-                      appointment.status !== "completed" &&
-                      appointment.status !== "cancelled" &&
-                      appointment.status !== "rejected" &&
-                      appointment.checkInStatus !== "completed" &&
-                      appointment.checkInStatus !== "no-show"
-                  ).length
+                  (appointment) =>
+                    appointment.status !== "completed" &&
+                    appointment.status !== "cancelled" &&
+                    appointment.status !== "rejected" &&
+                    appointment.checkInStatus !== "completed" &&
+                    appointment.checkInStatus !== "no-show"
+                ).length
                 : appointments.filter(
-                    (appointment) =>
-                      appointment.status === "completed" ||
-                      appointment.checkInStatus === "completed" ||
-                      appointment.checkInStatus === "no-show"
-                  ).length}
+                  (appointment) =>
+                    appointment.status === "completed" ||
+                    appointment.checkInStatus === "completed" ||
+                    appointment.checkInStatus === "no-show"
+                ).length}
             </span>
           </button>
         ))}
@@ -2072,9 +2270,9 @@ export default function ClinicAppointmentsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* ── Left Column: Calendar + Legend ── */}
-        <div className="lg:col-span-7 xl:col-span-6 bg-white border border-gray-100 rounded-3xl p-5 shadow-xs">
+        <div className="lg:col-span-7 xl:col-span-6 bg-white border border-gray-100 rounded-3xl p-4 sm:p-5 shadow-xs flex flex-col self-start h-136 sm:h-144 lg:h-152 min-h-0">
           {/* Calendar Header */}
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-2.5">
             <div className="flex items-center gap-2.5">
               <Calendar className="w-5 h-5 text-[#c0166a]" />
               <h2 className="font-display font-bold text-gray-900 text-base">
@@ -2113,51 +2311,81 @@ export default function ClinicAppointmentsPage() {
           </div>
 
           {/* Day of Week Headers */}
-          <div className="grid grid-cols-7 gap-1.5 text-center text-[11px] font-semibold text-gray-400 mb-1.5 px-1">
+          <div className="grid grid-cols-7 gap-1.5 text-center text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5 px-1 shrink-0">
             {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
               <p key={day}>{day}</p>
             ))}
           </div>
 
-          {/* Calendar Cells Grid */}
-          <div className="grid grid-cols-7 gap-1.5">
+          {/* Calendar Cells Grid — rows stretch to fill the card so the calendar never leaves empty space */}
+          <div className="grid grid-cols-7 grid-rows-6 gap-1.5 flex-1 min-h-0">
             {calendarCells.map((cell) => {
               const isSelected = selectedDate === cell.key;
+              const isToday = todayKey === cell.key;
+              // Past days and days outside the visible month use the soft muted style
+              const isMutedDay = !cell.inCurrentMonth || cell.key < todayKey;
               const dayAppointments = scheduleAppointmentsByDate[cell.key] || [];
-              const hasAppointment = dayAppointments.some(
+              const activeDayAppointments = dayAppointments.filter(
                 (a) => a.status !== "cancelled" && a.status !== "rejected"
               );
+              const dayCount = activeDayAppointments.length;
+              const hasAppointment = dayCount > 0;
+              const selectCell = () => {
+                setSelectedDate(cell.key);
+                if (!cell.inCurrentMonth) {
+                  setCurrentMonth(new Date(cell.date.getFullYear(), cell.date.getMonth(), 1));
+                }
+              };
 
               return (
                 <div
                   key={cell.key}
-                  onClick={() => {
-                    setSelectedDate(cell.key);
-                    if (!cell.inCurrentMonth) {
-                      setCurrentMonth(new Date(cell.date.getFullYear(), cell.date.getMonth(), 1));
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={isSelected}
+                  aria-label={`${cell.key}${isToday ? ", today" : ""}${hasAppointment ? `, ${dayCount} ${dayCount === 1 ? "appointment" : "appointments"}` : ""}`}
+                  onClick={selectCell}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      selectCell();
                     }
                   }}
                   className={cn(
-                    "min-h-13.5 sm:min-h-14.5 rounded-xl p-1.5 sm:p-2 text-left transition-all cursor-pointer flex flex-col justify-between border",
-                    !cell.inCurrentMonth
-                      ? "bg-gray-50/50 border-gray-200/60 text-gray-300"
-                      : isSelected
-                        ? "bg-linear-to-b from-rose-50/90 to-pink-50/50 border-rose-300 shadow-2xs"
-                        : "bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50/50"
+                    "min-h-10 rounded-2xl p-1.5 sm:p-2 text-left transition-all cursor-pointer flex flex-col justify-between border outline-none focus-visible:ring-2 focus-visible:ring-[#7a123a]/50",
+                    isSelected && cell.inCurrentMonth
+                      ? "bg-pink-50 border-[#7a123a] ring-1 ring-[#7a123a] shadow-xs"
+                      : isMutedDay
+                        ? "bg-[#faf3f6] border-pink-100 hover:border-pink-200"
+                        : "bg-white border-pink-200 hover:bg-pink-50/60 hover:border-pink-300"
                   )}
                 >
-                  <p
-                    className={cn(
-                      "text-[11px] sm:text-xs font-semibold",
-                      !cell.inCurrentMonth
-                        ? "text-gray-300"
-                        : isSelected
-                          ? "text-[#c0166a] font-bold"
-                          : "text-gray-800"
+                  <div className="flex items-start justify-between gap-1">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <p
+                        className={cn(
+                          "text-[11px] sm:text-xs font-semibold leading-none",
+                          isToday
+                            ? "inline-flex items-center justify-center min-w-5 h-5 -mt-0.5 -ml-0.5 px-1 rounded-full bg-[#c0166a] text-white font-bold"
+                            : isSelected && cell.inCurrentMonth
+                              ? "text-[#4a0a22] font-bold"
+                              : isMutedDay
+                                ? "text-[#cdb3bf]"
+                                : "text-gray-900"
+                        )}
+                      >
+                        {cell.date.getDate()}
+                      </p>
+                    </div>
+                    {hasAppointment && cell.inCurrentMonth && (
+                      <span
+                        className="text-[9px] leading-none font-bold px-1.5 py-0.5 rounded-full bg-magenta-50 text-magenta-700 border border-magenta-200 tabular-nums"
+                        title={`${dayCount} ${dayCount === 1 ? "appointment" : "appointments"}`}
+                      >
+                        {dayCount}
+                      </span>
                     )}
-                  >
-                    {cell.date.getDate()}
-                  </p>
+                  </div>
 
                   {/* Status Indicator Line */}
                   <div className="flex items-center justify-center min-h-2.5 mt-1">
@@ -2171,115 +2399,115 @@ export default function ClinicAppointmentsPage() {
           </div>
 
           {false && (
-          <div className="mt-6">
-            <h3 className="text-sm font-bold text-gray-900 mb-3">
-              Scheduled on {selectedDate}
-            </h3>
+            <div className="mt-6">
+              <h3 className="text-sm font-bold text-gray-900 mb-3">
+                Scheduled on {selectedDate}
+              </h3>
 
-            <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-2xs">
-              {selectedDayAppointments.length === 0 ? (
-                <p className="py-6 text-center text-xs text-gray-400">
-                  No scheduled appointments for this date.
-                </p>
-              ) : (
-                <div className="divide-y divide-gray-100">
-                  {selectedDayAppointments.map((appointment) => {
-                    const isPast = isAppointmentPastDue(appointment);
-                    const isNoShow = appointment.checkInStatus === "no-show";
-                    const isCompleted = appointment.status === "completed" || appointment.checkInStatus === "completed";
-                    const isArrived = appointment.checkInStatus === "arrived";
+              <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-2xs">
+                {selectedDayAppointments.length === 0 ? (
+                  <p className="py-6 text-center text-xs text-gray-400">
+                    No scheduled appointments for this date.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-gray-100">
+                    {selectedDayAppointments.map((appointment) => {
+                      const isPast = isAppointmentPastDue(appointment);
+                      const isNoShow = appointment.checkInStatus === "no-show";
+                      const isCompleted = appointment.status === "completed" || appointment.checkInStatus === "completed";
+                      const isArrived = appointment.checkInStatus === "arrived";
 
-                    return (
-                      <motion.div
-                        key={appointment.id}
-                        id={`clinic-calendar-appt-${appointment.id}`}
-                        initial={{ opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        onClick={() => setViewingPatient(appointment)}
-                        className={cn(
-                          "py-3.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer group hover:bg-gray-50/80 rounded-2xl px-2.5 transition-all border border-transparent",
-                          isPast && !isNoShow && !isCompleted && "bg-rose-50/30 hover:bg-rose-50/60 border-rose-100/80 shadow-2xs",
-                          isNoShow && "bg-gray-50/40 opacity-80",
-                          highlightedApptId === appointment.id && "ring-2 ring-[#c0166a] bg-rose-50/40 border-rose-200"
-                        )}
-                      >
-                        {/* Left: Details */}
-                        <div className="min-w-0 sm:flex-1">
-                          <div className="flex items-center gap-2.5 flex-wrap">
-                            <p className="text-xs sm:text-sm font-bold text-gray-900 truncate group-hover:text-[#c0166a] transition-colors">
-                              {appointment.patientName || "Patient"}
-                            </p>
-                          </div>
-
-                          <p className="text-[11px] text-gray-400 mt-0.5">
-                            {appointment.patientAge ? `${appointment.patientAge} years old` : "Age not specified"}
-                          </p>
-                          <p className="text-[11px] text-[#c0166a] font-medium mt-0.5 truncate">
-                            {appointment.conditionName || appointment.aiConditionName || "Skin Concern"}
-                          </p>
-                          <div className="flex items-center gap-1.5 text-[11px] text-gray-500 mt-0.5 truncate">
-                            <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                            <span className="truncate">
-                              {appointment.assignedDoctorName
-                                ? formatDoctorDisplay(appointment.assignedDoctorName)
-                                : "Doctor unassigned"}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Center: Status Badge (Absent / No-Show, Completed, Time Passed · Needs Action, In Lobby) */}
-                        {(isNoShow || isCompleted || isPast || isArrived) && (
-                          <div className="flex items-center justify-start sm:justify-center shrink-0 sm:flex-1 sm:px-2">
-                            {isNoShow ? (
-                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0 whitespace-nowrap shadow-2xs">
-                                <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                                Absent / No-Show
-                              </span>
-                            ) : isCompleted ? (
-                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0 whitespace-nowrap shadow-2xs">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                Completed
-                              </span>
-                            ) : isPast ? (
-                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0 whitespace-nowrap shadow-2xs">
-                                <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                                Time Passed · Needs Action
-                              </span>
-                            ) : isArrived ? (
-                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 shrink-0 whitespace-nowrap shadow-2xs">
-                                <span className="w-1.5 h-1.5 rounded-full bg-sky-500 inline-block animate-pulse shrink-0" />
-                                In Lobby
-                              </span>
-                            ) : null}
-                          </div>
-                        )}
-
-                        {/* Right: Time badge + Chevron */}
-                        <div
+                      return (
+                        <motion.div
+                          key={appointment.id}
+                          id={`clinic-calendar-appt-${appointment.id}`}
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          onClick={() => setViewingPatient(appointment)}
                           className={cn(
-                            "flex items-center gap-2 sm:gap-2.5 shrink-0 justify-between sm:justify-end sm:self-center pt-1 sm:pt-0",
-                            (isNoShow || isCompleted || isPast || isArrived) && "sm:flex-1"
+                            "py-3.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer group hover:bg-gray-50/80 rounded-2xl px-2.5 transition-all border border-transparent",
+                            isPast && !isNoShow && !isCompleted && "bg-rose-50/30 hover:bg-rose-50/60 border-rose-100/80 shadow-2xs",
+                            isNoShow && "bg-gray-50/40 opacity-80",
+                            highlightedApptId === appointment.id && "ring-2 ring-[#c0166a] bg-rose-50/40 border-rose-200"
                           )}
                         >
-                          <div className="px-3 py-1.5 rounded-full bg-[#edf2f7] border border-slate-200/60 text-slate-700 font-bold text-xs flex items-center gap-1.5 whitespace-nowrap shrink-0">
-                            <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                            <span>{formatAppointmentTime(appointment.time)}</span>
+                          {/* Left: Details */}
+                          <div className="min-w-0 sm:flex-1">
+                            <div className="flex items-center gap-2.5 flex-wrap">
+                              <p className="text-xs sm:text-sm font-bold text-gray-900 truncate group-hover:text-[#c0166a] transition-colors">
+                                {appointment.patientName || "Patient"}
+                              </p>
+                            </div>
+
+                            <p className="text-[11px] text-gray-400 mt-0.5">
+                              {appointment.patientAge ? `${appointment.patientAge} years old` : "Age not specified"}
+                            </p>
+                            <p className="text-[11px] text-[#c0166a] font-medium mt-0.5 truncate">
+                              {appointment.conditionName || appointment.aiConditionName || "Skin Concern"}
+                            </p>
+                            <div className="flex items-center gap-1.5 text-[11px] text-gray-500 mt-0.5 truncate">
+                              <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                              <span className="truncate">
+                                {appointment.assignedDoctorName
+                                  ? formatDoctorDisplay(appointment.assignedDoctorName)
+                                  : "Doctor unassigned"}
+                              </span>
+                            </div>
                           </div>
 
-                          <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-                </div>
-              )}
+                          {/* Center: Status Badge (Absent / No-Show, Completed, Time Passed · Needs Action, In Lobby) */}
+                          {(isNoShow || isCompleted || isPast || isArrived) && (
+                            <div className="flex items-center justify-start sm:justify-center shrink-0 sm:flex-1 sm:px-2">
+                              {isNoShow ? (
+                                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                  Absent / No-Show
+                                </span>
+                              ) : isCompleted ? (
+                                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                  Completed
+                                </span>
+                              ) : isPast ? (
+                                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                  Time Passed · Needs Action
+                                </span>
+                              ) : isArrived ? (
+                                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 shrink-0 whitespace-nowrap shadow-2xs">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-sky-500 inline-block animate-pulse shrink-0" />
+                                  In Lobby
+                                </span>
+                              ) : null}
+                            </div>
+                          )}
+
+                          {/* Right: Time badge + Chevron */}
+                          <div
+                            className={cn(
+                              "flex items-center gap-2 sm:gap-2.5 shrink-0 justify-between sm:justify-end sm:self-center pt-1 sm:pt-0",
+                              (isNoShow || isCompleted || isPast || isArrived) && "sm:flex-1"
+                            )}
+                          >
+                            <div className="px-3 py-1.5 rounded-full bg-[#edf2f7] border border-slate-200/60 text-slate-700 font-bold text-xs flex items-center gap-1.5 whitespace-nowrap shrink-0">
+                              <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                              <span>{formatAppointmentTime(appointment.time)}</span>
+                            </div>
+
+                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
 
           )}
 
           {/* ── Legend ── */}
-          <div className="flex items-center gap-6 text-xs text-gray-500 pt-5 mt-6 border-t border-gray-100 flex-wrap px-1">
+          <div className="flex items-center gap-x-5 gap-y-2 text-xs text-gray-500 pt-3.5 mt-3.5 border-t border-gray-100 flex-wrap px-1 shrink-0">
             <div className="flex items-center gap-2">
               <span className="w-5 h-1 sm:h-1.5 rounded-full bg-[#c0166a]" />
               <span className="text-[11px] text-gray-600 font-medium">Appointment</span>
@@ -2288,11 +2516,20 @@ export default function ClinicAppointmentsPage() {
               <span className="w-5 h-1 sm:h-1.5 rounded-full bg-gray-200" />
               <span className="text-[11px] text-gray-500 font-medium">No appointment</span>
             </div>
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#c0166a]" />
+              <span className="text-[11px] text-gray-600 font-medium">Today</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-md border border-[#7a123a] ring-1 ring-[#7a123a] bg-pink-50" />
+              <span className="text-[11px] text-gray-600 font-medium">Selected</span>
+            </div>
           </div>
         </div>
 
-        <div className="lg:col-span-5 xl:col-span-6 bg-white border border-gray-100 rounded-2xl p-4 sm:p-5">
-          <div className="flex items-start justify-between gap-3 mb-3">
+        {/* Fixed-height panel: size stays constant across tabs/filters; the list below scrolls internally */}
+        <div className="lg:col-span-5 xl:col-span-6 bg-white border border-gray-100 rounded-2xl p-4 sm:p-5 flex flex-col h-160 lg:h-176 min-h-0">
+          <div className="flex items-start justify-between gap-3 mb-3 shrink-0">
             <div className="min-w-0">
               <h2 className="font-display font-bold text-gray-900 text-base">
                 Appointments for {formatSelectedDate(selectedDate)}
@@ -2307,41 +2544,41 @@ export default function ClinicAppointmentsPage() {
           </div>
 
           {scheduleTab === "upcoming" && (
-          <>
-          {/* Queue Stage Filter Pills */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-3 pt-1 text-xs no-scrollbar">
-            {[
-              { key: "all", label: "All", count: incomingQueue.length },
-              { key: "needs_doctor", label: "Needs Doctor", count: needsDoctorQueue.length, alert: needsDoctorQueue.length > 0 },
-              { key: "in_review", label: "In Review", count: inReviewQueue.length },
-              { key: "reschedule_requests", label: "Reschedules", count: rescheduleRequestsQueue.length, alert: rescheduleRequestsQueue.length > 0 },
-              { key: "approved", label: "Confirmed", count: approvedQueue.length, highlight: approvedQueue.length > 0 },
-            ].map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => setQueueFilter(tab.key as any)}
-                className={`px-3 py-1.5 rounded-xl font-semibold shrink-0 transition-all flex items-center gap-1.5 cursor-pointer ${queueFilter === tab.key
-                  ? "bg-magenta-600 text-white shadow-xs"
-                  : tab.highlight
-                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
-                    : tab.alert
-                      ? "bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
-                      : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                  }`}
-              >
-                <span>{tab.label}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${queueFilter === tab.key ? "bg-white/20 text-white" : "bg-white/80 text-gray-700"
-                  }`}>
-                  {tab.count}
-                </span>
-              </button>
-            ))}
-          </div>
-          </>
+            <>
+              {/* Queue Stage Filter Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-3 pt-1 text-xs no-scrollbar shrink-0">
+                {[
+                  { key: "all", label: "All", count: incomingQueue.length },
+                  { key: "needs_doctor", label: "Needs Doctor", count: needsDoctorQueue.length, alert: needsDoctorQueue.length > 0 },
+                  { key: "in_review", label: "In Review", count: inReviewQueue.length },
+                  { key: "reschedule_requests", label: "Reschedules", count: rescheduleRequestsQueue.length, alert: rescheduleRequestsQueue.length > 0 },
+                  { key: "approved", label: "Confirmed", count: approvedQueue.length, highlight: approvedQueue.length > 0 },
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setQueueFilter(tab.key as any)}
+                    className={`px-3 py-1.5 rounded-xl font-semibold shrink-0 transition-all flex items-center gap-1.5 cursor-pointer ${queueFilter === tab.key
+                      ? "bg-magenta-600 text-white shadow-xs"
+                      : tab.highlight
+                        ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                        : tab.alert
+                          ? "bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
+                          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      }`}
+                  >
+                    <span>{tab.label}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${queueFilter === tab.key ? "bg-white/20 text-white" : "bg-white/80 text-gray-700"
+                      }`}>
+                      {tab.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
           )}
 
-          <div className="space-y-3 max-h-165 overflow-y-auto pr-1 no-scrollbar scrollbar-none [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+          <div className="space-y-3 flex-1 min-h-0 overflow-y-auto pr-2 [scrollbar-width:thin] [scrollbar-color:#d1d5db_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-300 hover:[&::-webkit-scrollbar-thumb]:bg-gray-400">
             {selectedDateQueue.length === 0 && (
               <div className="border border-dashed border-gray-200 rounded-2xl p-8 text-center bg-gray-50/50">
                 <Clock className="w-8 h-8 text-gray-300 mx-auto mb-2" />
@@ -2351,28 +2588,34 @@ export default function ClinicAppointmentsPage() {
                     : "No approved appointments scheduled for this date."}
                 </p>
                 <p className="text-[11px] text-gray-400 mt-1 max-w-xs mx-auto">
-                  {queueFilter === "needs_doctor"
-                    ? "All consultation requests have been assigned to doctors for review."
-                    : queueFilter === "approved"
-                      ? "No approved or confirmed appointments yet."
-                      : queueFilter === "reschedule_requests"
-                        ? "No pending patient reschedule requests to review."
-                        : "Incoming consultation requests will appear here."}
+                  {scheduleTab === "completed"
+                    ? "Completed consultation records for this date will appear here."
+                    : queueFilter === "needs_doctor"
+                      ? "All consultation requests have been assigned to doctors for review."
+                      : queueFilter === "approved"
+                        ? "No approved or confirmed appointments yet."
+                        : queueFilter === "reschedule_requests"
+                          ? "No pending patient reschedule requests to review."
+                          : "Incoming consultation requests will appear here."}
                 </p>
               </div>
             )}
 
             {selectedDateQueue.map((appointment) => {
               const urgency = getPendingAppointmentUrgency(appointment, urgencyNow);
-              const isDoctorDeclined = appointment.doctorStatus === "rejected";
-              const isInReview = !isDoctorDeclined && Boolean(appointment.assignedDoctorId) && appointment.doctorStatus === "pending-review";
-              const isApproved = !isDoctorDeclined && !isInReview && (
+              const isCompleted = appointment.status === "completed" || appointment.checkInStatus === "completed";
+              const isNoShow = appointment.checkInStatus === "no-show";
+              const isPast = isAppointmentPastDue(appointment);
+              const isPastDueNeedsAction = isPast && !isCompleted && !isNoShow && appointment.checkInStatus !== "arrived" && appointment.checkInStatus !== "in-consultation";
+              const isDoctorDeclined = !isCompleted && !isNoShow && appointment.doctorStatus === "rejected";
+              const isInReview = !isCompleted && !isNoShow && !isDoctorDeclined && Boolean(appointment.assignedDoctorId) && appointment.doctorStatus === "pending-review";
+              const isApproved = !isCompleted && !isNoShow && !isDoctorDeclined && !isInReview && (
                 appointment.doctorStatus === "approved" ||
                 appointment.status === "confirmed" ||
                 appointment.status === "accepted" ||
                 (appointment.status === "scheduled" && appointment.doctorStatus !== "rejected")
               );
-              const isUnassigned = !isDoctorDeclined && !isInReview && !isApproved;
+              const isUnassigned = !isCompleted && !isNoShow && !isDoctorDeclined && !isInReview && !isApproved;
               const payBadge = getPaymentBadgeInfo(appointment);
 
               return (
@@ -2380,16 +2623,22 @@ export default function ClinicAppointmentsPage() {
                   key={appointment.id}
                   id={`clinic-appt-card-${appointment.id}`}
                   className={cn(
-                    `rounded-2xl border p-4 transition-all ${urgency !== null
-                      ? "border-amber-300 bg-amber-50/70"
-                      : isDoctorDeclined
-                        ? "border-red-200 bg-red-50/30"
-                        : isApproved
-                          ? "border-emerald-200 bg-emerald-50/30"
-                          : isInReview
-                            ? "border-blue-100 bg-blue-50/20"
-                            : "border-amber-100 bg-amber-50/20"
-                      }`,
+                    `rounded-2xl border p-4 transition-all ${isCompleted
+                      ? "border-emerald-200 bg-emerald-50/20"
+                      : isNoShow
+                        ? "border-gray-200 bg-gray-50/40 opacity-80"
+                        : isPastDueNeedsAction
+                          ? "border-rose-300 bg-rose-50/30"
+                          : urgency !== null
+                            ? "border-amber-300 bg-amber-50/70"
+                            : isDoctorDeclined
+                              ? "border-red-200 bg-red-50/30"
+                              : isApproved
+                                ? "border-emerald-200 bg-emerald-50/30"
+                                : isInReview
+                                  ? "border-blue-100 bg-blue-50/20"
+                                  : "border-amber-100 bg-amber-50/20"
+                    }`,
                     highlightedApptId === appointment.id && "ring-2 ring-magenta-600 shadow-md"
                   )}
                 >
@@ -2437,7 +2686,19 @@ export default function ClinicAppointmentsPage() {
                         {/* Status Badge */}
                         <div className="shrink-0 flex flex-col items-end gap-1">
                           <AppointmentUrgencyBadge remainingMs={urgency} />
-                          {isDoctorDeclined ? (
+                          {isPastDueNeedsAction ? (
+                            <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1 shadow-2xs">
+                              <AlertTriangle className="w-3 h-3 text-rose-600" /> Time Passed · Needs Action
+                            </span>
+                          ) : isCompleted ? (
+                            <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Completed
+                            </span>
+                          ) : isNoShow ? (
+                            <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3 text-rose-600" /> Absent / No-Show
+                            </span>
+                          ) : isDoctorDeclined ? (
                             <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-red-100 text-red-800 border border-red-200 flex items-center gap-1">
                               <XCircle className="w-3 h-3 text-red-600" /> Doctor Declined
                             </span>
@@ -2454,7 +2715,7 @@ export default function ClinicAppointmentsPage() {
                               <Clock className="w-3 h-3 text-amber-600" /> Needs Doctor
                             </span>
                           )}
-                          {appointment.rescheduleRequested && (
+                          {!isCompleted && !isNoShow && appointment.rescheduleRequested && (
                             <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-purple-100 text-purple-800 border border-purple-200 flex items-center gap-1">
                               <Clock className="w-2.5 h-2.5" /> Reschedule Req
                             </span>
@@ -2465,7 +2726,25 @@ export default function ClinicAppointmentsPage() {
                   </div>
 
                   {/* Stage Workflow Banners */}
-                  {isDoctorDeclined ? (() => {
+                  {isCompleted ? (
+                    <div className="mb-2.5 p-2.5 rounded-xl bg-emerald-100/70 border border-emerald-200 text-xs text-emerald-900 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span className="font-medium truncate">
+                          <strong>Consultation completed</strong> with {formatDoctorDisplay(appointment.assignedDoctorName) || "Doctor"}.
+                        </span>
+                      </div>
+                    </div>
+                  ) : isNoShow ? (
+                    <div className="mb-2.5 p-2.5 rounded-xl bg-rose-100/70 border border-rose-200 text-xs text-rose-900 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span className="font-medium truncate">
+                          Patient was marked as absent / no-show.
+                        </span>
+                      </div>
+                    </div>
+                  ) : isDoctorDeclined ? (() => {
                     const privilege = getPatientPrivilegeStatus(appointment);
                     return (
                       <div className="mb-2.5 p-2.5 rounded-xl bg-red-100/70 border border-red-200 text-xs text-red-900 flex items-start gap-2">
@@ -2498,7 +2777,7 @@ export default function ClinicAppointmentsPage() {
                         </div>
                       </div>
                     );
-                  })() : isApproved ? (
+                  })() : isApproved && !isPastDueNeedsAction ? (
                     <div className="mb-2.5 p-2.5 rounded-xl bg-emerald-100/70 border border-emerald-200 text-xs text-emerald-900 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2516,6 +2795,19 @@ export default function ClinicAppointmentsPage() {
                     </div>
                   ) : null}
 
+                  {/* Past-Due Attendance Action Required Banner */}
+                  {isPastDueNeedsAction && (
+                    <div className="mb-2.5 p-2.5 rounded-xl bg-rose-50/90 border border-rose-200 flex items-start gap-2.5 text-xs text-rose-900 shadow-2xs">
+                      <Clock className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold">Consultation Date &amp; Time Has Passed</p>
+                        <p className="text-[11px] text-rose-700 mt-0.5">
+                          The scheduled time for this consultation has passed. Please update the appointment status to reflect the outcome.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Patient Requested Schedule Banner with Queue Badge & Payment Verified Badge */}
                   <div className="mb-2.5 p-2 rounded-xl bg-magenta-50/70 border border-magenta-100 flex items-center justify-between text-xs flex-wrap gap-1.5">
                     <div className="flex items-center gap-1.5 font-bold text-magenta-950">
@@ -2528,7 +2820,7 @@ export default function ClinicAppointmentsPage() {
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      {isApproved && (
+                      {!isCompleted && !isNoShow && isApproved ? (
                         appointment.checkInStatus === "arrived" ? (
                           <span className="px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-800 font-bold text-[9px] flex items-center gap-0.5">
                             <span className="w-1 h-1 rounded-full bg-sky-500 inline-block" /> In Lobby
@@ -2537,17 +2829,13 @@ export default function ClinicAppointmentsPage() {
                           <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[9px] flex items-center gap-0.5 animate-pulse">
                             <span className="w-1 h-1 rounded-full bg-emerald-500 inline-block" /> In Room
                           </span>
-                        ) : appointment.checkInStatus === "no-show" ? (
-                          <span className="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[9px]">
-                            Absent / No-Show
-                          </span>
                         ) : null
-                      )}
+                      ) : null}
                     </div>
                   </div>
 
                   {/* Rule 1: Patient Reschedule Request Banner */}
-                  {appointment.rescheduleRequested && (
+                  {!isCompleted && !isNoShow && appointment.rescheduleRequested && (
                     <div className="mb-3 p-3 rounded-xl bg-purple-50/90 border border-purple-200 text-purple-900 space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-bold uppercase tracking-wider text-purple-800 flex items-center gap-1">
@@ -2609,6 +2897,19 @@ export default function ClinicAppointmentsPage() {
 
                   {/* Contextual Action Buttons */}
                   <div className="pt-1">
+                    {/* Scenario: Completed or No-Show -> View Details */}
+                    {(isCompleted || isNoShow) && (
+                      <div className="flex items-center gap-2 w-full">
+                        <button
+                          type="button"
+                          onClick={() => setViewingPatient(appointment)}
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          <User className="w-3.5 h-3.5" /> View Details
+                        </button>
+                      </div>
+                    )}
+
                     {/* Scenario A: Unassigned -> Assign Doctor */}
                     {isUnassigned && (
                       <div className="space-y-2 w-full">
@@ -2684,26 +2985,64 @@ export default function ClinicAppointmentsPage() {
                       </div>
                     )}
 
-                    {/* Scenario C: Doctor Approved -> View Details & Reschedule */}
+                    {/* Scenario C: Doctor Approved -> View Details & Reschedule OR Past-Due Action */}
                     {isApproved && (
-                      <div className="flex items-center gap-2 w-full">
-                        <button
-                          type="button"
-                          onClick={() => setViewingPatient(appointment)}
-                          className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
-                        >
-                          <User className="w-3.5 h-3.5" /> View Details
-                        </button>
-                        {appointment.rescheduleRequested && (
+                      isPastDueNeedsAction ? (
+                        <div className="flex items-center gap-1.5 sm:gap-2 w-full">
                           <button
                             type="button"
-                            onClick={() => setQueueFilter("reschedule_requests")}
-                            className="py-2.5 px-3.5 rounded-xl border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                            onClick={async () => {
+                              await handleMarkArrived(appointment.id);
+                            }}
+                            className="flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 py-2.5 px-2.5 sm:px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-all shadow-xs cursor-pointer active:scale-[0.98] whitespace-nowrap"
+                            title="Mark patient as arrived"
                           >
-                            Review Reschedule
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate">Arrived</span>
                           </button>
-                        )}
-                      </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNoShowConfirmModal(appointment);
+                              setNoShowError("");
+                              setNoShowSuccess("");
+                            }}
+                            className="flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 py-2.5 px-2.5 sm:px-3 rounded-xl bg-[#e1004a] hover:bg-[#c0003e] text-white text-xs font-semibold transition-all shadow-xs cursor-pointer active:scale-[0.98] whitespace-nowrap"
+                            title="Mark patient as absent / no-show"
+                          >
+                            <Ban className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate">Mark as No-Show</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setViewingPatient(appointment)}
+                            className="inline-flex items-center justify-center gap-1.5 py-2.5 px-3 sm:px-3.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+                            title="View Details"
+                          >
+                            <User className="w-3.5 h-3.5 shrink-0" />
+                            <span>Details</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 w-full">
+                          <button
+                            type="button"
+                            onClick={() => setViewingPatient(appointment)}
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
+                          >
+                            <User className="w-3.5 h-3.5" /> View Details
+                          </button>
+                          {appointment.rescheduleRequested && (
+                            <button
+                              type="button"
+                              onClick={() => setQueueFilter("reschedule_requests")}
+                              className="py-2.5 px-3.5 rounded-xl border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                            >
+                              Review Reschedule
+                            </button>
+                          )}
+                        </div>
+                      )
                     )}
 
                     {/* Scenario D: Doctor Declined -> RE-ASSIGN DOCTOR OR DECLINE REQUEST */}
@@ -2783,11 +3122,6 @@ export default function ClinicAppointmentsPage() {
                 </div>
               );
             })}
-          </div>
-
-          <div className="mt-4 rounded-xl bg-gray-50 border border-gray-100 p-3 text-[11px] text-gray-600">
-            <p className="font-bold text-gray-900 mb-1">Appointment Approval Workflow</p>
-            <p>1. Assign doctor for review &rarr; 2. Attending doctor decides (Approve/Decline) &rarr; 3. If approved, clinic finalizes schedule date &amp; time. If declined, clinic re-assigns or declines request.</p>
           </div>
         </div>
       </div>      {/* ── Day Detail Modal ─────────────────────────────────── */}

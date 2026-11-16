@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { groupPatientHistory, isNoShowAppointment } from '../src/lib/patientHistory.ts';
+import { groupPatientHistory, isNoShowAppointment, isPastHistoryRecord, historyStatus, historyStatusLabel } from '../src/lib/patientHistory.ts';
 
 // Helper to simulate DoctorPatientHistoryPage appointment filtering pipeline
 function simulateHistoryFilter({
@@ -19,13 +19,6 @@ function simulateHistoryFilter({
       return true;
     }
     return false;
-  };
-
-  const isPastHistoryRecord = (appt) => {
-    if (!appt) return false;
-    if (isNoShowAppointment(appt)) return true;
-    const s = String(appt.status || "").trim().toLowerCase();
-    return s === "completed" || s === "cancelled" || s === "canceled" || Boolean(appt.doctorDone);
   };
 
   // Filter for clinic scope (activeClinicId)
@@ -362,4 +355,84 @@ test('Scenario 15: Summary card metrics remain unchanged when searching', () => 
   assert.equal(withSearch.stats.cancelled, 1);
   assert.equal(withSearch.stats.noShow, 1);
   assert.equal(withSearch.stats.totalPatients, 4);
+});
+
+test('Scenario 16: Doctor-rejected appointments appear in Cancelled Visits, All Past Appointments (without duplication), summary counts, search, and date filters', () => {
+  const doctorRejectedAppt = {
+    id: 'appt-doc-rejected-1',
+    userId: 'user_paolo',
+    patientId: 'P-2026-0099',
+    patientName: 'Paolo Mendoza',
+    patientEmail: 'paolo@example.com',
+    doctorDiagnosis: '',
+    conditionName: 'Psoriasis',
+    clinicName: 'Skin Clinic Manila',
+    clinicId: 'clinic_1',
+    notes: 'Scaly plaques on elbows',
+    doctorNote: 'Fully booked during requested timeframe',
+    date: '2026-03-05',
+    status: 'pending',
+    doctorStatus: 'rejected',
+    doctorDone: false,
+    assignedDoctorId: 'doc_123',
+    isAssignedToMe: true,
+  };
+
+  const dataset = [...sampleAppts, doctorRejectedAppt];
+
+  // 1. Doctor rejects an appointment -> appears under Cancelled Visits
+  // 2. Patient cancels an appointment (Carlos) -> also appears under Cancelled Visits
+  const cancelledTab = simulateHistoryFilter({ appointments: dataset, historyTab: 'cancelled' });
+  assert.equal(cancelledTab.searchFilteredHistory.length, 2);
+  assert.deepEqual(
+    cancelledTab.searchFilteredHistory.map(a => a.id),
+    ['appt-4', 'appt-doc-rejected-1']
+  );
+  assert.equal(historyStatusLabel(doctorRejectedAppt), 'Declined');
+  assert.equal(historyStatusLabel(sampleAppts[3]), 'Cancelled');
+  assert.equal(doctorRejectedAppt.doctorNote, 'Fully booked during requested timeframe');
+  assert.equal(doctorRejectedAppt.conditionName, 'Psoriasis');
+  assert.equal(doctorRejectedAppt.doctorDiagnosis, '');
+
+  // 3. Completed appointment -> appears under Completed Visits only (doctor-rejected is excluded)
+  const completedTab = simulateHistoryFilter({ appointments: dataset, historyTab: 'completed' });
+  assert.equal(completedTab.searchFilteredHistory.length, 3);
+  assert.ok(completedTab.searchFilteredHistory.every(a => a.id !== 'appt-doc-rejected-1' && a.id !== 'appt-4'));
+
+  // 4. No-show appointment -> appears under No-Show Visits only (doctor-rejected is excluded)
+  const noShowTab = simulateHistoryFilter({ appointments: dataset, historyTab: 'no-show' });
+  assert.equal(noShowTab.searchFilteredHistory.length, 1);
+  assert.equal(noShowTab.searchFilteredHistory[0].id, 'appt-5');
+
+  // 5. Rejected appointment does not appear twice in All Past Appointments
+  const allTab = simulateHistoryFilter({ appointments: [...dataset, doctorRejectedAppt], historyTab: 'all' });
+  const rejectedOccurrencesInPatients = allTab.tabPatients
+    .flatMap(p => p.appointments)
+    .filter(a => a.id === 'appt-doc-rejected-1');
+  assert.equal(rejectedOccurrencesInPatients.length, 1);
+
+  // 6. Summary card counts match the actual records displayed
+  const summaryCheck = simulateHistoryFilter({ appointments: dataset, historyTab: 'all' });
+  assert.equal(summaryCheck.stats.totalAppointments, 6);
+  assert.equal(summaryCheck.stats.completed, 3);
+  assert.equal(summaryCheck.stats.cancelled, 2);
+  assert.equal(summaryCheck.stats.noShow, 1);
+  assert.equal(
+    summaryCheck.stats.totalAppointments,
+    summaryCheck.stats.completed + summaryCheck.stats.cancelled + summaryCheck.stats.noShow
+  );
+  assert.equal(summaryCheck.stats.totalPatients, 5);
+
+  // 7. Search and date filters include the rejected appointment record
+  const searchPaolo = simulateHistoryFilter({
+    appointments: dataset,
+    historyTab: 'cancelled',
+    fromDate: '2026-03-01',
+    toDate: '2026-03-10',
+    search: 'Paolo',
+  });
+  assert.equal(searchPaolo.searchFilteredHistory.length, 1);
+  assert.equal(searchPaolo.searchFilteredHistory[0].id, 'appt-doc-rejected-1');
+  assert.equal(searchPaolo.tabPatients.length, 1);
+  assert.equal(searchPaolo.tabPatients[0].latest.patientName, 'Paolo Mendoza');
 });

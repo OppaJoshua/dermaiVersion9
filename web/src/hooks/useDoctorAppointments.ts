@@ -284,8 +284,27 @@ export function useDoctorAppointments({
             s.charAt(0).toUpperCase() + s.slice(1).toLowerCase(),
             s
           ])));
+          const includesRejected = stableStatusIn.some(
+            (s) => s.trim().toLowerCase() === "rejected"
+          );
+          const orClauses = [`status.in.(${variants.join(",")})`];
+          if (includesRejected) {
+            orClauses.push(
+              "doctor_status.eq.rejected",
+              "doctor_status.eq.Rejected",
+              "doctor_status.eq.REJECTED"
+            );
+          }
           if (includeNoShow) {
-            apptQuery.or(`status.in.(${variants.join(",")}),check_in_status.eq.no-show,check_in_status.eq.no_show,status.eq.no-show,status.eq.no_show`);
+            orClauses.push(
+              "check_in_status.eq.no-show",
+              "check_in_status.eq.no_show",
+              "status.eq.no-show",
+              "status.eq.no_show"
+            );
+          }
+          if (orClauses.length > 1) {
+            apptQuery.or(orClauses.join(","));
           } else {
             apptQuery.in("status", variants);
           }
@@ -339,10 +358,16 @@ export function useDoctorAppointments({
         for (const row of primaryData as any[]) {
           const rawAssignedDoc = row.assigned_doctor_id ? String(row.assigned_doctor_id) : "";
           const rowClinicId = row.clinic_id ? String(row.clinic_id) : "";
+          const qaObj =
+            row.questionnaire_answers && typeof row.questionnaire_answers === "object" && !Array.isArray(row.questionnaire_answers)
+              ? row.questionnaire_answers
+              : null;
+          const declinedDocId = qaObj?.latest_declined_doctor_id ? String(qaObj.latest_declined_doctor_id) : "";
+          const effectiveAssignedDoc = rawAssignedDoc || (String(row.doctor_status || "").toLowerCase() === "rejected" ? declinedDocId : "");
 
           const isDirectDocMatch = Boolean(
-            rawAssignedDoc &&
-            uniqueDoctorIds.some((id) => String(id).toLowerCase().trim() === rawAssignedDoc.toLowerCase().trim())
+            effectiveAssignedDoc &&
+            uniqueDoctorIds.some((id) => String(id).toLowerCase().trim() === effectiveAssignedDoc.toLowerCase().trim())
           );
 
           const isClinicMatch = Boolean(
@@ -356,15 +381,15 @@ export function useDoctorAppointments({
           }
 
           // Doctors only see appointments explicitly assigned to THEM (or unassigned clinic queue requests)
-          if (rawAssignedDoc && !isDirectDocMatch) {
+          if (effectiveAssignedDoc && !isDirectDocMatch) {
             continue;
           }
           if (!isClinicMatch) {
             continue;
           }
 
-          const assignedDocName = rawAssignedDoc
-            ? (clinicDoctorsMap.get(rawAssignedDoc) || (isDirectDocMatch ? docDisplayName : undefined))
+          const assignedDocName = effectiveAssignedDoc
+            ? (clinicDoctorsMap.get(effectiveAssignedDoc) || (isDirectDocMatch ? docDisplayName : undefined))
             : undefined;
 
           {
@@ -411,15 +436,25 @@ export function useDoctorAppointments({
             // Extract doctor diagnosis and note if formatted
             let docDiagnosis = "";
             let docCleanNote = "";
+            const isDocRejectedRow =
+              String(row.doctor_status || "").trim().toLowerCase() === "rejected" ||
+              String(row.status || "").trim().toLowerCase() === "rejected";
             if (row.doctor_note) {
               const match = row.doctor_note.match(/^Diagnosis:\s*([^|\n]+)(?:[|\n]\s*(?:Note:\s*)?(.*))?$/is);
               if (match) {
                 docDiagnosis = match[1]?.trim() || "";
                 docCleanNote = match[2]?.trim() || "";
+              } else if (isDocRejectedRow) {
+                // When a doctor rejects an appointment, doctor_note stores the rejection reason, not a diagnosis
+                docDiagnosis = "";
+                docCleanNote = row.doctor_note.trim();
               } else {
                 docDiagnosis = row.doctor_note.trim();
                 docCleanNote = "";
               }
+            }
+            if (isDocRejectedRow && !docCleanNote && qaObj?.latest_decline_reason) {
+              docCleanNote = String(qaObj.latest_decline_reason).trim();
             }
 
             const resolvedName = row.patient_name || userProf?.full_name || "";
@@ -544,7 +579,7 @@ export function useDoctorAppointments({
               notes: sanitizePatientSymptoms(row.notes) || "",
               clinicNote: row.clinic_note || "",
               status: resolvedStatus,
-              assignedDoctorId: row.assigned_doctor_id || undefined,
+              assignedDoctorId: effectiveAssignedDoc || undefined,
               assignedDoctorName: assignedDocName,
               isAssignedToMe: Boolean(isDirectDocMatch),
               doctorStatus: row.doctor_status || (
@@ -567,7 +602,7 @@ export function useDoctorAppointments({
               updatedAt: row.updated_at || undefined,
               skinPhotoUrl: photoUrl,
               conditionImage: undefined,
-              conditionName: docDiagnosis || row.ai_condition_name || undefined,
+              conditionName: docDiagnosis || row.ai_condition_name || (Array.isArray(row.condition) ? row.condition[0] : row.condition)?.name || undefined,
               aiConditionName: (row.ai_condition_name && !row.ai_condition_name.toLowerCase().includes("consultation")) ? row.ai_condition_name : undefined,
               userId: row.user_id || undefined,
               patientId: row.patient_id || undefined,
@@ -600,7 +635,14 @@ export function useDoctorAppointments({
         if (urgentOnly && getReviewUrgency(a, Date.now()) === null) return false;
         if (stableStatusIn && stableStatusIn.length > 0) {
           const s = String(a.status || "").toLowerCase();
-          const matches = stableStatusIn.some(expected => expected.toLowerCase() === s) || (includeNoShow && isAppointmentNoShow(a));
+          const ds = String(a.doctorStatus || "").toLowerCase();
+          const includesRejected = stableStatusIn.some(
+            (expected) => expected.toLowerCase() === "rejected"
+          );
+          const matches =
+            stableStatusIn.some(expected => expected.toLowerCase() === s) ||
+            (includesRejected && ds === "rejected") ||
+            (includeNoShow && isAppointmentNoShow(a));
           if (!matches) return false;
         }
         return true;

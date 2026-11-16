@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { groupPatientHistory, filterPatientHistory, historyStatus, historyStatusLabel, isNoShowAppointment } from '../src/lib/patientHistory.ts';
+import { groupPatientHistory, filterPatientHistory, historyStatus, historyStatusLabel, isNoShowAppointment, isPastHistoryRecord } from '../src/lib/patientHistory.ts';
 const visit = (id, userId, status, date, extra = {}) => ({ id, userId, status, date, time: '09:00', createdAt: '2026-01-01T00:00:00Z', patientName: 'Same Name', clinicName: 'Clinic', notes: '', ...extra });
 
 test('groups by identity, deduplicates visits, and sorts newest schedule first without mutating input', () => {
@@ -62,8 +62,21 @@ test('No-Show visits are prioritized over completed/confirmed and clearly distin
   // 4. Genuine Cancelled appointment
   const cancelledAppt = visit('cx1', 'u1', 'cancelled', '2026-03-04');
   assert.equal(isNoShowAppointment(cancelledAppt), false);
+  assert.equal(isPastHistoryRecord(cancelledAppt), true);
   assert.equal(historyStatus(cancelledAppt), 'rejected');
   assert.equal(historyStatusLabel(cancelledAppt), 'Cancelled');
+
+  // 5. Doctor-Rejected appointment (status = pending, doctorStatus = rejected)
+  const docRejectedAppt = visit('dr1', 'u1', 'pending', '2026-03-05', {
+    doctorStatus: 'rejected',
+    doctorNote: 'Schedule conflict with surgical procedure',
+    conditionName: 'Vitiligo',
+    doctorDiagnosis: '',
+  });
+  assert.equal(isNoShowAppointment(docRejectedAppt), false);
+  assert.equal(isPastHistoryRecord(docRejectedAppt), true);
+  assert.equal(historyStatus(docRejectedAppt), 'rejected');
+  assert.equal(historyStatusLabel(docRejectedAppt), 'Declined');
 });
 
 test('patient grouping with mixed Completed and No-Show visits isolates tab counts and latest record', () => {

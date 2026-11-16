@@ -90,6 +90,9 @@ interface ScanResultData {
   isCombined?: boolean;
   agreement?: boolean | null;
   combinedEvidenceScore?: number | null;
+  resultStatus?: "confident" | "low_confidence";
+  confidenceThreshold?: number | null;
+  lowConfidenceMessage?: string | null;
 }
 
 interface RecommendedClinic {
@@ -653,12 +656,17 @@ export default function ScanSkinPage() {
         throw new Error(errMsg, { cause: err });
       }
 
+      const isLowConfidence = aiResult.result_status === "low_confidence";
+
       // Determine effective image confidence score:
-      // When both close-up and wide-view images are analyzed, apply the verified 70/30
-      // combined image evidence score; when only one image is analyzed (or wide-view failed),
-      // preserve the raw close-up confidence. Questionnaire answers NEVER alter this score.
+      // For low-confidence results (< configured threshold), always use the calibrated
+      // primary close-up confidence (multi-view fusion is not run).
+      // When >= configured threshold and both close-up and wide-view images are analyzed,
+      // apply the verified 70/30 combined image evidence score; when only one image is
+      // analyzed (or wide-view failed), preserve the raw close-up confidence.
+      // Questionnaire answers NEVER alter this score.
       const effectiveConfidence =
-        aiResult.is_combined && aiResult.combined_evidence_score != null
+        !isLowConfidence && aiResult.is_combined && aiResult.combined_evidence_score != null
           ? aiResult.combined_evidence_score
           : aiResult.confidence;
 
@@ -703,21 +711,22 @@ export default function ScanSkinPage() {
           console.error("[ScanSkin] Wide-view upload error:", upErr2.message);
         }
 
-        // Insert into ai_scan_result with questionnaire_answers
-        const { data: scanInsertData, error: insertErr } = await supabase
-          .from("ai_scan_result")
-          .insert({
-            user_id: user.id,
-            confidence_score: effectiveConfidence,
-            status: "completed",
-            condition_id: conditionUUID,
-            photo_url: uploadedCloseUpPath || null,
-            photo_url_wide: uploadedWidePath || null,
-            body_part: "Skin Assessment",
-            questionnaire_answers: questionnaireData,
-          })
-          .select("analysis_id")
-          .maybeSingle();
+          // Insert into ai_scan_result with questionnaire_answers
+          const { data: scanInsertData, error: insertErr } = await supabase
+            .from("ai_scan_result")
+            .insert({
+              user_id: user.id,
+              confidence_score: effectiveConfidence,
+              status: "completed",
+              referral_suggested: isLowConfidence,
+              condition_id: conditionUUID,
+              photo_url: uploadedCloseUpPath || null,
+              photo_url_wide: uploadedWidePath || null,
+              body_part: "Skin Assessment",
+              questionnaire_answers: questionnaireData,
+            })
+            .select("analysis_id")
+            .maybeSingle();
 
         if (insertErr) {
           console.error("[ScanSkin] Failed to insert ai_scan_result:", insertErr);
@@ -805,6 +814,8 @@ export default function ScanSkinPage() {
             predictedClass: aiResult.predicted_class,
             displayName: aiResult.display_name,
             confidence: effectiveConfidence,
+            resultStatus: isLowConfidence ? "low_confidence" : "confident",
+            confidenceThreshold: aiResult.confidence_threshold ?? null,
             severity: patientReportedImpact, // Preserves backward compatibility: explicitly patient-reported impact
             patientReportedImpact,
             questionnaire: questionnaireData,
@@ -858,9 +869,12 @@ export default function ScanSkinPage() {
           status: "valid",
         },
         supportingPrediction: aiResult.supporting_prediction || null,
-        isCombined: aiResult.is_combined,
-        agreement: aiResult.agreement,
-        combinedEvidenceScore: aiResult.combined_evidence_score ?? null,
+        isCombined: Boolean(!isLowConfidence && aiResult.is_combined),
+        agreement: isLowConfidence ? null : aiResult.agreement,
+        combinedEvidenceScore: isLowConfidence ? null : (aiResult.combined_evidence_score ?? null),
+        resultStatus: isLowConfidence ? "low_confidence" : "confident",
+        confidenceThreshold: aiResult.confidence_threshold ?? null,
+        lowConfidenceMessage: aiResult.message ?? null,
       });
 
       // Ensure the full 5-phase scanning animation (3600ms) runs completely before revealing result
@@ -1563,247 +1577,444 @@ export default function ScanSkinPage() {
             >
               {/* Primary Assessment Card */}
               <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm overflow-hidden">
-                <div className="p-6 sm:p-8 border-b border-slate-100">
-                  <div className="flex flex-wrap items-center gap-2 mb-3">
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 text-xs font-semibold border border-magenta-100 -ml-2">
-                      <Sparkles className="w-3.5 h-3.5 text-magenta-600 shrink-0" />
-                      <span>AI Preliminary Assessment - Please consult a doctor or dermatologist to confirm.</span>
-                    </div>
-                  </div>
-                  <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 mb-1">
-                    Possible Condition: {scanResult.condition}
-                  </h2>
-                  {scanResult.localName && scanResult.localName !== scanResult.condition && (
-                    <p className="text-sm font-medium text-slate-500 italic">
-                      Lokal na tawag: {scanResult.localName}
-                    </p>
-                  )}
-                </div>
+                {scanResult.resultStatus === "low_confidence" ? (
+                  <>
+                    {/* Low-Confidence (< Configured Threshold) Uncertain AI Result Header */}
+                    <div className="p-6 sm:p-8 border-b border-amber-200/80 bg-amber-50/40">
+                      <div className="flex flex-wrap items-center gap-2 mb-3">
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-900 text-xs font-bold border border-amber-300">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                          <span>Uncertain AI Result</span>
+                        </div>
+                      </div>
 
-                {/* 1. ResNet50 / Image Evidence Confidence Score */}
-                <div className="px-6 sm:px-8 py-5 border-b border-slate-100 bg-slate-50/40">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div>
-                      <span className="text-sm font-semibold text-slate-900">
-                        AI Confidence Score
-                      </span>
-                    </div>
-                    <span className="text-xl font-bold text-magenta-600 shrink-0 ml-4">
-                      {formatConfidencePercent(scanResult.confidence)}
-                    </span>
-                  </div>
-                  <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden mt-2">
-                    <motion.div
-                      className="h-full bg-linear-to-r from-magenta-500 to-magenta-600 rounded-full"
-                      initial={{ width: "0%" }}
-                      animate={{ width: `${Math.min(Math.max(Number(scanResult.confidence) || 0, 0), 100)}%` }}
-                      transition={{ duration: 1, delay: 0.2 }}
-                    />
-                  </div>
-                </div>
+                      <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 mb-1">
+                        Possible skin condition: {scanResult.condition}
+                      </h2>
+                      {scanResult.localName && scanResult.localName !== scanResult.condition && (
+                        <p className="text-sm font-medium text-slate-500 italic mb-3">
+                          Lokal na tawag: {scanResult.localName}
+                        </p>
+                      )}
 
-                {/* Uploaded Photos Card */}
-                <div className="p-6 sm:p-8 border-b border-slate-100">
-                  <h3 className="font-display font-bold text-slate-900 text-lg mb-4">
-                    Images Analyzed
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
-                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                        Close-Up Photo
-                      </span>
-                      <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
-                        <img
-                          src={scanResult.imageUrl || closeUpImage || undefined}
-                          alt="Close-up photo"
-                          className="w-full h-full object-cover"
+                      <p className="text-sm text-slate-700 leading-relaxed mt-3">
+                        Based on your photo, the AI found signs that look most like {scanResult.condition}. However, the AI is not confident enough in this result. This is not a diagnosis—please see a doctor for an accurate assessment.
+                      </p>
+                    </div>
+
+                    {/* Calibrated Primary Close-Up Confidence Display */}
+                    <div className="px-6 sm:px-8 py-5 border-b border-slate-100 bg-slate-50/60">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                        <div>
+                          <span className="text-sm font-semibold text-slate-900">
+                            AI Confidence Score: {formatConfidencePercent(scanResult.confidence)} — Low Confidence
+                          </span>
+                        </div>
+                      </div>
+                      <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden mt-2">
+                        <motion.div
+                          className="h-full bg-linear-to-r from-amber-500 to-amber-600 rounded-full"
+                          initial={{ width: "0%" }}
+                          animate={{ width: `${Math.min(Math.max(Number(scanResult.confidence) || 0, 0), 100)}%` }}
+                          transition={{ duration: 1, delay: 0.2 }}
                         />
                       </div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
-                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                        Wider-Area Photo
-                      </span>
-                      <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
-                        {scanResult.wideImageUrl || wideImage ? (
-                          <img
-                            src={scanResult.wideImageUrl || wideImage || undefined}
-                            alt="Wider photo"
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-xs text-slate-400">
-                            No wide photo
+
+                    {/* Prominent Dermatologist Priority Recommendation */}
+                    <div className="p-6 sm:p-8 border-b border-slate-100 bg-rose-50/40">
+                      <div className="rounded-2xl border-2 border-rose-200 bg-white p-5 sm:p-6 shadow-xs space-y-4">
+                        <div className="flex items-start gap-3.5">
+                          <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0 mt-0.5">
+                            <Stethoscope className="w-5 h-5" />
                           </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Supporting Image Feedback (Fix C) */}
-                  {scanResult.supportingPrediction?.status === "invalid" && (
-                    <div className="mt-3 p-3 rounded-xl bg-slate-100 border border-slate-200 text-xs text-slate-700 flex items-start gap-2">
-                      <Info className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
-                      <span>We couldn't read the wider-area photo clearly. This result is based only on your close-up photo.</span>
-                    </div>
-                  )}
-
-                  {scanResult.isCombined && scanResult.agreement === false && (
-                    <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                      <span>The AI noticed different things in your close-up and wider-area photos. Because of this, we highly recommend seeing a dermatologist to confirm the results.</span>
-                    </div>
-                  )}
-
-                  {scanResult.isCombined && scanResult.agreement === true && (
-                    <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-start gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                      <span>Both of your photos show similar signs, which supports this result.</span>
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2 pt-4 px-1 text-xs text-slate-500">
-                    <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
-                    <span>{scanResult.bodyPart}</span>
-                    <span className="ml-auto">{scanResult.date}</span>
-                  </div>
-                </div>
-
-                {/* 2. AI vs Questionnaire Agreement / Discrepancy Banner */}
-                {scanResult.comparison && (
-                  <div className="px-6 sm:px-8 py-4 border-b border-slate-100">
-                    <div
-                      className={cn(
-                        "rounded-2xl p-4 border flex items-start gap-3",
-                        scanResult.comparison.agreementStatus === "aligned"
-                          ? "bg-emerald-50/80 border-emerald-200 text-emerald-950"
-                          : scanResult.comparison.agreementStatus === "differing"
-                            ? "bg-amber-50/80 border-amber-300 text-amber-950"
-                            : "bg-slate-100 border-slate-200 text-slate-800"
-                      )}
-                    >
-                      {scanResult.comparison.agreementStatus === "aligned" ? (
-                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-                      ) : (
-                        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                      )}
-                      <div className="text-xs leading-relaxed">
-                        <p className="font-bold text-sm mb-1">
-                          {scanResult.comparison.agreementStatus === "aligned"
-                            ? "Your photos and questionnaire answers match."
-                            : scanResult.comparison.agreementStatus === "differing"
-                              ? "We noticed a mismatch in your results"
-                              : "Assessment Context"}
-                        </p>
-                        <p>
-                          {scanResult.comparison.summary?.includes("increases the accuracy")
-                            ? "The AI noticed signs in your photo that match the symptoms you selected in the questionnaire. This supports the result."
-                            : scanResult.comparison.summary?.includes("provide limited specific support")
-                              ? `Your photo looks like it might be ${scanResult.condition}, but this doesn't fully match the symptoms you selected in the questionnaire.`
-                              : scanResult.comparison.summary}
-                        </p>
-                        <p className="font-semibold mt-1.5">
-                          {scanResult.comparison.recommendation?.includes("Image-based predictions may capture")
-                            ? "Photos can sometimes be misleading on their own. Please consult a dermatologist to review your symptoms in person."
-                            : scanResult.comparison.recommendation}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. Questionnaire Evidence-Based Support Details */}
-                <div className="p-6 sm:p-8 border-b border-slate-100 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="font-display font-bold text-slate-900 text-lg">
-                        Questionnaire Evidence Support
-                      </h3>
-                      <p className="text-xs text-slate-500">
-                        Based on standard dermatology guidelines.
-                      </p>
-                    </div>
-                    {/* Support label badge for predicted condition */}
-                    {(() => {
-                      const condEval = (scanResult.mappingResult.conditions as any)[scanResult.condition] ||
-                        Object.values(scanResult.mappingResult.conditions).find((c) =>
-                          scanResult.condition.toLowerCase().includes(c.condition.toLowerCase())
-                        );
-                      const level = condEval?.supportLevel || "Limited / no specific support";
-
-                      return (
-                        <span
-                          className={cn(
-                            "px-3 py-1 rounded-full text-xs font-bold shrink-0 border",
-                            level === "Strong support"
-                              ? "bg-emerald-100 text-emerald-800 border-emerald-200"
-                              : level === "Moderate support"
-                                ? "bg-blue-100 text-blue-800 border-blue-200"
-                                : "bg-slate-100 text-slate-700 border-slate-200"
-                          )}
-                        >
-                          {level}
-                        </span>
-                      );
-                    })()}
-                  </div>
-
-                  {/* Supporting findings from questionnaire */}
-                  {(() => {
-                    const condEval = (scanResult.mappingResult.conditions as any)[scanResult.condition] ||
-                      Object.values(scanResult.mappingResult.conditions).find((c) =>
-                        scanResult.condition.toLowerCase().includes(c.condition.toLowerCase())
-                      );
-                    const findings = condEval?.supportingFindings || [];
-                    const limitations = condEval?.limitations || [];
-
-                    return (
-                      <div className="space-y-3 bg-slate-50 rounded-2xl p-4 border border-slate-200/80">
-                        <div>
-                          <span className="text-xs font-bold text-slate-800 block mb-1.5">
-                            Key Supporting Questionnaire Findings:
-                          </span>
-                          {findings.length > 0 ? (
-                            <ul className="space-y-1">
-                              {findings.map((f: string, i: number) => (
-                                <li key={i} className="flex items-start gap-2 text-xs text-slate-700">
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
-                                  <span>{f}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <p className="text-xs text-slate-500 italic">
-                              No specific primary symptom criteria for this condition were reported in the questionnaire.
-                            </p>
-                          )}
+                          <div className="space-y-1.5">
+                            <span className="inline-block text-[11px] font-bold uppercase tracking-wider text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-md border border-rose-200">
+                              Recommended Priority Next Step
+                            </span>
+                            <h3 className="text-base sm:text-lg font-display font-bold text-slate-900">
+                              Please prioritize consultation with a licensed dermatologist to properly assess your skin condition and confirm what it may be.
+                            </h3>
+                          </div>
                         </div>
 
-                        {limitations.length > 0 && (
-                          <div className="pt-2 border-t border-slate-200">
-                            <span className="text-xs font-bold text-slate-700 block mb-1">
-                              Clinical Limitations &amp; Nuances:
-                            </span>
-                            <ul className="space-y-1">
-                              {limitations.map((lim: string, i: number) => (
-                                <li key={i} className="flex items-start gap-2 text-xs text-slate-600">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-1.5 shrink-0" />
-                                  <span>{lim}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
+                        <ul className="space-y-2 pt-1 text-xs sm:text-sm text-slate-700">
+                          <li className="flex items-start gap-2.5">
+                            <div className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-2 shrink-0" />
+                            <span>This result is preliminary informational guidance only.</span>
+                          </li>
+                          <li className="flex items-start gap-2.5">
+                            <div className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-2 shrink-0" />
+                            <span>The AI cannot confirm a skin disease.</span>
+                          </li>
+                          <li className="flex items-start gap-2.5">
+                            <div className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-2 shrink-0" />
+                            <span>A dermatologist should evaluate your symptoms, medical history, and skin in person.</span>
+                          </li>
+                          <li className="flex items-start gap-2.5">
+                            <div className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-2 shrink-0" />
+                            <span>The AI result does not replace professional medical assessment.</span>
+                          </li>
+                        </ul>
 
-                  <p className="text-[11px] text-slate-400 italic">
-                    {scanResult.mappingResult.disclaimer?.includes("Cleveland")
-                      ? "This is a preliminary screening tool based on standard clinical guidelines. It is not a medical diagnosis and should not replace an evaluation by a doctor or dermatologist."
-                      : scanResult.mappingResult.disclaimer}
-                  </p>
-                </div>
+                        <div className="pt-2 flex flex-col sm:flex-row gap-3">
+                          <Link
+                            to={isBookingOrigin ? returnAppointmentUrl : scanClinicsUrl}
+                            onClick={handleScanBookingContext}
+                            className="flex-1 py-3 px-5 rounded-full font-semibold text-sm bg-magenta-600 text-white text-center hover:bg-magenta-700 transition-all shadow-md shadow-magenta-600/20 flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <Stethoscope className="w-4 h-4" />
+                            <span>{isBookingOrigin ? "Continue to Dermatologist Booking" : "Find a Dermatology Clinic"}</span>
+                            <ArrowRight className="w-4 h-4" />
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowResult(false);
+                              setCurrentStep(2);
+                            }}
+                            className="py-3 px-5 rounded-full font-semibold text-xs sm:text-sm border border-slate-300 text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                          >
+                            Retake Close-Up Photo (Optional)
+                          </button>
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          Optional: If your photo was dim or out of focus, you may also consider retaking the close-up photo with bright natural lighting and sharp focus.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Uploaded Photos Card (Low-Confidence View) */}
+                    <div className="p-6 sm:p-8 border-b border-slate-100">
+                      <h3 className="font-display font-bold text-slate-900 text-lg mb-4">
+                        Images Analyzed
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                            Close-Up Photo (Primary)
+                          </span>
+                          <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
+                            <img
+                              src={scanResult.imageUrl || closeUpImage || undefined}
+                              alt="Close-up photo"
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                            Wider-Area Photo
+                          </span>
+                          <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
+                            {scanResult.wideImageUrl || wideImage ? (
+                              <img
+                                src={scanResult.wideImageUrl || wideImage || undefined}
+                                alt="Wider photo"
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-xs text-slate-400">
+                                No wide photo
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 pt-4 px-1 text-xs text-slate-500">
+                        <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span>{scanResult.bodyPart}</span>
+                        <span className="ml-auto">{scanResult.date}</span>
+                      </div>
+                    </div>
+
+                    {/* Questionnaire Context (Separate from Low-Confidence Image Prediction) */}
+                    <div className="p-6 sm:p-8 border-b border-slate-100 space-y-4">
+                      <div>
+                        <h3 className="font-display font-bold text-slate-900 text-lg">
+                          Questionnaire Context
+                        </h3>
+                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                          Your answers help give the doctor more context about what you're experiencing. The AI does not use these answers to change its photo analysis.
+                        </p>
+                      </div>
+
+                      {(() => {
+                        const condEval = (scanResult.mappingResult.conditions as any)[scanResult.condition] ||
+                          Object.values(scanResult.mappingResult.conditions).find((c) =>
+                            scanResult.condition.toLowerCase().includes(c.condition.toLowerCase())
+                          );
+                        const findings = condEval?.supportingFindings || [];
+
+                        return (
+                          <div className="space-y-2.5 bg-slate-50 rounded-2xl p-4 border border-slate-200/80">
+                            <span className="text-xs font-bold text-slate-800 block">
+                              Reported Symptoms &amp; Answers Summary (For Dermatologist Review):
+                            </span>
+                            {findings.length > 0 ? (
+                              <ul className="space-y-1">
+                                {findings.map((f: string, i: number) => (
+                                  <li key={i} className="flex items-start gap-2 text-xs text-slate-700">
+                                    <Info className="w-3.5 h-3.5 text-slate-500 mt-0.5 shrink-0" />
+                                    <span>{f}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-xs text-slate-600">
+                                Your 15 questionnaire responses have been recorded to provide symptom context when you consult a licensed dermatologist.
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="p-6 sm:p-8 border-b border-slate-100">
+                      <div className="flex flex-wrap items-center gap-2 mb-3">
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta-50 text-magenta-700 text-xs font-semibold border border-magenta-100 -ml-2">
+                          <Sparkles className="w-3.5 h-3.5 text-magenta-600 shrink-0" />
+                          <span>AI Preliminary Assessment - Please consult a doctor or dermatologist to confirm.</span>
+                        </div>
+                      </div>
+                      <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 mb-1">
+                        Possible Condition: {scanResult.condition}
+                      </h2>
+                      {scanResult.localName && scanResult.localName !== scanResult.condition && (
+                        <p className="text-sm font-medium text-slate-500 italic">
+                          Lokal na tawag: {scanResult.localName}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* 1. ResNet50 / Image Evidence Confidence Score */}
+                    <div className="px-6 sm:px-8 py-5 border-b border-slate-100 bg-slate-50/40">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div>
+                          <span className="text-sm font-semibold text-slate-900">
+                            AI Confidence Score
+                          </span>
+                        </div>
+                        <span className="text-xl font-bold text-magenta-600 shrink-0 ml-4">
+                          {formatConfidencePercent(scanResult.confidence)}
+                        </span>
+                      </div>
+                      <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden mt-2">
+                        <motion.div
+                          className="h-full bg-linear-to-r from-magenta-500 to-magenta-600 rounded-full"
+                          initial={{ width: "0%" }}
+                          animate={{ width: `${Math.min(Math.max(Number(scanResult.confidence) || 0, 0), 100)}%` }}
+                          transition={{ duration: 1, delay: 0.2 }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Uploaded Photos Card */}
+                    <div className="p-6 sm:p-8 border-b border-slate-100">
+                      <h3 className="font-display font-bold text-slate-900 text-lg mb-4">
+                        Images Analyzed
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                            Close-Up Photo
+                          </span>
+                          <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
+                            <img
+                              src={scanResult.imageUrl || closeUpImage || undefined}
+                              alt="Close-up photo"
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                            Wider-Area Photo
+                          </span>
+                          <div className="relative aspect-4/3 rounded-xl overflow-hidden bg-white border border-slate-200">
+                            {scanResult.wideImageUrl || wideImage ? (
+                              <img
+                                src={scanResult.wideImageUrl || wideImage || undefined}
+                                alt="Wider photo"
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-xs text-slate-400">
+                                No wide photo
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Supporting Image Feedback (Fix C) */}
+                      {scanResult.supportingPrediction?.status === "invalid" && (
+                        <div className="mt-3 p-3 rounded-xl bg-slate-100 border border-slate-200 text-xs text-slate-700 flex items-start gap-2">
+                          <Info className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                          <span>We couldn't read the wider-area photo clearly. This result is based only on your close-up photo.</span>
+                        </div>
+                      )}
+
+                      {scanResult.isCombined && scanResult.agreement === false && (
+                        <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <span>The AI noticed different things in your close-up and wider-area photos. Because of this, we highly recommend seeing a dermatologist to confirm the results.</span>
+                        </div>
+                      )}
+
+                      {scanResult.isCombined && scanResult.agreement === true && (
+                        <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-start gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                          <span>Both of your photos show similar signs, which supports this result.</span>
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-2 pt-4 px-1 text-xs text-slate-500">
+                        <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span>{scanResult.bodyPart}</span>
+                        <span className="ml-auto">{scanResult.date}</span>
+                      </div>
+                    </div>
+
+                    {/* 2. AI vs Questionnaire Agreement / Discrepancy Banner */}
+                    {scanResult.comparison && (
+                      <div className="px-6 sm:px-8 py-4 border-b border-slate-100">
+                        <div
+                          className={cn(
+                            "rounded-2xl p-4 border flex items-start gap-3",
+                            scanResult.comparison.agreementStatus === "aligned"
+                              ? "bg-emerald-50/80 border-emerald-200 text-emerald-950"
+                              : scanResult.comparison.agreementStatus === "differing"
+                                ? "bg-amber-50/80 border-amber-300 text-amber-950"
+                                : "bg-slate-100 border-slate-200 text-slate-800"
+                          )}
+                        >
+                          {scanResult.comparison.agreementStatus === "aligned" ? (
+                            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                          ) : (
+                            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                          )}
+                          <div className="text-xs leading-relaxed">
+                            <p className="font-bold text-sm mb-1">
+                              {scanResult.comparison.agreementStatus === "aligned"
+                                ? "Your photos and questionnaire answers match."
+                                : scanResult.comparison.agreementStatus === "differing"
+                                  ? "We noticed a mismatch in your results"
+                                  : "Assessment Context"}
+                            </p>
+                            <p>
+                              {scanResult.comparison.summary?.includes("increases the accuracy")
+                                ? "The AI noticed signs in your photo that match the symptoms you selected in the questionnaire. This supports the result."
+                                : scanResult.comparison.summary?.includes("provide limited specific support")
+                                  ? `Your photo looks like it might be ${scanResult.condition}, but this doesn't fully match the symptoms you selected in the questionnaire.`
+                                  : scanResult.comparison.summary}
+                            </p>
+                            <p className="font-semibold mt-1.5">
+                              {scanResult.comparison.recommendation?.includes("Image-based predictions may capture")
+                                ? "Photos can sometimes be misleading on their own. Please consult a dermatologist to review your symptoms in person."
+                                : scanResult.comparison.recommendation}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 3. Questionnaire Evidence-Based Support Details */}
+                    <div className="p-6 sm:p-8 border-b border-slate-100 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="font-display font-bold text-slate-900 text-lg">
+                            Questionnaire Evidence Support
+                          </h3>
+                          <p className="text-xs text-slate-500">
+                            Based on standard dermatology guidelines.
+                          </p>
+                        </div>
+                        {/* Support label badge for predicted condition */}
+                        {(() => {
+                          const condEval = (scanResult.mappingResult.conditions as any)[scanResult.condition] ||
+                            Object.values(scanResult.mappingResult.conditions).find((c) =>
+                              scanResult.condition.toLowerCase().includes(c.condition.toLowerCase())
+                            );
+                          const level = condEval?.supportLevel || "Limited / no specific support";
+
+                          return (
+                            <span
+                              className={cn(
+                                "px-3 py-1 rounded-full text-xs font-bold shrink-0 border",
+                                level === "Strong support"
+                                  ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                  : level === "Moderate support"
+                                    ? "bg-blue-100 text-blue-800 border-blue-200"
+                                    : "bg-slate-100 text-slate-700 border-slate-200"
+                              )}
+                            >
+                              {level}
+                            </span>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Supporting findings from questionnaire */}
+                      {(() => {
+                        const condEval = (scanResult.mappingResult.conditions as any)[scanResult.condition] ||
+                          Object.values(scanResult.mappingResult.conditions).find((c) =>
+                            scanResult.condition.toLowerCase().includes(c.condition.toLowerCase())
+                          );
+                        const findings = condEval?.supportingFindings || [];
+                        const limitations = condEval?.limitations || [];
+
+                        return (
+                          <div className="space-y-3 bg-slate-50 rounded-2xl p-4 border border-slate-200/80">
+                            <div>
+                              <span className="text-xs font-bold text-slate-800 block mb-1.5">
+                                Key Supporting Questionnaire Findings:
+                              </span>
+                              {findings.length > 0 ? (
+                                <ul className="space-y-1">
+                                  {findings.map((f: string, i: number) => (
+                                    <li key={i} className="flex items-start gap-2 text-xs text-slate-700">
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
+                                      <span>{f}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-xs text-slate-500 italic">
+                                  No specific primary symptom criteria for this condition were reported in the questionnaire.
+                                </p>
+                              )}
+                            </div>
+
+                            {limitations.length > 0 && (
+                              <div className="pt-2 border-t border-slate-200">
+                                <span className="text-xs font-bold text-slate-700 block mb-1">
+                                  Clinical Limitations &amp; Nuances:
+                                </span>
+                                <ul className="space-y-1">
+                                  {limitations.map((lim: string, i: number) => (
+                                    <li key={i} className="flex items-start gap-2 text-xs text-slate-600">
+                                      <div className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-1.5 shrink-0" />
+                                      <span>{lim}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      <p className="text-[11px] text-slate-400 italic">
+                        {scanResult.mappingResult.disclaimer?.includes("Cleveland")
+                          ? "This is a preliminary screening tool based on standard clinical guidelines. It is not a medical diagnosis and should not replace an evaluation by a doctor or dermatologist."
+                          : scanResult.mappingResult.disclaimer}
+                      </p>
+                    </div>
+                  </>
+                )}
 
                 {/* 4. Independent Q14 Safety Alert Card (if triggered) */}
                 {scanResult.mappingResult.safetyAlert.level !== "none" && (

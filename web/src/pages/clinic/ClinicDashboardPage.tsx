@@ -879,7 +879,17 @@ export default function ClinicDashboardPage() {
         uniqueOnDuty.push(docItem);
       }
     }
-    return uniqueOnDuty;
+
+    const dutyStateOrder: Record<DutyState, number> = {
+      "on-duty": 0,
+      "on-break": 1,
+      upcoming: 2,
+      finished: 3,
+    };
+
+    return uniqueOnDuty.sort(
+      (a, b) => dutyStateOrder[a.dutyState] - dutyStateOrder[b.dutyState]
+    );
   }, [doctors, todayDayName, nowMinutes, clinicSchedule, clinicStatus]);
 
   // Shifts and patient count for the selected schedule date

@@ -28,7 +28,7 @@ import { formatConfidencePercent, cn } from "@/lib/utils";
 import { ModalPortal } from "@/components/common/ModalPortal";
 import { PatientAvatar } from "@/components/common/PatientAvatar";
 import { useDoctorClinicContext } from "@/components/layout/doctorLayout";
-import { groupPatientHistory, historyStatus, historyStatusLabel, isNoShowAppointment, type HistoryTab } from "@/lib/patientHistory";
+import { groupPatientHistory, historyStatus, historyStatusLabel, isNoShowAppointment, isPastHistoryRecord, type HistoryTab } from "@/lib/patientHistory";
 
 function formatDate(dateStr?: string, createdAt?: string): string {
   const target = dateStr || (createdAt ? createdAt.split("T")[0] : "");
@@ -66,15 +66,11 @@ function cleanPatientNotes(notes?: string | null): string {
     .trim();
 }
 
-function isPastHistoryRecord(appt?: { status?: string | null; doctorDone?: boolean; checkInStatus?: string | null } | null): boolean {
-  if (!appt) return false;
-  if (isNoShowAppointment(appt)) return true;
-  const s = String(appt.status || "").trim().toLowerCase();
-  return s === "completed" || s === "cancelled" || s === "canceled" || Boolean(appt.doctorDone);
-}
-
 export default function DoctorPatientHistoryPage() {
-  const HISTORY_STATUSES = useMemo(() => ["Completed", "Cancelled", "Canceled", "completed", "cancelled", "canceled"], []);
+  const HISTORY_STATUSES = useMemo(
+    () => ["Completed", "Cancelled", "Canceled", "Rejected", "completed", "cancelled", "canceled", "rejected"],
+    []
+  );
   const { appointments, loading, error, doctorName, doctorIds } = useDoctorAppointments({ statusIn: HISTORY_STATUSES, includeNoShow: true });
   const { activeClinicId, affiliations, activeAffiliation, doctorName: contextDoctorName } = useDoctorClinicContext();
   const [viewingPatientId, setViewingPatientId] = useState<string | null>(null);
@@ -1016,7 +1012,7 @@ export default function DoctorPatientHistoryPage() {
                           </span>
                         ) : isRejected ? (
                           <span className="text-sm font-semibold text-red-700">
-                            Declined
+                            {historyStatusLabel(appt)}
                           </span>
                         ) : (
                           <span className="text-sm font-semibold text-gray-700">
@@ -1134,6 +1130,13 @@ export default function DoctorPatientHistoryPage() {
                   modalAppointments.map((viewingAppt, index) => {
                   const viewCond = skinConditions.find(c => c.id === viewingAppt.conditionId || c.name.toLowerCase() === viewingAppt.aiConditionName?.toLowerCase());
                   const cleanNotes = cleanPatientNotes(viewingAppt.notes);
+                  const viewStatus = historyStatus(viewingAppt);
+                  const isDocRejected =
+                    viewStatus === "rejected" &&
+                    (String(viewingAppt.doctorStatus || "").trim().toLowerCase() === "rejected" ||
+                      String(viewingAppt.status || "").trim().toLowerCase() === "rejected");
+                  const isPatientCancelled =
+                    viewStatus === "rejected" && !isDocRejected;
                   return (
                     <details key={viewingAppt.id} open={index === 0} className="rounded-xl border border-slate-200 p-4">
                       <summary className="cursor-pointer text-sm font-semibold text-slate-800">
@@ -1146,8 +1149,32 @@ export default function DoctorPatientHistoryPage() {
                         <span className="block mt-1 text-xs text-slate-500">{viewingAppt.clinicName} &middot; {viewingAppt.doctorDiagnosis || viewingAppt.conditionName || (isNoShowAppointment(viewingAppt) ? "Missed Appointment" : "No diagnosis recorded")}</span>
                       </summary>
                       <div className="space-y-4 mt-4">
-                {/* Doctor Diagnosis Box */}
-                {(viewingAppt.doctorDiagnosis || viewingAppt.doctorNote) && (
+                {/* Doctor Rejection / Cancellation / Final Diagnosis Box */}
+                {isDocRejected ? (
+                  <div className="rounded-xl border border-red-200 bg-red-50/70 p-4 space-y-1.5">
+                    <p className="text-[11px] text-red-700 font-bold uppercase tracking-wide">
+                      Declined by Doctor
+                    </p>
+                    <p className="text-sm text-red-900 leading-relaxed">
+                      <span className="font-semibold">Rejection Reason:</span>{" "}
+                      {viewingAppt.doctorNote || "Declined by the assigned doctor."}
+                    </p>
+                  </div>
+                ) : isPatientCancelled ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 space-y-1.5">
+                    <p className="text-[11px] text-amber-700 font-bold uppercase tracking-wide">
+                      Cancelled by Patient
+                    </p>
+                    <p className="text-sm text-amber-900 leading-relaxed">
+                      This appointment was cancelled by the patient.
+                    </p>
+                    {viewingAppt.doctorNote && (
+                      <p className="text-sm text-amber-800 leading-relaxed pt-1 border-t border-amber-200/80">
+                        <span className="font-semibold">Review Note:</span> {viewingAppt.doctorNote}
+                      </p>
+                    )}
+                  </div>
+                ) : (viewingAppt.doctorDiagnosis || viewingAppt.doctorNote) ? (
                   <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-4 space-y-1.5">
                     <p className="text-[11px] text-blue-600 font-bold uppercase tracking-wide">
                       Doctor's Final Diagnosis
@@ -1159,7 +1186,7 @@ export default function DoctorPatientHistoryPage() {
                       </p>
                     )}
                   </div>
-                )}
+                ) : null}
 
                 {/* AI Scan Analysis result preview if available */}
                 {(viewingAppt.aiConditionName || viewCond) && (

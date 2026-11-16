@@ -123,6 +123,12 @@ export interface ScanResult {
 
   supportingFindings?: string[];
 
+  resultStatus?: 'confident' | 'low_confidence';
+
+  confidenceThreshold?: number | null;
+
+  lowConfidenceMessage?: string | null;
+
 }
 
 

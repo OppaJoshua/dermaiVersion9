@@ -1,93 +1,232 @@
 """
-Regression test suite for DermAI Low-Confidence Threshold and Image Combiner.
-Verifies:
-1. 64.99% confidence is strictly rejected (< 65.00%).
-2. Rejection message formats confidence and configured threshold to 2 decimal places.
-3. 65.00% confidence passes the confidence check (does not reject).
-4. 65.01% confidence passes the confidence check.
-5. Dynamic threshold from environment/config is respected.
-6. Wide-view failures gracefully fallback to close-up prediction with status='invalid'.
-7. Close-up and wide-view agreement vs disagreement metadata behavior.
+Regression test suite for DermAI Low-Confidence Result Path, Threshold Gate,
+Temperature Calibration, Image Combiner, and Non-Confidence Error Paths.
 """
 
+import asyncio
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock, MagicMock
+from PIL import Image
 from fastapi import HTTPException
 
-from app.config import CLASSIFIER_CONFIDENCE_FALLBACK
+from app.config import CLASSIFIER_CONFIDENCE_FALLBACK, CLASS_NAMES, DISPLAY_NAMES
+from app.routers.predict import predict_skin_condition
 from app.services.result_combiner import combine_image_predictions
+from app.utils.image_utils import ImageValidationError
 
 
-def evaluate_confidence_gate(confidence: float, threshold: float = CLASSIFIER_CONFIDENCE_FALLBACK):
-    """
-    Simulates the exact gate in predict.py lines 119-132:
-    if primary_result["confidence"] < CLASSIFIER_CONFIDENCE_FALLBACK:
-        raise HTTPException(...)
-    """
-    primary_result = {"confidence": confidence}
-    if primary_result["confidence"] < threshold:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "success": False,
-                "error": (
-                    f"We couldn't confidently assess this photo. The model's confidence was "
-                    f"{primary_result['confidence']:.2f}%, below the required "
-                    f"{threshold:.2f}% threshold. Please retake the close-up "
-                    "photo with good lighting and the affected skin area clearly in focus."
-                ),
-                "error_type": "low_confidence",
-            },
-        )
-    return True
+def make_mock_primary_result(
+    confidence: float,
+    predicted_class: str = "Acne_Vulgaris",
+    inference_time_ms: int = 42,
+):
+    display_name = DISPLAY_NAMES.get(predicted_class, predicted_class)
+    if confidence >= 75:
+        confidence_level = "high"
+    elif confidence >= 60:
+        confidence_level = "medium"
+    else:
+        confidence_level = "low"
+
+    rem = round((100.0 - confidence) / 4.0, 2)
+    probs = {}
+    for cls in CLASS_NAMES:
+        probs[cls] = confidence if cls == predicted_class else rem
+
+    return {
+        "predicted_class": predicted_class,
+        "display_name": display_name,
+        "confidence": confidence,
+        "confidence_level": confidence_level,
+        "probabilities": probs,
+        "inference_time_ms": inference_time_ms,
+    }
+
+
+def run_predict_with_mocks(
+    primary_confidence: float,
+    predicted_class: str = "Acne_Vulgaris",
+    threshold: float = CLASSIFIER_CONFIDENCE_FALLBACK,
+    wide_result: dict = None,
+):
+    dummy_img = Image.new("RGB", (224, 224), color=(200, 150, 130))
+    mock_upload = MagicMock()
+    mock_upload.filename = "closeup.jpg"
+
+    mock_wide_upload = None
+    if wide_result is not None:
+        mock_wide_upload = MagicMock()
+        mock_wide_upload.filename = "wide.jpg"
+
+    primary_res = make_mock_primary_result(primary_confidence, predicted_class)
+    quality_res = {
+        "passed": True,
+        "issues": [],
+        "blur_score": 145.2,
+        "brightness": 128.4,
+        "contrast": 42.1,
+    }
+
+    async def _call():
+        with patch("app.routers.predict.CLASSIFIER_CONFIDENCE_FALLBACK", threshold), \
+             patch("app.routers.predict.load_image_from_upload", new=AsyncMock(return_value=dummy_img)), \
+             patch("app.routers.predict.check_image_quality", return_value=quality_res), \
+             patch("app.routers.predict.skin_validator.is_human_skin", return_value=(True, 0.9456)), \
+             patch("app.routers.predict.predictor.predict") as mock_predict:
+            if wide_result is not None:
+                mock_predict.side_effect = [primary_res, wide_result]
+            else:
+                mock_predict.return_value = primary_res
+            resp = await predict_skin_condition(image=mock_upload, wide_image=mock_wide_upload)
+            return resp, mock_predict.call_count
+
+    return asyncio.run(_call())
 
 
 class TestConfidenceAndCombiner(unittest.TestCase):
 
-    def test_confidence_59_99_rejected(self):
-        """59.99% must be strictly rejected when threshold is 60.00%."""
-        with self.assertRaises(HTTPException) as ctx:
-            evaluate_confidence_gate(59.99, 60.0)
+    def test_confidence_59_99_returns_low_confidence_result(self):
+        """59.99% (< 60.00%) must return structured low-confidence PredictionResponse, not raise HTTP 400."""
+        wide_res = make_mock_primary_result(82.0, "Acne_Vulgaris")
+        resp, call_count = run_predict_with_mocks(59.99, "Acne_Vulgaris", 60.0, wide_result=wide_res)
 
-        exc = ctx.exception
-        self.assertEqual(exc.status_code, 400)
-        self.assertEqual(exc.detail["error_type"], "low_confidence")
-        self.assertFalse(exc.detail["success"])
-        # Must show exactly 59.99% and 60.00% without rounding
-        self.assertIn("59.99%", exc.detail["error"])
-        self.assertIn("60.00%", exc.detail["error"])
-        self.assertNotIn("60.0%", exc.detail["error"])
+        self.assertTrue(resp.success)
+        self.assertEqual(resp.result_status, "low_confidence")
+        self.assertEqual(resp.confidence, 59.99)
+        self.assertEqual(resp.confidence_threshold, 60.0)
+        self.assertEqual(resp.predicted_class, "Acne_Vulgaris")
+        self.assertEqual(resp.display_name, "Acne Vulgaris")
+        self.assertEqual(resp.confidence_level, "low")
+        self.assertFalse(resp.is_combined)
+        self.assertIsNone(resp.agreement)
+        self.assertIsNone(resp.combined_evidence_score)
+        self.assertIsNone(resp.supporting_prediction)
+        self.assertIsNotNone(resp.primary_prediction)
+        self.assertEqual(resp.primary_prediction.confidence, 59.99)
+        self.assertIn("Acne Vulgaris", resp.message)
+        self.assertIn("dermatologist", resp.message.lower())
+        # Wide-view inference must NOT execute when primary confidence is below threshold
+        self.assertEqual(call_count, 1)
 
-    def test_confidence_60_00_passes(self):
-        """60.00% must pass the confidence check (60.00 < 60.0 is False)."""
-        passed = evaluate_confidence_gate(60.00, 60.0)
-        self.assertTrue(passed)
+    def test_confidence_60_00_passes_normal_confident_flow(self):
+        """60.00% (>= 60.00%) must return normal confident PredictionResponse."""
+        resp, call_count = run_predict_with_mocks(60.00, "Acne_Vulgaris", 60.0)
+        self.assertTrue(resp.success)
+        self.assertEqual(resp.result_status, "confident")
+        self.assertEqual(resp.confidence, 60.00)
+        self.assertEqual(resp.confidence_level, "medium")
+        self.assertEqual(call_count, 1)
 
-    def test_confidence_60_01_passes(self):
-        """60.01% must pass the confidence check."""
-        passed = evaluate_confidence_gate(60.01, 60.0)
-        self.assertTrue(passed)
+    def test_confidence_60_01_passes_and_runs_70_30_fusion(self):
+        """60.01% (>= 60.00%) must pass and execute optional wide-view 70/30 fusion."""
+        wide_res = make_mock_primary_result(80.00, "Acne_Vulgaris")
+        resp, call_count = run_predict_with_mocks(60.01, "Acne_Vulgaris", 60.0, wide_result=wide_res)
+        self.assertTrue(resp.success)
+        self.assertEqual(resp.result_status, "confident")
+        self.assertEqual(resp.confidence, 60.01)
+        self.assertTrue(resp.is_combined)
+        self.assertTrue(resp.agreement)
+        # 0.70 * 60.01 + 0.30 * 80.00 = 42.007 + 24.00 = 66.01
+        self.assertEqual(resp.combined_evidence_score, 66.01)
+        self.assertEqual(call_count, 2)
 
-    def test_legacy_threshold_65_regression(self):
-        """Custom configured threshold (65.0%) continues to work as expected."""
-        with self.assertRaises(HTTPException) as ctx:
-            evaluate_confidence_gate(64.99, 65.0)
-        exc = ctx.exception
-        self.assertIn("64.99%", exc.detail["error"])
-        self.assertIn("65.00%", exc.detail["error"])
-        self.assertTrue(evaluate_confidence_gate(65.00, 65.0))
+    def test_confidence_40_00_low_confidence_result(self):
+        """40.00% primary confidence returns structured low-confidence result with metadata."""
+        resp, _ = run_predict_with_mocks(40.00, "Melasma", 60.0)
+        self.assertTrue(resp.success)
+        self.assertEqual(resp.result_status, "low_confidence")
+        self.assertEqual(resp.predicted_class, "Melasma")
+        self.assertEqual(resp.display_name, "Melasma")
+        self.assertEqual(resp.confidence, 40.00)
+        self.assertEqual(resp.confidence_level, "low")
+        self.assertEqual(resp.skin_score, 0.9456)
+        self.assertEqual(resp.quality_metrics["blur_score"], 145.2)
+        self.assertEqual(resp.inference_time_ms, 42)
 
-    def test_dynamic_threshold(self):
-        """Custom configured threshold (e.g. 70.0%) must be respected and formatted."""
-        with self.assertRaises(HTTPException) as ctx:
-            evaluate_confidence_gate(69.99, 70.0)
-        exc = ctx.exception
-        self.assertIn("69.99%", exc.detail["error"])
-        self.assertIn("70.00%", exc.detail["error"])
+    def test_all_five_classes_supported_when_low_confidence(self):
+        """All 5 configured classes return accurate display_name and probabilities below threshold."""
+        for cls_name in CLASS_NAMES:
+            resp, _ = run_predict_with_mocks(52.35, cls_name, 60.0)
+            self.assertEqual(resp.result_status, "low_confidence")
+            self.assertEqual(resp.predicted_class, cls_name)
+            self.assertEqual(resp.display_name, DISPLAY_NAMES[cls_name])
+            self.assertEqual(resp.confidence, 52.35)
+            self.assertEqual(resp.probabilities[cls_name], 52.35)
 
-        # 70.00% passes
-        self.assertTrue(evaluate_confidence_gate(70.00, 70.0))
+    def test_custom_configured_threshold_65_and_50(self):
+        """Custom CLASSIFIER_CONFIDENCE_FALLBACK values (e.g. 65.0% and 50.0%) are respected."""
+        resp_low_65, _ = run_predict_with_mocks(64.99, "Vitiligo", 65.0)
+        self.assertEqual(resp_low_65.result_status, "low_confidence")
+        self.assertEqual(resp_low_65.confidence_threshold, 65.0)
+
+        resp_ok_65, _ = run_predict_with_mocks(65.00, "Vitiligo", 65.0)
+        self.assertEqual(resp_ok_65.result_status, "confident")
+
+        resp_low_50, _ = run_predict_with_mocks(49.99, "Contact_Dermatitis", 50.0)
+        self.assertEqual(resp_low_50.result_status, "low_confidence")
+        self.assertEqual(resp_low_50.confidence_threshold, 50.0)
+
+        resp_ok_50, _ = run_predict_with_mocks(50.00, "Contact_Dermatitis", 50.0)
+        self.assertEqual(resp_ok_50.result_status, "confident")
+
+    def test_non_confidence_errors_still_raise_http_exceptions(self):
+        """Format, quality, skin validation, and inference failures still raise HTTP 400/500."""
+        mock_upload = MagicMock()
+        mock_upload.filename = "bad.txt"
+        dummy_img = Image.new("RGB", (224, 224))
+
+        # 1. Image format validation error -> 400 validation
+        async def _test_format():
+            with patch("app.routers.predict.load_image_from_upload", side_effect=ImageValidationError("Invalid image format")):
+                await predict_skin_condition(image=mock_upload, wide_image=None)
+
+        with self.assertRaises(HTTPException) as ctx1:
+            asyncio.run(_test_format())
+        self.assertEqual(ctx1.exception.status_code, 400)
+        self.assertEqual(ctx1.exception.detail["error_type"], "validation")
+
+        # 2. Image quality error -> 400 quality_blur
+        async def _test_quality():
+            with patch("app.routers.predict.load_image_from_upload", new=AsyncMock(return_value=dummy_img)), \
+                 patch("app.routers.predict.check_image_quality", return_value={
+                     "passed": False,
+                     "issues": [{"type": "blur", "message": "Image is blurry"}],
+                     "blur_score": 12.0,
+                     "brightness": 100.0,
+                     "contrast": 30.0,
+                 }):
+                await predict_skin_condition(image=mock_upload, wide_image=None)
+
+        with self.assertRaises(HTTPException) as ctx2:
+            asyncio.run(_test_quality())
+        self.assertEqual(ctx2.exception.status_code, 400)
+        self.assertEqual(ctx2.exception.detail["error_type"], "quality_blur")
+
+        # 3. Not human skin -> 400 not_human_skin
+        async def _test_skin():
+            with patch("app.routers.predict.load_image_from_upload", new=AsyncMock(return_value=dummy_img)), \
+                 patch("app.routers.predict.check_image_quality", return_value={"passed": True, "issues": [], "blur_score": 100.0, "brightness": 100.0, "contrast": 40.0}), \
+                 patch("app.routers.predict.skin_validator.is_human_skin", return_value=(False, 0.12)):
+                await predict_skin_condition(image=mock_upload, wide_image=None)
+
+        with self.assertRaises(HTTPException) as ctx3:
+            asyncio.run(_test_skin())
+        self.assertEqual(ctx3.exception.status_code, 400)
+        self.assertEqual(ctx3.exception.detail["error_type"], "not_human_skin")
+
+        # 4. Model inference failure -> 500 inference
+        async def _test_inference():
+            with patch("app.routers.predict.load_image_from_upload", new=AsyncMock(return_value=dummy_img)), \
+                 patch("app.routers.predict.check_image_quality", return_value={"passed": True, "issues": [], "blur_score": 100.0, "brightness": 100.0, "contrast": 40.0}), \
+                 patch("app.routers.predict.skin_validator.is_human_skin", return_value=(True, 0.95)), \
+                 patch("app.routers.predict.predictor.predict", side_effect=RuntimeError("OOM")):
+                await predict_skin_condition(image=mock_upload, wide_image=None)
+
+        with self.assertRaises(HTTPException) as ctx4:
+            asyncio.run(_test_inference())
+        self.assertEqual(ctx4.exception.status_code, 500)
+        self.assertEqual(ctx4.exception.detail["error_type"], "inference")
 
 
     def test_combiner_invalid_wide_view_fallback(self):
