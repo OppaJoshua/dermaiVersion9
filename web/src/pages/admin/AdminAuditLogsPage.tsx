@@ -146,6 +146,21 @@ export function formatDoctorAuditDetails(action: string, rawDetails?: string | n
   return rawDetails;
 }
 
+function getCleanDisplayDetails(
+  action: string,
+  rawDetails?: string | null,
+  target?: string | null
+): string {
+  const formattedText = formatDoctorAuditDetails(action, rawDetails, target);
+  const contextSeparator = " | Context: ";
+
+  if (formattedText.includes(contextSeparator)) {
+    return formattedText.split(contextSeparator)[0].trim();
+  }
+
+  return formattedText;
+}
+
 /**
  * Resolves the display performer for an audit log.
  * In Admin Audit Logs -> Activity Log -> PERFORMED BY, displays ONLY the registered clinic name
@@ -811,7 +826,7 @@ export default function AdminAuditLogsPage() {
 
                       {/* Details */}
                       <td className="px-6 py-4 text-xs sm:text-sm text-gray-600 max-w-sm break-words leading-relaxed">
-                        {formatDoctorAuditDetails(log.action, log.details, log.target)}
+                        {getCleanDisplayDetails(log.action, log.details, log.target)}
                       </td>
 
                       {/* Performed by & Role */}

@@ -202,7 +202,7 @@ export default function AdminDashboardPage() {
       color: "bg-amber-50 text-amber-500",
     },
     {
-      label: "Flagged / Low Quality",
+      label: "Flagged",
       value: String(flaggedScans.length),
       change: "Live",
       trend: "up" as const,
