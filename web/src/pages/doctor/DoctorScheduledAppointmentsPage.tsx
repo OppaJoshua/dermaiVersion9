@@ -269,10 +269,10 @@ export default function DoctorScheduledAppointmentsPage() {
     setSaveError("");
   };
 
-  // Sync date/id from URL search parameters if provided (e.g. from Dashboard click)
+  // Sync date/id from URL search parameters if provided (e.g. from Dashboard or Notification click)
   useEffect(() => {
     const paramDate = searchParams.get("date");
-    const paramId = searchParams.get("id");
+    const paramId = searchParams.get("id") || searchParams.get("appointmentId");
     if (paramDate) {
       setSelectedDate(paramDate);
       const d = parseLocalDate(paramDate);
@@ -283,6 +283,13 @@ export default function DoctorScheduledAppointmentsPage() {
     if (paramId && appointments.length > 0) {
       const target = appointments.find((a) => String(a.id) === String(paramId));
       if (target) {
+        if (!paramDate && target.date) {
+          setSelectedDate(target.date);
+          const td = parseLocalDate(target.date);
+          if (!isNaN(td.getTime())) {
+            setCurrentDate(td);
+          }
+        }
         if (target.status === "completed" || target.doctorDone) {
           setTab("completed");
         }

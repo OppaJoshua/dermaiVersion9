@@ -31,9 +31,11 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
   });
 
   let activeClinicId: string | undefined = undefined;
+  let setActiveClinicId: ((clinicId: string) => void) | undefined = undefined;
   try {
     const clinicCtx = useDoctorClinicContext();
     activeClinicId = clinicCtx?.activeClinicId;
+    setActiveClinicId = clinicCtx?.setActiveClinicId;
   } catch {
     // Graceful fallback if rendered outside DoctorClinicContext
   }
@@ -41,37 +43,21 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
   const [activeTab, setActiveTab] = useState<"all" | "appointment" | "ticket" | "broadcast">("all");
 
   const branchFiltered = useMemo(() => {
-    if (!activeClinicId || activeClinicId === "all") {
-      return notifications;
-    }
-    return notifications.filter((n) => {
-      const nClinicId = n.metadata?.clinic_id || n.metadata?.clinicId;
-      // Cross-branch broadcast, announcements, tickets or items with no specific clinic_id remain visible
-      if (!nClinicId || n.category === "broadcast" || n.category === "ticket" || n.type === "broadcast" || n.type === "maintenance_alert") {
-        return true;
-      }
-      return nClinicId === activeClinicId;
-    });
-  }, [notifications, activeClinicId]);
-
-  const filtered = useMemo(() => {
-    let list = branchFiltered;
-    if (activeTab === "broadcast") {
-      list = branchFiltered.filter(
-        (n) =>
-          n.category === "broadcast" ||
-          n.type === "broadcast" ||
-          n.metadata?.subtype === "admin_announcement" ||
-          n.metadata?.subtype === "maintenance_alert" ||
-          n.type === "maintenance_alert"
-      );
-    } else if (activeTab !== "all") {
-      list = branchFiltered.filter((n) => n.category === activeTab);
-    }
+    const rawList =
+      !activeClinicId || activeClinicId === "all"
+        ? notifications
+        : notifications.filter((n) => {
+            const nClinicId = n.metadata?.clinic_id || n.metadata?.clinicId;
+            // Cross-branch broadcast, announcements, tickets or items with no specific clinic_id remain visible
+            if (!nClinicId || n.category === "broadcast" || n.category === "ticket" || n.type === "broadcast" || n.type === "maintenance_alert") {
+              return true;
+            }
+            return nClinicId === activeClinicId;
+          });
 
     const seenIds = new Set<string>();
     const seenContent = new Set<string>();
-    return list.filter((n) => {
+    return rawList.filter((n) => {
       if (!n || !n.id) return false;
       if (seenIds.has(n.id)) return false;
       seenIds.add(n.id);
@@ -94,6 +80,23 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
       }
       return true;
     });
+  }, [notifications, activeClinicId]);
+
+  const filtered = useMemo(() => {
+    if (activeTab === "broadcast") {
+      return branchFiltered.filter(
+        (n) =>
+          n.category === "broadcast" ||
+          n.type === "broadcast" ||
+          n.metadata?.subtype === "admin_announcement" ||
+          n.metadata?.subtype === "maintenance_alert" ||
+          n.type === "maintenance_alert"
+      );
+    }
+    if (activeTab !== "all") {
+      return branchFiltered.filter((n) => n.category === activeTab);
+    }
+    return branchFiltered;
   }, [branchFiltered, activeTab]);
 
   const visibleUnreadCount = useMemo(() => {
@@ -132,7 +135,7 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
             )}
           </div>
           <p className="text-xs text-gray-500 mt-0.5">
-            {visibleUnreadCount > 0 ? `${visibleUnreadCount} unread request${visibleUnreadCount > 1 ? "s" : ""}` : "All requests up to date"}
+            {visibleUnreadCount > 0 ? `${visibleUnreadCount} unread notification${visibleUnreadCount > 1 ? "s" : ""}` : "All notifications up to date"}
           </p>
         </div>
 
@@ -254,8 +257,12 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
               docStatus === "rejected";
             const isHandled = isConfirmed || isCompleted || isRejected;
 
+            const isDisabledOrExpired = Boolean(item.metadata?.is_expired || item.metadata?.disabled);
+
             let targetLink: string | null = null;
-            if (isMaintenance) {
+            if (isDisabledOrExpired) {
+              targetLink = null;
+            } else if (isMaintenance) {
               targetLink = "/doctor/settings";
             } else if (isCompleted) {
               targetLink = appointmentId ? `/doctor/history?appointmentId=${appointmentId}` : "/doctor/history";
@@ -274,6 +281,10 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
             const handleItemClick = () => {
               if (!item.isRead) {
                 markRead(item.id);
+              }
+              const itemClinicId = item.metadata?.clinic_id || item.metadata?.clinicId;
+              if (itemClinicId && activeClinicId && activeClinicId !== "all" && activeClinicId !== itemClinicId) {
+                setActiveClinicId?.(itemClinicId);
               }
               onClose?.();
               if (targetLink) {
@@ -392,33 +403,37 @@ export default function DoctorNotifications({ onClose, isDropdown = false }: Doc
                   <p className="text-sm font-semibold text-gray-900 mt-0.5">{item.title}</p>
                   <p className="text-sm text-gray-600 leading-relaxed mt-0.5 break-words">{item.message}</p>
 
-                  {/* Branch badge for cross-branch notifications */}
-                  {item.metadata?.branch_name && isAppointmentRequest && (
-                    <span className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                      </svg>
-                      {item.metadata.branch_name}
-                    </span>
-                  )}
-
-                  {targetLink && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleItemClick();
-                      }}
-                      className={cn(
-                        "mt-2 inline-flex items-center gap-1 text-sm font-medium transition-colors cursor-pointer",
-                        isMaintenance
-                          ? "text-amber-800 hover:text-amber-900"
-                          : "text-magenta-700 hover:text-magenta-800"
+                  {/* Branch badge & action link container with proper spacing and wrapping */}
+                  {((item.metadata?.branch_name && isAppointmentRequest) || targetLink) && (
+                    <div className="mt-2 flex flex-col items-start gap-2">
+                      {item.metadata?.branch_name && isAppointmentRequest && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 max-w-full">
+                          <svg className="w-2.5 h-2.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                          </svg>
+                          <span className="break-words text-left leading-tight">{item.metadata.branch_name}</span>
+                        </span>
                       )}
-                    >
-                      <span>{actionLabel}</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
+
+                      {targetLink && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleItemClick();
+                          }}
+                          className={cn(
+                            "inline-flex items-center gap-1 text-sm font-medium transition-colors cursor-pointer",
+                            isMaintenance
+                              ? "text-amber-800 hover:text-amber-900"
+                              : "text-magenta-700 hover:text-magenta-800"
+                          )}
+                        >
+                          <span>{actionLabel}</span>
+                          <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>

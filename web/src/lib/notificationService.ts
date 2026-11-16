@@ -1169,6 +1169,8 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
       item.metadata?.appointmentId ||
       (item.id.startsWith("clinic-")
         ? item.id.replace(/^clinic-[a-z]+-/, "")
+        : item.id.startsWith("doc-reminder-")
+        ? item.id.replace(/^doc-reminder-([0-9a-f-]{36}).*$/i, "$1")
         : item.id.startsWith("doc-req-")
         ? item.id.replace("doc-req-", "")
         : item.id.startsWith("doc-branch-req-")
@@ -1188,6 +1190,12 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
     const normType = (item.type || item.metadata?.type || "").toLowerCase().replace(/_/g, "-");
     const isDoctorAction = normType.includes("doctor-");
 
+    // Reminder deduplication: collapse duplicate DB reminder rows and synthetic doc-reminder items per (appointment_id, occurrence)
+    const isReminderAction =
+      normType === "appointment-reminder" ||
+      item.metadata?.subtype === "reminder_24h" ||
+      item.id.startsWith("doc-reminder-");
+
     // Conflict / rejection deduplication: suppress duplicate notification cards for the same appointment conflict
     const isRejectionAction =
       normType === "appointment-rejected" ||
@@ -1196,7 +1204,33 @@ export function deduplicateNotificationItems(items: NotificationItem[]): Notific
       item.metadata?.subtype === "schedule-conflict" ||
       /review update|schedule conflict|declined|rejected/i.test(item.title || "");
 
-    if (apptId && isRejectionAction) {
+    if (apptId && isReminderAction) {
+      const occKey =
+        item.metadata?.occurrence ||
+        (item.id.startsWith(`doc-reminder-${apptId}-`)
+          ? item.id.slice(`doc-reminder-${apptId}-`.length)
+          : "default");
+      const reminderKey = `${apptId}:::reminder:::${occKey}`;
+
+      if (seenApptActions.has(reminderKey)) {
+        const existing = itemByKey.get(`appt:${reminderKey}`);
+        if (existing) {
+          if (item.isRead) existing.isRead = true;
+          // Preserve the original (earliest) database creation timestamp rather than a regenerated duplicate timestamp
+          if (isUuid(item.id) && isUuid(existing.id)) {
+            const itemTime = new Date(item.timestamp).getTime();
+            const existingTime = new Date(existing.timestamp).getTime();
+            if (!isNaN(itemTime) && !isNaN(existingTime) && itemTime < existingTime) {
+              existing.timestamp = item.timestamp;
+              existing.id = item.id;
+            }
+          }
+        }
+        continue;
+      }
+      seenApptActions.add(reminderKey);
+      itemByKey.set(`appt:${reminderKey}`, item);
+    } else if (apptId && isRejectionAction) {
       const stableEventId =
         item.metadata?.rejection_event_id ||
         item.metadata?.event_id;
@@ -2141,6 +2175,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
 
     // 2A. Fetch Doctor's Assigned Appointments (existing behavior)
     let fetchedAssignedAppts: any[] = [];
+    const pendingRemindersToPersist: Array<Parameters<typeof sendAuthorizedNotification>[0]> = [];
     if (validDoctorIds.length > 0) {
       const { data: appointments } = await supabase
         .from("patient_appointment")
@@ -2235,7 +2270,19 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           // B. Genuine upcoming consultation reminder (approaching scheduled time within 24 hours, or past scheduled time)
           // Preserves genuinely issued reminders in history, marks them expired once appointment time passes, and never auto-removes.
           // Suppresses redundant self-confirmation ("... has been confirmed") when doctor approves the appointment
-          if (appt.doctor_status === "approved" && appt.status !== "completed" && appt.date) {
+          const normApptStatus = String(appt.status || "").toLowerCase();
+          const normCheckIn = String(appt.check_in_status || "").toLowerCase();
+          const isInvalidForUpcomingReminder =
+            normApptStatus === "completed" ||
+            normApptStatus === "cancelled" ||
+            normApptStatus === "canceled" ||
+            normApptStatus === "rejected" ||
+            normApptStatus === "no-show" ||
+            normApptStatus === "no_show" ||
+            normCheckIn === "no-show" ||
+            normCheckIn === "no_show";
+
+          if (appt.doctor_status === "approved" && !isInvalidForUpcomingReminder && appt.date) {
             const parsedApptTime = resolveAppointmentTimestamp(appt, appt.date);
             const apptTimestamp = new Date(parsedApptTime).getTime();
             const now = Date.now();
@@ -2251,8 +2298,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
                 ? new Date(Math.max(new Date(appt.created_at || 0).getTime(), apptTimestamp - 24 * 60 * 60 * 1000)).toISOString()
                 : (appt.created_at || new Date().toISOString());
 
-              // Persist genuine reminder if approaching so it remains in DB history indefinitely
-              // Anchored to occurrenceKey so rescheduled appointments get distinct genuine reminders
+              // Queue genuine reminder for persistence after checking directNotifs so it is persisted at most once per occurrence
               if (
                 isApproaching &&
                 userId &&
@@ -2260,7 +2306,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
                 !hiddenSet.has(legacyNotifId) &&
                 !hiddenSyntheticIds.has(notifId)
               ) {
-                sendAuthorizedNotification({
+                pendingRemindersToPersist.push({
                   userId,
                   type: "appointment-reminder",
                   subtype: "reminder_24h",
@@ -2282,7 +2328,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
                     occurrence: occurrenceKey,
                     idempotency_key: `doc_reminder_${appt.appointment_id}_${occurrenceKey}_${userId}`,
                   },
-                }).catch(() => {});
+                });
               }
 
               items.push({
@@ -2529,7 +2575,30 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
       .select("notif_id, type, subtype, title, body, is_read, metadata, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .limit(Math.max(limit * 3, 300));
+
+    const existingDbReminderKeys = new Set<string>();
+    if (Array.isArray(directNotifs)) {
+      directNotifs.forEach((n: any) => {
+        const meta = n?.metadata || {};
+        if (meta.idempotency_key) {
+          existingDbReminderKeys.add(String(meta.idempotency_key));
+        }
+        const isRem = n?.type === "appointment-reminder" || n?.subtype === "reminder_24h";
+        const aid = meta.appointment_id || meta.appointmentId;
+        if (isRem && aid) {
+          const occ = meta.occurrence || "default";
+          existingDbReminderKeys.add(`doc_reminder_${aid}_${occ}_${userId}`);
+        }
+      });
+    }
+
+    for (const remPayload of pendingRemindersToPersist) {
+      const remKey = String(remPayload.metadata?.idempotency_key || "");
+      if (!remKey || existingDbReminderKeys.has(remKey)) continue;
+      existingDbReminderKeys.add(remKey);
+      sendAuthorizedNotification(remPayload).catch(() => {});
+    }
 
     if (directNotifs && directNotifs.length > 0) {
       // Pre-resolve missing appointment IDs or clinic IDs referenced in direct notifications
@@ -2778,6 +2847,18 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           finalLink = "/doctor/appointments";
         }
 
+        const rowReadAliases = getNotificationHiddenAliases("doctor", n.notif_id, {
+          ...meta,
+          type: n.type || meta.type,
+          subtype: n.subtype || meta.subtype,
+          category,
+        });
+        const isRowRead = Boolean(
+          n.is_read ||
+          readSet.has(n.notif_id) ||
+          rowReadAliases.some((a) => readSet.has(a))
+        );
+
         items.push({
           id: n.notif_id,
           type: n.type || (isBookingNotif ? "appointment_request" : "system"),
@@ -2789,7 +2870,7 @@ export async function fetchDoctorNotifications(userId: string, userEmail?: strin
           senderType: finalSenderType,
           senderAvatar: finalSenderAvatar || undefined,
           timestamp: n.created_at,
-          isRead: Boolean(n.is_read || readSet.has(n.notif_id)),
+          isRead: isRowRead,
           metadata: {
             ...meta,
             ticket_id: ticketIdMatch || meta.ticket_id,
@@ -4803,6 +4884,8 @@ export async function markNotificationAsRead(
     const raw = id.replace("scan-", "");
     extraAliases.push(raw, `scan:${raw}`);
   }
+  const roleAliases = getNotificationHiddenAliases(role, id, metadata);
+  extraAliases.push(...roleAliases);
 
   saveReadId(role, id, userId, undefined, extraAliases);
 
@@ -5484,6 +5567,8 @@ export function useNotifications(
  *   with strict relationship verification and idempotency.
  * - Provides seamless fallback to direct `user_notification` insert when pre-Phase A.
  */
+const sentAuthorizedIdempotencyKeys = new Set<string>();
+
 export async function sendAuthorizedNotification(params: {
   userId: string;
   title: string;
@@ -5504,6 +5589,11 @@ export async function sendAuthorizedNotification(params: {
       : {}),
   };
 
+  const idemKey = finalMetadata.idempotency_key ? String(finalMetadata.idempotency_key) : "";
+  if (idemKey && sentAuthorizedIdempotencyKeys.has(`${userId}:${idemKey}`)) {
+    return { success: true };
+  }
+
   // 1. Authorized server-side RPC under Phase A deployment
   if (isPhaseAMigrationDeployed() && isPhaseADatabaseRpcDeployed()) {
     try {
@@ -5517,6 +5607,7 @@ export async function sendAuthorizedNotification(params: {
       });
 
       if (!error && data) {
+        if (idemKey) sentAuthorizedIdempotencyKeys.add(`${userId}:${idemKey}`);
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
         }
@@ -5533,8 +5624,23 @@ export async function sendAuthorizedNotification(params: {
     }
   }
 
-  // 2. Direct insert fallback
+  // 2. Direct insert fallback (with idempotency pre-check to prevent duplicate rows on unmigrated DB)
   try {
+    if (idemKey) {
+      try {
+        const { data: existingRows } = await supabase
+          .from("user_notification")
+          .select("notif_id")
+          .eq("user_id", userId)
+          .eq("metadata->>idempotency_key", idemKey)
+          .limit(1);
+        if (Array.isArray(existingRows) && existingRows.length > 0 && existingRows[0]?.notif_id) {
+          sentAuthorizedIdempotencyKeys.add(`${userId}:${idemKey}`);
+          return { success: true, notifId: existingRows[0].notif_id };
+        }
+      } catch {}
+    }
+
     const { data, error } = await supabase
       .from("user_notification")
       .insert({
@@ -5555,6 +5661,7 @@ export async function sendAuthorizedNotification(params: {
       return { success: false, error: error.message };
     }
 
+    if (idemKey) sentAuthorizedIdempotencyKeys.add(`${userId}:${idemKey}`);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("dermai_notifications_updated"));
     }

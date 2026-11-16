@@ -241,10 +241,24 @@ function DoctorLayoutContent({ children, onLogoutStart, onLogoutFailed }: Doctor
   });
   const bellRef = useRef<HTMLDivElement>(null);
 
-  const { unreadCount } = useRoleNotifications("doctor", {
+  const { notifications: doctorNotifList, unreadCount: rawUnreadCount } = useRoleNotifications("doctor", {
     userId: user?.id,
     userEmail: user?.email,
   });
+
+  const unreadCount = useMemo(() => {
+    if (!activeClinicId || activeClinicId === "all") {
+      return rawUnreadCount;
+    }
+    return doctorNotifList.filter((n) => {
+      if (n.isRead) return false;
+      const nClinicId = n.metadata?.clinic_id || n.metadata?.clinicId;
+      if (!nClinicId || n.category === "broadcast" || n.category === "ticket" || n.type === "broadcast" || n.type === "maintenance_alert") {
+        return true;
+      }
+      return nClinicId === activeClinicId;
+    }).length;
+  }, [doctorNotifList, rawUnreadCount, activeClinicId]);
 
   const handleClinicChange = useCallback((clinicId: string) => {
     if (clinicId !== "all" && !affiliations.some(branch => branch.clinic_id === clinicId)) return;
