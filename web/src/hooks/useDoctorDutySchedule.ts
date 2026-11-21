@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { fetchDoctorDutySchedule } from "@/lib/doctorDutySchedule";
@@ -9,7 +9,17 @@ export function useDoctorDutySchedule(doctorId: string | null, clinicId: string 
   const { user } = useAuth();
   const userId = user?.id || "";
   const scope = `${userId}:${doctorId || ""}:${clinicId || ""}`;
-  const [result, setResult] = useState<{ scope: string; schedule: DoctorWeeklySchedule | null; loading: boolean; error: boolean } | null>(null);
+  const [result, setResult] = useState<{
+    scope: string;
+    schedule: DoctorWeeklySchedule | null;
+    loading: boolean;
+    error: boolean;
+  } | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  const refresh = useCallback(() => {
+    setRefreshTick((t) => t + 1);
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -26,26 +36,48 @@ export function useDoctorDutySchedule(doctorId: string | null, clinicId: string 
       }
       try {
         const schedule = await fetchDoctorDutySchedule(supabase, doctorId, clinicId, userId);
-        if (!disposed && request === requestId) setResult({ scope, schedule, loading: false, error: false });
+        if (!disposed && request === requestId) {
+          setResult({ scope, schedule, loading: false, error: false });
+        }
       } catch {
-        if (!disposed && request === requestId) setResult({ scope, schedule: null, loading: false, error: true });
+        if (!disposed && request === requestId) {
+          setResult({ scope, schedule: null, loading: false, error: true });
+        }
       }
     };
-    void load(false);
-    if (!userId || !doctorId || !clinicId) return () => { disposed = true; };
-    const handleBackgroundRefresh = () => { void load(true); };
-    const channel = supabase.channel(`doctor-duty-roster-${userId}-${clinicId}-${doctorId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "clinic_doctor", filter: `doctor_id=eq.${doctorId}` }, handleBackgroundRefresh)
+    void load(refreshTick > 0);
+    if (!userId || !doctorId || !clinicId) {
+      return () => {
+        disposed = true;
+      };
+    }
+    const handleBackgroundRefresh = () => {
+      void load(true);
+    };
+    const channel = supabase
+      .channel(`doctor-duty-roster-${userId}-${clinicId}-${doctorId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "clinic_doctor",
+          filter: `doctor_id=eq.${doctorId}`,
+        },
+        handleBackgroundRefresh
+      )
       .subscribe();
     window.addEventListener("focus", handleBackgroundRefresh);
     window.addEventListener("dermai_doctor_profile_updated", handleBackgroundRefresh);
+    window.addEventListener("dermai_doctors_updated", handleBackgroundRefresh);
     return () => {
       disposed = true;
       void supabase.removeChannel(channel);
       window.removeEventListener("focus", handleBackgroundRefresh);
       window.removeEventListener("dermai_doctor_profile_updated", handleBackgroundRefresh);
+      window.removeEventListener("dermai_doctors_updated", handleBackgroundRefresh);
     };
-  }, [userId, doctorId, clinicId, scope]);
+  }, [userId, doctorId, clinicId, scope, refreshTick]);
 
   // Suppress the previous result during the switch render, before effects run.
   const current = result?.scope === scope ? result : null;
@@ -53,6 +85,7 @@ export function useDoctorDutySchedule(doctorId: string | null, clinicId: string 
     schedule: current?.schedule || null,
     loading: current?.loading ?? Boolean(userId && doctorId && clinicId),
     error: current?.error || false,
+    refresh,
   };
 }
 
@@ -65,7 +98,8 @@ export interface BranchScheduleEntry {
 
 /**
  * Fetches duty schedules for ALL of the doctor's affiliated clinic branches in
- * parallel. Used by the "All Clinics (Consolidated)" view in DoctorSettingsPage.
+ * parallel and subscribes to live Supabase Realtime updates on `public.clinic_doctor`.
+ * Used by the "All Clinics (Consolidated)" view in DoctorSettingsPage.
  */
 export function useAllBranchesDutySchedules(
   affiliations: DoctorAffiliatedClinic[]
@@ -139,14 +173,34 @@ export function useAllBranchesDutySchedules(
 
     void fetchAll();
 
-    const handleRefresh = () => { if (!disposed) void fetchAll(); };
+    const handleRefresh = () => {
+      if (!disposed) void fetchAll();
+    };
+
+    const channel = supabase
+      .channel(`doctor-all-branches-duty-${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "clinic_doctor",
+          filter: `user_id=eq.${userId}`,
+        },
+        handleRefresh
+      )
+      .subscribe();
+
     window.addEventListener("focus", handleRefresh);
     window.addEventListener("dermai_doctor_profile_updated", handleRefresh);
+    window.addEventListener("dermai_doctors_updated", handleRefresh);
 
     return () => {
       disposed = true;
+      void supabase.removeChannel(channel);
       window.removeEventListener("focus", handleRefresh);
       window.removeEventListener("dermai_doctor_profile_updated", handleRefresh);
+      window.removeEventListener("dermai_doctors_updated", handleRefresh);
     };
     // affiliations reference is stable from context; userId rarely changes
     // eslint-disable-next-line react-hooks/exhaustive-deps

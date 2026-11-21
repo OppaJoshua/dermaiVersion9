@@ -1,5 +1,5 @@
 import { useAuth } from "@/context/AuthContext";
-import { parseAssignedDutySchedule } from "@/lib/doctorDutySchedule";
+import { parseAssignedDutySchedule, saveAuthorizedDoctorDutySchedule } from "@/lib/doctorDutySchedule";
 import { findCrossClinicDutyConflicts, type ScheduleConflict } from "@/lib/doctorScheduleConflicts";
 import { fetchClinicDoctorRows } from "@/lib/clinicDoctorRoster";
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -926,7 +926,12 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
     }
   }, [allDoctors, selectedDoctorId]);
 
-  // Hydrate only assigned shifts. Missing assignments start with an empty form.
+  // Hydrate only assigned shifts, and automatically re-sync when the doctor updates their own schedule in real time.
+  const selectedDoctorScheduleFingerprint = useMemo(() => {
+    if (!selectedDoctor) return "";
+    return `${selectedDoctor.id}:${JSON.stringify(selectedDoctor.dutyDays || [])}:${JSON.stringify(selectedDoctor.dutySchedule || null)}`;
+  }, [selectedDoctor]);
+
   useEffect(() => {
     const parsed = parseAssignedDutySchedule({
       duty_schedule: selectedDoctor?.dutySchedule,
@@ -939,7 +944,16 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
     });
     setScheduleError("");
     setScheduleSavedFeedback(null);
-  }, [selectedDoctor?.id, clinicId]);
+  }, [selectedDoctor?.id, selectedDoctorScheduleFingerprint, clinicId]);
+
+  // Keep Doctor Details modal synchronized when allDoctors updates via Realtime
+  useEffect(() => {
+    if (!selectedDoctorForDetails) return;
+    const latest = allDoctors.find((d) => d.id === selectedDoctorForDetails.id);
+    if (latest && latest !== selectedDoctorForDetails) {
+      setSelectedDoctorForDetails(latest);
+    }
+  }, [allDoctors, selectedDoctorForDetails]);
 
   // Fetch active duty schedules for this doctor across other clinic branches
   useEffect(() => {
@@ -2228,48 +2242,31 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
         return;
       }
 
-      const serializedSchedule = serializeDoctorSchedule(
-        {
-          weeklyShifts: normalizedWeeklyShifts,
-          slotIntervalMinutes: effectiveInterval,
-          isCustomSchedule: !isScheduleEmpty,
-        },
-        finalDutyDays,
-        clinicDefaultInterval || undefined
-      );
-
-      // Compute primary start/end time fallback from the first active day
-      const firstActiveDay = finalDutyDays[0];
-      const firstShifts = firstActiveDay ? (normalizedWeeklyShifts[firstActiveDay] || []) : [];
-      const primaryStart = isScheduleEmpty ? null : (firstShifts[0]?.startTime || clinicOpenTime || "08:00");
-      const primaryEnd = isScheduleEmpty ? null : (firstShifts[firstShifts.length - 1]?.endTime || clinicCloseTime || "17:00");
+      const savedResult = await saveAuthorizedDoctorDutySchedule({
+        client: supabase,
+        doctorId: selectedDoctor.id,
+        clinicId: clinicId!,
+        clinicName: clinicDisplayName,
+        doctorName: selectedDoctor.name,
+        userId: user?.id,
+        actorRole: "clinic",
+        dutyDays: finalDutyDays,
+        weeklyShifts: normalizedWeeklyShifts,
+        slotIntervalMinutes: effectiveInterval,
+        clinicOpenTime,
+        clinicCloseTime,
+        clinicOperatingDays,
+        clinicDefaultInterval,
+      });
 
       const updatedDoctor: DoctorAccount = {
         ...selectedDoctor,
-        dutyDays: [...finalDutyDays],
-        dutyStartTime: primaryStart || "",
-        dutyEndTime: primaryEnd || "",
-        dutySchedule: serializedSchedule,
+        dutyDays: [...savedResult.dutyDays],
+        dutyStartTime: savedResult.dutyStartTime || "",
+        dutyEndTime: savedResult.dutyEndTime || "",
+        dutySchedule: savedResult.dutySchedule,
         slotIntervalMinutes: effectiveInterval,
       };
-
-      // Persist to Supabase clinic_doctor table
-      const updatePayload: Record<string, unknown> = {
-        duty_days: updatedDoctor.dutyDays,
-        duty_start_time: isScheduleEmpty ? null : primaryStart,
-        duty_end_time: isScheduleEmpty ? null : primaryEnd,
-        duty_schedule: serializedSchedule,
-      };
-
-      const updateRes = await supabase
-        .from("clinic_doctor")
-        .update(updatePayload)
-        .eq("doctor_id", selectedDoctor.id)
-        .eq("clinic_id", clinicId!)
-        .select("doctor_id")
-        .single();
-      if (updateRes.error) throw new Error(updateRes.error.message);
-      if (!updateRes.data) throw new Error("The clinic affiliation was not updated. Please reload and try again.");
 
       const nextList = allDoctors.map((d) => (d.id === selectedDoctor.id ? updatedDoctor : d));
       setAllDoctors(nextList);
@@ -2297,23 +2294,6 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
         setSuccessMsg(`Duty schedule and shifts for ${updatedDoctor.name} updated successfully.`);
       }
       setTimeout(() => setSuccessMsg(""), 4500);
-
-      logAuditEvent({
-        role: "clinic",
-        category: "Clinic",
-        action: "Doctor Schedule Updated",
-        target: `Dr. ${updatedDoctor.name}`,
-        details: isScheduleEmpty
-          ? `Updated duty schedule for Dr. ${updatedDoctor.name}: Doctor is now Off Duty (0 duty days, 0 shifts).`
-          : `Updated duty schedule for Dr. ${updatedDoctor.name}: ${updatedDoctor.dutyDays.join(", ")} (${totalConfiguredShifts} shifts).`,
-        metadata: {
-          doctorName: updatedDoctor.name,
-          doctorId: updatedDoctor.id,
-          dutyDays: updatedDoctor.dutyDays,
-          shiftsCount: totalConfiguredShifts,
-          isOffDuty: isScheduleEmpty,
-        },
-      }).catch(() => { });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to update schedule.";
       setScheduleError(msg);
@@ -4676,16 +4656,26 @@ function ClinicDoctorsContent({ clinicId, verifiedClinicName }: { clinicId: stri
                     ) : (
                       <div className="space-y-1 mt-1">
                         {detailDutyDays.map((d) => {
-                          const shift = getDoctorShiftForDay(selectedDoctorForDetails, d);
+                          const parsedDetailSched = parseAssignedDutySchedule({
+                            duty_schedule: selectedDoctorForDetails.dutySchedule,
+                            duty_days: selectedDoctorForDetails.dutyDays,
+                          });
+                          const dayShifts = parsedDetailSched?.weeklyShifts[d] || [];
+                          const fallbackShift = getDoctorShiftForDay(selectedDoctorForDetails, d);
+                          const displayShifts = dayShifts.length > 0 ? dayShifts : [fallbackShift];
                           return (
                             <div
                               key={d}
-                              className="flex items-center justify-between text-xs py-0.5 border-b border-gray-200/50 last:border-b-0"
+                              className="flex items-start justify-between gap-2 text-xs py-0.5 border-b border-gray-200/50 last:border-b-0"
                             >
                               <span className="font-semibold text-gray-800">{d}</span>
-                              <span className="font-bold text-magenta-700">
-                                {formatTime12h(shift.startTime)} – {formatTime12h(shift.endTime)}
-                              </span>
+                              <div className="flex flex-col items-end">
+                                {displayShifts.map((s, idx) => (
+                                  <span key={idx} className="font-bold text-magenta-700">
+                                    {formatTime12h(s.startTime)} – {formatTime12h(s.endTime)}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
                           );
                         })}

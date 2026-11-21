@@ -107,6 +107,12 @@ function formatUserFriendlyBookingError(errStr?: string | null, slotRange?: stri
     const range = slotRange || "selected";
     return `The ${range} consultation slot was just reserved by another patient. Please choose another available consultation slot.`;
   }
+  if (
+    lower.includes("err_outside_doctor_schedule") ||
+    lower.includes("no longer within their available duty hours")
+  ) {
+    return "This doctor's duty schedule was just updated and the selected consultation slot is no longer within their available duty hours. Please select another available time.";
+  }
   if (lower.includes("err_schedule_config") || lower.includes("appointment interval") || lower.includes("duty schedule")) {
     return "This doctor's consultation schedule has not been configured with appointment intervals by the clinic. Please select another available doctor or contact the clinic.";
   }
@@ -1365,32 +1371,29 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           .eq("clinic_id", targetClinicId)
           .maybeSingle();
 
-        // Fetch doctors with resilient query and local cache fallback
+        // Fetch doctors via zero-PII public RPC first, with explicit non-PII column fallback
         let rawDoctorRows: any[] = [];
         try {
-          const { data: docRows1, error: err1 } = await supabase
-            .from("clinic_doctor")
-            .select(`
-              *,
-              user:user_id ( avatar_url ),
-              doctor_specializations (
-                specialization_id,
-                specializations (
-                  id,
-                  name
-                )
-              )
-            `)
-            .eq("clinic_id", targetClinicId);
+          const { data: rpcDocs, error: rpcErr } = await supabase.rpc(
+            "get_clinic_public_doctor_schedules",
+            { p_clinic_id: targetClinicId }
+          );
 
-          if (!err1 && Array.isArray(docRows1) && docRows1.length > 0) {
-            rawDoctorRows = docRows1;
-          } else if (data?.clinic_id && String(data.clinic_id) !== String(clinicIdFromUrl)) {
-            const { data: docRows2, error: err2 } = await supabase
+          if (!rpcErr && Array.isArray(rpcDocs) && rpcDocs.length > 0) {
+            rawDoctorRows = rpcDocs;
+          } else {
+            const { data: docRows1, error: err1 } = await supabase
               .from("clinic_doctor")
               .select(`
-                *,
-                user:user_id ( avatar_url ),
+                doctor_id,
+                clinic_id,
+                doctor_name,
+                photo_url,
+                status,
+                duty_days,
+                duty_start_time,
+                duty_end_time,
+                duty_schedule,
                 doctor_specializations (
                   specialization_id,
                   specializations (
@@ -1399,18 +1402,46 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                   )
                 )
               `)
-              .eq("clinic_id", data.clinic_id);
+              .eq("clinic_id", targetClinicId);
 
-            if (!err2 && Array.isArray(docRows2) && docRows2.length > 0) {
-              rawDoctorRows = docRows2;
+            if (!err1 && Array.isArray(docRows1) && docRows1.length > 0) {
+              rawDoctorRows = docRows1;
+            } else if (data?.clinic_id && String(data.clinic_id) !== String(clinicIdFromUrl)) {
+              const { data: docRows2, error: err2 } = await supabase
+                .from("clinic_doctor")
+                .select(`
+                  doctor_id,
+                  clinic_id,
+                  doctor_name,
+                  photo_url,
+                  status,
+                  duty_days,
+                  duty_start_time,
+                  duty_end_time,
+                  duty_schedule,
+                  doctor_specializations (
+                    specialization_id,
+                    specializations (
+                      id,
+                      name
+                    )
+                  )
+                `)
+                .eq("clinic_id", data.clinic_id);
+
+              if (!err2 && Array.isArray(docRows2) && docRows2.length > 0) {
+                rawDoctorRows = docRows2;
+              }
             }
           }
 
-          // Fallback to select("*") if relation query failed
+          // Fallback to explicit non-PII columns if relation query failed (never select("*"))
           if (rawDoctorRows.length === 0) {
             const { data: fallbackRows } = await supabase
               .from("clinic_doctor")
-              .select("*")
+              .select(
+                "doctor_id, clinic_id, doctor_name, photo_url, status, duty_days, duty_start_time, duty_end_time, duty_schedule"
+              )
               .eq("clinic_id", targetClinicId);
             if (Array.isArray(fallbackRows) && fallbackRows.length > 0) {
               rawDoctorRows = fallbackRows;
@@ -1472,10 +1503,23 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
           .map((d: any) => {
             const docName = d.doctor_name || d.name || "Attending Dermatologist";
 
-            const rawSchedObj = d.duty_schedule || d.dutySchedule;
-            let weeklySched = parseDoctorSchedule(
+            const rawSchedObj = d.duty_schedule ?? d.dutySchedule;
+            const rawDaysVal = d.duty_days ?? d.dutyDays;
+            const isExplicitlyEmptyDays =
+              (Array.isArray(rawDaysVal) && rawDaysVal.length === 0) ||
+              (typeof rawDaysVal === "string" && rawDaysVal.replace(/[{}\[\]"'\s]/g, "") === "");
+
+            const hasExplicitWeeklyShifts = Boolean(
+              rawSchedObj &&
+                typeof rawSchedObj === "object" &&
+                !Array.isArray(rawSchedObj) &&
+                rawSchedObj.weeklyShifts &&
+                typeof rawSchedObj.weeklyShifts === "object"
+            );
+
+            const weeklySched = parseDoctorSchedule(
               rawSchedObj,
-              d.duty_days || d.dutyDays,
+              rawDaysVal,
               d.duty_start_time || d.dutyStartTime || "08:00",
               d.duty_end_time || d.dutyEndTime || "17:00"
             );
@@ -1483,16 +1527,16 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             let pDays = Object.keys(weeklySched.weeklyShifts).filter(
               (day) => weeklySched.weeklyShifts[day] && weeklySched.weeklyShifts[day].length > 0
             );
-            if (pDays.length === 0) {
-              pDays = parseDoctorDutyDays(d.duty_days || d.dutyDays, rawSchedObj);
+            if (!isExplicitlyEmptyDays && !hasExplicitWeeklyShifts && pDays.length === 0) {
+              pDays = parseDoctorDutyDays(rawDaysVal, rawSchedObj);
             }
 
-            let startT = d.duty_start_time || d.dutyStartTime || "08:00";
-            let endT = d.duty_end_time || d.dutyEndTime || "17:00";
-            let maxPatients = weeklySched.maxPatientsPerShift || 10;
-            let slotInterval = weeklySched.slotIntervalMinutes || 30;
+            const startT = d.duty_start_time || d.dutyStartTime || "08:00";
+            const endT = d.duty_end_time || d.dutyEndTime || "17:00";
+            const maxPatients = weeklySched.maxPatientsPerShift || 10;
+            const slotInterval = weeklySched.slotIntervalMinutes || 30;
 
-            // Live synchronization with clinic roster settings (from ClinicDoctorsPage)
+            // Optional specialization fallback lookup from local cache (never overrides database schedule)
             let localMatch: any = null;
             try {
               for (let i = 0; i < localStorage.length; i++) {
@@ -1505,29 +1549,6 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
                       const match = parsed.find((cd: any) => isDoctorMatch(cd, d));
                       if (match) {
                         localMatch = match;
-                        const localWeekly = parseDoctorSchedule(
-                          match.dutySchedule || match.duty_schedule || (match.weeklyShifts ? match : undefined),
-                          match.dutyDays || match.duty_days,
-                          match.dutyStartTime || "08:00",
-                          match.dutyEndTime || "17:00"
-                        );
-                        const localActiveDays = Object.keys(localWeekly.weeklyShifts).filter(
-                          (day) => localWeekly.weeklyShifts[day] && localWeekly.weeklyShifts[day].length > 0
-                        );
-                        if (localActiveDays.length > 0) {
-                          weeklySched = localWeekly;
-                          pDays = localActiveDays;
-                        }
-                        if (match.dutyStartTime) startT = match.dutyStartTime;
-                        if (match.dutyEndTime) endT = match.dutyEndTime;
-                        if (match.maxPatientsPerDay || match.maxPatientsPerShift) {
-                          maxPatients = Number(match.maxPatientsPerDay || match.maxPatientsPerShift);
-                          weeklySched.maxPatientsPerShift = maxPatients;
-                        }
-                        if (match.slotIntervalMinutes) {
-                          slotInterval = Number(match.slotIntervalMinutes);
-                          weeklySched.slotIntervalMinutes = slotInterval;
-                        }
                         break;
                       }
                     }
@@ -1536,8 +1557,11 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
               }
             } catch { }
 
-            // If duty days are unconfigured, default to Mon-Fri
-            if (pDays.length === 0) {
+            // Tier 4B: Only default to Mon-Fri for legacy unconfigured records where BOTH duty_days and duty_schedule are NULL/undefined
+            const isLegacyNullSchedule =
+              (rawDaysVal === null || rawDaysVal === undefined) &&
+              (rawSchedObj === null || rawSchedObj === undefined);
+            if (pDays.length === 0 && isLegacyNullSchedule) {
               pDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
             }
 
@@ -1793,17 +1817,50 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
     loadClinic();
 
     const handleSync = () => loadClinic();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        loadClinic();
+      }
+    };
+    const activeClinicParam = searchParams.get("clinic") || sessionStorage.getItem("dermai_selected_clinic_id") || "";
+    const doctorScheduleChannel = supabase
+      .channel(`public-booking-doctor-schedules-${activeClinicParam || "all"}`)
+      .on(
+        "postgres_changes",
+        activeClinicParam
+          ? {
+              event: "*",
+              schema: "public",
+              table: "clinic_doctor",
+              filter: `clinic_id=eq.${activeClinicParam}`,
+            }
+          : {
+              event: "*",
+              schema: "public",
+              table: "clinic_doctor",
+            },
+        handleSync
+      )
+      .subscribe();
+
     window.addEventListener("storage", handleSync);
+    window.addEventListener("focus", handleSync);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("clinicSettingsUpdated", handleSync);
     window.addEventListener("dermai_clinic_updated", handleSync);
     window.addEventListener("dermai_doctors_updated", handleSync);
+    window.addEventListener("dermai_doctor_profile_updated", handleSync);
 
     return () => {
       cancelled = true;
+      void supabase.removeChannel(doctorScheduleChannel);
       window.removeEventListener("storage", handleSync);
+      window.removeEventListener("focus", handleSync);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("clinicSettingsUpdated", handleSync);
       window.removeEventListener("dermai_clinic_updated", handleSync);
       window.removeEventListener("dermai_doctors_updated", handleSync);
+      window.removeEventListener("dermai_doctor_profile_updated", handleSync);
     };
   }, [searchParams]);
 
@@ -3336,6 +3393,18 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             setRealtimeRefreshTick((t) => t + 1);
             const slotRange = selectedSlot?.timeRange || (effectiveSlotTime ? formatTime12h(effectiveSlotTime) : "selected");
             throw new Error(`The ${slotRange} consultation slot was just reserved by another patient. Please choose another available consultation slot.`);
+          } else if (
+            !holdRes.success &&
+            (holdRes.code === "ERR_OUTSIDE_DOCTOR_SCHEDULE" ||
+              holdRes.message?.includes("ERR_OUTSIDE_DOCTOR_SCHEDULE") ||
+              holdRes.message?.includes("no longer within their available duty hours"))
+          ) {
+            setSelectedTime("");
+            window.dispatchEvent(new CustomEvent("dermai_doctors_updated"));
+            throw new Error(
+              holdRes.message ||
+                "This doctor's duty schedule was recently updated and the selected consultation slot is no longer within their available duty hours. Please select another available time."
+            );
           } else if (!holdRes.success && classifyHoldFailure(holdRes.code, holdRes.message) === "schedule_config") {
             throw new Error(holdRes.message || "This doctor's consultation schedule has not been configured with appointment intervals by the clinic. Please select another available doctor or contact the clinic.");
           } else {
@@ -3363,7 +3432,9 @@ export default function AppointmentPage({ defaultType: _defaultType }: {
             holdErr?.message?.includes("already booked") ||
             holdErr?.message?.includes("ERR_SLOT_UNAVAILABLE") ||
             holdErr?.message?.includes("ERR_DUPLICATE_SLOT") ||
-            holdErr?.message?.includes("ERR_SCHEDULE_CONFIG")
+            holdErr?.message?.includes("ERR_SCHEDULE_CONFIG") ||
+            holdErr?.message?.includes("ERR_OUTSIDE_DOCTOR_SCHEDULE") ||
+            holdErr?.message?.includes("no longer within their available duty hours")
           ) {
             throw holdErr;
           }

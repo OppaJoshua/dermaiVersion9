@@ -503,7 +503,16 @@ export function parseDoctorSchedule(
   // If dutyDays was provided, strictly enforce it as the authority on active days:
   // 1. If explicitly empty array (off-duty), clear all shifts
   // 2. Clear any shifts on days not included in dutyDays
-  // 3. Ensure each active duty day has at least one shift
+  // 3. Only synthesize a fallback shift from fallbackStart/fallbackEnd when duty_schedule
+  //    does NOT have an explicit weeklyShifts map or an explicit weekday key for that day.
+  const hasExplicitWeeklyShiftsObject = Boolean(
+    scheduleObj &&
+      typeof scheduleObj === "object" &&
+      !Array.isArray(scheduleObj) &&
+      scheduleObj.weeklyShifts &&
+      typeof scheduleObj.weeklyShifts === "object"
+  );
+
   if (Array.isArray(rawDutyDays) && rawDutyDays.length === 0) {
     ALL_DAYS_OF_WEEK.forEach((day) => {
       weeklyShifts[day] = [];
@@ -513,14 +522,23 @@ export function parseDoctorSchedule(
       if (!dutyDays.includes(day)) {
         weeklyShifts[day] = [];
       } else if (!weeklyShifts[day] || weeklyShifts[day].length === 0) {
-        weeklyShifts[day] = [
-          {
-            id: `shift-${day.toLowerCase()}-1`,
-            label: "Duty Shift",
-            startTime: fallbackStart,
-            endTime: fallbackEnd,
-          },
-        ];
+        const hasExplicitLegacyDayKey = Boolean(
+          scheduleObj &&
+            typeof scheduleObj === "object" &&
+            !Array.isArray(scheduleObj) &&
+            (Object.prototype.hasOwnProperty.call(scheduleObj, day) ||
+              Object.prototype.hasOwnProperty.call(scheduleObj, day.toLowerCase()))
+        );
+        if (!hasExplicitWeeklyShiftsObject && !hasExplicitLegacyDayKey && fallbackStart && fallbackEnd) {
+          weeklyShifts[day] = [
+            {
+              id: `shift-${day.toLowerCase()}-1`,
+              label: "Duty Shift",
+              startTime: fallbackStart,
+              endTime: fallbackEnd,
+            },
+          ];
+        }
       }
     });
   }
@@ -1611,11 +1629,13 @@ export function validateDoctorReassignment({
     return { isAvailable: false, reason: `Not scheduled on duty on ${normDay}s.` };
   }
 
-  // Find shift covering this appointment time
+  // Find shift covering this appointment time (including full appointment duration)
   const matchedShift = shiftsForDay.find((shift) => {
     const sStart = timeToMinutes(shift.startTime);
     const sEnd = timeToMinutes(shift.endTime);
-    return apptMinutes >= sStart && apptMinutes < sEnd;
+    const eff = getEffectiveShiftSettings(shift, schedule, clinicDefaults);
+    const durationMin = eff.interval > 0 ? eff.interval : 30;
+    return apptMinutes >= sStart && apptMinutes + durationMin <= sEnd;
   });
 
   if (!matchedShift) {
